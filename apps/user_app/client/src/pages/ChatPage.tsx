@@ -488,13 +488,15 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-screen bg-gray-50/50">
-      {/* Mobile sidebar toggle */}
-      <button
-        onClick={() => setSidebarOpen(!sidebarOpen)}
-        className="fixed left-3 top-3 z-30 rounded-xl border border-gray-200/80 bg-white/90 p-2.5 shadow-glass backdrop-blur-sm transition-all duration-200 hover:shadow-md sm:hidden active:scale-95"
-      >
-        <Menu className="h-5 w-5 text-gray-600" />
-      </button>
+      {/* Mobile sidebar toggle — hidden when sidebar is open */}
+      {!sidebarOpen && (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="fixed left-3 top-3 z-30 rounded-xl border border-gray-200/80 bg-white/90 p-2.5 shadow-glass backdrop-blur-sm transition-all duration-200 hover:shadow-md sm:hidden active:scale-95"
+        >
+          <Menu className="h-5 w-5 text-gray-600" />
+        </button>
+      )}
 
       {/* Sidebar */}
       <div
@@ -529,7 +531,7 @@ export default function ChatPage() {
       <main className="flex flex-1 flex-col bg-white">
         {/* Chat Header */}
         <header className="flex items-center justify-between border-b border-gray-100 bg-white/80 px-4 py-3.5 backdrop-blur-xl sm:px-6">
-          <div className="ml-10 sm:ml-0 min-w-0 flex-1 mr-3">
+          <div className="ml-14 sm:ml-0 min-w-0 flex-1 mr-3">
             <h2 className="text-sm font-semibold text-gray-900 tracking-tight">
               {convName}
             </h2>
