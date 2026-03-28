@@ -43,7 +43,7 @@ export async function summarizationGuardNode(
     }
 
     // ── DB-backed checks (TTL + checkpoint size) ─────────────────────
-    const session = await Thread.findOne({ where: { threadId } });
+    const session = await Thread.findOne({ where: { id: threadId } });
 
     if (!session) {
       // New session — nothing to summarize yet.

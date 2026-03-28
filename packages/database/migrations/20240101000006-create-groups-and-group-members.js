@@ -77,10 +77,6 @@ module.exports = {
       onDelete: "SET NULL",
     });
 
-    await queryInterface.sequelize.query(
-      `ALTER TABLE threads ALTER COLUMN user_id DROP NOT NULL;`,
-    );
-
     await queryInterface.addIndex("threads", ["group_id"], {
       name: "threads_group_id",
     });
@@ -108,10 +104,6 @@ module.exports = {
     await queryInterface.removeIndex("threads", "threads_group_id");
 
     await queryInterface.removeColumn("threads", "group_id");
-
-    await queryInterface.sequelize.query(
-      `ALTER TABLE threads ALTER COLUMN user_id SET NOT NULL;`,
-    );
 
     await queryInterface.dropTable("group_members");
     await queryInterface.dropTable("groups");

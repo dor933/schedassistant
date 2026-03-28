@@ -98,9 +98,8 @@ export function getMe() {
 // ─── Sessions ────────────────────────────────────────────────────────────────
 
 export interface Session {
-  id: string;
   threadId: string;
-  userId: string;
+  userId: string | null;
   groupId: string | null;
   singleChatId: string | null;
   title: string | null;

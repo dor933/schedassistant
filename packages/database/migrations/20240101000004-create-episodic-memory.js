@@ -22,7 +22,7 @@ module.exports = {
       thread_id: {
         type: Sequelize.STRING,
         allowNull: false,
-        references: { model: "threads", key: "thread_id" },
+        references: { model: "threads", key: "id" },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },

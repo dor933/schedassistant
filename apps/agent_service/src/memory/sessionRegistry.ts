@@ -13,20 +13,21 @@ export type EnsureSessionScope = {
  * user. Creates one if it doesn't exist yet (new conversation),
  * or returns the existing row (resumed conversation).
  *
- * Also validates that the `user_id` on the stored row matches the
- * caller — a mismatch would indicate a session-isolation breach.
+ * For group chats, `userId` is null — the thread is shared across
+ * all group members. For single chats, a mismatch would indicate a
+ * session-isolation breach.
  */
 export async function ensureSession(
   threadId: string,
-  userId: UserId,
+  userId: UserId | null,
   scope: EnsureSessionScope = {},
 ): Promise<Thread> {
   const { groupId = null, singleChatId = null, agentId = null } = scope;
 
   const [session, created] = await Thread.findOrCreate({
-    where: { threadId },
+    where: { id: threadId },
     defaults: {
-      threadId,
+      id: threadId,
       userId,
       groupId,
       singleChatId,
@@ -39,7 +40,8 @@ export async function ensureSession(
     logger.info("Session created", { threadId, userId, groupId, singleChatId });
   }
 
-  if (!created && session.userId !== userId) {
+  // Isolation check only for user-owned threads (single chats), not shared group threads.
+  if (!created && userId && session.userId && session.userId !== userId) {
     logger.error("Session isolation violation", { threadId, ownerUserId: session.userId, callerUserId: userId });
     throw new Error(
       `Session isolation violation: thread ${threadId} belongs to user ${session.userId}, not ${userId}.`,
@@ -78,6 +80,6 @@ export async function writeSummary(
       summary: { text: summaryText, createdAt: new Date().toISOString() },
       summarizedAt: new Date(),
     },
-    { where: { threadId } },
+    { where: { id: threadId } },
   );
 }

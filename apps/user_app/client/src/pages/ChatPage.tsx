@@ -254,6 +254,12 @@ export default function ChatPage() {
           ...prev,
           { role: "user", content: data.message, senderName: data.displayName },
         ]);
+      } else {
+        // Not viewing this group — increment unread count
+        setUnreadCounts((prev) => ({
+          ...prev,
+          [data.groupId]: (prev[data.groupId] ?? 0) + 1,
+        }));
       }
     };
 
@@ -561,19 +567,11 @@ export default function ChatPage() {
               <button
                 type="button"
                 onClick={() => setShowGroupInfo(true)}
-                className="flex items-center gap-1 text-xs text-gray-400 truncate hover:text-indigo-500 transition-colors"
+                className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
               >
-                <span className="truncate">
-                  {[
-                    activeConv.agentDefinition,
-                    groupMembersList.length > 0
-                      ? groupMembersList.map((m) => m.displayName || m.userId).join(", ")
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" \u00B7 ") || "Group Chat"}
-                </span>
-                <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                <Users className="h-3 w-3" />
+                {groupMembersList.length + 1} members
+                <ChevronRight className="h-2.5 w-2.5" />
               </button>
             ) : (
               <p className="text-xs text-gray-400">

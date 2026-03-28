@@ -157,9 +157,9 @@ router.delete("/single-chats/:id", authMiddleware, async (req, res) => {
     // Find all threads for this single chat
     const threads = await Thread.findAll({
       where: { singleChatId: scId },
-      attributes: ["threadId"],
+      attributes: ["id"],
     });
-    const threadIds = threads.map((t) => t.threadId);
+    const threadIds = threads.map((t) => t.id);
 
     // Delete in a transaction
     await sequelize.transaction(async (t) => {

@@ -156,7 +156,7 @@ module.exports = {
       UPDATE episodic_memory em
       SET agent_id = t.agent_id
       FROM threads t
-      WHERE em.thread_id = t.thread_id
+      WHERE em.thread_id = t.id
         AND em.agent_id IS NULL
         AND t.agent_id IS NOT NULL
     `);

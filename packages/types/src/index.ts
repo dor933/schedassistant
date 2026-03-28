@@ -101,8 +101,8 @@ export interface SessionSummary {
 
 /** Attributes exposed by the `Thread` Sequelize model (`threads` table). */
 export interface ThreadAttributes {
+  /** The thread ID — also used as the LangGraph checkpoint thread_id. */
   id: string;
-  threadId: string;
   userId: UserId | null;
   groupId: GroupId | null;
   /** Set for 1:1 user↔agent threads; null for group-only or legacy rows. */

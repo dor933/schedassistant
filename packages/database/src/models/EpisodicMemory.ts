@@ -44,7 +44,7 @@ EpisodicMemory.init(
       type: DataTypes.STRING,
       allowNull: false,
       field: "thread_id",
-      references: { model: "threads", key: "thread_id" },
+      references: { model: "threads", key: "id" },
       onUpdate: "CASCADE",
       onDelete: "CASCADE",
     },

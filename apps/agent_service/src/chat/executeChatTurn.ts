@@ -45,7 +45,8 @@ export async function executeChatTurn(
       const modelSlug = await resolveModelSlug(singleChatId, groupId);
       logger.info("Executing chat turn", { threadId, userId, agentId, modelSlug, msgLen: message.length });
 
-      await ensureSession(threadId, userId, {
+      // Group threads are shared — don't tie them to a specific user.
+      await ensureSession(threadId, groupId ? null : userId, {
         groupId: groupId ?? null,
         singleChatId: singleChatId ?? null,
         agentId: agentId ?? null,
@@ -119,7 +120,8 @@ export async function storeMessageOnly(
   graph: CompiledStateGraph<any, any, any>,
   { userId, threadId, message, groupId, singleChatId, agentId }: ChatTurnPayload,
 ): Promise<void> {
-  await ensureSession(threadId, userId, {
+  // Group threads are shared — don't tie them to a specific user.
+  await ensureSession(threadId, groupId ? null : userId, {
     groupId: groupId ?? null,
     singleChatId: singleChatId ?? null,
     agentId: agentId ?? null,

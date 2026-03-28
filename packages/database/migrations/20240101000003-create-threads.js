@@ -5,19 +5,13 @@ module.exports = {
   async up(queryInterface, Sequelize) {
     await queryInterface.createTable("threads", {
       id: {
-        type: Sequelize.UUID,
-        defaultValue: Sequelize.UUIDV4,
-        primaryKey: true,
-        allowNull: false,
-      },
-      thread_id: {
         type: Sequelize.STRING,
-        unique: true,
+        primaryKey: true,
         allowNull: false,
       },
       user_id: {
         type: Sequelize.STRING,
-        allowNull: false,
+        allowNull: true,
         references: { model: "users", key: "id" },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",

@@ -57,16 +57,32 @@ export function createServer({ agentChatQueue, graph }: CreateServerDeps) {
   // ── GET /api/sessions/:userId ─────────────────────────────────────────
   app.get("/api/sessions/:userId", async (req, res) => {
     try {
-      const where: Record<string, unknown> = { userId: req.params.userId };
-      if (req.query.groupId) where.groupId = req.query.groupId;
-      if (req.query.singleChatId) where.singleChatId = req.query.singleChatId;
+      const where: Record<string, unknown> = {};
+
+      // Group threads are shared (userId is null) — look up by groupId only.
+      if (req.query.groupId) {
+        where.groupId = req.query.groupId;
+      } else {
+        where.userId = req.params.userId;
+        if (req.query.singleChatId) where.singleChatId = req.query.singleChatId;
+      }
 
       const sessions = await Thread.findAll({
         where,
         order: [["updated_at", "DESC"]],
-        attributes: ["id", "threadId", "userId", "groupId", "singleChatId", "title", "createdAt", "updatedAt", "lastActivityAt"],
+        attributes: ["id", "userId", "groupId", "singleChatId", "title", "createdAt", "updatedAt", "lastActivityAt"],
       });
-      return res.json(sessions);
+      // Map id → threadId for client compatibility
+      return res.json(sessions.map((s) => ({
+        threadId: s.id,
+        userId: s.userId,
+        groupId: s.groupId,
+        singleChatId: s.singleChatId,
+        title: s.title,
+        createdAt: s.createdAt,
+        updatedAt: s.updatedAt,
+        lastActivityAt: s.lastActivityAt,
+      })));
     } catch (err: any) {
       logger.error("/api/sessions/:userId error", { error: err.message });
       return res.status(500).json({ error: err.message });
@@ -93,7 +109,8 @@ export function createServer({ agentChatQueue, graph }: CreateServerDeps) {
       }
 
       const threadId = crypto.randomUUID();
-      const session = await ensureSession(threadId, userId, {
+      // Group threads are shared — don't tie them to a specific user.
+      const session = await ensureSession(threadId, groupId ? null : userId, {
         groupId: groupId ?? undefined,
         singleChatId: singleChatId ?? undefined,
         agentId,
@@ -104,8 +121,7 @@ export function createServer({ agentChatQueue, graph }: CreateServerDeps) {
       }
 
       return res.status(201).json({
-        id: session.id,
-        threadId: session.threadId,
+        threadId: session.id,
         userId: session.userId,
         groupId: session.groupId,
         singleChatId: session.singleChatId,

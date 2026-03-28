@@ -36,7 +36,7 @@ export async function persistSummarizationResult(
       summary: summaryPayload,
       summarizedAt: now,
     },
-    { where: { threadId } },
+    { where: { id: threadId } },
   );
 
   // Embed each chunk and insert into episodic_memory (scoped to agent_id).

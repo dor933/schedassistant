@@ -4,7 +4,6 @@ import type { ThreadAttributes, SessionSummary } from "@scheduling-agent/types";
 
 type ThreadCreationAttributes = Optional<
   ThreadAttributes,
-  | "id"
   | "createdAt"
   | "updatedAt"
   | "userId"
@@ -22,7 +21,6 @@ type ThreadCreationAttributes = Optional<
 
 class Thread extends Model<ThreadAttributes, ThreadCreationAttributes> implements ThreadAttributes {
   declare id: string;
-  declare threadId: string;
   declare userId: string | null;
   declare groupId: string | null;
   declare singleChatId: string | null;
@@ -41,15 +39,9 @@ class Thread extends Model<ThreadAttributes, ThreadCreationAttributes> implement
 Thread.init(
   {
     id: {
-      type: DataTypes.UUID,
-      defaultValue: DataTypes.UUIDV4,
-      primaryKey: true,
-    },
-    threadId: {
       type: DataTypes.STRING,
-      unique: true,
+      primaryKey: true,
       allowNull: false,
-      field: "thread_id",
     },
     userId: {
       type: DataTypes.STRING,
