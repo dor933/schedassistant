@@ -82,9 +82,9 @@ export default function ModelSelector({
         title="Change model"
       >
         <VendorIcon slug={vendorSlug} />
-        <span className="hidden sm:inline">{currentModel?.name ?? "Select model"}</span>
+        <span className="max-w-[7rem] truncate sm:max-w-none">{currentModel?.name ?? "Select model"}</span>
         <ChevronDown
-          className={`h-3 w-3 opacity-50 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          className={`h-3 w-3 flex-shrink-0 opacity-50 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         />
       </button>
 
