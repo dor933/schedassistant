@@ -10,70 +10,70 @@ const SALT_ROUNDS = 10;
 const router = Router();
 
 // ── POST /api/auth/register ──────────────────────────────────────────────────
-router.post("/register", async (_req, res) => {
+router.post("/register", async (req, res) => {
   return res.status(503).json({ error: "Registration not available — please try later." });
   // TODO: Re-enable registration by uncommenting below and removing the early return above.
-  /*
-  const parsed = registerSchema.safeParse(req.body);
-  if (!parsed.success) {
-    const firstError = parsed.error.errors[0]?.message ?? "Invalid input.";
-    return res.status(400).json({ error: firstError });
-  }
 
-  const { userName, displayName, password, userIdentity } = parsed.data;
+  // const parsed = registerSchema.safeParse(req.body);
+  // if (!parsed.success) {
+  //   const firstError = parsed.error.errors[0]?.message ?? "Invalid input.";
+  //   return res.status(400).json({ error: firstError });
+  // }
 
-  const existing = await User.findOne({ where: { userName } });
-  if (existing) {
-    return res.status(409).json({ error: "Username is already taken." });
-  }
+  // const { userName, displayName, password, userIdentity } = parsed.data;
 
-  try {
-    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
+  // const existing = await User.findOne({ where: { userName } });
+  // if (existing) {
+  //   return res.status(409).json({ error: "Username is already taken." });
+  // }
 
-    const user = await User.create({
-      userName,
-      displayName,
-      password: hashedPassword,
-      userIdentity: userIdentity ?? null,
-    });
+  // try {
+  //   const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-    const agent = await Agent.create({
-      definition: `${displayName}'s Agent`,
-      coreInstructions: "You are a helpful AI assistant.",
-    });
+  //   const user = await User.create({
+  //     userName,
+  //     displayName,
+  //     password: hashedPassword,
+  //     userIdentity: userIdentity ?? null,
+  //   });
 
-    const sc = await SingleChat.create({
-      userId: user.id,
-      agentId: agent.id,
-      title: "Default Chat",
-    });
+  //   const agent = await Agent.create({
+  //     definition: `${displayName}'s Agent`,
+  //     coreInstructions: "You are a helpful AI assistant.",
+  //   });
 
-    await agent.update({ singleChatId: sc.id });
+  //   const sc = await SingleChat.create({
+  //     userId: user.id,
+  //     agentId: agent.id,
+  //     title: "Default Chat",
+  //   });
 
-    const token = signToken({
-      userId: user.id,
-      displayName: user.displayName,
-    });
+  //   await agent.update({ singleChatId: sc.id });
 
-    const conversations = await loadUserConversations(user.id);
+  //   const token = signToken({
+  //     userId: user.id,
+  //     displayName: user.displayName,
+  //   });
 
-    return res.status(201).json({
-      token,
-      user: {
-        id: user.id,
-        displayName: user.displayName,
-        userIdentity: user.userIdentity,
-      },
-      conversations,
-    });
-  } catch (err: any) {
-    logger.error("Register error", { error: err?.message });
-    if (err.name === "SequelizeUniqueConstraintError") {
-      return res.status(409).json({ error: "Username is already taken." });
-    }
-    return res.status(500).json({ error: "Internal server error." });
-  }
-  */
+  //   const conversations = await loadUserConversations(user.id);
+
+  //   return res.status(201).json({
+  //     token,
+  //     user: {
+  //       id: user.id,
+  //       displayName: user.displayName,
+  //       userIdentity: user.userIdentity,
+  //     },
+  //     conversations,
+  //   });
+  // } catch (err: any) {
+  //   logger.error("Register error", { error: err?.message });
+  //   if (err.name === "SequelizeUniqueConstraintError") {
+  //     return res.status(409).json({ error: "Username is already taken." });
+  //   }
+  //   return res.status(500).json({ error: "Internal server error." });
+  // }
+
 });
 
 // ── POST /api/auth/login ─────────────────────────────────────────────────────
