@@ -78,7 +78,7 @@ export default function ModelSelector({
           setOpen(!open);
           setError(null);
         }}
-        className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold shadow-sm transition-all duration-200 hover:shadow-md active:scale-95 sm:gap-1.5 sm:px-3 sm:py-1.5 sm:text-[11px] ${colors}`}
+        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-semibold shadow-sm transition-all duration-200 hover:shadow-md active:scale-95 ${colors}`}
         title="Change model"
       >
         <VendorIcon slug={vendorSlug} />
