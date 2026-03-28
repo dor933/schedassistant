@@ -1,6 +1,7 @@
 import { useState, useMemo, type FormEvent } from "react";
 import { useAuth } from "../context/AuthContext";
-import { Brain, Loader2, Eye, EyeOff, CheckCircle2, XCircle } from "lucide-react";
+import { Loader2, Eye, EyeOff, CheckCircle2, XCircle } from "lucide-react";
+import logo from "../assets/logo.svg";
 import { userNameSchema, passwordSchema, registerSchema } from "../validation";
 
 /** Validate a single zod schema against a value, returning error messages. */
@@ -104,9 +105,7 @@ export default function LoginPage() {
       <div className="relative z-10 w-full max-w-sm animate-fade-in">
         {/* Logo / Brand */}
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 shadow-lg shadow-indigo-200/60">
-            <Brain className="h-8 w-8 text-white" />
-          </div>
+          <img src={logo} alt="Logo" className="mx-auto mb-5 h-16 w-16 rounded-2xl shadow-lg shadow-indigo-200/60 object-cover" />
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">
             GrahamyClaw
           </h1>

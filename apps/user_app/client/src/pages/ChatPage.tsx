@@ -532,7 +532,7 @@ export default function ChatPage() {
         {/* Chat Header */}
         <header className="flex items-center justify-between border-b border-gray-100 bg-white/80 px-4 py-3.5 backdrop-blur-xl sm:px-6">
           <div className="ml-14 sm:ml-0 min-w-0 flex-1 mr-3">
-            <h2 className="text-sm font-semibold text-gray-900 tracking-tight">
+            <h2 className="text-[13px] sm:text-sm font-semibold text-gray-900 tracking-tight truncate">
               {convName}
             </h2>
             {agentIsTyping ? (
@@ -686,9 +686,11 @@ export default function ChatPage() {
           disabled={sending || !activeConv}
           placeholder={
             activeConv?.type === "group" && activeConv.agentDefinition
-              ? `Type a message... use @${activeConv.agentDefinition} to ask the agent`
+              ? `Type a message... use @ to mention the agent`
               : undefined
           }
+          agentName={activeConv?.type === "group" ? (activeConv.agentDefinition ?? undefined) : undefined}
+          vendorSlug={activeConv?.type === "group" ? (activeConv.model?.vendor?.slug ?? undefined) : undefined}
         />
       </main>
 

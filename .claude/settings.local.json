@@ -14,7 +14,9 @@
       "Bash(npm list:*)",
       "Bash(find . -path */node_modules/@langchain/anthropic/package.json)",
       "WebFetch(domain:reference.langchain.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(npm run:*)",
+      "Bash(./node_modules/.bin/tsc --noEmit)"
     ]
   }
 }

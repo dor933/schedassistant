@@ -5,8 +5,8 @@ import {
   Settings,
   LogOut,
   Trash2,
-  Brain,
 } from "lucide-react";
+import logo from "../assets/logo.svg";
 import { Link } from "react-router-dom";
 import type {
   GroupConversation,
@@ -91,9 +91,7 @@ export default function SessionSidebar({
     <aside className="flex h-full w-72 flex-col bg-gradient-to-b from-slate-50 to-gray-50 border-r border-gray-200/80">
       {/* Header */}
       <div className="flex items-center gap-3 px-5 py-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 shadow-md shadow-indigo-200/50">
-          <Brain className="h-4.5 w-4.5 text-white" />
-        </div>
+        <img src={logo} alt="Logo" className="h-9 w-9 rounded-xl shadow-md shadow-indigo-200/50 object-cover" />
         <div>
           <span className="text-sm font-bold text-gray-900 tracking-tight">
             GrahamyClaw

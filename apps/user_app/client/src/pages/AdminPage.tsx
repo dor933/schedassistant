@@ -76,8 +76,10 @@ function AgentCard({
               value={definition}
               onChange={(e) => setDefinition(e.target.value)}
               placeholder='e.g. "AI Default Agent"'
+              maxLength={30}
               className={smallInput}
             />
+            <p className={`text-[10px] text-right ${definition.length >= 30 ? "text-red-400" : "text-gray-400"}`}>{definition.length}/30</p>
           </div>
           <div>
             <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -577,13 +579,17 @@ export default function AdminPage() {
             </h2>
 
             <div className="mb-5 space-y-2.5">
-              <input
-                type="text"
-                value={newAgentDefinition}
-                onChange={(e) => setNewAgentDefinition(e.target.value)}
-                placeholder='Role label, e.g. "AI Default Agent"'
-                className={inputClass}
-              />
+              <div>
+                <input
+                  type="text"
+                  value={newAgentDefinition}
+                  onChange={(e) => setNewAgentDefinition(e.target.value)}
+                  placeholder='Role label, e.g. "AI Default Agent"'
+                  maxLength={30}
+                  className={inputClass}
+                />
+                <p className={`mt-1 text-[10px] text-right ${newAgentDefinition.length >= 30 ? "text-red-400" : "text-gray-400"}`}>{newAgentDefinition.length}/30</p>
+              </div>
               <textarea
                 value={newAgentInstructions}
                 onChange={(e) => setNewAgentInstructions(e.target.value)}
