@@ -137,7 +137,7 @@ export default function ChatPage() {
                 // If senderName matches current user → own message (no senderName)
                 // If senderName is different → other user's message
                 senderName:
-                  h.senderName && h.senderName !== myName
+                  h.senderName && sanitize(h.senderName) !== myName
                     ? h.senderName.replace(/_/g, " ")
                     : undefined,
               })),
