@@ -12,7 +12,8 @@ const router = Router();
 // ── POST /api/auth/register ──────────────────────────────────────────────────
 router.post("/register", async (_req, res) => {
   return res.status(503).json({ error: "Registration not available — please try later." });
-
+  // TODO: Re-enable registration by uncommenting below and removing the early return above.
+  /*
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
     const firstError = parsed.error.errors[0]?.message ?? "Invalid input.";
@@ -21,7 +22,6 @@ router.post("/register", async (_req, res) => {
 
   const { userName, displayName, password, userIdentity } = parsed.data;
 
-  // Check username uniqueness (case-insensitive — userName is already lowercased by schema)
   const existing = await User.findOne({ where: { userName } });
   if (existing) {
     return res.status(409).json({ error: "Username is already taken." });
@@ -37,20 +37,17 @@ router.post("/register", async (_req, res) => {
       userIdentity: userIdentity ?? null,
     });
 
-    // Create a personal agent for this user
     const agent = await Agent.create({
       definition: `${displayName}'s Agent`,
       coreInstructions: "You are a helpful AI assistant.",
     });
 
-    // Create the default single chat linked to the personal agent
     const sc = await SingleChat.create({
       userId: user.id,
       agentId: agent.id,
       title: "Default Chat",
     });
 
-    // Link the agent to this single chat (exclusive assignment)
     await agent.update({ singleChatId: sc.id });
 
     const token = signToken({
@@ -76,6 +73,7 @@ router.post("/register", async (_req, res) => {
     }
     return res.status(500).json({ error: "Internal server error." });
   }
+  */
 });
 
 // ── POST /api/auth/login ─────────────────────────────────────────────────────
