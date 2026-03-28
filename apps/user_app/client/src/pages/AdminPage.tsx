@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
+import { getChatSocket } from "../sockets/chatSocket";
+import { useToast } from "../components/Toast";
 import {
   ArrowLeft,
   LogOut,
@@ -18,6 +20,7 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
+  KeyRound,
 } from "lucide-react";
 import {
   admin,
@@ -25,6 +28,7 @@ import {
   type AdminAgent,
   type AdminGroup,
   type AdminGroupMember,
+  type AdminRole,
   type ConversationModelInfo,
 } from "../api";
 import { VendorIcon } from "../components/VendorModelBadge";
@@ -154,13 +158,18 @@ function AgentCard({
 
 function UserCard({
   u,
+  roles: availableRoles,
+  isSystemAdmin,
   onSaved,
 }: {
   u: AdminUser;
+  roles: AdminRole[];
+  isSystemAdmin: boolean;
   onSaved: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [displayName, setDisplayName] = useState(u.displayName ?? "");
+  const [selectedRoleId, setSelectedRoleId] = useState(u.roleId ?? "");
   const [role, setRole] = useState((u.userIdentity as any)?.role ?? "");
   const [department, setDepartment] = useState(
     (u.userIdentity as any)?.department ?? "",
@@ -186,6 +195,7 @@ function UserCard({
         displayName: displayName || undefined,
         userIdentity:
           Object.keys(identity).length > 0 ? identity : undefined,
+        roleId: selectedRoleId || undefined,
       });
       setEditing(false);
       onSaved();
@@ -203,15 +213,34 @@ function UserCard({
     <div className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md">
       {editing ? (
         <div className="space-y-3">
-          <div>
-            <label className="mb-1 block text-[10px] font-medium text-gray-500">
-              Display Name
-            </label>
-            <input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              className={inputClass}
-            />
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="mb-1 block text-[10px] font-medium text-gray-500">
+                Display Name
+              </label>
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+            {isSystemAdmin && (
+              <div>
+                <label className="mb-1 block text-[10px] font-medium text-gray-500">
+                  Access Level
+                </label>
+                <select
+                  value={selectedRoleId}
+                  onChange={(e) => setSelectedRoleId(e.target.value)}
+                  className={inputClass}
+                >
+                  <option value="">No role</option>
+                  {availableRoles.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -290,6 +319,11 @@ function UserCard({
                 </p>
                 <p className="font-mono text-[10px] text-gray-400">{u.id}</p>
               </div>
+              {u.role === "admin" && (
+                <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-600">
+                  admin
+                </span>
+              )}
             </div>
             {u.userIdentity && (
               <div className="mt-2 flex flex-wrap gap-1">
@@ -321,6 +355,7 @@ function UserCard({
 export default function AdminPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const { toast } = useToast();
 
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [agents, setAgents] = useState<AdminAgent[]>([]);
@@ -328,10 +363,13 @@ export default function AdminPage() {
   const [selectedGroup, setSelectedGroup] = useState<AdminGroup | null>(null);
   const [groupMembers, setGroupMembers] = useState<AdminGroupMember[]>([]);
 
+  const [roles, setRoles] = useState<AdminRole[]>([]);
   const [models, setModels] = useState<ConversationModelInfo[]>([]);
   const [vendors, setVendors] = useState<
-    { id: string; name: string; slug: string }[]
+    { id: string; name: string; slug: string; hasApiKey: boolean }[]
   >([]);
+  const [vendorApiKeys, setVendorApiKeys] = useState<Record<string, string>>({});
+  const [savingKeyVendorId, setSavingKeyVendorId] = useState<string | null>(null);
 
   const [newAgentDefinition, setNewAgentDefinition] = useState("");
   const [newAgentInstructions, setNewAgentInstructions] = useState("");
@@ -350,23 +388,25 @@ export default function AdminPage() {
   const [success, setSuccess] = useState("");
 
   useEffect(() => {
-    if (user && user.id !== "SYSTEM") navigate("/", { replace: true });
+    if (user && user.role !== "admin") navigate("/", { replace: true });
   }, [user, navigate]);
 
   const reload = useCallback(async () => {
     try {
-      const [u, a, g, m, v] = await Promise.all([
+      const [u, a, g, m, v, r] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
         admin.getModels(),
         admin.getVendors(),
+        admin.getRoles(),
       ]);
       setUsers(u);
       setAgents(a);
       setGroups(g);
       setModels(m);
       setVendors(v);
+      setRoles(r);
       const unattached = a.filter((x) => !x.singleChatId && !x.groupId);
       if (unattached.length > 0 && !newGroupAgentId) setNewGroupAgentId(unattached[0].id);
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
@@ -378,6 +418,24 @@ export default function AdminPage() {
   useEffect(() => {
     reload();
   }, [reload]);
+
+  // Listen for admin changes from other admins and auto-refresh
+  const reloadRef = useRef(reload);
+  reloadRef.current = reload;
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) return;
+    const socket = getChatSocket(token);
+
+    const onAdminChange = (data: { type: string; message: string; actorId?: string }) => {
+      if (data.actorId === user?.id) return;
+      toast(data.message, "info");
+      reloadRef.current();
+    };
+
+    socket.on("admin:change", onAdminChange);
+    return () => { socket.off("admin:change", onAdminChange); };
+  }, [user?.id]);
 
   useEffect(() => {
     if (!selectedGroup) {
@@ -486,6 +544,43 @@ export default function AdminPage() {
     }
   }
 
+  async function handleSaveApiKey(vendorId: string) {
+    const key = vendorApiKeys[vendorId];
+    if (!key?.trim()) return;
+    setSavingKeyVendorId(vendorId);
+    setError("");
+    try {
+      await admin.setVendorApiKey(vendorId, key.trim());
+      setVendorApiKeys((prev) => ({ ...prev, [vendorId]: "" }));
+      flash("API key saved.");
+      await reload();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSavingKeyVendorId(null);
+    }
+  }
+
+  const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null);
+
+  async function handleDeleteGroup(groupId: string) {
+    const group = groups.find((g) => g.id === groupId);
+    if (!group) return;
+    if (!window.confirm(`Delete group "${group.name}"? This will remove all threads, messages, and memory for this group. The agent will become available for reuse. This cannot be undone.`)) return;
+    setDeletingGroupId(groupId);
+    setError("");
+    try {
+      await admin.deleteGroup(groupId);
+      if (selectedGroup?.id === groupId) setSelectedGroup(null);
+      flash("Group deleted.");
+      await reload();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setDeletingGroupId(null);
+    }
+  }
+
   async function handleRenameGroup() {
     if (!editingGroupId || !editingGroupName.trim()) return;
     try {
@@ -512,7 +607,7 @@ export default function AdminPage() {
   const btnPrimary =
     "inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:shadow-md hover:shadow-indigo-200/50 active:scale-[0.98] disabled:opacity-50 disabled:shadow-none";
 
-  if (!user || user.id !== "SYSTEM") return null;
+  if (!user || user.role !== "admin") return null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50/30">
@@ -629,7 +724,7 @@ export default function AdminPage() {
             </h2>
             <div className="max-h-[500px] overflow-y-auto space-y-2.5">
               {users.map((u) => (
-                <UserCard key={u.id} u={u} onSaved={reload} />
+                <UserCard key={u.id} u={u} roles={roles} isSystemAdmin={user?.id === "SYSTEM"} onSaved={reload} />
               ))}
             </div>
           </div>
@@ -746,7 +841,7 @@ export default function AdminPage() {
                 </label>
                 <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
                   {users
-                    .filter((u) => u.id !== "SYSTEM")
+                    .filter((u) => u.id !== user?.id)
                     .map((u) => {
                       const selected = newGroupMembers.includes(u.id);
                       return (
@@ -774,7 +869,7 @@ export default function AdminPage() {
                         </button>
                       );
                     })}
-                  {users.filter((u) => u.id !== "SYSTEM").length === 0 && (
+                  {users.filter((u) => u.id !== user?.id).length === 0 && (
                     <p className="text-xs text-gray-400 py-1">No users available.</p>
                   )}
                 </div>
@@ -847,6 +942,21 @@ export default function AdminPage() {
                         title="Rename group"
                       >
                         <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteGroup(g.id);
+                        }}
+                        disabled={deletingGroupId === g.id}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500 transition disabled:opacity-50"
+                        title="Delete group"
+                      >
+                        {deletingGroupId === g.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
                       </button>
                     </>
                   )}
@@ -929,6 +1039,63 @@ export default function AdminPage() {
                 </p>
               </div>
             )}
+          </div>
+
+          {/* API Keys */}
+          <div className="lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm">
+                <KeyRound className="h-4 w-4" />
+              </div>
+              API Keys
+            </h2>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {vendors.map((v) => (
+                <div
+                  key={v.id}
+                  className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200"
+                >
+                  <div className="flex items-center gap-2.5 mb-3">
+                    <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600">
+                      <VendorIcon slug={v.slug} />
+                    </div>
+                    <span className="text-sm font-semibold text-gray-900">{v.name}</span>
+                    {v.hasApiKey ? (
+                      <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+                        Configured
+                      </span>
+                    ) : (
+                      <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
+                        Missing
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="password"
+                      value={vendorApiKeys[v.id] ?? ""}
+                      onChange={(e) =>
+                        setVendorApiKeys((prev) => ({ ...prev, [v.id]: e.target.value }))
+                      }
+                      placeholder={v.hasApiKey ? "Enter new key to replace" : "Enter API key"}
+                      className="flex-1 min-w-0 rounded-xl border border-gray-200 bg-gray-50/80 px-3 py-2 text-xs font-mono transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10"
+                    />
+                    <button
+                      onClick={() => handleSaveApiKey(v.id)}
+                      disabled={!vendorApiKeys[v.id]?.trim() || savingKeyVendorId === v.id}
+                      className="flex-shrink-0 inline-flex items-center gap-1 rounded-xl bg-indigo-500 px-3 py-2 text-xs font-medium text-white shadow-sm transition hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {savingKeyVendorId === v.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Save className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
           {/* Models */}

@@ -126,3 +126,15 @@ html, body {
 .chat-prose-user a {
   color: inherit;
 }
+
+/* Search result highlight flash animation */
+.search-highlight-flash {
+  animation: search-flash 1.5s ease-out;
+}
+@keyframes search-flash {
+  0% { background-color: rgb(253 230 138 / 0.5); }
+  100% { background-color: transparent; }
+}
+.search-match-highlight {
+  background-color: rgb(253 230 138 / 0.15);
+}

@@ -24,6 +24,9 @@ export interface AgentReplyPayload {
   ok: true;
   reply: string;
   systemPrompt: string | null;
+  modelSlug?: string;
+  vendorSlug?: string;
+  modelName?: string;
 }
 
 export interface AgentErrorPayload {

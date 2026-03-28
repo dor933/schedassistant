@@ -1,25 +1,23 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
-import type { VendorAttributes } from "@scheduling-agent/types";
 
-type VendorCreationAttributes = Optional<
-  VendorAttributes,
-  "id" | "apiKey" | "createdAt" | "updatedAt"
->;
+export interface RoleAttributes {
+  id: string;
+  name: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
-class Vendor
-  extends Model<VendorAttributes, VendorCreationAttributes>
-  implements VendorAttributes
-{
+type RoleCreationAttributes = Optional<RoleAttributes, "id" | "createdAt" | "updatedAt">;
+
+class Role extends Model<RoleAttributes, RoleCreationAttributes> implements RoleAttributes {
   declare id: string;
   declare name: string;
-  declare slug: string;
-  declare apiKey: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
 
-Vendor.init(
+Role.init(
   {
     id: {
       type: DataTypes.UUID,
@@ -29,16 +27,7 @@ Vendor.init(
     name: {
       type: DataTypes.STRING,
       allowNull: false,
-    },
-    slug: {
-      type: DataTypes.STRING,
-      allowNull: false,
       unique: true,
-    },
-    apiKey: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      field: "api_key",
     },
     createdAt: {
       type: DataTypes.DATE,
@@ -53,10 +42,10 @@ Vendor.init(
   },
   {
     sequelize,
-    tableName: "vendors",
+    tableName: "roles",
     underscored: true,
     timestamps: true,
   },
 );
 
-export { Vendor };
+export { Role };

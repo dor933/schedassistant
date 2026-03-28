@@ -18,6 +18,9 @@ interface AgentReplyOk {
   ok: true;
   reply: string;
   systemPrompt: string | null;
+  modelSlug?: string;
+  vendorSlug?: string;
+  modelName?: string;
 }
 
 interface AgentReplyError {
@@ -52,6 +55,9 @@ interface ChatReplyToClient {
   reply?: string;
   systemPrompt?: string | null;
   error?: string;
+  modelSlug?: string;
+  vendorSlug?: string;
+  modelName?: string;
 }
 
 /**
@@ -133,7 +139,13 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
     conversationType,
     ok: payload.ok,
     ...(payload.ok
-      ? { reply: payload.reply, systemPrompt: payload.systemPrompt }
+      ? {
+          reply: payload.reply,
+          systemPrompt: payload.systemPrompt,
+          ...(payload.modelSlug ? { modelSlug: payload.modelSlug } : {}),
+          ...(payload.vendorSlug ? { vendorSlug: payload.vendorSlug } : {}),
+          ...(payload.modelName ? { modelName: payload.modelName } : {}),
+        }
       : { error: payload.error }),
   };
 

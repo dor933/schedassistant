@@ -42,6 +42,8 @@ export interface VendorAttributes {
   id: VendorId;
   name: string;
   slug: string;
+  /** Encrypted API key for this vendor (null = not configured). */
+  apiKey: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -154,6 +156,8 @@ export interface UserAttributes {
   displayName?: string | null;
   userIdentity?: UserIdentity | null;
   password?: string | null;
+  /** FK to `roles.id` — determines the user's access level. */
+  roleId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

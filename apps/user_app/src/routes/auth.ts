@@ -1,6 +1,6 @@
 import { Router } from "express";
 import bcrypt from "bcrypt";
-import { User, Group, GroupMember, SingleChat, Agent, LLMModel, Vendor } from "@scheduling-agent/database";
+import { User, Role, Group, GroupMember, SingleChat, Agent, LLMModel, Vendor } from "@scheduling-agent/database";
 import { registerSchema, loginSchema } from "@scheduling-agent/types";
 import { signToken, authMiddleware } from "../middleware/auth";
 import { logger } from "../logger";
@@ -112,9 +112,17 @@ router.post("/login", async (req, res) => {
       await agent.update({ singleChatId: sc.id });
     }
 
+    // Resolve role name from role_id
+    let roleName = "user";
+    if (user.roleId) {
+      const role = await Role.findByPk(user.roleId, { attributes: ["name"] });
+      if (role) roleName = role.name;
+    }
+
     const token = signToken({
       userId: user.id,
       displayName: user.displayName,
+      role: roleName,
     });
 
     const conversations = await loadUserConversations(user.id);
@@ -125,6 +133,7 @@ router.post("/login", async (req, res) => {
         id: user.id,
         displayName: user.displayName,
         userIdentity: user.userIdentity,
+        role: roleName,
       },
       conversations,
     });
@@ -200,10 +209,16 @@ async function loadUserConversations(userId: string) {
 router.get("/me", authMiddleware, async (req, res) => {
   try {
     const user = await User.findByPk(req.user!.userId, {
-      attributes: ["id", "displayName", "userIdentity"],
+      attributes: ["id", "displayName", "userIdentity", "roleId"],
     });
     if (!user) {
       return res.status(404).json({ error: "User not found." });
+    }
+
+    let roleName = "user";
+    if (user.roleId) {
+      const role = await Role.findByPk(user.roleId, { attributes: ["name"] });
+      if (role) roleName = role.name;
     }
 
     const conversations = await loadUserConversations(user.id);
@@ -212,6 +227,7 @@ router.get("/me", authMiddleware, async (req, res) => {
       id: user.id,
       displayName: user.displayName,
       userIdentity: user.userIdentity,
+      role: roleName,
       conversations,
     });
   } catch (err: any) {

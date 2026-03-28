@@ -7,6 +7,7 @@ import { persistSummarizationResult } from "../../../memory/sessionSummaryChunks
 import { embedText } from "../../../memory/embeddings";
 import { getLangfuseCallbackHandler, observeWithContext } from "../../../langfuse";
 import { logger } from "../../../logger";
+import { Vendor } from "@scheduling-agent/database";
 
 /**
  * Zod schema for the structured output returned by the LLM during
@@ -27,11 +28,18 @@ const sessionSummarizationSchema = z.object({
     ),
 });
 
-const llm = new ChatOpenAI({
-  modelName: "gpt-4o",
-  temperature: 0,
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let cachedLlm: ChatOpenAI | null = null;
+
+async function getSummarizationLlm(): Promise<ChatOpenAI> {
+  if (cachedLlm) return cachedLlm;
+  const vendor = await Vendor.findOne({ where: { slug: "openai" }, attributes: ["apiKey"] });
+  cachedLlm = new ChatOpenAI({
+    modelName: "gpt-4o",
+    temperature: 0,
+    apiKey: vendor?.apiKey ?? undefined,
+  });
+  return cachedLlm;
+}
 
 /**
  * LangGraph node: runs when a guard determines that TTL or checkpoint-size
@@ -79,6 +87,7 @@ export async function sessionSummarizationNode(
           });
         }
 
+        const llm = await getSummarizationLlm();
         const structuredLlm = llm.withStructuredOutput(
           sessionSummarizationSchema,
           { name: "session_summarization" },

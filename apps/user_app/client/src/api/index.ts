@@ -55,7 +55,7 @@ export interface Conversations {
 
 export interface LoginResponse {
   token: string;
-  user: { id: string; displayName: string | null; userIdentity: Record<string, unknown> | null };
+  user: { id: string; displayName: string | null; userIdentity: Record<string, unknown> | null; role: string };
   conversations: Conversations;
 }
 
@@ -88,6 +88,7 @@ export function register(data: RegisterData) {
 export interface MeResponse {
   id: string;
   displayName: string | null;
+  role: string;
   conversations: Conversations;
 }
 
@@ -112,10 +113,37 @@ export interface HistoryMessage {
   content: string;
   /** Display name of the sender (set on human messages when available). */
   senderName?: string;
+  /** Model metadata (set on assistant messages). */
+  modelSlug?: string;
+  vendorSlug?: string;
+  modelName?: string;
 }
 
-export function getHistory(threadId: string) {
-  return request<HistoryMessage[]>(`/sessions/history/${threadId}`);
+export interface PaginatedHistory {
+  messages: HistoryMessage[];
+  total: number;
+}
+
+export function getHistory(
+  threadId: string,
+  opts?: { limit?: number; offset?: number },
+) {
+  const params = new URLSearchParams();
+  if (opts?.limit != null) params.set("limit", String(opts.limit));
+  if (opts?.offset != null) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  return request<PaginatedHistory>(`/sessions/history/${threadId}${qs ? `?${qs}` : ""}`);
+}
+
+export interface SearchResult extends HistoryMessage {
+  index: number;
+}
+
+export function searchHistory(threadId: string, q: string) {
+  const params = new URLSearchParams({ q });
+  return request<{ results: SearchResult[]; total: number }>(
+    `/sessions/history/${threadId}/search?${params}`,
+  );
 }
 
 export function getSessions(scope?: { groupId?: string; singleChatId?: string }) {
@@ -238,7 +266,14 @@ export interface AdminUser {
   id: string;
   displayName: string | null;
   userIdentity: Record<string, unknown> | null;
+  role: string;
+  roleId: string | null;
   createdAt: string;
+}
+
+export interface AdminRole {
+  id: string;
+  name: string;
 }
 
 export interface AdminAgent {
@@ -264,6 +299,7 @@ export interface AdminGroupMember {
 }
 
 export const admin = {
+  getRoles: () => request<AdminRole[]>("/admin/roles"),
   getUsers: () => request<AdminUser[]>("/admin/users"),
   getAgents: () => request<AdminAgent[]>("/admin/agents"),
   createAgent: (data: { definition?: string; coreInstructions?: string }) =>
@@ -276,7 +312,7 @@ export const admin = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
-  updateUser: (id: string, data: { displayName?: string; userIdentity?: Record<string, unknown> }) =>
+  updateUser: (id: string, data: { displayName?: string; userIdentity?: Record<string, unknown>; roleId?: string }) =>
     request<AdminUser>(`/admin/users/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -292,6 +328,8 @@ export const admin = {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
+  deleteGroup: (groupId: string) =>
+    request<{ deleted: boolean }>(`/admin/groups/${groupId}`, { method: "DELETE" }),
   getGroupMembers: (groupId: string) =>
     request<AdminGroupMember[]>(`/admin/groups/${groupId}/members`),
   addGroupMember: (groupId: string, userId: string) =>
@@ -304,7 +342,12 @@ export const admin = {
       method: "DELETE",
     }),
   getVendors: () =>
-    request<{ id: string; name: string; slug: string }[]>("/admin/vendors"),
+    request<{ id: string; name: string; slug: string; hasApiKey: boolean }[]>("/admin/vendors"),
+  setVendorApiKey: (vendorId: string, apiKey: string) =>
+    request<{ id: string; name: string; slug: string; hasApiKey: boolean }>(
+      `/admin/vendors/${vendorId}/api-key`,
+      { method: "PATCH", body: JSON.stringify({ apiKey }) },
+    ),
   getModels: () =>
     request<ConversationModelInfo[]>("/admin/models"),
   createModel: (data: { vendorId: string; name: string; slug: string }) =>

@@ -11,6 +11,36 @@ const vendorAvatarColors: Record<string, string> = {
 
 const defaultAvatarColor = "bg-gray-100 text-gray-500 shadow-gray-100/50 ring-gray-200/60";
 
+/** Highlight occurrences of `term` within `text`. */
+function HighlightedText({ text, term }: { text: string; term: string }) {
+  if (!term) return <>{text}</>;
+  const lc = text.toLowerCase();
+  const lcTerm = term.toLowerCase();
+  const parts: { text: string; match: boolean }[] = [];
+  let cursor = 0;
+  let idx = lc.indexOf(lcTerm, cursor);
+  while (idx !== -1) {
+    if (idx > cursor) parts.push({ text: text.slice(cursor, idx), match: false });
+    parts.push({ text: text.slice(idx, idx + term.length), match: true });
+    cursor = idx + term.length;
+    idx = lc.indexOf(lcTerm, cursor);
+  }
+  if (cursor < text.length) parts.push({ text: text.slice(cursor), match: false });
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.match ? (
+          <mark key={i} className="rounded-sm bg-amber-200/80 px-0.5 text-inherit">
+            {p.text}
+          </mark>
+        ) : (
+          <span key={i}>{p.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
 interface ChatMessageProps {
   role: "user" | "assistant";
   content: string;
@@ -18,11 +48,15 @@ interface ChatMessageProps {
   senderName?: string;
   /** Vendor slug for the model (used to show vendor icon on assistant messages). */
   vendorSlug?: string | null;
+  /** Display name of the model (e.g. "GPT-4o Mini"). */
+  modelName?: string | null;
   /** Whether this message is in a group chat — enables sender labels. */
   isGroup?: boolean;
+  /** Text to highlight within the message (search term). */
+  highlightText?: string;
 }
 
-export default function ChatMessage({ role, content, senderName, vendorSlug, isGroup }: ChatMessageProps) {
+export default function ChatMessage({ role, content, senderName, vendorSlug, modelName, isGroup, highlightText }: ChatMessageProps) {
   const isUser = role === "user";
   const isError = !isUser && content.startsWith("Error:");
   // Messages from other group members: role is "user" but senderName is set
@@ -30,27 +64,52 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, isG
   // Current user's own message in a group chat
   const isSelfInGroup = isUser && !isOtherUser && isGroup;
 
+  // When highlighting, render plain text with highlights instead of Markdown
+  const renderContent = (className?: string) => {
+    if (highlightText) {
+      return (
+        <div className={className}>
+          <p className="whitespace-pre-wrap">
+            <HighlightedText text={content} term={highlightText} />
+          </p>
+        </div>
+      );
+    }
+    return (
+      <div className={className}>
+        <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+      </div>
+    );
+  };
+
   return (
     <div
       className={`flex animate-slide-up ${isUser && !isOtherUser ? "justify-end" : "justify-start"}`}
     >
       {/* Left-side avatar: assistant or other group member */}
       {!isUser && (
-        <div
-          className={`mr-3 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${
-            isError
-              ? "bg-red-100 text-red-500 ring-red-200/60"
-              : vendorSlug
-                ? vendorAvatarColors[vendorSlug] ?? defaultAvatarColor
-                : defaultAvatarColor
-          }`}
-        >
-          {isError ? (
-            <AlertTriangle className="h-4 w-4" />
-          ) : vendorSlug ? (
-            <VendorIcon slug={vendorSlug} />
-          ) : (
-            <VendorIcon slug="" />
+        <div className="mr-3 flex flex-col items-center gap-1 flex-shrink-0">
+          <div
+            className={`flex h-8 w-8 items-center justify-center rounded-xl shadow-sm ring-1 ${
+              isError
+                ? "bg-red-100 text-red-500 ring-red-200/60"
+                : vendorSlug
+                  ? vendorAvatarColors[vendorSlug] ?? defaultAvatarColor
+                  : defaultAvatarColor
+            }`}
+          >
+            {isError ? (
+              <AlertTriangle className="h-4 w-4" />
+            ) : vendorSlug ? (
+              <VendorIcon slug={vendorSlug} />
+            ) : (
+              <VendorIcon slug="" />
+            )}
+          </div>
+          {modelName && !isError && (
+            <span className="max-w-[4.5rem] truncate text-center text-[9px] font-medium leading-tight text-gray-400">
+              {modelName}
+            </span>
           )}
         </div>
       )}
@@ -77,9 +136,7 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, isG
         <div className="max-w-[88%] sm:max-w-[75%]">
           <p className="mb-1 ml-1 text-[11px] font-semibold text-indigo-500">{senderName}</p>
           <div className="rounded-2xl rounded-tl-md bg-white px-4 py-3 text-sm text-gray-800 shadow-glass ring-1 ring-gray-950/[0.04]">
-            <div className="chat-prose">
-              <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
-            </div>
+            {renderContent("chat-prose")}
           </div>
         </div>
       ) : (
@@ -94,9 +151,7 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, isG
                 : "rounded-2xl rounded-tl-md bg-white px-4 py-3 text-gray-800 shadow-glass ring-1 ring-gray-950/[0.04]"
             }`}
           >
-            <div className={`chat-prose ${isUser ? "chat-prose-user" : ""}`}>
-              <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
-            </div>
+            {renderContent(`chat-prose ${isUser ? "chat-prose-user" : ""}`)}
           </div>
         </div>
       )}

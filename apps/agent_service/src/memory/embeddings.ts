@@ -1,4 +1,5 @@
 import { OpenAIEmbeddings } from "@langchain/openai";
+import { Vendor } from "@scheduling-agent/database";
 
 /**
  * Shared OpenAI embedding model instance.
@@ -6,11 +7,28 @@ import { OpenAIEmbeddings } from "@langchain/openai";
  * Uses `text-embedding-3-small` (1536 dimensions) — must match the
  * EMBEDDING_DIMENSION constant in the EpisodicMemory model and the
  * pgvector column created by migrations.
+ *
+ * The API key is fetched from the database on first use.
  */
-const embeddingModel = new OpenAIEmbeddings({
-  modelName: "text-embedding-3-small",
-  apiKey: process.env.OPENAI_API_KEY,
-});
+let embeddingModel: OpenAIEmbeddings | null = null;
+
+async function getEmbeddingModel(): Promise<OpenAIEmbeddings> {
+  if (embeddingModel) return embeddingModel;
+
+  const vendor = await Vendor.findOne({ where: { slug: "openai" }, attributes: ["apiKey"] });
+  const apiKey = vendor?.apiKey ?? undefined;
+
+  embeddingModel = new OpenAIEmbeddings({
+    modelName: "text-embedding-3-small",
+    apiKey,
+  });
+  return embeddingModel;
+}
+
+/** Reset cached model so the next call re-reads the key from DB. */
+export function resetEmbeddingModel(): void {
+  embeddingModel = null;
+}
 
 /**
  * Embeds a single text string and returns its vector representation.
@@ -18,7 +36,8 @@ const embeddingModel = new OpenAIEmbeddings({
  * (chunk embedding).
  */
 export async function embedText(text: string): Promise<number[]> {
-  return embeddingModel.embedQuery(text);
+  const model = await getEmbeddingModel();
+  return model.embedQuery(text);
 }
 
 /**
@@ -27,5 +46,6 @@ export async function embedText(text: string): Promise<number[]> {
  * several chunks to embed at once (e.g. during session summarization).
  */
 export async function embedTexts(texts: string[]): Promise<number[][]> {
-  return embeddingModel.embedDocuments(texts);
+  const model = await getEmbeddingModel();
+  return model.embedDocuments(texts);
 }

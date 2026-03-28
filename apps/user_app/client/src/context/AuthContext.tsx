@@ -13,11 +13,12 @@ import {
   type Conversations,
   type RegisterData,
 } from "../api";
-import { disconnectChatSocket } from "../sockets/chatSocket";
+import { getChatSocket, disconnectChatSocket } from "../sockets/chatSocket";
 
 interface User {
   id: string;
   displayName: string | null;
+  role: string;
 }
 
 interface AuthContextValue {
@@ -45,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     getMe()
       .then((me) => {
-        setUser({ id: me.id, displayName: me.displayName });
+        setUser({ id: me.id, displayName: me.displayName, role: me.role ?? "user" });
         setConversations(me.conversations);
       })
       .catch(() => {
@@ -57,14 +58,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (userName: string, password: string) => {
     const res = await apiLogin(userName, password);
     localStorage.setItem("token", res.token);
-    setUser({ id: res.user.id, displayName: res.user.displayName });
+    setUser({ id: res.user.id, displayName: res.user.displayName, role: res.user.role ?? "user" });
     setConversations(res.conversations);
   }, []);
 
   const register = useCallback(async (data: RegisterData) => {
     const res = await apiRegister(data);
     localStorage.setItem("token", res.token);
-    setUser({ id: res.user.id, displayName: res.user.displayName });
+    setUser({ id: res.user.id, displayName: res.user.displayName, role: res.user.role ?? "user" });
     setConversations(res.conversations);
   }, []);
 
@@ -74,6 +75,73 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setConversations(null);
   }, []);
+
+  // Keep conversations state in sync with admin changes (always mounted)
+  useEffect(() => {
+    if (!user) return;
+    const token = localStorage.getItem("token");
+    if (!token) return;
+
+    const socket = getChatSocket(token);
+
+    const onAdminChange = (data: { type: string; data: any }) => {
+      switch (data.type) {
+        case "group_model_changed": {
+          const { groupId, model } = data.data;
+          setConversations((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              groups: prev.groups.map((g) =>
+                g.id === groupId ? { ...g, model } : g,
+              ),
+            };
+          });
+          break;
+        }
+        case "single_chat_model_changed": {
+          const { singleChatId, model } = data.data;
+          setConversations((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              singleChats: prev.singleChats.map((sc) =>
+                sc.id === singleChatId ? { ...sc, model } : sc,
+              ),
+            };
+          });
+          break;
+        }
+        case "group_renamed": {
+          const { groupId, name } = data.data;
+          setConversations((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              groups: prev.groups.map((g) =>
+                g.id === groupId ? { ...g, name } : g,
+              ),
+            };
+          });
+          break;
+        }
+        case "group_deleted": {
+          const { groupId } = data.data;
+          setConversations((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              groups: prev.groups.filter((g) => g.id !== groupId),
+            };
+          });
+          break;
+        }
+      }
+    };
+
+    socket.on("admin:change", onAdminChange);
+    return () => { socket.off("admin:change", onAdminChange); };
+  }, [user]);
 
   return (
     <AuthContext.Provider value={{ user, conversations, setConversations, loading, login, register, logout }}>

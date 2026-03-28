@@ -12,6 +12,9 @@ export type ChatReplyPayload =
       ok: true;
       reply: string;
       systemPrompt: string | null;
+      modelSlug?: string;
+      vendorSlug?: string;
+      modelName?: string;
     }
   | {
       requestId: string;

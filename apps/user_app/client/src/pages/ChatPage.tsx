@@ -6,8 +6,11 @@ import {
   Loader2,
   AlertTriangle,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   Users,
   Bot,
+  Search,
 } from "lucide-react";
 import { VendorIcon } from "../components/VendorModelBadge";
 import { useAuth } from "../context/AuthContext";
@@ -17,6 +20,7 @@ import {
   sendMessage,
   getUnreadCounts,
   getHistory,
+  searchHistory,
   getAgentsList,
   createSingleChat,
   deleteSingleChat,
@@ -24,6 +28,7 @@ import {
   type Session,
   type AgentListItem,
   type GroupMemberInfo,
+  type SearchResult,
 } from "../api";
 import {
   getChatSocket,
@@ -31,6 +36,7 @@ import {
   emitUserTyping,
   type ChatReplyPayload,
 } from "../sockets/chatSocket";
+import { useToast } from "../components/Toast";
 import SessionSidebar, {
   type ConversationRef,
 } from "../components/SessionSidebar";
@@ -40,15 +46,23 @@ import VendorModelBadge from "../components/VendorModelBadge";
 import ModelSelector from "../components/ModelSelector";
 import type { ConversationModelInfo } from "../api";
 
+const PAGE_SIZE = 20;
+
 interface Message {
   role: "user" | "assistant";
   content: string;
   /** Display name of the sender — set for group messages from other users. */
   senderName?: string;
+  /** Per-message model metadata (set on assistant messages). */
+  vendorSlug?: string;
+  modelName?: string;
+  /** Absolute index in the full messages array (used for search navigation). */
+  _absIndex?: number;
 }
 
 export default function ChatPage() {
   const { user, conversations, setConversations, logout } = useAuth();
+  const { toast } = useToast();
 
   const [activeConv, setActiveConv] = useState<ConversationRef | null>(null);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
@@ -65,12 +79,26 @@ export default function ChatPage() {
   );
   const userTypingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
   const pendingReplies = useRef(
     new Map<string, (p: ChatReplyPayload) => void>(),
   );
   const activeConvRef = useRef<ConversationRef | null>(null);
   activeConvRef.current = activeConv;
 
+  // Pagination state
+  const [totalMessages, setTotalMessages] = useState(0);
+  const [loadedFrom, setLoadedFrom] = useState(0); // absolute index of first loaded message
+  const [loadingMore, setLoadingMore] = useState(false);
+  const hasMoreMessages = loadedFrom > 0;
+
+  // Search state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searchIdx, setSearchIdx] = useState(-1); // current result index
+  const [searching, setSearching] = useState(false);
   useEffect(() => {
     getUnreadCounts()
       .then(setUnreadCounts)
@@ -92,10 +120,34 @@ export default function ChatPage() {
       .catch(() => setGroupMembersList([]));
   }, [activeConv?.id, activeConv?.type]);
 
+  // Helper: transform a history message into our local Message shape
+  const sanitize = useCallback(
+    (s: string) => s.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user",
+    [],
+  );
+  const myName = sanitize(user?.displayName ?? user?.id ?? "");
+
+  const toMessage = useCallback(
+    (h: { role: string; content: string; senderName?: string; vendorSlug?: string; modelName?: string }, absIndex?: number): Message => ({
+      role: h.role as Message["role"],
+      content: h.content,
+      senderName:
+        h.senderName && sanitize(h.senderName) !== myName
+          ? h.senderName.replace(/_/g, " ")
+          : undefined,
+      vendorSlug: h.vendorSlug,
+      modelName: h.modelName,
+      _absIndex: absIndex,
+    }),
+    [sanitize, myName],
+  );
+
   useEffect(() => {
     if (!activeConv) {
       setActiveSession(null);
       setMessages([]);
+      setTotalMessages(0);
+      setLoadedFrom(0);
       return;
     }
 
@@ -106,7 +158,14 @@ export default function ChatPage() {
         : { singleChatId: activeConv.id };
 
     setMessages([]);
+    setTotalMessages(0);
+    setLoadedFrom(0);
     setLoadingHistory(true);
+    // Reset search when switching conversations
+    setSearchOpen(false);
+    setSearchQuery("");
+    setSearchResults([]);
+    setSearchIdx(-1);
 
     getSessions(scope)
       .then(async (list) => {
@@ -121,27 +180,14 @@ export default function ChatPage() {
         setActiveSession(session);
 
         try {
-          const history = await getHistory(session.threadId);
-          if (!cancelled && history.length > 0) {
-            // For group chats, compare senderName with current user to
-            // distinguish own messages from other users' messages.
-            // Names are sanitized server-side (spaces → underscores) to comply
-            // with LLM API constraints, so we sanitize the local name the same way.
-            const sanitize = (s: string) =>
-              s.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user";
-            const myName = sanitize(user?.displayName ?? user?.id ?? "");
-            setMessages(
-              history.map((h) => ({
-                role: h.role,
-                content: h.content,
-                // If senderName matches current user → own message (no senderName)
-                // If senderName is different → other user's message
-                senderName:
-                  h.senderName && sanitize(h.senderName) !== myName
-                    ? h.senderName.replace(/_/g, " ")
-                    : undefined,
-              })),
-            );
+          const { messages: history, total } = await getHistory(session.threadId, { limit: PAGE_SIZE });
+          if (!cancelled) {
+            setTotalMessages(total);
+            const offset = Math.max(0, total - history.length);
+            setLoadedFrom(offset);
+            if (history.length > 0) {
+              setMessages(history.map((h, i) => toMessage(h, offset + i)));
+            }
           }
         } catch {
           // No history available
@@ -165,9 +211,147 @@ export default function ChatPage() {
     };
   }, [activeConv?.id]);
 
+  // Only auto-scroll to bottom when messages are appended (new message), not when prepended (load more).
+  const prevMsgCount = useRef(0);
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    // Scroll to bottom only on initial load or when new messages are appended at the end
+    if (messages.length > 0 && messages.length >= prevMsgCount.current) {
+      // Check if this is a prepend (loadMore) by seeing if loadingMore just finished
+      if (!loadingMore) {
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+    }
+    prevMsgCount.current = messages.length;
+  }, [messages, loadingMore]);
+
+  // Load more messages when scrolling to top
+  const handleLoadMore = useCallback(async () => {
+    if (!activeSession || loadingMore || loadedFrom <= 0) return;
+    setLoadingMore(true);
+
+    const container = scrollContainerRef.current;
+    const prevScrollHeight = container?.scrollHeight ?? 0;
+
+    try {
+      const offset = Math.max(0, loadedFrom - PAGE_SIZE);
+      const limit = loadedFrom - offset;
+      const { messages: older } = await getHistory(activeSession.threadId, { limit, offset });
+
+      if (older.length > 0) {
+        const olderMessages = older.map((h, i) => toMessage(h, offset + i));
+        setMessages((prev) => [...olderMessages, ...prev]);
+        setLoadedFrom(offset);
+
+        // Restore scroll position after prepending
+        requestAnimationFrame(() => {
+          if (container) {
+            const newScrollHeight = container.scrollHeight;
+            container.scrollTop = newScrollHeight - prevScrollHeight;
+          }
+        });
+      }
+    } catch {
+      // Ignore
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [activeSession, loadingMore, loadedFrom, toMessage]);
+
+  // IntersectionObserver to detect scroll to top
+  useEffect(() => {
+    const sentinel = topSentinelRef.current;
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && hasMoreMessages && !loadingMore) {
+          handleLoadMore();
+        }
+      },
+      { root: scrollContainerRef.current, threshold: 0.1 },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMoreMessages, loadingMore, handleLoadMore]);
+
+  // Search handlers
+  const navigateRef = useRef<typeof navigateToResult>(() => Promise.resolve());
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  const handleSearch = useCallback(async (query: string) => {
+    setSearchQuery(query);
+    if (!query.trim() || !activeSession) {
+      setSearchResults([]);
+      setSearchIdx(-1);
+      return;
+    }
+    setSearching(true);
+    try {
+      const { results } = await searchHistory(activeSession.threadId, query.trim());
+      setSearchResults(results);
+      // Start at the last (most recent) match
+      const idx = results.length > 0 ? results.length - 1 : -1;
+      setSearchIdx(idx);
+      if (idx >= 0) navigateRef.current(results[idx]);
+    } catch {
+      setSearchResults([]);
+      setSearchIdx(-1);
+    } finally {
+      setSearching(false);
+    }
+  }, [activeSession]);
+
+  // Navigate to a search result, loading the page if needed
+  const navigateToResult = useCallback(async (result: SearchResult) => {
+    if (!activeSession) return;
+
+    // Check if this message is already loaded
+    const isLoaded = result.index >= loadedFrom && result.index < loadedFrom + messages.length;
+
+    if (!isLoaded) {
+      // Load a page centered around the target index
+      const targetOffset = Math.max(0, result.index - Math.floor(PAGE_SIZE / 2));
+      setLoadingMore(true);
+      try {
+        const { messages: page, total } = await getHistory(activeSession.threadId, {
+          limit: Math.max(PAGE_SIZE, loadedFrom + messages.length - targetOffset),
+          offset: targetOffset,
+        });
+        setTotalMessages(total);
+        setLoadedFrom(targetOffset);
+        setMessages(page.map((h, i) => toMessage(h, targetOffset + i)));
+      } catch {
+        // ignore
+      } finally {
+        setLoadingMore(false);
+      }
+    }
+
+    // Scroll to the message after render
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-msg-index="${result.index}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("search-highlight-flash");
+        setTimeout(() => el.classList.remove("search-highlight-flash"), 1500);
+      }
+    });
+  }, [activeSession, loadedFrom, messages.length, toMessage]);
+  navigateRef.current = navigateToResult;
+
+  // Navigate between search results
+  const handleSearchNav = useCallback((direction: "prev" | "next") => {
+    if (searchResults.length === 0) return;
+    let next: number;
+    if (direction === "next") {
+      next = searchIdx < searchResults.length - 1 ? searchIdx + 1 : 0;
+    } else {
+      next = searchIdx > 0 ? searchIdx - 1 : searchResults.length - 1;
+    }
+    setSearchIdx(next);
+    navigateToResult(searchResults[next]);
+  }, [searchResults, searchIdx, navigateToResult]);
 
   useEffect(() => {
     if (!user) return;
@@ -209,9 +393,10 @@ export default function ChatPage() {
 
       if (isForActiveConv) {
         if (p.ok) {
+          setTotalMessages((t) => t + 1);
           setMessages((prev) => [
             ...prev,
-            { role: "assistant", content: p.reply },
+            { role: "assistant", content: p.reply, vendorSlug: p.vendorSlug, modelName: p.modelName },
           ]);
         }
         markConversationSeen(p.conversationId, p.conversationType);
@@ -268,6 +453,7 @@ export default function ChatPage() {
     }) => {
       const current = activeConvRef.current;
       if (current?.type === "group" && current.id === data.groupId) {
+        setTotalMessages((t) => t + 1);
         setMessages((prev) => [
           ...prev,
           { role: "user", content: data.message, senderName: data.displayName },
@@ -278,6 +464,45 @@ export default function ChatPage() {
           ...prev,
           [data.groupId]: (prev[data.groupId] ?? 0) + 1,
         }));
+      }
+    };
+
+    const onAdminChange = (data: {
+      type: string;
+      message: string;
+      data: any;
+      actorId?: string;
+    }) => {
+      // Don't toast our own actions
+      if (data.actorId === user?.id) return;
+
+      toast(data.message, "info");
+
+      // Update the active conversation view if it's affected
+      // (conversations state is updated globally in AuthContext)
+      const current = activeConvRef.current;
+      switch (data.type) {
+        case "group_model_changed": {
+          const { groupId, model } = data.data;
+          if (current?.type === "group" && current.id === groupId) {
+            setActiveConv((prev) => prev ? { ...prev, model } : prev);
+          }
+          break;
+        }
+        case "single_chat_model_changed": {
+          const { singleChatId, model } = data.data;
+          if (current?.type === "single" && current.id === singleChatId) {
+            setActiveConv((prev) => prev ? { ...prev, model } : prev);
+          }
+          break;
+        }
+        case "group_renamed": {
+          const { groupId, name } = data.data;
+          if (current?.type === "group" && current.id === groupId) {
+            setActiveConv((prev) => prev ? { ...prev, name } : prev);
+          }
+          break;
+        }
       }
     };
 
@@ -307,12 +532,14 @@ export default function ChatPage() {
     socket.on("user:typing", onUserTyping);
     socket.on("group:user-message", onGroupUserMessage);
     socket.on("conversations:updated", onConversationsUpdated);
+    socket.on("admin:change", onAdminChange);
     return () => {
       socket.off("thread:typing", onTyping);
       socket.off("chat:reply", onReply);
       socket.off("user:typing", onUserTyping);
       socket.off("group:user-message", onGroupUserMessage);
       socket.off("conversations:updated", onConversationsUpdated);
+      socket.off("admin:change", onAdminChange);
     };
   }, [user]);
 
@@ -418,7 +645,8 @@ export default function ChatPage() {
   );
 
   async function doSend(threadId: string, text: string) {
-    const userMsg: Message = { role: "user", content: text };
+    const userMsg: Message = { role: "user", content: text, _absIndex: totalMessages };
+    setTotalMessages((t) => t + 1);
     setMessages((prev) => [...prev, userMsg]);
     setSending(true);
 
@@ -471,10 +699,11 @@ export default function ChatPage() {
     try {
       await sendMessage(threadId, text, requestId, scope);
       const p = await replyPromise;
+      setTotalMessages((t) => t + 1);
       if (p.ok) {
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: p.reply },
+          { role: "assistant", content: p.reply, vendorSlug: p.vendorSlug, modelName: p.modelName, _absIndex: prev.length > 0 ? (prev[prev.length - 1]._absIndex ?? prev.length - 1) + 1 : 0 },
         ]);
       } else {
         setMessages((prev) => [
@@ -538,7 +767,7 @@ export default function ChatPage() {
           activeConversationId={activeConv?.id ?? null}
           unreadCounts={unreadCounts}
           typingConversations={typingConversations}
-          isAdmin={user?.id === "SYSTEM"}
+          isAdmin={user?.role === "admin"}
           onSelectConversation={handleSelectConversation}
           onNewChat={handleOpenNewChat}
           onDeleteChat={(id, title) => setDeleteTarget({ id, title })}
@@ -599,7 +828,7 @@ export default function ChatPage() {
               </p>
             )}
           </div>
-          {activeConv && user?.id === "SYSTEM" ? (
+          {activeConv && user?.role === "admin" ? (
             <ModelSelector
               currentModel={activeConv.model}
               conversationType={activeConv.type}
@@ -632,10 +861,101 @@ export default function ChatPage() {
           ) : activeConv?.model ? (
             <VendorModelBadge model={activeConv.model} />
           ) : null}
+          {activeConv && (
+            <button
+              onClick={() => {
+                setSearchOpen((v) => !v);
+                if (searchOpen) {
+                  setSearchQuery("");
+                  setSearchResults([]);
+                  setSearchIdx(-1);
+                }
+              }}
+              className={`ml-2 flex-shrink-0 rounded-xl p-2 transition-all duration-200 ${
+                searchOpen
+                  ? "bg-indigo-50 text-indigo-600 ring-1 ring-indigo-200/60"
+                  : "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              }`}
+              title="Search in chat"
+            >
+              <Search className="h-4 w-4" />
+            </button>
+          )}
         </header>
 
+        {/* Search Bar */}
+        {searchOpen && activeConv && (
+          <div className="flex items-center justify-center border-b border-gray-100 bg-gray-50/80 px-4 py-2 sm:px-6 animate-slide-up">
+            <div className="flex items-center gap-2 w-full max-w-xl rounded-full bg-white px-4 py-1.5 ring-1 ring-gray-200/80 shadow-sm">
+            <Search className="h-4 w-4 flex-shrink-0 text-gray-400" />
+            <input
+              autoFocus
+              type="text"
+              value={searchQuery}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSearchQuery(val);
+                clearTimeout(searchTimer.current);
+                if (!val.trim()) {
+                  setSearchResults([]);
+                  setSearchIdx(-1);
+                  return;
+                }
+                searchTimer.current = setTimeout(() => handleSearch(val), 300);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setSearchOpen(false);
+                  setSearchQuery("");
+                  setSearchResults([]);
+                  setSearchIdx(-1);
+                } else if (e.key === "Enter") {
+                  handleSearchNav(e.shiftKey ? "prev" : "next");
+                }
+              }}
+              placeholder="Search messages..."
+              className="flex-1 bg-transparent text-sm text-gray-900 placeholder-gray-400 outline-none"
+            />
+            {searching && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
+            {searchResults.length > 0 && (
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-gray-500 tabular-nums whitespace-nowrap">
+                  {searchIdx + 1} / {searchResults.length}
+                </span>
+                <button
+                  onClick={() => handleSearchNav("prev")}
+                  className="rounded-lg p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition"
+                >
+                  <ChevronUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => handleSearchNav("next")}
+                  className="rounded-lg p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+            {searchQuery && searchResults.length === 0 && !searching && (
+              <span className="text-xs text-gray-400">No results</span>
+            )}
+            <button
+              onClick={() => {
+                setSearchOpen(false);
+                setSearchQuery("");
+                setSearchResults([]);
+                setSearchIdx(-1);
+              }}
+              className="rounded-lg p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+            </div>
+          </div>
+        )}
+
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
+        <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-6 sm:px-6">
           {!activeConv && !sending && (
             <div className="flex h-full flex-col items-center justify-center text-center animate-fade-in">
               <div className="mb-5 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-indigo-50 to-blue-50 shadow-glass">
@@ -678,9 +998,35 @@ export default function ChatPage() {
             )}
 
           <div className="mx-auto max-w-3xl space-y-5">
-            {messages.map((msg, i) => (
-              <ChatMessage key={i} role={msg.role} content={msg.content} senderName={msg.senderName} vendorSlug={activeConv?.model?.vendor?.slug} isGroup={activeConv?.type === "group"} />
-            ))}
+            {/* Top sentinel for infinite scroll */}
+            <div ref={topSentinelRef} className="h-1" />
+
+            {/* Load more indicator */}
+            {loadingMore && (
+              <div className="flex justify-center py-3 animate-fade-in">
+                <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
+              </div>
+            )}
+            {hasMoreMessages && !loadingMore && (
+              <div className="flex justify-center">
+                <button
+                  onClick={handleLoadMore}
+                  className="rounded-full bg-gray-100 px-3 py-1 text-[11px] font-medium text-gray-500 transition hover:bg-gray-200 hover:text-gray-700"
+                >
+                  Load older messages
+                </button>
+              </div>
+            )}
+
+            {messages.map((msg, i) => {
+              const absIdx = msg._absIndex ?? i;
+              const isSearchMatch = searchQuery && searchResults.some((r) => r.index === absIdx);
+              return (
+                <div key={absIdx} data-msg-index={absIdx} className={isSearchMatch ? "search-match-highlight rounded-2xl transition-colors duration-300" : ""}>
+                  <ChatMessage role={msg.role} content={msg.content} senderName={msg.senderName} vendorSlug={msg.vendorSlug ?? activeConv?.model?.vendor?.slug} modelName={msg.modelName ?? activeConv?.model?.name} isGroup={activeConv?.type === "group"} highlightText={searchQuery && isSearchMatch ? searchQuery : undefined} />
+                </div>
+              );
+            })}
 
             {(sending || agentIsTyping) && (
               <div className="flex justify-start animate-fade-in">

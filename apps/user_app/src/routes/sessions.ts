@@ -66,11 +66,32 @@ router.post("/", authMiddleware, async (req, res) => {
   }
 });
 
+// ── GET /api/sessions/history/:threadId/search ───────────────────────────────
+// (Must be before the generic :threadId route)
+router.get("/history/:threadId/search", authMiddleware, async (req, res) => {
+  try {
+    const params = new URLSearchParams();
+    if (req.query.q) params.set("q", String(req.query.q));
+    const response = await fetch(
+      `${AGENT_SERVICE_URL}/api/history/${req.params.threadId}/search?${params}`,
+    );
+    const data = await response.json();
+    return res.json(data);
+  } catch (err: any) {
+    logger.error("Search proxy error", { error: err?.message });
+    return res.status(502).json({ error: "Agent service unavailable." });
+  }
+});
+
 // ── GET /api/sessions/history/:threadId ───────────────────────────────────────
 router.get("/history/:threadId", authMiddleware, async (req, res) => {
   try {
+    const params = new URLSearchParams();
+    if (req.query.limit) params.set("limit", String(req.query.limit));
+    if (req.query.offset) params.set("offset", String(req.query.offset));
+    const qs = params.toString();
     const response = await fetch(
-      `${AGENT_SERVICE_URL}/api/history/${req.params.threadId}`,
+      `${AGENT_SERVICE_URL}/api/history/${req.params.threadId}${qs ? `?${qs}` : ""}`,
     );
     const data = await response.json();
     return res.json(data);

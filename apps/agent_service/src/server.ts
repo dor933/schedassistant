@@ -135,40 +135,92 @@ export function createServer({ agentChatQueue, graph }: CreateServerDeps) {
     }
   });
 
-  // ── GET /api/history/:threadId ─────────────────────────────────────
-  app.get("/api/history/:threadId", async (req, res) => {
-    try {
-      const state = await graph.getState({
-        configurable: { thread_id: req.params.threadId },
-      });
+  /** Transform a raw LangGraph message into a plain HistoryMessage DTO. */
+  function toHistoryMessage(m: any) {
+    let role: "user" | "assistant" = "user";
+    if (typeof m._getType === "function") {
+      const t = m._getType();
+      role = t === "human" ? "user" : "assistant";
+    } else if (m.role === "assistant" || m.role === "ai") {
+      role = "assistant";
+    }
+    const content =
+      typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+    const senderName = role === "user" ? (m.name ?? null) : null;
+    const ak = m.additional_kwargs ?? m.kwargs?.additional_kwargs;
+    const modelSlug = role === "assistant" && ak?.modelSlug ? ak.modelSlug : undefined;
+    const vendorSlug = role === "assistant" && ak?.vendorSlug ? ak.vendorSlug : undefined;
+    const modelName = role === "assistant" && ak?.modelName ? ak.modelName : undefined;
+    return {
+      role,
+      content,
+      ...(senderName ? { senderName } : {}),
+      ...(modelSlug ? { modelSlug } : {}),
+      ...(vendorSlug ? { vendorSlug } : {}),
+      ...(modelName ? { modelName } : {}),
+    };
+  }
 
-      if (!state?.values) {
-        return res.json([]);
+  /** Load raw messages from a thread's checkpoint. */
+  async function loadRawMessages(threadId: string): Promise<any[]> {
+    const state = await graph.getState({
+      configurable: { thread_id: threadId },
+    });
+    if (!state?.values) return [];
+    return Array.isArray(state.values.messages) ? state.values.messages : [];
+  }
+
+  // ── GET /api/history/:threadId/search ──────────────────────────────
+  // (Must be before the generic :threadId route)
+  // Returns matching messages with their absolute indices.
+  app.get("/api/history/:threadId/search", async (req, res) => {
+    const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+    if (!q) return res.json({ results: [], total: 0 });
+    try {
+      const msgs = await loadRawMessages(req.params.threadId);
+      const total = msgs.length;
+      const results: { index: number; role: string; content: string; senderName?: string; modelSlug?: string; vendorSlug?: string; modelName?: string }[] = [];
+
+      for (let i = 0; i < msgs.length; i++) {
+        const h = toHistoryMessage(msgs[i]);
+        if (h.content.toLowerCase().includes(q)) {
+          results.push({ index: i, ...h });
+        }
       }
 
-      const msgs: any[] = Array.isArray(state.values.messages)
-        ? state.values.messages
-        : [];
+      return res.json({ results, total });
+    } catch (err: any) {
+      logger.error("/api/history/:threadId/search error", { threadId: req.params.threadId, error: err.message });
+      return res.json({ results: [], total: 0 });
+    }
+  });
 
-      const history = msgs.map((m: any) => {
-        let role: "user" | "assistant" = "user";
-        if (typeof m._getType === "function") {
-          const t = m._getType();
-          role = t === "human" ? "user" : "assistant";
-        } else if (m.role === "assistant" || m.role === "ai") {
-          role = "assistant";
-        }
-        const content =
-          typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-        // Extract sender name from HumanMessage's `name` field
-        const senderName = role === "user" ? (m.name ?? null) : null;
-        return { role, content, ...(senderName ? { senderName } : {}) };
-      });
+  // ── GET /api/history/:threadId ─────────────────────────────────────
+  // Supports pagination via ?limit=N&offset=M
+  // Returns { messages: [...], total: N }
+  app.get("/api/history/:threadId", async (req, res) => {
+    try {
+      const msgs = await loadRawMessages(req.params.threadId);
+      const total = msgs.length;
 
-      return res.json(history);
+      const limitParam = req.query.limit != null ? Number(req.query.limit) : undefined;
+      const offsetParam = req.query.offset != null ? Number(req.query.offset) : undefined;
+
+      let slice: any[];
+      if (limitParam != null) {
+        // If offset not provided, return the last `limit` messages
+        const offset = offsetParam ?? Math.max(0, total - limitParam);
+        const end = Math.min(total, offset + limitParam);
+        slice = msgs.slice(Math.max(0, offset), end);
+      } else {
+        slice = msgs;
+      }
+
+      const history = slice.map(toHistoryMessage);
+      return res.json({ messages: history, total });
     } catch (err: any) {
       logger.error("/api/history/:threadId error", { threadId: req.params.threadId, error: err.message });
-      return res.json([]);
+      return res.json({ messages: [], total: 0 });
     }
   });
 

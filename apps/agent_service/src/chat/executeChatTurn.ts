@@ -29,6 +29,9 @@ export type ChatTurnResult = {
   threadId: string;
   reply: string;
   systemPrompt: string | null;
+  modelSlug?: string;
+  vendorSlug?: string;
+  modelName?: string;
 };
 
 /**
@@ -111,12 +114,21 @@ export async function executeChatTurn(
         lastAiMessage?.content ??
         "Something went wrong — the model did not produce a response.";
 
+      // Extract model metadata attached by callModelNode
+      const ak = lastAiMessage?.additional_kwargs;
+      const replyModelSlug: string | undefined = ak?.modelSlug;
+      const replyVendorSlug: string | undefined = ak?.vendorSlug;
+      const replyModelName: string | undefined = ak?.modelName;
+
       const sp = result.systemPrompt;
       return {
         threadId,
         reply: typeof reply === "string" ? reply : JSON.stringify(reply),
         systemPrompt:
           sp == null ? null : typeof sp === "string" ? sp : JSON.stringify(sp),
+        ...(replyModelSlug ? { modelSlug: replyModelSlug } : {}),
+        ...(replyVendorSlug ? { vendorSlug: replyVendorSlug } : {}),
+        ...(replyModelName ? { modelName: replyModelName } : {}),
       };
     },
     observationInput,

@@ -1,4 +1,5 @@
 export { sequelize } from "./connection";
+export { Role } from "./models/Role";
 export { Vendor } from "./models/Vendor";
 export { LLMModel } from "./models/LLMModel";
 export { Agent } from "./models/Agent";

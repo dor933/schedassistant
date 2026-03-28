@@ -81,6 +81,9 @@ export function startAgentChatWorker(
           ok: true,
           reply: result.reply,
           systemPrompt: result.systemPrompt,
+          ...(result.modelSlug ? { modelSlug: result.modelSlug } : {}),
+          ...(result.vendorSlug ? { vendorSlug: result.vendorSlug } : {}),
+          ...(result.modelName ? { modelName: result.modelName } : {}),
         });
 
         return result;

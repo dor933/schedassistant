@@ -1,3 +1,4 @@
+export { Role } from "./Role";
 export { Vendor } from "./Vendor";
 export { LLMModel } from "./LLMModel";
 export { Agent } from "./Agent";

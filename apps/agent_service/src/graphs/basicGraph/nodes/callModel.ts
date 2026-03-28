@@ -19,46 +19,31 @@ import { resolveModelSlug } from "../../../chat/modelResolution";
 import { SchedulerAgentState } from "../../../state";
 import { logger } from "../../../logger";
 
-/** Maps vendor slug → required env var name. */
-const VENDOR_API_KEY_ENV: Record<string, string> = {
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-  google: "GOOGLE_API_KEY",
-};
-
 /**
- * Resolves the vendor slug for a given model slug by querying the DB.
+ * Resolves the vendor slug and API key for a given model slug by querying the DB.
  */
-async function resolveVendorSlug(modelSlug: string): Promise<string | null> {
+async function resolveVendor(modelSlug: string): Promise<{ slug: string; apiKey: string | null; modelName: string } | null> {
   const model = await LLMModel.findOne({
     where: { slug: modelSlug },
-    include: [{ model: Vendor, attributes: ["slug"] }],
+    include: [{ model: Vendor, attributes: ["slug", "apiKey"] }],
   });
-  return (model as any)?.Vendor?.slug ?? null;
+  const vendor = (model as any)?.Vendor;
+  if (!vendor) return null;
+  return { slug: vendor.slug, apiKey: vendor.apiKey ?? null, modelName: model!.name };
 }
 
 /**
- * Checks whether the API key for the given vendor is set.
- * Returns the env var name if missing, or null if OK.
- */
-export function getMissingApiKeyEnv(vendorSlug: string): string | null {
-  const envVar = VENDOR_API_KEY_ENV[vendorSlug];
-  if (!envVar) return null;
-  return process.env[envVar] ? null : envVar;
-}
-
-/**
- * Creates a LangChain chat model instance based on the vendor and model slug.
+ * Creates a LangChain chat model instance based on the vendor, model slug, and API key.
  * New models under a known vendor work automatically — no code changes needed.
  */
-function getModel(modelSlug: string, vendorSlug: string): BaseChatModel {
+function getModel(modelSlug: string, vendorSlug: string, apiKey: string): BaseChatModel {
   switch (vendorSlug) {
     case "openai":
-      return new ChatOpenAI({ modelName: modelSlug, temperature: 0.4 });
+      return new ChatOpenAI({ modelName: modelSlug, temperature: 0.4, apiKey });
     case "anthropic":
-      return new ChatAnthropic({ modelName: modelSlug, temperature: 0.4 });
+      return new ChatAnthropic({ modelName: modelSlug, temperature: 0.4, apiKey });
     case "google":
-      return new ChatGoogle({ model: modelSlug, temperature: 0.4 });
+      return new ChatGoogle({ model: modelSlug, temperature: 0.4, apiKey });
     default:
       throw new Error(`Unsupported vendor "${vendorSlug}" for model "${modelSlug}"`);
   }
@@ -157,27 +142,24 @@ export async function callModelNode(
 
   const modelSlug = await resolveModelSlug(singleChatId, groupId);
 
-  // Resolve vendor from DB
-  const vendorSlug = await resolveVendorSlug(modelSlug);
-  logger.info("Vendor slug resolved", { vendorSlug });
-  if (!vendorSlug) {
+  // Resolve vendor + API key from DB
+  const vendor = await resolveVendor(modelSlug);
+  logger.info("Vendor resolved", { vendorSlug: vendor?.slug });
+  if (!vendor) {
     const errMsg = `Unknown model "${modelSlug}". It may have been removed. Please select a different model.`;
     logger.error("Model not found in DB", { modelSlug });
     return { error: errMsg };
   }
 
-  // Validate API key
-  const missingEnv = getMissingApiKeyEnv(vendorSlug);
-  if (missingEnv) {
-    logger.info("Missing API key env", { missingEnv });
-    const errMsg = `API key not configured for ${vendorSlug} (missing ${missingEnv}). Please set the environment variable or switch to a different model.`;
-    logger.error("Missing API key for model", { modelSlug, vendorSlug, missingEnv });
+  if (!vendor.apiKey) {
+    const errMsg = `API key not configured for ${vendor.slug}. Please set the API key in the admin panel or switch to a different model.`;
+    logger.error("Missing API key for vendor", { modelSlug, vendorSlug: vendor.slug });
     return { error: errMsg };
   }
 
-  logger.info("Calling LLM", { modelSlug, vendorSlug, messageCount: stateMessages.length });
+  logger.info("Calling LLM", { modelSlug, vendorSlug: vendor.slug, messageCount: stateMessages.length });
 
-  const model = getModel(modelSlug, vendorSlug);
+  const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
   const llmMessages: BaseMessage[] = [new SystemMessage(systemPrompt)];
 
   for (const msg of stateMessages) {
@@ -200,10 +182,17 @@ export async function callModelNode(
 
   try {
     const response = await model.invoke(llmMessages, config);
+    // Attach model metadata so it's persisted in the checkpoint and available in history
+    (response as any).additional_kwargs = {
+      ...(response as any).additional_kwargs,
+      modelSlug,
+      vendorSlug: vendor.slug,
+      modelName: vendor.modelName,
+    };
     return { messages: [response] };
   } catch (err) {
     const vendorText = rawVendorErrorText(err);
-    logger.error("LLM invocation failed", { modelSlug, vendorSlug, vendorError: vendorText });
+    logger.error("LLM invocation failed", { modelSlug, vendorSlug: vendor.slug, vendorError: vendorText });
     return { error: vendorText };
   }
 }
