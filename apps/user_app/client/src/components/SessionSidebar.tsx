@@ -260,7 +260,7 @@ export default function SessionSidebar({
       )}
 
       {/* User Footer */}
-      <div className="border-t border-gray-200/60 px-4 py-3 safe-bottom">
+      <div className="border-t border-gray-200/60 px-4 py-3 pb-5 sm:pb-3 safe-bottom">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-gray-200 to-gray-300 text-xs font-bold text-gray-600 shadow-sm">

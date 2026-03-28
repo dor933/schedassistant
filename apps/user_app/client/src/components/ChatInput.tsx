@@ -151,7 +151,7 @@ export default function ChatInput({
     : "bg-indigo-50 text-indigo-700 border-indigo-200/60";
 
   return (
-    <div className="border-t border-gray-100 bg-white/80 backdrop-blur-xl px-4 py-3 sm:px-6 sm:py-3 safe-bottom">
+    <div className="border-t border-gray-100 bg-white/80 backdrop-blur-xl px-4 py-3 pb-5 sm:pb-3 sm:px-6 sm:py-3 safe-bottom">
       <form
         onSubmit={handleSubmit}
         className="mx-auto flex max-w-3xl items-end gap-3"

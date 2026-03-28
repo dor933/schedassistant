@@ -5,6 +5,9 @@ import {
   X,
   Loader2,
   AlertTriangle,
+  ChevronRight,
+  Users,
+  Bot,
 } from "lucide-react";
 import { VendorIcon } from "../components/VendorModelBadge";
 import { useAuth } from "../context/AuthContext";
@@ -76,6 +79,7 @@ export default function ChatPage() {
 
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [groupMembersList, setGroupMembersList] = useState<GroupMemberInfo[]>([]);
+  const [showGroupInfo, setShowGroupInfo] = useState(false);
 
   // Fetch group members when a group conversation is selected
   useEffect(() => {
@@ -554,16 +558,23 @@ export default function ChatPage() {
                   : `${usersTypingNames.join(", ")} are typing...`}
               </p>
             ) : activeConv?.type === "group" ? (
-              <p className="text-xs text-gray-400 truncate">
-                {[
-                  activeConv.agentDefinition,
-                  groupMembersList.length > 0
-                    ? groupMembersList.map((m) => m.displayName || m.userId).join(", ")
-                    : null,
-                ]
-                  .filter(Boolean)
-                  .join(" \u00B7 ") || "Group Chat"}
-              </p>
+              <button
+                type="button"
+                onClick={() => setShowGroupInfo(true)}
+                className="flex items-center gap-1 text-xs text-gray-400 truncate hover:text-indigo-500 transition-colors"
+              >
+                <span className="truncate">
+                  {[
+                    activeConv.agentDefinition,
+                    groupMembersList.length > 0
+                      ? groupMembersList.map((m) => m.displayName || m.userId).join(", ")
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" \u00B7 ") || "Group Chat"}
+                </span>
+                <ChevronRight className="h-3 w-3 flex-shrink-0" />
+              </button>
             ) : (
               <p className="text-xs text-gray-400">
                 {activeConv?.type === "single"
@@ -686,7 +697,7 @@ export default function ChatPage() {
           disabled={sending || !activeConv}
           placeholder={
             activeConv?.type === "group" && activeConv.agentDefinition
-              ? `Type a message... use @ to mention the agent`
+              ? `Message... use @ to tag agent`
               : undefined
           }
           agentName={activeConv?.type === "group" ? (activeConv.agentDefinition ?? undefined) : undefined}
@@ -740,6 +751,102 @@ export default function ChatPage() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Group Info Panel */}
+      {showGroupInfo && activeConv?.type === "group" && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/30 backdrop-blur-sm animate-fade-in"
+          onClick={() => setShowGroupInfo(false)}
+        >
+          <div
+            className="w-full max-w-sm animate-scale-in rounded-t-2xl sm:rounded-2xl border border-gray-200/60 bg-white/95 p-5 sm:p-6 shadow-glass-lg backdrop-blur-xl mx-0 sm:mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-md">
+                  <Users className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-gray-900">{activeConv.name}</h3>
+                  <p className="text-[11px] text-gray-400">
+                    {groupMembersList.length} member{groupMembersList.length !== 1 ? "s" : ""} + 1 agent
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowGroupInfo(false)}
+                className="rounded-xl p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Agent */}
+            {activeConv.agentDefinition && (
+              <div className="mb-4">
+                <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Agent</p>
+                <div className="flex items-center gap-3 rounded-xl bg-gradient-to-r from-gray-50 to-indigo-50/50 p-3 ring-1 ring-gray-100">
+                  <div
+                    className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${
+                      activeConv.model?.vendor?.slug === "openai" ? "bg-emerald-50 text-emerald-600 ring-emerald-200/60" :
+                      activeConv.model?.vendor?.slug === "anthropic" ? "bg-amber-50 text-amber-600 ring-amber-200/60" :
+                      activeConv.model?.vendor?.slug === "google" ? "bg-blue-50 text-blue-600 ring-blue-200/60" :
+                      "bg-violet-50 text-violet-600 ring-violet-200/60"
+                    }`}
+                  >
+                    {activeConv.model?.vendor?.slug ? (
+                      <VendorIcon slug={activeConv.model.vendor.slug} />
+                    ) : (
+                      <Bot className="h-4 w-4" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{activeConv.agentDefinition}</p>
+                    {activeConv.model && (
+                      <p className="text-[11px] text-gray-400 truncate">{activeConv.model.vendor?.name} &middot; {activeConv.model.name}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Members */}
+            <div>
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Members</p>
+              <div className="max-h-60 space-y-1 overflow-y-auto">
+                {groupMembersList.map((m) => {
+                  const name = m.displayName || m.userId;
+                  const isCurrentUser = m.userId === user?.id;
+                  return (
+                    <div
+                      key={m.userId}
+                      className="flex items-center gap-3 rounded-xl px-3 py-2.5 transition-colors hover:bg-gray-50"
+                    >
+                      <div className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold shadow-sm ring-1 ring-gray-950/[0.04] ${
+                        isCurrentUser
+                          ? "bg-gradient-to-br from-indigo-100 to-blue-100 text-indigo-600"
+                          : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
+                      }`}>
+                        {name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {name}
+                          {isCurrentUser && (
+                            <span className="ml-1.5 text-[10px] font-semibold text-indigo-500">you</span>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       )}
