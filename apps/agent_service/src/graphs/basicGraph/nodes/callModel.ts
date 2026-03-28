@@ -7,6 +7,11 @@ import {
   AIMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
+
+/** Sanitize a name for the LLM API (OpenAI rejects spaces/special chars in message name). */
+function sanitizeName(raw: string): string {
+  return raw.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user";
+}
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { LLMModel, Vendor } from "@scheduling-agent/database";
@@ -177,11 +182,16 @@ export async function callModelNode(
 
   for (const msg of stateMessages) {
     if (typeof (msg as any)._getType === "function") {
+      // Deserialized LangChain message — sanitize name if present
+      const name = (msg as any).name;
+      if (name && typeof name === "string") {
+        (msg as any).name = sanitizeName(name);
+      }
       llmMessages.push(msg);
     } else {
       const m = msg as any;
       if (m.role === "human" || m.role === "user") {
-        llmMessages.push(new HumanMessage({ content: m.content, ...(m.name ? { name: m.name } : {}) }));
+        llmMessages.push(new HumanMessage({ content: m.content, ...(m.name ? { name: sanitizeName(m.name) } : {}) }));
       } else if (m.role === "assistant" || m.role === "ai") {
         llmMessages.push(new AIMessage(m.content));
       }
