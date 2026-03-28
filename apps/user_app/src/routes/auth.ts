@@ -10,7 +10,9 @@ const SALT_ROUNDS = 10;
 const router = Router();
 
 // ── POST /api/auth/register ──────────────────────────────────────────────────
-router.post("/register", async (req, res) => {
+router.post("/register", async (_req, res) => {
+  return res.status(503).json({ error: "Registration not available — please try later." });
+
   const parsed = registerSchema.safeParse(req.body);
   if (!parsed.success) {
     const firstError = parsed.error.errors[0]?.message ?? "Invalid input.";

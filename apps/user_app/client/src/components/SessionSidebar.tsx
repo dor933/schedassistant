@@ -7,6 +7,7 @@ import {
   Trash2,
   Brain,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import type {
   GroupConversation,
   SingleChatConversation,
@@ -250,13 +251,13 @@ export default function SessionSidebar({
       {/* Admin link */}
       {isAdmin && (
         <div className="px-3 py-1">
-          <a
-            href="/admin"
+          <Link
+            to="/admin"
             className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium text-gray-500 transition-all duration-150 hover:bg-white hover:text-gray-700 hover:shadow-sm"
           >
             <Settings className="h-4 w-4" />
             Admin Panel
-          </a>
+          </Link>
         </div>
       )}
 
