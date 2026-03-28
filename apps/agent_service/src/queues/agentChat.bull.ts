@@ -27,6 +27,7 @@ export type AgentChatJobData = {
   threadId: string;
   message: string;
   requestId: string;
+  displayName?: string;
   groupId?: string | null;
   singleChatId?: string | null;
   agentId?: string | null;

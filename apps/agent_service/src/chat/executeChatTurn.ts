@@ -16,6 +16,8 @@ export type ChatTurnPayload = {
   singleChatId?: string | null;
   /** `agents.id` — loads `core_instructions` from the DB into the system prompt. */
   agentId?: string | null;
+  /** Display name of the sender — stored on HumanMessage.name for group attribution. */
+  displayName?: string;
 };
 
 export type ChatTurnResult = {
@@ -30,7 +32,7 @@ export type ChatTurnResult = {
  */
 export async function executeChatTurn(
   graph: CompiledStateGraph<any, any, any>,
-  { userId, threadId, message, groupId, singleChatId, agentId }: ChatTurnPayload,
+  { userId, threadId, message, groupId, singleChatId, agentId, displayName }: ChatTurnPayload,
 ): Promise<ChatTurnResult> {
   const observationInput = {
     userId,
@@ -57,6 +59,10 @@ export async function executeChatTurn(
         service: "agent_service",
       });
 
+      // Use HumanMessage with `name` so the LLM and history know who sent it.
+      const senderName = displayName || userId;
+      const humanMsg = new HumanMessage({ content: message, name: senderName });
+
       const result = await graph.invoke(
         {
           userId,
@@ -66,7 +72,7 @@ export async function executeChatTurn(
           agentId: agentId ?? null,
           modelSlug,
           userInput: message,
-          messages: [{ role: "human", content: message }],
+          messages: [humanMsg],
         },
         {
           configurable: { thread_id: threadId },
@@ -118,7 +124,7 @@ export async function executeChatTurn(
  */
 export async function storeMessageOnly(
   graph: CompiledStateGraph<any, any, any>,
-  { userId, threadId, message, groupId, singleChatId, agentId }: ChatTurnPayload,
+  { userId, threadId, message, groupId, singleChatId, agentId, displayName }: ChatTurnPayload,
 ): Promise<void> {
   // Group threads are shared — don't tie them to a specific user.
   await ensureSession(threadId, groupId ? null : userId, {
@@ -127,9 +133,10 @@ export async function storeMessageOnly(
     agentId: agentId ?? null,
   });
 
+  const senderName = displayName || userId;
   await graph.updateState(
     { configurable: { thread_id: threadId } },
-    { messages: [new HumanMessage(message)] },
+    { messages: [new HumanMessage({ content: message, name: senderName })] },
   );
 
   logger.info("Message stored (no agent invocation)", { threadId, userId, msgLen: message.length });

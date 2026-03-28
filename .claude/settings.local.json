@@ -21,7 +21,10 @@
       "Bash(node_modules/typescript/bin/tsc --noEmit)",
       "Bash(node_modules/typescript/bin/tsc --noEmit --project /home/office/Dev/schedassistant/apps/agent_service/tsconfig.json)",
       "Bash(node_modules/typescript/bin/tsc --noEmit --project /home/office/Dev/schedassistant/apps/user_app/tsconfig.json)",
-      "Bash(find /home/office/Dev/schedassistant -type f -path */api/index.ts)"
+      "Bash(find /home/office/Dev/schedassistant -type f -path */api/index.ts)",
+      "Bash(./node_modules/.bin/tsc --noEmit -p apps/agent_service/tsconfig.json)",
+      "Bash(./node_modules/.bin/tsc --noEmit -p apps/user_app/tsconfig.json)",
+      "Bash(../../../node_modules/.bin/tsc --noEmit)"
     ]
   }
 }

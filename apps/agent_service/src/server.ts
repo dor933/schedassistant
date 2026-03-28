@@ -26,7 +26,7 @@ export function createServer({ agentChatQueue, graph }: CreateServerDeps) {
   // ── POST /api/chat ───────────────────────────────────────────────────
   // Returns 202 immediately. Worker emits the result on Socket.IO (`agent:reply`).
   app.post("/api/chat", async (req, res) => {
-    const { userId, threadId, message, groupId, singleChatId, agentId, requestId, mentionsAgent } = req.body;
+    const { userId, threadId, message, groupId, singleChatId, agentId, requestId, mentionsAgent, displayName } = req.body;
 
     if (!userId || !threadId || !message) {
       return res.status(400).json({ error: "userId, threadId, and message are required." });
@@ -40,6 +40,7 @@ export function createServer({ agentChatQueue, graph }: CreateServerDeps) {
           threadId,
           message,
           requestId: requestId ?? crypto.randomUUID(),
+          ...(displayName ? { displayName } : {}),
           ...(groupId != null ? { groupId } : {}),
           ...(singleChatId != null ? { singleChatId } : {}),
           ...(agentId != null ? { agentId } : {}),
@@ -159,7 +160,9 @@ export function createServer({ agentChatQueue, graph }: CreateServerDeps) {
         }
         const content =
           typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-        return { role, content };
+        // Extract sender name from HumanMessage's `name` field
+        const senderName = role === "user" ? (m.name ?? null) : null;
+        return { role, content, ...(senderName ? { senderName } : {}) };
       });
 
       return res.json(history);

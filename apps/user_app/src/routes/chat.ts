@@ -69,6 +69,7 @@ router.post("/", authMiddleware, (req, res) => {
           threadId,
           message,
           requestId,
+          displayName: req.user!.displayName ?? userId,
           ...(groupId ? { groupId } : {}),
           ...(singleChatId ? { singleChatId } : {}),
           ...(agentId ? { agentId } : {}),

@@ -181,7 +181,7 @@ export async function callModelNode(
     } else {
       const m = msg as any;
       if (m.role === "human" || m.role === "user") {
-        llmMessages.push(new HumanMessage(m.content));
+        llmMessages.push(new HumanMessage({ content: m.content, ...(m.name ? { name: m.name } : {}) }));
       } else if (m.role === "assistant" || m.role === "ai") {
         llmMessages.push(new AIMessage(m.content));
       }

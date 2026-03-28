@@ -123,7 +123,21 @@ export default function ChatPage() {
         try {
           const history = await getHistory(session.threadId);
           if (!cancelled && history.length > 0) {
-            setMessages(history);
+            // For group chats, compare senderName with current user to
+            // distinguish own messages from other users' messages.
+            const myName = user?.displayName ?? user?.id;
+            setMessages(
+              history.map((h) => ({
+                role: h.role,
+                content: h.content,
+                // If senderName matches current user → own message (no senderName)
+                // If senderName is different → other user's message
+                senderName:
+                  h.senderName && h.senderName !== myName
+                    ? h.senderName
+                    : undefined,
+              })),
+            );
           }
         } catch {
           // No history available

@@ -110,6 +110,8 @@ export interface Session {
 export interface HistoryMessage {
   role: "user" | "assistant";
   content: string;
+  /** Display name of the sender (set on human messages when available). */
+  senderName?: string;
 }
 
 export function getHistory(threadId: string) {

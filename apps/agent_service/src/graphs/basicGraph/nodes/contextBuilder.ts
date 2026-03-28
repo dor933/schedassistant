@@ -186,7 +186,14 @@ function formatSystemPrompt(
 
   // Identity: group (all members) or single user
   if (groupMembers && groupMembers.length > 0) {
-    sections.push("## Group members");
+    sections.push("## Group chat");
+    sections.push(
+      "You are in a group conversation with multiple users. " +
+      "Each message includes a sender name so you can tell who is speaking. " +
+      "Address users by name when relevant and keep track of who said what.",
+    );
+    sections.push("");
+    sections.push("### Members");
     for (const m of groupMembers) {
       const label =
         m.displayName?.trim() ||

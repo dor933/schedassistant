@@ -32,7 +32,7 @@ export function startAgentChatWorker(
   const worker = new Worker<AgentChatJobData, AgentChatJobResult, string>(
     AGENT_CHAT_QUEUE_NAME,
     async (job) => {
-      const { userId, threadId, message, groupId, singleChatId, agentId, requestId, mentionsAgent } =
+      const { userId, threadId, message, groupId, singleChatId, agentId, requestId, mentionsAgent, displayName } =
         job.data;
 
       logger.info("Processing chat job", { requestId, userId, threadId, groupId, singleChatId, mentionsAgent });
@@ -41,7 +41,7 @@ export function startAgentChatWorker(
       if (groupId && mentionsAgent === false) {
         try {
           await withThreadLock(lockRedis, threadId, () =>
-            storeMessageOnly(graph, { userId, threadId, message, groupId, singleChatId, agentId }),
+            storeMessageOnly(graph, { userId, threadId, message, groupId, singleChatId, agentId, displayName }),
           );
           return { threadId, reply: "", systemPrompt: null };
         } catch (err: any) {
@@ -66,6 +66,7 @@ export function startAgentChatWorker(
             groupId,
             singleChatId,
             agentId,
+            displayName,
           }),
         );
 
