@@ -6,6 +6,11 @@ import { getLangfuseCallbackHandler, observeWithContext } from "../langfuse";
 import { logger } from "../logger";
 import { resolveModelSlug } from "./modelResolution";
 
+/** Sanitize a display name for use as HumanMessage `name` (OpenAI rejects spaces and special chars). */
+function sanitizeMsgName(raw: string): string {
+  return raw.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user";
+}
+
 export type ChatTurnPayload = {
   userId: string;
   threadId: string;
@@ -60,7 +65,7 @@ export async function executeChatTurn(
       });
 
       // Use HumanMessage with `name` so the LLM and history know who sent it.
-      const senderName = displayName || userId;
+      const senderName = sanitizeMsgName(displayName || userId);
       const humanMsg = new HumanMessage({ content: message, name: senderName });
 
       const result = await graph.invoke(
@@ -133,7 +138,7 @@ export async function storeMessageOnly(
     agentId: agentId ?? null,
   });
 
-  const senderName = displayName || userId;
+  const senderName = sanitizeMsgName(displayName || userId);
   await graph.updateState(
     { configurable: { thread_id: threadId } },
     { messages: [new HumanMessage({ content: message, name: senderName })] },

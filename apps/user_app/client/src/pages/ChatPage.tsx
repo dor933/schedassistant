@@ -125,7 +125,11 @@ export default function ChatPage() {
           if (!cancelled && history.length > 0) {
             // For group chats, compare senderName with current user to
             // distinguish own messages from other users' messages.
-            const myName = user?.displayName ?? user?.id;
+            // Names are sanitized server-side (spaces → underscores) to comply
+            // with LLM API constraints, so we sanitize the local name the same way.
+            const sanitize = (s: string) =>
+              s.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user";
+            const myName = sanitize(user?.displayName ?? user?.id ?? "");
             setMessages(
               history.map((h) => ({
                 role: h.role,
@@ -134,7 +138,7 @@ export default function ChatPage() {
                 // If senderName is different → other user's message
                 senderName:
                   h.senderName && h.senderName !== myName
-                    ? h.senderName
+                    ? h.senderName.replace(/_/g, " ")
                     : undefined,
               })),
             );
