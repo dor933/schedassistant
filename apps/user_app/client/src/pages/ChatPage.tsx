@@ -70,10 +70,12 @@ export default function ChatPage() {
   const [typingConversations, setTypingConversations] = useState<Set<string>>(
     new Set(),
   );
-  const [userTyping, setUserTyping] = useState<Map<string, Map<string, string>>>(
+  const [userTyping, setUserTyping] = useState<
+    Map<string, Map<string, string>>
+  >(new Map());
+  const userTypingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
-  const userTypingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
@@ -102,7 +104,9 @@ export default function ChatPage() {
   }, []);
 
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [groupMembersList, setGroupMembersList] = useState<GroupMemberInfo[]>([]);
+  const [groupMembersList, setGroupMembersList] = useState<GroupMemberInfo[]>(
+    [],
+  );
   const [showGroupInfo, setShowGroupInfo] = useState(false);
 
   useEffect(() => {
@@ -116,13 +120,23 @@ export default function ChatPage() {
   }, [activeConv?.id, activeConv?.type]);
 
   const sanitize = useCallback(
-    (s: string) => s.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user",
+    (s: string) =>
+      s.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user",
     [],
   );
   const myName = sanitize(user?.displayName ?? user?.id ?? "");
 
   const toMessage = useCallback(
-    (h: { role: string; content: string; senderName?: string; vendorSlug?: string; modelName?: string }, absIndex?: number): Message => ({
+    (
+      h: {
+        role: string;
+        content: string;
+        senderName?: string;
+        vendorSlug?: string;
+        modelName?: string;
+      },
+      absIndex?: number,
+    ): Message => ({
       role: h.role as Message["role"],
       content: h.content,
       senderName:
@@ -173,9 +187,14 @@ export default function ChatPage() {
         setActiveSession(session);
 
         try {
-          const convType = activeConv.type === "group" ? "group" as const : "single" as const;
+          const convType =
+            activeConv.type === "group"
+              ? ("group" as const)
+              : ("single" as const);
           const { messages: history, total } = await getConversationHistory(
-            activeConv.id, convType, { limit: PAGE_SIZE },
+            activeConv.id,
+            convType,
+            { limit: PAGE_SIZE },
           );
           if (!cancelled) {
             setTotalMessages(total);
@@ -227,8 +246,13 @@ export default function ChatPage() {
     try {
       const offset = Math.max(0, loadedFrom - PAGE_SIZE);
       const limit = loadedFrom - offset;
-      const convType = activeConv.type === "group" ? "group" as const : "single" as const;
-      const { messages: older } = await getConversationHistory(activeConv.id, convType, { limit, offset });
+      const convType =
+        activeConv.type === "group" ? ("group" as const) : ("single" as const);
+      const { messages: older } = await getConversationHistory(
+        activeConv.id,
+        convType,
+        { limit, offset },
+      );
 
       if (older.length > 0) {
         const olderMessages = older.map((h, i) => toMessage(h, offset + i));
@@ -270,75 +294,106 @@ export default function ChatPage() {
   const navigateRef = useRef<typeof navigateToResult>(() => Promise.resolve());
   const searchTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const handleSearch = useCallback(async (query: string) => {
-    setSearchQuery(query);
-    if (!query.trim() || !activeConv) {
-      setSearchResults([]);
-      setSearchIdx(-1);
-      return;
-    }
-    setSearching(true);
-    try {
-      const convType = activeConv.type === "group" ? "group" as const : "single" as const;
-      const { results } = await searchConversationHistory(activeConv.id, convType, query.trim());
-      setSearchResults(results);
-      const idx = results.length > 0 ? results.length - 1 : -1;
-      setSearchIdx(idx);
-      if (idx >= 0) navigateRef.current(results[idx]);
-    } catch {
-      setSearchResults([]);
-      setSearchIdx(-1);
-    } finally {
-      setSearching(false);
-    }
-  }, [activeConv]);
-
-  const navigateToResult = useCallback(async (result: SearchResult) => {
-    if (!activeConv) return;
-
-    const isLoaded = result.index >= loadedFrom && result.index < loadedFrom + messages.length;
-
-    if (!isLoaded) {
-      const targetOffset = Math.max(0, result.index - Math.floor(PAGE_SIZE / 2));
-      setLoadingMore(true);
+  const handleSearch = useCallback(
+    async (query: string) => {
+      setSearchQuery(query);
+      if (!query.trim() || !activeConv) {
+        setSearchResults([]);
+        setSearchIdx(-1);
+        return;
+      }
+      setSearching(true);
       try {
-        const convType = activeConv.type === "group" ? "group" as const : "single" as const;
-        const { messages: page, total } = await getConversationHistory(activeConv.id, convType, {
-          limit: Math.max(PAGE_SIZE, loadedFrom + messages.length - targetOffset),
-          offset: targetOffset,
-        });
-        setTotalMessages(total);
-        setLoadedFrom(targetOffset);
-        setMessages(page.map((h, i) => toMessage(h, targetOffset + i)));
+        const convType =
+          activeConv.type === "group"
+            ? ("group" as const)
+            : ("single" as const);
+        const { results } = await searchConversationHistory(
+          activeConv.id,
+          convType,
+          query.trim(),
+        );
+        setSearchResults(results);
+        const idx = results.length > 0 ? results.length - 1 : -1;
+        setSearchIdx(idx);
+        if (idx >= 0) navigateRef.current(results[idx]);
       } catch {
-        // ignore
+        setSearchResults([]);
+        setSearchIdx(-1);
       } finally {
-        setLoadingMore(false);
+        setSearching(false);
       }
-    }
+    },
+    [activeConv],
+  );
 
-    requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-msg-index="${result.index}"]`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("search-highlight-flash");
-        setTimeout(() => el.classList.remove("search-highlight-flash"), 1500);
+  const navigateToResult = useCallback(
+    async (result: SearchResult) => {
+      if (!activeConv) return;
+
+      const isLoaded =
+        result.index >= loadedFrom &&
+        result.index < loadedFrom + messages.length;
+
+      if (!isLoaded) {
+        const targetOffset = Math.max(
+          0,
+          result.index - Math.floor(PAGE_SIZE / 2),
+        );
+        setLoadingMore(true);
+        try {
+          const convType =
+            activeConv.type === "group"
+              ? ("group" as const)
+              : ("single" as const);
+          const { messages: page, total } = await getConversationHistory(
+            activeConv.id,
+            convType,
+            {
+              limit: Math.max(
+                PAGE_SIZE,
+                loadedFrom + messages.length - targetOffset,
+              ),
+              offset: targetOffset,
+            },
+          );
+          setTotalMessages(total);
+          setLoadedFrom(targetOffset);
+          setMessages(page.map((h, i) => toMessage(h, targetOffset + i)));
+        } catch {
+          // ignore
+        } finally {
+          setLoadingMore(false);
+        }
       }
-    });
-  }, [activeConv, loadedFrom, messages.length, toMessage]);
+
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-msg-index="${result.index}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          el.classList.add("search-highlight-flash");
+          setTimeout(() => el.classList.remove("search-highlight-flash"), 1500);
+        }
+      });
+    },
+    [activeConv, loadedFrom, messages.length, toMessage],
+  );
   navigateRef.current = navigateToResult;
 
-  const handleSearchNav = useCallback((direction: "prev" | "next") => {
-    if (searchResults.length === 0) return;
-    let next: number;
-    if (direction === "next") {
-      next = searchIdx < searchResults.length - 1 ? searchIdx + 1 : 0;
-    } else {
-      next = searchIdx > 0 ? searchIdx - 1 : searchResults.length - 1;
-    }
-    setSearchIdx(next);
-    navigateToResult(searchResults[next]);
-  }, [searchResults, searchIdx, navigateToResult]);
+  const handleSearchNav = useCallback(
+    (direction: "prev" | "next") => {
+      if (searchResults.length === 0) return;
+      let next: number;
+      if (direction === "next") {
+        next = searchIdx < searchResults.length - 1 ? searchIdx + 1 : 0;
+      } else {
+        next = searchIdx > 0 ? searchIdx - 1 : searchResults.length - 1;
+      }
+      setSearchIdx(next);
+      navigateToResult(searchResults[next]);
+    },
+    [searchResults, searchIdx, navigateToResult],
+  );
 
   useEffect(() => {
     if (!user) return;
@@ -382,7 +437,12 @@ export default function ChatPage() {
           setTotalMessages((t) => t + 1);
           setMessages((prev) => [
             ...prev,
-            { role: "assistant", content: p.reply, vendorSlug: p.vendorSlug, modelName: p.modelName },
+            {
+              role: "assistant",
+              content: p.reply,
+              vendorSlug: p.vendorSlug,
+              modelName: p.modelName,
+            },
           ]);
         }
         markConversationSeen(p.conversationId, p.conversationType);
@@ -464,21 +524,21 @@ export default function ChatPage() {
         case "group_model_changed": {
           const { groupId, model } = data.data;
           if (current?.type === "group" && current.id === groupId) {
-            setActiveConv((prev) => prev ? { ...prev, model } : prev);
+            setActiveConv((prev) => (prev ? { ...prev, model } : prev));
           }
           break;
         }
         case "single_chat_model_changed": {
           const { singleChatId, model } = data.data;
           if (current?.type === "single" && current.id === singleChatId) {
-            setActiveConv((prev) => prev ? { ...prev, model } : prev);
+            setActiveConv((prev) => (prev ? { ...prev, model } : prev));
           }
           break;
         }
         case "group_renamed": {
           const { groupId, name } = data.data;
           if (current?.type === "group" && current.id === groupId) {
-            setActiveConv((prev) => prev ? { ...prev, name } : prev);
+            setActiveConv((prev) => (prev ? { ...prev, name } : prev));
           }
           break;
         }
@@ -587,7 +647,11 @@ export default function ChatPage() {
   );
 
   async function doSend(threadId: string, text: string) {
-    const userMsg: Message = { role: "user", content: text, _absIndex: totalMessages };
+    const userMsg: Message = {
+      role: "user",
+      content: text,
+      _absIndex: totalMessages,
+    };
     setTotalMessages((t) => t + 1);
     setMessages((prev) => [...prev, userMsg]);
     setSending(true);
@@ -596,11 +660,11 @@ export default function ChatPage() {
 
     const isGroup = activeConv?.type === "group";
     const agentDef = isGroup ? activeConv?.agentDefinition : null;
-    const mentionsAgent = !isGroup || (
-      agentDef
+    const mentionsAgent =
+      !isGroup ||
+      (agentDef
         ? text.toLowerCase().includes(`@${agentDef.toLowerCase()}`)
-        : text.includes("@")
-    );
+        : text.includes("@"));
 
     const scope = activeConv
       ? {
@@ -642,7 +706,16 @@ export default function ChatPage() {
       if (p.ok) {
         setMessages((prev) => [
           ...prev,
-          { role: "assistant", content: p.reply, vendorSlug: p.vendorSlug, modelName: p.modelName, _absIndex: prev.length > 0 ? (prev[prev.length - 1]._absIndex ?? prev.length - 1) + 1 : 0 },
+          {
+            role: "assistant",
+            content: p.reply,
+            vendorSlug: p.vendorSlug,
+            modelName: p.modelName,
+            _absIndex:
+              prev.length > 0
+                ? (prev[prev.length - 1]._absIndex ?? prev.length - 1) + 1
+                : 0,
+          },
         ]);
       } else {
         setMessages((prev) => [
@@ -668,9 +741,10 @@ export default function ChatPage() {
     ? typingConversations.has(activeConv.id)
     : false;
 
-  const usersTypingNames: string[] = activeConv?.type === "group"
-    ? Array.from(userTyping.get(activeConv.id)?.values() ?? [])
-    : [];
+  const usersTypingNames: string[] =
+    activeConv?.type === "group"
+      ? Array.from(userTyping.get(activeConv.id)?.values() ?? [])
+      : [];
 
   const handleUserTyping = useCallback(() => {
     if (activeConv?.type === "group") {
@@ -679,7 +753,14 @@ export default function ChatPage() {
   }, [activeConv?.type, activeConv?.id]);
 
   return (
-    <Stack direction="row" sx={{ height: "100dvh", bgcolor: "rgb(249 250 251 / 0.5)", overflow: "hidden" }}>
+    <Stack
+      direction="row"
+      sx={{
+        height: "100dvh",
+        bgcolor: "rgb(249 250 251 / 0.5)",
+        overflow: "hidden",
+      }}
+    >
       {/* Mobile sidebar toggle — hidden when sidebar is open */}
       {!sidebarOpen && (
         <Box
@@ -776,18 +857,56 @@ export default function ChatPage() {
               {convName}
             </Box>
             {agentIsTyping ? (
-              <Stack direction="row" alignItems="center" spacing={0.75} className="text-xs font-medium text-emerald-600">
-                <Box component="span" sx={{ position: "relative", display: "flex", width: 8, height: 8 }}>
-                  <Box component="span" className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                  <Box component="span" className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={0.75}
+                className="text-xs font-medium text-emerald-600"
+              >
+                <Box
+                  component="span"
+                  sx={{
+                    position: "relative",
+                    display: "flex",
+                    width: 8,
+                    height: 8,
+                  }}
+                >
+                  <Box
+                    component="span"
+                    className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
+                  />
+                  <Box
+                    component="span"
+                    className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"
+                  />
                 </Box>
                 <span>Agent is typing...</span>
               </Stack>
             ) : usersTypingNames.length > 0 ? (
-              <Stack direction="row" alignItems="center" spacing={0.75} className="text-xs font-medium text-blue-600">
-                <Box component="span" sx={{ position: "relative", display: "flex", width: 8, height: 8 }}>
-                  <Box component="span" className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
-                  <Box component="span" className="relative inline-flex h-2 w-2 rounded-full bg-blue-500" />
+              <Stack
+                direction="row"
+                alignItems="center"
+                spacing={0.75}
+                className="text-xs font-medium text-blue-600"
+              >
+                <Box
+                  component="span"
+                  sx={{
+                    position: "relative",
+                    display: "flex",
+                    width: 8,
+                    height: 8,
+                  }}
+                >
+                  <Box
+                    component="span"
+                    className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75"
+                  />
+                  <Box
+                    component="span"
+                    className="relative inline-flex h-2 w-2 rounded-full bg-blue-500"
+                  />
                 </Box>
                 <span>
                   {usersTypingNames.length === 1
@@ -820,15 +939,18 @@ export default function ChatPage() {
               </Stack>
             ) : (
               <Box component="p" className="text-xs text-gray-400">
-                {activeConv?.type === "single"
-                  ? "Direct Chat"
-                  : "Default Chat"}
+                {activeConv?.type === "single" ? "Direct Chat" : "Default Chat"}
               </Box>
             )}
           </Box>
 
-          <Stack direction="row" alignItems="center" sx={{ flexShrink: 0, gap: 1 }}>
-            {activeConv && (user?.role === "admin" || user?.role === "super_admin") ? (
+          <Stack
+            direction="row"
+            alignItems="center"
+            sx={{ flexShrink: 0, gap: 1 }}
+          >
+            {activeConv &&
+            (user?.role === "admin" || user?.role === "super_admin") ? (
               <ModelSelector
                 currentModel={activeConv.model}
                 conversationType={activeConv.type}
@@ -916,7 +1038,10 @@ export default function ChatPage() {
                     setSearchIdx(-1);
                     return;
                   }
-                  searchTimer.current = setTimeout(() => handleSearch(val), 300);
+                  searchTimer.current = setTimeout(
+                    () => handleSearch(val),
+                    300,
+                  );
                 }}
                 onKeyDown={(e: React.KeyboardEvent<HTMLInputElement>) => {
                   if (e.key === "Escape") {
@@ -932,10 +1057,16 @@ export default function ChatPage() {
                 className="bg-transparent text-sm text-gray-900 placeholder-gray-400 outline-none"
                 sx={{ flex: 1, minWidth: 0 }}
               />
-              {searching && <Loader2 className="h-4 w-4 animate-spin text-gray-400" />}
+              {searching && (
+                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+              )}
               {searchResults.length > 0 && (
                 <Stack direction="row" alignItems="center" spacing={0.5}>
-                  <Box component="span" className="text-xs text-gray-500 tabular-nums" sx={{ whiteSpace: "nowrap" }}>
+                  <Box
+                    component="span"
+                    className="text-xs text-gray-500 tabular-nums"
+                    sx={{ whiteSpace: "nowrap" }}
+                  >
                     {searchIdx + 1} / {searchResults.length}
                   </Box>
                   <Box
@@ -955,7 +1086,13 @@ export default function ChatPage() {
                 </Stack>
               )}
               {searchQuery && searchResults.length === 0 && !searching && (
-                <Box component="span" className="text-xs text-gray-400" sx={{ whiteSpace: "nowrap" }}>No results</Box>
+                <Box
+                  component="span"
+                  className="text-xs text-gray-400"
+                  sx={{ whiteSpace: "nowrap" }}
+                >
+                  No results
+                </Box>
               )}
               <Box
                 component="button"
@@ -984,21 +1121,39 @@ export default function ChatPage() {
           }}
         >
           {!activeConv && !sending && (
-            <Stack alignItems="center" justifyContent="center" className="animate-fade-in" sx={{ height: "100%", textAlign: "center" }}>
+            <Stack
+              alignItems="center"
+              justifyContent="center"
+              className="animate-fade-in"
+              sx={{ height: "100%", textAlign: "center" }}
+            >
               <Box className="mb-5 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-indigo-50 to-blue-50 shadow-glass">
                 <Sparkles className="h-9 w-9 text-indigo-400" />
               </Box>
-              <Box component="h3" className="mb-1.5 text-lg font-bold text-gray-900 tracking-tight">
+              <Box
+                component="h3"
+                className="mb-1.5 text-lg font-bold text-gray-900 tracking-tight"
+              >
                 Select a conversation
               </Box>
-              <Box component="p" className="text-sm text-gray-500 leading-relaxed" sx={{ maxWidth: "20rem" }}>
-                Choose a group or direct chat from the sidebar to start messaging.
+              <Box
+                component="p"
+                className="text-sm text-gray-500 leading-relaxed"
+                sx={{ maxWidth: "20rem" }}
+              >
+                Choose a group or direct chat from the sidebar to start
+                messaging.
               </Box>
             </Stack>
           )}
 
           {activeConv && loadingHistory && (
-            <Stack alignItems="center" justifyContent="center" className="animate-fade-in" sx={{ height: "100%" }}>
+            <Stack
+              alignItems="center"
+              justifyContent="center"
+              className="animate-fade-in"
+              sx={{ height: "100%" }}
+            >
               <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
               <Box component="p" className="mt-3 text-sm text-gray-400">
                 Loading conversation...
@@ -1010,14 +1165,26 @@ export default function ChatPage() {
             messages.length === 0 &&
             !sending &&
             !loadingHistory && (
-              <Stack alignItems="center" justifyContent="center" className="animate-fade-in" sx={{ height: "100%", textAlign: "center" }}>
+              <Stack
+                alignItems="center"
+                justifyContent="center"
+                className="animate-fade-in"
+                sx={{ height: "100%", textAlign: "center" }}
+              >
                 <Box className="mb-5 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-indigo-50 to-blue-50 shadow-glass">
                   <Sparkles className="h-9 w-9 text-indigo-400" />
                 </Box>
-                <Box component="h3" className="mb-1.5 text-lg font-bold text-gray-900 tracking-tight">
+                <Box
+                  component="h3"
+                  className="mb-1.5 text-lg font-bold text-gray-900 tracking-tight"
+                >
                   {convName}
                 </Box>
-                <Box component="p" className="text-sm text-gray-500 leading-relaxed" sx={{ maxWidth: "20rem" }}>
+                <Box
+                  component="p"
+                  className="text-sm text-gray-500 leading-relaxed"
+                  sx={{ maxWidth: "20rem" }}
+                >
                   Send a message to start the conversation.
                 </Box>
               </Stack>
@@ -1030,7 +1197,12 @@ export default function ChatPage() {
 
               {/* Load more indicator */}
               {loadingMore && (
-                <Stack justifyContent="center" alignItems="center" className="animate-fade-in" sx={{ py: 1.5 }}>
+                <Stack
+                  justifyContent="center"
+                  alignItems="center"
+                  className="animate-fade-in"
+                  sx={{ py: 1.5 }}
+                >
                   <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
                 </Stack>
               )}
@@ -1049,10 +1221,31 @@ export default function ChatPage() {
 
               {messages.map((msg, i) => {
                 const absIdx = msg._absIndex ?? i;
-                const isSearchMatch = searchQuery && searchResults.some((r) => r.index === absIdx);
+                const isSearchMatch =
+                  searchQuery && searchResults.some((r) => r.index === absIdx);
                 return (
-                  <Box key={absIdx} data-msg-index={absIdx} className={isSearchMatch ? "search-match-highlight rounded-2xl transition-colors duration-300" : ""}>
-                    <ChatMessage role={msg.role} content={msg.content} senderName={msg.senderName} vendorSlug={msg.vendorSlug ?? activeConv?.model?.vendor?.slug} modelName={msg.modelName ?? activeConv?.model?.name} isGroup={activeConv?.type === "group"} highlightText={searchQuery && isSearchMatch ? searchQuery : undefined} />
+                  <Box
+                    key={absIdx}
+                    data-msg-index={absIdx}
+                    className={
+                      isSearchMatch
+                        ? "search-match-highlight rounded-2xl transition-colors duration-300"
+                        : ""
+                    }
+                  >
+                    <ChatMessage
+                      role={msg.role}
+                      content={msg.content}
+                      senderName={msg.senderName}
+                      vendorSlug={
+                        msg.vendorSlug ?? activeConv?.model?.vendor?.slug
+                      }
+                      modelName={msg.modelName ?? activeConv?.model?.name}
+                      isGroup={activeConv?.type === "group"}
+                      highlightText={
+                        searchQuery && isSearchMatch ? searchQuery : undefined
+                      }
+                    />
                   </Box>
                 );
               })}
@@ -1061,10 +1254,13 @@ export default function ChatPage() {
                 <Stack direction="row" className="animate-fade-in">
                   <Box
                     className={`mr-3 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${
-                      activeConv?.model?.vendor?.slug === "openai" ? "bg-emerald-50 text-emerald-700 ring-emerald-200/60" :
-                      activeConv?.model?.vendor?.slug === "anthropic" ? "bg-amber-50 text-amber-700 ring-amber-200/60" :
-                      activeConv?.model?.vendor?.slug === "google" ? "bg-blue-50 text-blue-700 ring-blue-200/60" :
-                      "bg-gray-100 text-gray-500 ring-gray-200/60"
+                      activeConv?.model?.vendor?.slug === "openai"
+                        ? "bg-emerald-50 text-emerald-700 ring-emerald-200/60"
+                        : activeConv?.model?.vendor?.slug === "anthropic"
+                          ? "bg-amber-50 text-amber-700 ring-amber-200/60"
+                          : activeConv?.model?.vendor?.slug === "google"
+                            ? "bg-blue-50 text-blue-700 ring-blue-200/60"
+                            : "bg-gray-100 text-gray-500 ring-gray-200/60"
                     }`}
                   >
                     <VendorIcon slug={activeConv?.model?.vendor?.slug ?? ""} />
@@ -1094,8 +1290,16 @@ export default function ChatPage() {
               ? `Message... use @ to tag agent`
               : undefined
           }
-          agentName={activeConv?.type === "group" ? (activeConv.agentDefinition ?? undefined) : undefined}
-          vendorSlug={activeConv?.type === "group" ? (activeConv.model?.vendor?.slug ?? undefined) : undefined}
+          agentName={
+            activeConv?.type === "group"
+              ? (activeConv.agentDefinition ?? undefined)
+              : undefined
+          }
+          vendorSlug={
+            activeConv?.type === "group"
+              ? (activeConv.model?.vendor?.slug ?? undefined)
+              : undefined
+          }
         />
       </Stack>
 
@@ -1106,7 +1310,13 @@ export default function ChatPage() {
           justifyContent={{ xs: "flex-end", sm: "center" }}
           className="animate-fade-in"
           onClick={() => setShowGroupInfo(false)}
-          sx={{ position: "fixed", inset: 0, zIndex: 50, bgcolor: "rgba(0,0,0,0.3)", backdropFilter: "blur(4px)" }}
+          sx={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            bgcolor: "rgba(0,0,0,0.3)",
+            backdropFilter: "blur(4px)",
+          }}
         >
           <Box
             className="animate-scale-in border border-gray-200/60 bg-white/95 shadow-glass-lg backdrop-blur-xl"
@@ -1120,15 +1330,26 @@ export default function ChatPage() {
             }}
           >
             {/* Header */}
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2.5 }}>
+            <Stack
+              direction="row"
+              alignItems="center"
+              justifyContent="space-between"
+              sx={{ mb: 2.5 }}
+            >
               <Stack direction="row" alignItems="center" spacing={1.5}>
                 <Box className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-md">
                   <Users className="h-5 w-5" />
                 </Box>
                 <Box>
-                  <Box component="h3" className="text-base font-bold text-gray-900">{activeConv.name}</Box>
+                  <Box
+                    component="h3"
+                    className="text-base font-bold text-gray-900"
+                  >
+                    {activeConv.name}
+                  </Box>
                   <Box component="p" className="text-[11px] text-gray-400">
-                    {groupMembersList.length} member{groupMembersList.length !== 1 ? "s" : ""} + 1 agent
+                    {groupMembersList.length} member
+                    {groupMembersList.length !== 1 ? "s" : ""} + 1 agent
                   </Box>
                 </Box>
               </Stack>
@@ -1144,7 +1365,12 @@ export default function ChatPage() {
             {/* Agent */}
             {activeConv.agentDefinition && (
               <Box sx={{ mb: 2 }}>
-                <Box component="p" className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Agent</Box>
+                <Box
+                  component="p"
+                  className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400"
+                >
+                  Agent
+                </Box>
                 <Stack
                   direction="row"
                   alignItems="center"
@@ -1154,10 +1380,13 @@ export default function ChatPage() {
                 >
                   <Box
                     className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${
-                      activeConv.model?.vendor?.slug === "openai" ? "bg-emerald-50 text-emerald-600 ring-emerald-200/60" :
-                      activeConv.model?.vendor?.slug === "anthropic" ? "bg-amber-50 text-amber-600 ring-amber-200/60" :
-                      activeConv.model?.vendor?.slug === "google" ? "bg-blue-50 text-blue-600 ring-blue-200/60" :
-                      "bg-violet-50 text-violet-600 ring-violet-200/60"
+                      activeConv.model?.vendor?.slug === "openai"
+                        ? "bg-emerald-50 text-emerald-600 ring-emerald-200/60"
+                        : activeConv.model?.vendor?.slug === "anthropic"
+                          ? "bg-amber-50 text-amber-600 ring-amber-200/60"
+                          : activeConv.model?.vendor?.slug === "google"
+                            ? "bg-blue-50 text-blue-600 ring-blue-200/60"
+                            : "bg-violet-50 text-violet-600 ring-violet-200/60"
                     }`}
                   >
                     {activeConv.model?.vendor?.slug ? (
@@ -1167,9 +1396,20 @@ export default function ChatPage() {
                     )}
                   </Box>
                   <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Box component="p" className="text-sm font-semibold text-gray-900 truncate">{activeConv.agentDefinition}</Box>
+                    <Box
+                      component="p"
+                      className="text-sm font-semibold text-gray-900 truncate"
+                    >
+                      {activeConv.agentDefinition}
+                    </Box>
                     {activeConv.model && (
-                      <Box component="p" className="text-[11px] text-gray-400 truncate">{activeConv.model.vendor?.name} &middot; {activeConv.model.name}</Box>
+                      <Box
+                        component="p"
+                        className="text-[11px] text-gray-400 truncate"
+                      >
+                        {activeConv.model.vendor?.name} &middot;{" "}
+                        {activeConv.model.name}
+                      </Box>
                     )}
                   </Box>
                 </Stack>
@@ -1178,7 +1418,12 @@ export default function ChatPage() {
 
             {/* Members */}
             <Box>
-              <Box component="p" className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400">Members</Box>
+              <Box
+                component="p"
+                className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400"
+              >
+                Members
+              </Box>
               <Stack spacing={0.5} sx={{ maxHeight: 240, overflowY: "auto" }}>
                 {groupMembersList.map((m) => {
                   const name = m.displayName || m.userId;
@@ -1192,18 +1437,28 @@ export default function ChatPage() {
                       className="rounded-xl transition-colors hover:bg-gray-50"
                       sx={{ px: 1.5, py: 1.25 }}
                     >
-                      <Box className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold shadow-sm ring-1 ring-gray-950/[0.04] ${
-                        isCurrentUser
-                          ? "bg-gradient-to-br from-indigo-100 to-blue-100 text-indigo-600"
-                          : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
-                      }`}>
+                      <Box
+                        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold shadow-sm ring-1 ring-gray-950/[0.04] ${
+                          isCurrentUser
+                            ? "bg-gradient-to-br from-indigo-100 to-blue-100 text-indigo-600"
+                            : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
+                        }`}
+                      >
                         {name.charAt(0).toUpperCase()}
                       </Box>
                       <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Box component="p" className="text-sm font-medium text-gray-900 truncate">
+                        <Box
+                          component="p"
+                          className="text-sm font-medium text-gray-900 truncate"
+                        >
                           {name}
                           {isCurrentUser && (
-                            <Box component="span" className="ml-1.5 text-[10px] font-semibold text-indigo-500">you</Box>
+                            <Box
+                              component="span"
+                              className="ml-1.5 text-[10px] font-semibold text-indigo-500"
+                            >
+                              you
+                            </Box>
                           )}
                         </Box>
                       </Box>
@@ -1222,7 +1477,13 @@ export default function ChatPage() {
           alignItems={{ xs: "stretch", sm: "center" }}
           justifyContent={{ xs: "flex-end", sm: "center" }}
           className="animate-fade-in"
-          sx={{ position: "fixed", inset: 0, zIndex: 50, bgcolor: "rgba(0,0,0,0.3)", backdropFilter: "blur(4px)" }}
+          sx={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 50,
+            bgcolor: "rgba(0,0,0,0.3)",
+            backdropFilter: "blur(4px)",
+          }}
         >
           <Box
             className="animate-scale-in border border-gray-200/60 bg-white/95 shadow-glass-lg backdrop-blur-xl"
@@ -1237,16 +1498,21 @@ export default function ChatPage() {
             <Box className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-100">
               <AlertTriangle className="h-6 w-6 text-red-500" />
             </Box>
-            <Box component="h3" className="mb-1 text-base font-bold text-gray-900">
+            <Box
+              component="h3"
+              className="mb-1 text-base font-bold text-gray-900"
+            >
               Delete "{deleteTarget.title}"?
             </Box>
-            <Box component="p" className="mb-5 text-sm text-gray-500 leading-relaxed">
+            <Box
+              component="p"
+              className="mb-5 text-sm text-gray-500 leading-relaxed"
+            >
               This will permanently delete{" "}
               <strong className="text-gray-700">
                 all conversation history
               </strong>
-              ,{" "}
-              <strong className="text-gray-700">agent memory</strong>, and{" "}
+              , <strong className="text-gray-700">agent memory</strong>, and{" "}
               <strong className="text-gray-700">episodic context</strong>{" "}
               associated with this chat. This action cannot be undone.
             </Box>
