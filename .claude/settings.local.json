@@ -40,7 +40,9 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''role:'''', d.get\\(''''user'''',{}\\).get\\(''''role'''',''''N/A''''\\)\\)\")",
       "Bash(curl -s http://localhost:3010/api/auth/login -H 'Content-Type: application/json' -d '{\"\"\"\"userName\"\"\"\":\"\"\"\"danz\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"Sys@dm1n!2026#Gr4hamy\"\"\"\"}')",
       "Bash(find /home/office/Dev/schedassistant/apps/user_app/src -type f \\\\\\(-name *.ts -o -name *.js \\\\\\))",
-      "Bash(find /home/office/Dev/schedassistant/apps/agent_service/src -type f \\\\\\(-name *.ts -o -name *.js \\\\\\))"
+      "Bash(find /home/office/Dev/schedassistant/apps/agent_service/src -type f \\\\\\(-name *.ts -o -name *.js \\\\\\))",
+      "Bash(find /home/office/Dev/schedassistant -path */node_modules/@langchain/core/src/messages* -name *.ts)",
+      "Bash(find /home/office/Dev/schedassistant/apps/agent_service/node_modules -path *langgraph*checkpoint* -type f -name *.d.ts)"
     ]
   }
 }
