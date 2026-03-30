@@ -1,5 +1,5 @@
 import {
-  SingleChat, GroupMember, User, sequelize,
+  SingleChat, GroupMember, User, ConversationMessage, MessageNotification
 } from "@scheduling-agent/database";
 import { logger } from "../logger";
 
@@ -88,16 +88,13 @@ export class SessionsService {
     if (!sc) throw Object.assign(new Error("Single chat not found."), { status: 404 });
     if (sc.userId !== userId) throw Object.assign(new Error("You can only delete your own chats."), { status: 403 });
 
-    const chatCount = await SingleChat.count({ where: { userId } });
-    if (chatCount <= 1) throw Object.assign(new Error("You cannot delete your last remaining chat."), { status: 403 });
+    // Clear conversation messages and notifications only — keep the
+    // agent↔user pair (SingleChat row) permanent.
+    await ConversationMessage.destroy({ where: { singleChatId: scId } });
+    await MessageNotification.destroy({ where: { conversationId: scId, conversationType: "single" } });
 
-    // LangGraph thread lives on `agents.active_thread_id` and may be shared — only remove this user's row.
-    await sequelize.transaction(async (t) => {
-      await sc.destroy({ transaction: t });
-    });
-
-    logger.info("Single chat deleted", { scId, userId });
-    return { deleted: true };
+    logger.info("Single chat conversation cleared", { scId, userId });
+    return { cleared: true };
   }
 
   async getGroupMembers(groupId: string, userId: string) {

@@ -6,16 +6,7 @@ export type EnsureSessionScope = {
   agentId?: string | null;
 };
 
-/**
- * Ensures a `threads` row exists for the given thread and
- * user. Creates one if it doesn't exist yet (new conversation),
- * or returns the existing row (resumed conversation).
- *
- * For group chats and multi-user single chats, `userId` is null — one LangGraph
- * thread per agent (`agents.active_thread_id`), shared by all conversations using
- * that agent; transcript isolation is `conversation_messages.single_chat_id` / `group_id`.
- * A mismatch on a user-owned thread would indicate a session-isolation breach.
- */
+
 export async function ensureSession(
   threadId: string,
   userId: UserId | null,

@@ -610,22 +610,16 @@ export default function ChatPage() {
     setDeleting(true);
     try {
       await deleteSingleChat(deleteTarget.id);
-      setConversations((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          singleChats: prev.singleChats.filter(
-            (sc) => sc.id !== deleteTarget.id,
-          ),
-        };
-      });
+      // Conversation cleared — just wipe the messages for the active view.
+      // The SingleChat row persists (agent↔user pair is permanent).
       if (activeConv?.id === deleteTarget.id) {
-        setActiveConv(null);
         setMessages([]);
+        setTotalMessages(0);
+        setLoadedFrom(0);
       }
       setDeleteTarget(null);
     } catch (err: any) {
-      alert(err.message || "Failed to delete chat");
+      alert(err.message || "Failed to clear conversation");
     } finally {
       setDeleting(false);
     }
@@ -1513,7 +1507,7 @@ export default function ChatPage() {
               component="h3"
               className="mb-1 text-base font-bold text-gray-900"
             >
-              Delete "{deleteTarget.title}"?
+              Clear "{deleteTarget.title}"?
             </Box>
             <Box
               component="p"
@@ -1522,10 +1516,9 @@ export default function ChatPage() {
               This will permanently delete{" "}
               <strong className="text-gray-700">
                 all conversation history
-              </strong>
-              , <strong className="text-gray-700">agent memory</strong>, and{" "}
-              <strong className="text-gray-700">episodic context</strong>{" "}
-              associated with this chat. This action cannot be undone.
+              </strong>{" "}
+              for this chat. The chat will remain in your sidebar so you can
+              start a fresh conversation. This action cannot be undone.
             </Box>
             <Stack direction="row" justifyContent="flex-end" spacing={1.25}>
               <Box
@@ -1545,7 +1538,7 @@ export default function ChatPage() {
                 {deleting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  "Delete permanently"
+                  "Clear messages"
                 )}
               </Box>
             </Stack>

@@ -12,6 +12,7 @@ import { createThreadLockRedis, withThreadLock } from "./threadLock";
 import { emitAgentReply, emitAgentTyping } from "../socket";
 import { ensureCanonicalThreadId } from "../sessionsManagment/canonicalThread";
 import { writeConversationMessage } from "../sessionsManagment/conversationMessageWriter";
+import { Group, SingleChat } from "@scheduling-agent/database";
 import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
@@ -24,8 +25,9 @@ export type AgentChatWorkerHandle = {
 
 /**
  * Starts a BullMQ worker that processes `agent_chat_jobs`.
- * Each job acquires a Redis lock per conversation (`groupId` / `singleChatId`) before
- * `ensureCanonicalThreadId` and `graph.invoke`, so the same chat never runs twice at once.
+ * Each job acquires a Redis lock per **agent** before
+ * `ensureCanonicalThreadId` and `graph.invoke`, so the same LangGraph
+ * thread (shared by all conversations for an agent) never runs twice at once.
  * When done, emits the result via Socket.IO to user_app.
  */
 export function startAgentChatWorker(
@@ -45,21 +47,30 @@ export function startAgentChatWorker(
         displayName,
       } = job.data;
 
-      const lockKey = groupId
-        ? `conv:group:${groupId}`
-        : singleChatId
-          ? `conv:single:${singleChatId}`
-          : null;
-
-      if (!lockKey) {
-        throw new Error("agent_chat job missing groupId and singleChatId");
+      // Resolve agentId for lock scoping — all conversations sharing
+      // an agent must serialise on the same lock to avoid concurrent
+      // graph.invoke on the same LangGraph thread.
+      let resolvedAgentId = agentId ?? null;
+      if (!resolvedAgentId && groupId) {
+        const g = await Group.findByPk(groupId, { attributes: ["agentId"] });
+        resolvedAgentId = g?.agentId ?? null;
       }
+      if (!resolvedAgentId && singleChatId) {
+        const sc = await SingleChat.findByPk(singleChatId, { attributes: ["agentId"] });
+        resolvedAgentId = sc?.agentId ?? null;
+      }
+      if (!resolvedAgentId) {
+        throw new Error("agent_chat job: cannot resolve agentId for lock");
+      }
+
+      const lockKey = `agent:thread:${resolvedAgentId}`;
 
       logger.info("Processing chat job", {
         requestId,
         userId,
         groupId,
         singleChatId,
+        agentId: resolvedAgentId,
         mentionsAgent,
       });
 

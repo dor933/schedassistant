@@ -189,7 +189,7 @@ export function createSession(opts?: {
 // ─── Single Chat Management ──────────────────────────────────────────────────
 
 export function deleteSingleChat(id: string) {
-  return request<{ deleted: boolean }>(`/sessions/single-chats/${id}`, {
+  return request<{ cleared: boolean }>(`/sessions/single-chats/${id}`, {
     method: "DELETE",
   });
 }

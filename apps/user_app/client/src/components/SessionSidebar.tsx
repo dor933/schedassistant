@@ -161,18 +161,16 @@ export default function SessionSidebar({
                       </Box>
                     )}
                   </Stack>
-                  {singleChats.length > 1 && (
-                    <button
+                  <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onDeleteChat(sc.id, sc.title || "Agent Chat");
                       }}
                       className="mr-2 rounded-lg p-1.5 text-gray-300 opacity-0 transition-all duration-150 group-hover:opacity-100 hover:bg-red-50 hover:text-red-500"
-                      title="Delete chat"
+                      title="Clear conversation"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
-                  )}
                 </Stack>
               );
             })}

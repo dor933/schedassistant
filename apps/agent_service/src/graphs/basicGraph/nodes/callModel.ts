@@ -90,7 +90,13 @@ function getModel(modelSlug: string, vendorSlug: string, apiKey: string): BaseCh
     case "openai":
       return new ChatOpenAI({ modelName: modelSlug, temperature: 0.4, apiKey });
     case "anthropic":
-      return new ChatAnthropic({ modelName: modelSlug, temperature: 0.4, apiKey });
+      return new ChatAnthropic({
+        modelName: modelSlug,
+        temperature: 0.4,
+        apiKey,
+        // ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
+
+      });
     case "google":
       return new ChatGoogle({ model: modelSlug, temperature: 0.4, apiKey });
     default:
