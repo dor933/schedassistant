@@ -94,7 +94,7 @@ function getModel(modelSlug: string, vendorSlug: string, apiKey: string): BaseCh
         modelName: modelSlug,
         temperature: 0.4,
         apiKey,
-        // ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
+        ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
 
       });
     case "google":
