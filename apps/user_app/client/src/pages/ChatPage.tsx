@@ -565,6 +565,15 @@ export default function ChatPage() {
             groups: prev.groups.filter((g) => g.id !== data.groupId),
           };
         });
+      } else if (data.action === "single_chat_added" && data.singleChat) {
+        setConversations((prev) => {
+          if (!prev) return prev;
+          if (prev.singleChats.some((sc) => sc.id === data.singleChat.id)) return prev;
+          return {
+            ...prev,
+            singleChats: [...prev.singleChats, data.singleChat],
+          };
+        });
       }
     };
 

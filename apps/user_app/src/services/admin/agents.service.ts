@@ -3,6 +3,7 @@ import {
   SingleChat,
   GroupMember,
   Group,
+  User,
   sequelize,
 } from "@scheduling-agent/database";
 import { QueryTypes } from "sequelize";
@@ -48,6 +49,33 @@ export class AgentsService {
       definition: definition ?? null,
       coreInstructions: coreInstructions ?? null,
     });
+
+    // Eagerly create a SingleChat for every user and notify them in real time
+    try {
+      const allUsers = await User.findAll({ attributes: ["id"] });
+      for (const u of allUsers) {
+        const [sc] = await SingleChat.findOrCreate({
+          where: { userId: u.id, agentId: agent.id },
+          defaults: {
+            userId: u.id,
+            agentId: agent.id,
+            title: agent.definition?.trim() || "Agent Chat",
+          },
+        });
+        getIO().to(`user:${u.id}`).emit("conversations:updated", {
+          action: "single_chat_added",
+          singleChat: {
+            id: sc.id,
+            agentId: agent.id,
+            title: sc.title,
+            model: null,
+          },
+        });
+      }
+    } catch (err) {
+      logger.error("Failed to create single chats for new agent", { agentId: agent.id, error: String(err) });
+    }
+
     this.broadcast(
       "agent_created",
       `Agent "${agent.definition || "Unnamed"}" created`,

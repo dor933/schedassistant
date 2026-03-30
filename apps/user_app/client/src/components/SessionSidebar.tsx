@@ -46,9 +46,8 @@ function VendorChatIcon({ model, isActive }: { model: ConversationModelInfo | nu
   if (!slug) {
     return (
       <Box
-        className={`mr-2.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ${
-          isActive ? "bg-indigo-100 text-indigo-600" : "bg-gray-100 text-gray-400"
-        }`}
+        className={`mr-2.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ${isActive ? "bg-indigo-100 text-indigo-600" : "bg-gray-100 text-gray-400"
+          }`}
       >
         <MessageCircle className="h-3.5 w-3.5" />
       </Box>
@@ -64,9 +63,8 @@ function VendorChatIcon({ model, isActive }: { model: ConversationModelInfo | nu
 
   return (
     <Box
-      className={`mr-2.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ${
-        isActive ? colors.active : colors.idle
-      }`}
+      className={`mr-2.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg ${isActive ? colors.active : colors.idle
+        }`}
     >
       <VendorIcon slug={slug} />
     </Box>
@@ -99,7 +97,7 @@ export default function SessionSidebar({
             GrahamyClaw
           </Box>
           <Box component="span" className="block text-[10px] font-medium text-gray-400">
-            Grahamy's agents interaction platform
+            Agent Management Interaction Platform
           </Box>
         </Box>
       </Stack>
@@ -122,11 +120,10 @@ export default function SessionSidebar({
                   key={sc.id}
                   direction="row"
                   alignItems="center"
-                  className={`group mb-0.5 rounded-xl text-sm transition-all duration-150 ${
-                    isActive
-                      ? "bg-gradient-to-r from-indigo-50 to-blue-50 font-medium text-indigo-700 shadow-sm ring-1 ring-indigo-100"
-                      : "text-gray-600 hover:bg-white hover:shadow-sm hover:ring-1 hover:ring-gray-100"
-                  }`}
+                  className={`group mb-0.5 rounded-xl text-sm transition-all duration-150 ${isActive
+                    ? "bg-gradient-to-r from-indigo-50 to-blue-50 font-medium text-indigo-700 shadow-sm ring-1 ring-indigo-100"
+                    : "text-gray-600 hover:bg-white hover:shadow-sm hover:ring-1 hover:ring-gray-100"
+                    }`}
                 >
                   <Stack
                     component="button"
@@ -209,11 +206,10 @@ export default function SessionSidebar({
                       model: g.model,
                     })
                   }
-                  className={`mb-0.5 w-full rounded-xl text-left text-sm transition-all duration-150 ${
-                    isActive
-                      ? "bg-gradient-to-r from-indigo-50 to-blue-50 font-medium text-indigo-700 shadow-sm ring-1 ring-indigo-100"
-                      : "text-gray-600 hover:bg-white hover:shadow-sm hover:ring-1 hover:ring-gray-100"
-                  }`}
+                  className={`mb-0.5 w-full rounded-xl text-left text-sm transition-all duration-150 ${isActive
+                    ? "bg-gradient-to-r from-indigo-50 to-blue-50 font-medium text-indigo-700 shadow-sm ring-1 ring-indigo-100"
+                    : "text-gray-600 hover:bg-white hover:shadow-sm hover:ring-1 hover:ring-gray-100"
+                    }`}
                   sx={{ px: 1.5, py: 1.25, cursor: "pointer" }}
                 >
                   <VendorChatIcon model={g.model} isActive={isActive} />

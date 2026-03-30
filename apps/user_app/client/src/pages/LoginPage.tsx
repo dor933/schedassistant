@@ -107,11 +107,11 @@ export default function LoginPage() {
         <div className="mb-8 text-center">
           <img src={logo} alt="Logo" className="mx-auto mb-5 h-16 w-16 rounded-2xl shadow-lg shadow-indigo-200/60 object-cover" />
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">
-            GrahamyClaw
+            Agent Management System
           </h1>
           <p className="mt-1.5 text-sm text-gray-500">
             {mode === "login"
-              ? "Sign in to Grahamy's agents interaction platform"
+              ? "Sign In"
               : "Create your account"}
           </p>
         </div>
@@ -124,11 +124,10 @@ export default function LoginPage() {
               setMode("login");
               setError("");
             }}
-            className={`flex-1 rounded-xl py-2.5 text-sm font-semibold transition-all duration-200 ${
-              mode === "login"
-                ? "bg-white text-gray-900 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
+            className={`flex-1 rounded-xl py-2.5 text-sm font-semibold transition-all duration-200 ${mode === "login"
+              ? "bg-white text-gray-900 shadow-sm"
+              : "text-gray-500 hover:text-gray-700"
+              }`}
           >
             Sign In
           </button>
@@ -138,11 +137,10 @@ export default function LoginPage() {
               setMode("register");
               setError("");
             }}
-            className={`flex-1 rounded-xl py-2.5 text-sm font-semibold transition-all duration-200 ${
-              mode === "register"
-                ? "bg-white text-gray-900 shadow-sm"
-                : "text-gray-500 hover:text-gray-700"
-            }`}
+            className={`flex-1 rounded-xl py-2.5 text-sm font-semibold transition-all duration-200 ${mode === "register"
+              ? "bg-white text-gray-900 shadow-sm"
+              : "text-gray-500 hover:text-gray-700"
+              }`}
           >
             Register
           </button>
@@ -284,9 +282,8 @@ export default function LoginPage() {
                 {passwordChecks.map((c) => (
                   <span
                     key={c.label}
-                    className={`inline-flex items-center gap-1 text-[10px] font-medium ${
-                      c.ok ? "text-emerald-600" : "text-gray-400"
-                    }`}
+                    className={`inline-flex items-center gap-1 text-[10px] font-medium ${c.ok ? "text-emerald-600" : "text-gray-400"
+                      }`}
                   >
                     {c.ok ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
                     {c.label}

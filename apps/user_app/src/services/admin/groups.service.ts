@@ -37,7 +37,7 @@ export class GroupsService {
       ),
     );
 
-    for (const userId of extraMembers) {
+    for (const userId of uniqueMembers) {
       getIO().to(`user:${userId}`).emit("conversations:updated", {
         action: "group_added",
         group: { id: group.id, name: group.name, agentId: group.agentId, agentDefinition: agent?.definition ?? null },

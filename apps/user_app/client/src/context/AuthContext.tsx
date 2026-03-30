@@ -136,17 +136,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
           break;
         }
-        case "agent_created": {
-          getMe()
-            .then((me) => setConversations(me.conversations))
-            .catch(() => {});
-          break;
-        }
       }
     };
 
+    const onConversationsUpdated = (data: any) => {
+      if (data.action === "group_added" && data.group) {
+        setConversations((prev) => {
+          if (!prev) return prev;
+          if (prev.groups.some((g: any) => g.id === data.group.id)) return prev;
+          return { ...prev, groups: [...prev.groups, data.group] };
+        });
+      } else if (data.action === "group_removed" && data.groupId) {
+        setConversations((prev) => {
+          if (!prev) return prev;
+          return { ...prev, groups: prev.groups.filter((g: any) => g.id !== data.groupId) };
+        });
+      } else if (data.action === "single_chat_added" && data.singleChat) {
+        setConversations((prev) => {
+          if (!prev) return prev;
+          if (prev.singleChats.some((sc: any) => sc.id === data.singleChat.id)) return prev;
+          return { ...prev, singleChats: [...prev.singleChats, data.singleChat] };
+        });
+      }
+    };
+
+    socket.on("conversations:updated", onConversationsUpdated);
     socket.on("admin:change", onAdminChange);
-    return () => { socket.off("admin:change", onAdminChange); };
+    return () => {
+      socket.off("conversations:updated", onConversationsUpdated);
+      socket.off("admin:change", onAdminChange);
+    };
   }, [user]);
 
   return (
