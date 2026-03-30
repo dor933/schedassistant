@@ -17,7 +17,6 @@ export class ChatService {
 
     await queue.add("chat", {
       userId: data.userId,
-      threadId: data.threadId,
       message: data.message,
       requestId,
       ...(data.displayName ? { displayName: data.displayName } : {}),

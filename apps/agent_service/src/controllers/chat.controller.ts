@@ -8,7 +8,6 @@ export class ChatController {
   send = async (req: Request, res: Response) => {
     const {
       userId,
-      threadId,
       message,
       groupId,
       singleChatId,
@@ -18,16 +17,18 @@ export class ChatController {
       displayName,
     } = req.body;
 
-    if (!userId || !threadId || !message) {
+    if (!userId || !message) {
+      return res.status(400).json({ error: "userId and message are required." });
+    }
+    if (!groupId && !singleChatId) {
       return res
         .status(400)
-        .json({ error: "userId, threadId, and message are required." });
+        .json({ error: "groupId or singleChatId is required." });
     }
 
     try {
       const resolvedRequestId = await chatService.enqueueChat({
         userId,
-        threadId,
         message,
         requestId,
         displayName,
@@ -37,7 +38,10 @@ export class ChatController {
         mentionsAgent,
       });
 
-      return res.status(202).json({ status: "accepted", threadId });
+      return res.status(202).json({
+        status: "accepted",
+        requestId: resolvedRequestId,
+      });
     } catch (err: any) {
       logger.error("/api/chat enqueue error", { error: err.message });
       return res.status(500).json({ error: err.message ?? "Internal error" });

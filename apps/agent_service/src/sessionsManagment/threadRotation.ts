@@ -3,8 +3,7 @@ import { Agent, Group, SingleChat, Thread } from "@scheduling-agent/database";
 import { logger } from "../logger";
 
 /**
- * Creates a fresh thread (T₂) and points the conversation's
- * `active_thread_id` at it.
+ * Creates a fresh thread (T₂) and points the agent's `active_thread_id` at it.
  *
  * Called after a successful summarization on T₁ so the next
  * `graph.invoke` starts with an empty checkpoint.
@@ -18,29 +17,27 @@ export async function rotateThread(
 ): Promise<string> {
   const newThreadId = crypto.randomUUID();
 
+  let aid = agentId ?? null;
+  if (!aid && groupId) {
+    const g = await Group.findByPk(groupId, { attributes: ["agentId"] });
+    aid = g?.agentId ?? null;
+  }
+  if (!aid && singleChatId) {
+    const sc = await SingleChat.findByPk(singleChatId, { attributes: ["agentId"] });
+    aid = sc?.agentId ?? null;
+  }
+
   await Thread.create({
     id: newThreadId,
     userId: null,
-    agentId: agentId ?? null,
+    agentId: aid ?? null,
     lastActivityAt: new Date(),
   });
 
-  if (groupId) {
-    await Group.update(
-      { activeThreadId: newThreadId },
-      { where: { id: groupId } },
-    );
-  } else if (singleChatId) {
-    const aid =
-      agentId ??
-      (await SingleChat.findByPk(singleChatId, { attributes: ["agentId"] }))?.agentId ??
-      null;
-    if (aid) {
-      await Agent.update({ activeThreadId: newThreadId }, { where: { id: aid } });
-      await SingleChat.update({ activeThreadId: newThreadId }, { where: { agentId: aid } });
-    }
+  if (aid) {
+    await Agent.update({ activeThreadId: newThreadId }, { where: { id: aid } });
   }
 
-  logger.info("Thread rotated", { newThreadId, groupId, singleChatId, agentId });
+  logger.info("Thread rotated", { newThreadId, groupId, singleChatId, agentId: aid });
   return newThreadId;
 }

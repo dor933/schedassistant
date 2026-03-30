@@ -33,7 +33,7 @@ export class AuthService {
       role: roleName,
     });
 
-    await this.ensurePoolAgentSingleChats(user.id);
+    await this.ensureAgentSingleChats(user.id);
     const conversations = await this.loadUserConversations(user.id);
 
     return {
@@ -61,7 +61,7 @@ export class AuthService {
       if (role) roleName = role.name;
     }
 
-    await this.ensurePoolAgentSingleChats(user.id);
+    await this.ensureAgentSingleChats(user.id);
     const conversations = await this.loadUserConversations(user.id);
 
     return {
@@ -74,14 +74,14 @@ export class AuthService {
   }
 
   /**
-   * Ensures a `single_chats` row exists for every pool agent (not group-bound) for this user.
+   * Ensures a `single_chats` row exists for every agent for this user (DM surface;
+   * same agent may also be used in groups — shared LangGraph thread is on `agents`).
    */
-  private async ensurePoolAgentSingleChats(userId: string): Promise<void> {
-    const poolAgents = await Agent.findAll({
-      where: { groupId: null },
+  private async ensureAgentSingleChats(userId: string): Promise<void> {
+    const agents = await Agent.findAll({
       attributes: ["id", "definition"],
     });
-    for (const agent of poolAgents) {
+    for (const agent of agents) {
       await SingleChat.findOrCreate({
         where: { userId, agentId: agent.id },
         defaults: {

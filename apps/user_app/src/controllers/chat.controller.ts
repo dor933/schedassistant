@@ -16,12 +16,16 @@ export class ChatController {
   private chatService = new ChatService();
 
   send = (req: Request, res: Response) => {
-    const { threadId, message, groupId, singleChatId, agentId, mentionsAgent } =
+    const { message, groupId, singleChatId, agentId, mentionsAgent } =
       req.body;
     const userId = req.user!.userId;
 
-    if (!threadId || !message) {
-      res.status(400).json({ error: "threadId and message are required." });
+    if (!message) {
+      res.status(400).json({ error: "message is required." });
+      return;
+    }
+    if (!groupId && !singleChatId) {
+      res.status(400).json({ error: "groupId or singleChatId is required." });
       return;
     }
 
@@ -29,14 +33,12 @@ export class ChatController {
 
     logger.info("Chat request accepted", {
       requestId,
-      threadId,
       userId,
       groupId,
       singleChatId,
       mentionsAgent,
     });
 
-    // Broadcast user message to other group members in real-time
     if (groupId) {
       void this.chatService
         .broadcastUserMessage(
@@ -54,11 +56,9 @@ export class ChatController {
         );
     }
 
-    // Fire-and-forget to agent_service
     void this.chatService.proxyToAgentService(
       {
         userId,
-        threadId,
         message,
         requestId,
         displayName: req.user!.displayName ?? userId,
@@ -69,11 +69,10 @@ export class ChatController {
       },
       userId,
       requestId,
-      threadId,
       groupId,
       singleChatId,
     );
 
-    res.status(202).json({ requestId, threadId, status: "accepted" });
+    res.status(202).json({ requestId, status: "accepted" });
   };
 }

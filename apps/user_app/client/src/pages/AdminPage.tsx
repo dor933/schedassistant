@@ -40,7 +40,7 @@ function AgentCard({
   agent: AdminAgent;
   onSaved: () => void;
 }) {
-  const isAttached = !!agent.groupId;
+  const isAttached = agent.groupCount > 0;
   const [editing, setEditing] = useState(false);
   const [definition, setDefinition] = useState(agent.definition ?? "");
   const [instructions, setInstructions] = useState(
@@ -420,7 +420,7 @@ export default function AdminPage() {
       setModels(m);
       setVendors(v);
       setRoles(r);
-      const unattached = a.filter((x) => !x.groupId);
+      const unattached = a.filter((x) => x.groupCount === 0);
       if (unattached.length > 0 && !newGroupAgentId) setNewGroupAgentId(unattached[0].id);
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
     } catch {
@@ -796,7 +796,7 @@ export default function AdminPage() {
                     />
                     <div className="absolute left-0 right-0 z-20 mt-1.5 max-h-52 overflow-y-auto rounded-xl border border-gray-200/80 bg-white/95 p-1 shadow-glass-lg backdrop-blur-xl">
                       {agents
-                        .filter((a) => !a.groupId)
+                        .filter((a) => a.groupCount === 0)
                         .map((a) => {
                           const isSelected = a.id === newGroupAgentId;
                           return (
@@ -836,7 +836,7 @@ export default function AdminPage() {
                             </button>
                           );
                         })}
-                      {agents.filter((a) => !a.groupId).length === 0 && (
+                      {agents.filter((a) => a.groupCount === 0).length === 0 && (
                         <p className="py-3 text-center text-xs text-gray-400">
                           No unattached agents available. Create one first.
                         </p>

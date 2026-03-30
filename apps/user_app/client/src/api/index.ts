@@ -176,7 +176,7 @@ export function createSession(opts?: {
   groupId?: string;
   singleChatId?: string;
 }) {
-  return request<Session>("/sessions", {
+  return request<{ ok: true }>("/sessions", {
     method: "POST",
     body: JSON.stringify({
       title: opts?.title,
@@ -210,12 +210,10 @@ export function getGroupMembers(groupId: string) {
 /** HTTP 202 — agent work accepted; reply arrives on Socket.IO (`chat:reply`). */
 export interface ChatAccepted {
   requestId: string;
-  threadId: string;
   status: "accepted";
 }
 
 export async function sendMessage(
-  threadId: string,
   message: string,
   requestId: string,
   scope?: {
@@ -237,7 +235,6 @@ export async function sendMessage(
     method: "POST",
     headers,
     body: JSON.stringify({
-      threadId,
       message,
       requestId,
       ...(scope?.groupId ? { groupId: scope.groupId } : {}),
@@ -290,7 +287,8 @@ export interface AdminAgent {
   id: string;
   definition: string | null;
   coreInstructions: string | null;
-  groupId: string | null;
+  /** Number of groups using this agent (same agent can back multiple groups). */
+  groupCount: number;
   editable: boolean;
   createdAt: string;
 }

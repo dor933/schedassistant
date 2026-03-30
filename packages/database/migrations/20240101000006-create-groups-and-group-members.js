@@ -69,9 +69,8 @@ module.exports = {
       name: "group_members_user_id",
     });
 
-    // Threads are keyed by `agents.id` (`threads.agent_id`) and by
-    // `groups.active_thread_id` / `single_chats.active_thread_id` / `agents.active_thread_id` —
-    // not by `group_id` / `single_chat_id` on the thread row.
+    // LangGraph checkpoint thread id is canonical on `agents.active_thread_id`.
+    // `threads` rows reference `agents.id` via `threads.agent_id` when created.
   },
 
   async down(queryInterface, _Sequelize) {

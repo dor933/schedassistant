@@ -6,8 +6,8 @@ export const AGENT_CHAT_QUEUE_NAME = "agent_chat_jobs";
 const connection = getRedisConfig();
 
 /**
- * Jobs for `/api/chat`: one job per HTTP request; the worker runs `graph.invoke`
- * after acquiring a per-`threadId` lock so the same thread is never processed twice at once.
+ * Jobs for `/api/chat`: one job per HTTP request; the worker resolves the canonical
+ * thread, then runs `graph.invoke` under a per-conversation Redis lock.
  */
 export const agentChatQueue = new Queue(AGENT_CHAT_QUEUE_NAME, {
   connection,
@@ -24,7 +24,6 @@ export const agentChatQueueEvents = new QueueEvents(AGENT_CHAT_QUEUE_NAME, {
 
 export type AgentChatJobData = {
   userId: string;
-  threadId: string;
   message: string;
   requestId: string;
   displayName?: string;

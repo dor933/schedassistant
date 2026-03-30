@@ -1,10 +1,11 @@
 import {
-  User,
   Agent,
   SingleChat,
   GroupMember,
   Group,
+  sequelize,
 } from "@scheduling-agent/database";
+import { QueryTypes } from "sequelize";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 
@@ -15,16 +16,25 @@ export class AgentsService {
         "id",
         "definition",
         "coreInstructions",
-        "groupId",
         "createdAt",
       ],
       order: [["created_at", "DESC"]],
     });
 
+    const countRows = await sequelize.query<{ agentId: string; cnt: string }>(
+      `SELECT agent_id AS "agentId", COUNT(*)::int AS cnt FROM groups GROUP BY agent_id`,
+      { type: QueryTypes.SELECT },
+    );
+    const groupCountByAgent: Record<string, number> = {};
+    for (const r of countRows) {
+      groupCountByAgent[r.agentId] = Number(r.cnt);
+    }
+
     const editableIds = await this.getEditableAgentIds(callerId, callerRole);
 
     return agents.map((a) => ({
       ...a.toJSON(),
+      groupCount: groupCountByAgent[a.id] ?? 0,
       editable: editableIds.has(a.id),
     }));
   }

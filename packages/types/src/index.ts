@@ -25,11 +25,9 @@ export interface AgentAttributes {
   definition: string | null;
   /** Detailed instructions merged into the system prompt each turn. */
   coreInstructions: string | null;
-  /** Set when this agent is dedicated to a group; single-user chats use `single_chats` only. */
-  groupId: GroupId | null;
   /**
-   * Pool agents only: shared LangGraph `thread_id` for all `single_chats` with this agent.
-   * Null for group-bound agents.
+   * Canonical LangGraph checkpoint `thread_id` for this agent.
+   * All groups and single chats that reference this agent share this thread / history.
    */
   activeThreadId: string | null;
   createdAt: Date;
@@ -73,7 +71,6 @@ export interface SingleChatAttributes {
   userId: UserId;
   agentId: AgentId;
   modelId: ModelId | null;
-  activeThreadId: string | null;
   title: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -84,7 +81,6 @@ export interface GroupAttributes {
   name: string;
   agentId: AgentId;
   modelId: ModelId | null;
-  activeThreadId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

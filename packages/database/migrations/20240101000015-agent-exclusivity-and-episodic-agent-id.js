@@ -1,27 +1,22 @@
 "use strict";
 
 /**
- * Agent group link + agent-level memory.
+ * Episodic memory + threads: `agent_id` for scoping.
  *
- * 1. Add `group_id` to `agents` (nullable, UNIQUE) when the agent is dedicated to a group.
- *    Single-user chats are scoped only via `single_chats`, not a column on `agents`.
- * 2. Add `agent_id` to `episodic_memory` and `threads`.
- * 3. Backfill: clone DEFAULT agent per single_chat, link group agents, episodic `agent_id` from threads when set.
+ * - Add `agent_id` to `episodic_memory` and `threads` (with indexes).
+ * - Backfill: clone DEFAULT agent per single_chat row that still points at the
+ *   default agent (legacy one-agent-per-chat cleanup), then link episodic rows
+ *   from threads when set.
+ *
+ * Canonical LangGraph thread id lives only on `agents.active_thread_id` (see
+ * create-agents migration). There is no `agents.group_id`; groups reference
+ * agents via `groups.agent_id` only.
  *
  * @type {import('sequelize-cli').Migration}
  */
 module.exports = {
   async up(queryInterface, Sequelize) {
     const DEFAULT_AGENT_ID = "00000000-0000-4000-a000-000000000001";
-
-    await queryInterface.addColumn("agents", "group_id", {
-      type: Sequelize.UUID,
-      allowNull: true,
-      unique: true,
-      references: { model: "groups", key: "id" },
-      onUpdate: "CASCADE",
-      onDelete: "SET NULL",
-    });
 
     await queryInterface.addColumn("episodic_memory", "agent_id", {
       type: Sequelize.UUID,
@@ -85,17 +80,6 @@ module.exports = {
     }
 
     await queryInterface.sequelize.query(`
-      UPDATE agents a
-      SET group_id = g.id
-      FROM groups g
-      WHERE g.agent_id = a.id
-        AND a.group_id IS NULL
-    `);
-
-    // `threads` no longer have `single_chat_id` / `group_id`; `agent_id` is set at runtime
-    // when sessions are created. Fresh DBs have no thread rows here.
-
-    await queryInterface.sequelize.query(`
       UPDATE episodic_memory em
       SET agent_id = t.agent_id
       FROM threads t
@@ -112,7 +96,5 @@ module.exports = {
 
     await queryInterface.removeIndex("episodic_memory", "episodic_memory_agent_id");
     await queryInterface.removeColumn("episodic_memory", "agent_id");
-
-    await queryInterface.removeColumn("agents", "group_id");
   },
 };

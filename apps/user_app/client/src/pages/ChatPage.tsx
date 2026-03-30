@@ -177,11 +177,13 @@ export default function ChatPage() {
     getSessions(scope)
       .then(async (list) => {
         if (cancelled) return;
-        let session: Session;
+        let session: Session | null = null;
         if (list.length > 0) {
           session = list[0];
         } else {
-          session = await createSession(scope);
+          await createSession(scope);
+          const after = await getSessions(scope);
+          session = after[0] ?? null;
         }
         if (cancelled) return;
         setActiveSession(session);
@@ -624,29 +626,29 @@ export default function ChatPage() {
     async (text: string) => {
       if (!activeConv) return;
 
-      let session = activeSession;
-      if (!session) {
+      if (!activeSession) {
         try {
           const scope =
             activeConv.type === "group"
               ? { groupId: activeConv.id }
               : { singleChatId: activeConv.id };
-          session = await createSession({
+          await createSession({
             title: text.slice(0, 60),
             ...scope,
           });
-          setActiveSession(session);
+          const list = await getSessions(scope);
+          setActiveSession(list[0] ?? null);
         } catch {
           return;
         }
       }
 
-      await doSend(session.threadId, text);
+      await doSend(text);
     },
     [activeConv, activeSession],
   );
 
-  async function doSend(threadId: string, text: string) {
+  async function doSend(text: string) {
     const userMsg: Message = {
       role: "user",
       content: text,
@@ -678,7 +680,7 @@ export default function ChatPage() {
 
     if (isGroup && !mentionsAgent) {
       try {
-        await sendMessage(threadId, text, requestId, scope);
+        await sendMessage(text, requestId, scope);
       } catch {
         // stored silently
       } finally {
@@ -700,7 +702,7 @@ export default function ChatPage() {
     });
 
     try {
-      await sendMessage(threadId, text, requestId, scope);
+      await sendMessage(text, requestId, scope);
       const p = await replyPromise;
       setTotalMessages((t) => t + 1);
       if (p.ok) {

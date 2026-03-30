@@ -10,7 +10,7 @@ import { getRedisConfig } from "../redisClient";
 import { executeChatTurn, storeMessageOnly } from "../chat/executeChatTurn";
 import { createThreadLockRedis, withThreadLock } from "./threadLock";
 import { emitAgentReply, emitAgentTyping } from "../socket";
-import { resolveCanonicalThreadId } from "../sessionsManagment/canonicalThread";
+import { ensureCanonicalThreadId } from "../sessionsManagment/canonicalThread";
 import { writeConversationMessage } from "../sessionsManagment/conversationMessageWriter";
 import { logger } from "../logger";
 
@@ -24,8 +24,8 @@ export type AgentChatWorkerHandle = {
 
 /**
  * Starts a BullMQ worker that processes `agent_chat_jobs`.
- * Each job acquires a Redis lock keyed by `threadId` before calling `graph.invoke`, so
- * two jobs for the same thread never run concurrently (later jobs wait on the lock).
+ * Each job acquires a Redis lock per conversation (`groupId` / `singleChatId`) before
+ * `ensureCanonicalThreadId` and `graph.invoke`, so the same chat never runs twice at once.
  * When done, emits the result via Socket.IO to user_app.
  */
 export function startAgentChatWorker(
@@ -36,7 +36,6 @@ export function startAgentChatWorker(
     async (job) => {
       const {
         userId,
-        threadId: clientThreadId,
         message,
         groupId,
         singleChatId,
@@ -46,25 +45,19 @@ export function startAgentChatWorker(
         displayName,
       } = job.data;
 
-      // Resolve the canonical thread for this conversation (handles stale client IDs after rotation).
-      const threadId = await resolveCanonicalThreadId(
-        clientThreadId,
-        groupId ?? null,
-        singleChatId ?? null,
-      );
-
-      // Conversation-scoped lock key — ensures serialization even when threadId rotates.
       const lockKey = groupId
         ? `conv:group:${groupId}`
         : singleChatId
           ? `conv:single:${singleChatId}`
-          : threadId;
+          : null;
+
+      if (!lockKey) {
+        throw new Error("agent_chat job missing groupId and singleChatId");
+      }
 
       logger.info("Processing chat job", {
         requestId,
         userId,
-        threadId,
-        clientThreadId,
         groupId,
         singleChatId,
         mentionsAgent,
@@ -72,8 +65,15 @@ export function startAgentChatWorker(
 
       // Group message without @mention → store only, no agent invocation
       if (groupId && mentionsAgent === false) {
+        let storeThreadId = "";
         try {
           await withThreadLock(lockRedis, lockKey, async () => {
+            const threadId = await ensureCanonicalThreadId({
+              userId,
+              groupId: groupId ?? null,
+              singleChatId: singleChatId ?? null,
+            });
+            storeThreadId = threadId;
             await storeMessageOnly(graph, {
               userId,
               threadId,
@@ -93,27 +93,36 @@ export function startAgentChatWorker(
               requestId,
             });
           });
-          return { threadId, reply: "", systemPrompt: null };
+          return { threadId: storeThreadId, reply: "", systemPrompt: null };
         } catch (err: any) {
           logger.error("Store-only failed", {
             requestId,
-            threadId,
+            groupId,
+            singleChatId,
             error: err?.message,
           });
           throw err;
         }
       }
 
-      emitAgentTyping({
-        threadId,
-        userId,
-        groupId: groupId ?? null,
-        singleChatId: singleChatId ?? null,
-      });
+      let threadIdForError: string | undefined;
 
       try {
         const result = await withThreadLock(lockRedis, lockKey, async () => {
-          // Write the user message to the conversation transcript.
+          const threadId = await ensureCanonicalThreadId({
+            userId,
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+          });
+          threadIdForError = threadId;
+
+          emitAgentTyping({
+            threadId,
+            userId,
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+          });
+
           await writeConversationMessage({
             groupId: groupId ?? null,
             singleChatId: singleChatId ?? null,
@@ -134,7 +143,6 @@ export function startAgentChatWorker(
             displayName,
           });
 
-          // Write the assistant reply to the conversation transcript.
           if (turnResult.reply) {
             await writeConversationMessage({
               groupId: groupId ?? null,
@@ -149,13 +157,15 @@ export function startAgentChatWorker(
             });
           }
 
-          return turnResult;
+          return { turnResult, threadId };
         });
+
+        const { turnResult, threadId } = result;
 
         logger.info("Chat turn completed", {
           requestId,
           threadId,
-          replyLen: result.reply.length,
+          replyLen: turnResult.reply.length,
         });
 
         emitAgentReply({
@@ -165,30 +175,32 @@ export function startAgentChatWorker(
           groupId: groupId ?? null,
           singleChatId: singleChatId ?? null,
           ok: true,
-          reply: result.reply,
-          systemPrompt: result.systemPrompt,
-          ...(result.modelSlug ? { modelSlug: result.modelSlug } : {}),
-          ...(result.vendorSlug ? { vendorSlug: result.vendorSlug } : {}),
-          ...(result.modelName ? { modelName: result.modelName } : {}),
+          reply: turnResult.reply,
+          systemPrompt: turnResult.systemPrompt,
+          ...(turnResult.modelSlug ? { modelSlug: turnResult.modelSlug } : {}),
+          ...(turnResult.vendorSlug ? { vendorSlug: turnResult.vendorSlug } : {}),
+          ...(turnResult.modelName ? { modelName: turnResult.modelName } : {}),
         });
 
-        return result;
+        return turnResult;
       } catch (err: any) {
         logger.error("Chat turn failed", {
           requestId,
-          threadId,
+          threadId: threadIdForError,
           error: err?.message,
         });
 
-        emitAgentReply({
-          requestId,
-          userId,
-          threadId,
-          groupId: groupId ?? null,
-          singleChatId: singleChatId ?? null,
-          ok: false,
-          error: err?.message ?? "Agent processing failed",
-        });
+        if (threadIdForError) {
+          emitAgentReply({
+            requestId,
+            userId,
+            threadId: threadIdForError,
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+            ok: false,
+            error: err?.message ?? "Agent processing failed",
+          });
+        }
         throw err;
       }
     },
@@ -204,7 +216,8 @@ export function startAgentChatWorker(
   worker.on("failed", (job, err) => {
     logger.error("BullMQ job failed", {
       bullJobId: job?.id,
-      threadId: job?.data?.threadId,
+      groupId: job?.data?.groupId,
+      singleChatId: job?.data?.singleChatId,
       error: err?.message ?? String(err),
     });
   });

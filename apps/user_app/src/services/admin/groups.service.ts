@@ -1,8 +1,7 @@
 import {
   User, Role, Agent, Group, GroupMember, SingleChat, LLMModel, Vendor,
-  Thread, EpisodicMemory, sequelize,
+  ConversationMessage, sequelize,
 } from "@scheduling-agent/database";
-import { Op } from "sequelize";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 
@@ -22,14 +21,10 @@ export class GroupsService {
       throw Object.assign(new Error("At least one user (besides yourself) must be added to the group."), { status: 400 });
     }
 
-    const agent = await Agent.findByPk(agentId, { attributes: ["id", "groupId", "definition"] });
+    const agent = await Agent.findByPk(agentId, { attributes: ["id", "definition"] });
     if (!agent) throw Object.assign(new Error("Agent not found."), { status: 404 });
-    if (agent.groupId) {
-      throw Object.assign(new Error("This agent is already attached to another conversation."), { status: 409 });
-    }
 
     const group = await Group.create({ name, agentId });
-    await agent.update({ groupId: group.id });
 
     const allMembers = [adminUserId, ...extraMembers];
     const uniqueMembers = [...new Set(allMembers)];
@@ -68,21 +63,8 @@ export class GroupsService {
     const members = await GroupMember.findAll({ where: { groupId: group.id }, attributes: ["userId"] });
     const memberUserIds = members.map((m) => m.userId);
 
-    const threads = group.agentId
-      ? await Thread.findAll({ where: { agentId: group.agentId }, attributes: ["id"] })
-      : [];
-    const threadIds = threads.map((t) => t.id);
-
     await sequelize.transaction(async (t) => {
-      if (threadIds.length > 0) {
-        await EpisodicMemory.destroy({ where: { threadId: { [Op.in]: threadIds } }, transaction: t });
-        for (const tid of threadIds) {
-          await sequelize.query(`DELETE FROM checkpoint_blobs WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
-          await sequelize.query(`DELETE FROM checkpoint_writes WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
-          await sequelize.query(`DELETE FROM checkpoints WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
-        }
-        await Thread.destroy({ where: { agentId: group.agentId }, transaction: t });
-      }
+      await ConversationMessage.destroy({ where: { groupId: group.id }, transaction: t });
       await GroupMember.destroy({ where: { groupId: group.id }, transaction: t });
       await group.destroy({ transaction: t });
     });
@@ -93,7 +75,7 @@ export class GroupsService {
 
     const groupName = group.name;
     this.broadcast("group_deleted", `Group "${groupName}" deleted`, { groupId: group.id }, actorId);
-    logger.info("Group deleted with cascade", { groupId: group.id, groupName, threadCount: threadIds.length });
+    logger.info("Group deleted", { groupId: group.id, groupName });
     return { deleted: true };
   }
 

@@ -1,59 +1,89 @@
+import crypto from "node:crypto";
 import { Agent, Group, SingleChat } from "@scheduling-agent/database";
+import { ensureSession } from "./sessionRegistry";
 import { logger } from "../logger";
 
 /**
- * Resolves the canonical (active) thread for a conversation.
- *
- * After thread rotation the client may still send the old thread ID.
- * This function looks up `active_thread_id` on the conversation table
- * and returns it if set, otherwise falls back to the client-supplied ID.
+ * Returns the active LangGraph thread for a group or single chat, creating
+ * `threads` + `agents.active_thread_id` when missing.
  */
-export async function resolveCanonicalThreadId(
-  clientThreadId: string,
-  groupId: string | null | undefined,
-  singleChatId: string | null | undefined,
-): Promise<string> {
-  if (groupId) {
-    const group = await Group.findByPk(groupId, {
-      attributes: ["activeThreadId"],
-    });
-    if (group?.activeThreadId) {
-      if (group.activeThreadId !== clientThreadId) {
-        logger.info("Resolved canonical thread (group)", {
-          groupId,
-          clientThreadId,
-          canonicalThreadId: group.activeThreadId,
-        });
-      }
-      return group.activeThreadId;
-    }
-  } else if (singleChatId) {
-    const sc = await SingleChat.findByPk(singleChatId, {
-      attributes: ["activeThreadId", "agentId"],
-    });
-    let canonical: string | null = null;
-    if (sc?.agentId) {
-      const agent = await Agent.findByPk(sc.agentId, {
-        attributes: ["activeThreadId", "groupId"],
-      });
-      if (agent && !agent.groupId && agent.activeThreadId) {
-        canonical = agent.activeThreadId;
-      }
-    }
-    if (!canonical && sc?.activeThreadId) {
-      canonical = sc.activeThreadId;
-    }
-    if (canonical) {
-      if (canonical !== clientThreadId) {
-        logger.info("Resolved canonical thread (single chat)", {
-          singleChatId,
-          clientThreadId,
-          canonicalThreadId: canonical,
-        });
-      }
-      return canonical;
-    }
+export async function ensureCanonicalThreadId(params: {
+  userId: string;
+  groupId?: string | null;
+  singleChatId?: string | null;
+}): Promise<string> {
+  const { userId, groupId, singleChatId } = params;
+  const hasGroup = !!groupId;
+  const hasSingle = !!singleChatId;
+  if (hasGroup === hasSingle) {
+    throw Object.assign(
+      new Error("Exactly one of groupId or singleChatId is required."),
+      {
+        status: 400,
+      },
+    );
   }
 
-  return clientThreadId;
+  if (groupId) {
+    const group = await Group.findByPk(groupId, {
+      attributes: ["id", "agentId"],
+    });
+    if (!group) {
+      throw Object.assign(new Error("Group not found."), { status: 404 });
+    }
+    const agent = await Agent.findByPk(group.agentId, {
+      attributes: ["id", "activeThreadId"],
+    });
+    if (!agent) {
+      throw Object.assign(new Error("Agent not found."), { status: 404 });
+    }
+    if (agent.activeThreadId) {
+      return agent.activeThreadId;
+    }
+    const threadId = crypto.randomUUID();
+    await ensureSession(threadId, null, {
+      agentId: agent.id,
+    });
+    await Agent.update(
+      { activeThreadId: threadId },
+      { where: { id: agent.id } },
+    );
+    logger.info("Created canonical thread (group)", { groupId, threadId, agentId: agent.id });
+    return threadId;
+  }
+
+  const sid = singleChatId!;
+  const sc = await SingleChat.findOne({
+    where: { id: sid, userId },
+    attributes: ["id", "agentId"],
+  });
+  if (!sc) {
+    throw Object.assign(new Error("Single chat not found or access denied."), {
+      status: 404,
+    });
+  }
+
+  const agent = await Agent.findByPk(sc.agentId, {
+    attributes: ["id", "activeThreadId"],
+  });
+  if (!agent) {
+    throw Object.assign(new Error("Agent not found."), { status: 404 });
+  }
+  if (agent.activeThreadId) {
+    return agent.activeThreadId;
+  }
+  const threadId = crypto.randomUUID();
+  await ensureSession(threadId, null, {
+    agentId: agent.id,
+  });
+  await Agent.update(
+    { activeThreadId: threadId },
+    { where: { id: agent.id } },
+  );
+  logger.info("Created canonical thread (single chat)", {
+    singleChatId: sid,
+    threadId,
+    agentId: agent.id,
+  });
+  return threadId;
 }

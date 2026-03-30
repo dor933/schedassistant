@@ -34,7 +34,6 @@ export class ChatService {
     payload: Record<string, unknown>,
     userId: string,
     requestId: string,
-    threadId: string,
     groupId?: string,
     singleChatId?: string,
   ) {
@@ -53,7 +52,6 @@ export class ChatService {
         this.emitError(
           userId,
           requestId,
-          threadId,
           groupId,
           singleChatId,
           typeof data.error === "string"
@@ -69,7 +67,6 @@ export class ChatService {
       this.emitError(
         userId,
         requestId,
-        threadId,
         groupId,
         singleChatId,
         "Agent service unavailable.",
@@ -80,20 +77,20 @@ export class ChatService {
   private emitError(
     userId: string,
     requestId: string,
-    threadId: string,
-    groupId?: string,
-    singleChatId?: string,
+    groupId: string | undefined,
+    singleChatId: string | undefined,
     error?: string,
   ) {
     try {
+      const conversationId = groupId ?? singleChatId ?? "";
       getIO()
         .to(`user:${userId}`)
         .emit("chat:reply", {
           requestId,
-          threadId,
+          threadId: "",
           groupId: groupId ?? null,
           singleChatId: singleChatId ?? null,
-          conversationId: groupId ?? singleChatId ?? threadId,
+          conversationId,
           conversationType: groupId ? "group" : "single",
           ok: false,
           error: error ?? "Unknown error",

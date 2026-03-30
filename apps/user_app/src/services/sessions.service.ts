@@ -1,7 +1,6 @@
 import {
-  SingleChat, Thread, EpisodicMemory, GroupMember, User, Agent, sequelize,
+  SingleChat, GroupMember, User, sequelize,
 } from "@scheduling-agent/database";
-import { Op } from "sequelize";
 import { logger } from "../logger";
 
 const AGENT_SERVICE_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:3001";
@@ -92,29 +91,12 @@ export class SessionsService {
     const chatCount = await SingleChat.count({ where: { userId } });
     if (chatCount <= 1) throw Object.assign(new Error("You cannot delete your last remaining chat."), { status: 403 });
 
-    const agent = sc.agentId
-      ? await Agent.findByPk(sc.agentId, { attributes: ["groupId"] })
-      : null;
-    const isPoolAgent = agent != null && !agent.groupId;
-
-    // Pool agents share one LangGraph thread across users — never delete that thread here.
-    const threadIds =
-      !isPoolAgent && sc.activeThreadId ? [sc.activeThreadId] : [];
-
+    // LangGraph thread lives on `agents.active_thread_id` and may be shared — only remove this user's row.
     await sequelize.transaction(async (t) => {
-      if (threadIds.length > 0) {
-        await EpisodicMemory.destroy({ where: { threadId: { [Op.in]: threadIds } }, transaction: t });
-        for (const tid of threadIds) {
-          await sequelize.query(`DELETE FROM checkpoint_blobs WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
-          await sequelize.query(`DELETE FROM checkpoint_writes WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
-          await sequelize.query(`DELETE FROM checkpoints WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
-        }
-        await Thread.destroy({ where: { id: { [Op.in]: threadIds } }, transaction: t });
-      }
       await sc.destroy({ transaction: t });
     });
 
-    logger.info("Single chat deleted with cascade", { scId, userId, threadCount: threadIds.length });
+    logger.info("Single chat deleted", { scId, userId });
     return { deleted: true };
   }
 

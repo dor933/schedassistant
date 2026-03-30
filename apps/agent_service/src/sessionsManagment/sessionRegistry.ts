@@ -11,9 +11,9 @@ export type EnsureSessionScope = {
  * user. Creates one if it doesn't exist yet (new conversation),
  * or returns the existing row (resumed conversation).
  *
- * For group chats and **pool-agent** direct chats (`single_chats` with an agent where
- * `group_id` IS NULL), `userId` is null — one LangGraph thread per agent, shared by
- * all users; transcript isolation is `conversation_messages.single_chat_id`.
+ * For group chats and multi-user single chats, `userId` is null — one LangGraph
+ * thread per agent (`agents.active_thread_id`), shared by all conversations using
+ * that agent; transcript isolation is `conversation_messages.single_chat_id` / `group_id`.
  * A mismatch on a user-owned thread would indicate a session-isolation breach.
  */
 export async function ensureSession(
