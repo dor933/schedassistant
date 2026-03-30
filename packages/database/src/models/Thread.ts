@@ -7,8 +7,6 @@ type ThreadCreationAttributes = Optional<
   | "createdAt"
   | "updatedAt"
   | "userId"
-  | "groupId"
-  | "singleChatId"
   | "agentId"
   | "title"
   | "archivedAt"
@@ -22,8 +20,6 @@ type ThreadCreationAttributes = Optional<
 class Thread extends Model<ThreadAttributes, ThreadCreationAttributes> implements ThreadAttributes {
   declare id: string;
   declare userId: string | null;
-  declare groupId: string | null;
-  declare singleChatId: string | null;
   declare agentId: string | null;
   declare title: string | null;
   declare createdAt: Date;
@@ -48,17 +44,6 @@ Thread.init(
       allowNull: true,
       field: "user_id",
       references: { model: "users", key: "id" },
-    },
-    groupId: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      field: "group_id",
-      references: { model: "groups", key: "id" },
-    },
-    singleChatId: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      field: "single_chat_id",
     },
     agentId: {
       type: DataTypes.UUID,
@@ -117,35 +102,9 @@ Thread.init(
     timestamps: true,
     indexes: [
       { fields: ["user_id"] },
-      { fields: ["group_id"] },
-      { fields: ["single_chat_id"] },
       { fields: ["agent_id"] },
       { fields: [{ name: "user_id", order: "ASC" }, { name: "summarized_at", order: "DESC" }] },
       { fields: [{ name: "user_id", order: "ASC" }, { name: "updated_at", order: "DESC" }] },
-      {
-        fields: [
-          { name: "group_id", order: "ASC" },
-          { name: "summarized_at", order: "DESC" },
-        ],
-      },
-      {
-        fields: [
-          { name: "group_id", order: "ASC" },
-          { name: "updated_at", order: "DESC" },
-        ],
-      },
-      {
-        fields: [
-          { name: "single_chat_id", order: "ASC" },
-          { name: "summarized_at", order: "DESC" },
-        ],
-      },
-      {
-        fields: [
-          { name: "single_chat_id", order: "ASC" },
-          { name: "updated_at", order: "DESC" },
-        ],
-      },
     ],
   },
 );

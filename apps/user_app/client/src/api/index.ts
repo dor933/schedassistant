@@ -1,4 +1,4 @@
-const BASE = "/claw/api";
+const BASE = "/api";
 
 function getToken(): string | null {
   return localStorage.getItem("token");
@@ -55,7 +55,12 @@ export interface Conversations {
 
 export interface LoginResponse {
   token: string;
-  user: { id: string; displayName: string | null; userIdentity: Record<string, unknown> | null; role: string; defaultAgentId: string | null };
+  user: {
+    id: string;
+    displayName: string | null;
+    userIdentity: Record<string, unknown> | null;
+    role: string;
+  };
   conversations: Conversations;
 }
 
@@ -89,7 +94,6 @@ export interface MeResponse {
   id: string;
   displayName: string | null;
   role: string;
-  defaultAgentId: string | null;
   conversations: Conversations;
 }
 
@@ -125,17 +129,6 @@ export interface PaginatedHistory {
   total: number;
 }
 
-export function getHistory(
-  threadId: string,
-  opts?: { limit?: number; offset?: number },
-) {
-  const params = new URLSearchParams();
-  if (opts?.limit != null) params.set("limit", String(opts.limit));
-  if (opts?.offset != null) params.set("offset", String(opts.offset));
-  const qs = params.toString();
-  return request<PaginatedHistory>(`/sessions/history/${threadId}${qs ? `?${qs}` : ""}`);
-}
-
 /** Conversation-scoped history — survives thread rotation. */
 export function getConversationHistory(
   conversationId: string,
@@ -155,14 +148,22 @@ export interface SearchResult extends HistoryMessage {
   index: number;
 }
 
-export function searchHistory(threadId: string, q: string) {
+/** Search within this group or single chat’s durable transcript only. */
+export function searchConversationHistory(
+  conversationId: string,
+  conversationType: "group" | "single",
+  q: string,
+) {
   const params = new URLSearchParams({ q });
   return request<{ results: SearchResult[]; total: number }>(
-    `/sessions/history/${threadId}/search?${params}`,
+    `/sessions/history/conversation/${conversationType}/${conversationId}/search?${params}`,
   );
 }
 
-export function getSessions(scope?: { groupId?: string; singleChatId?: string }) {
+export function getSessions(scope?: {
+  groupId?: string;
+  singleChatId?: string;
+}) {
   const params = new URLSearchParams();
   if (scope?.groupId) params.set("groupId", scope.groupId);
   if (scope?.singleChatId) params.set("singleChatId", scope.singleChatId);
@@ -186,22 +187,6 @@ export function createSession(opts?: {
 }
 
 // ─── Single Chat Management ──────────────────────────────────────────────────
-
-export interface AgentListItem {
-  id: string;
-  definition: string | null;
-}
-
-export function getAgentsList() {
-  return request<AgentListItem[]>("/sessions/agents");
-}
-
-export function createSingleChat(agentId: string) {
-  return request<SingleChatConversation>("/sessions/single-chats", {
-    method: "POST",
-    body: JSON.stringify({ agentId }),
-  });
-}
 
 export function deleteSingleChat(id: string) {
   return request<{ deleted: boolean }>(`/sessions/single-chats/${id}`, {
@@ -233,7 +218,12 @@ export async function sendMessage(
   threadId: string,
   message: string,
   requestId: string,
-  scope?: { groupId?: string; singleChatId?: string; agentId?: string; mentionsAgent?: boolean },
+  scope?: {
+    groupId?: string;
+    singleChatId?: string;
+    agentId?: string;
+    mentionsAgent?: boolean;
+  },
 ): Promise<ChatAccepted> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -253,7 +243,9 @@ export async function sendMessage(
       ...(scope?.groupId ? { groupId: scope.groupId } : {}),
       ...(scope?.singleChatId ? { singleChatId: scope.singleChatId } : {}),
       ...(scope?.agentId ? { agentId: scope.agentId } : {}),
-      ...(scope?.mentionsAgent != null ? { mentionsAgent: scope.mentionsAgent } : {}),
+      ...(scope?.mentionsAgent != null
+        ? { mentionsAgent: scope.mentionsAgent }
+        : {}),
     }),
   });
 
@@ -263,7 +255,9 @@ export async function sendMessage(
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as { error?: string }).error ?? `Request failed (${res.status})`);
+    throw new Error(
+      (body as { error?: string }).error ?? `Request failed (${res.status})`,
+    );
   }
 
   throw new Error(`Expected 202 Accepted, got ${res.status}`);
@@ -296,9 +290,7 @@ export interface AdminAgent {
   id: string;
   definition: string | null;
   coreInstructions: string | null;
-  singleChatId: string | null;
   groupId: string | null;
-  isDefault: boolean;
   editable: boolean;
   createdAt: string;
 }
@@ -325,12 +317,22 @@ export const admin = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  updateAgent: (id: string, data: { definition?: string; coreInstructions?: string }) =>
+  updateAgent: (
+    id: string,
+    data: { definition?: string; coreInstructions?: string },
+  ) =>
     request<AdminAgent>(`/admin/agents/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
-  updateUser: (id: string, data: { displayName?: string; userIdentity?: Record<string, unknown>; roleId?: string }) =>
+  updateUser: (
+    id: string,
+    data: {
+      displayName?: string;
+      userIdentity?: Record<string, unknown>;
+      roleId?: string;
+    },
+  ) =>
     request<AdminUser>(`/admin/users/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
@@ -347,7 +349,9 @@ export const admin = {
       body: JSON.stringify({ name }),
     }),
   deleteGroup: (groupId: string) =>
-    request<{ deleted: boolean }>(`/admin/groups/${groupId}`, { method: "DELETE" }),
+    request<{ deleted: boolean }>(`/admin/groups/${groupId}`, {
+      method: "DELETE",
+    }),
   getGroupMembers: (groupId: string) =>
     request<AdminGroupMember[]>(`/admin/groups/${groupId}/members`),
   addGroupMember: (groupId: string, userId: string) =>
@@ -360,14 +364,15 @@ export const admin = {
       method: "DELETE",
     }),
   getVendors: () =>
-    request<{ id: string; name: string; slug: string; hasApiKey: boolean }[]>("/admin/vendors"),
+    request<{ id: string; name: string; slug: string; hasApiKey: boolean }[]>(
+      "/admin/vendors",
+    ),
   setVendorApiKey: (vendorId: string, apiKey: string) =>
     request<{ id: string; name: string; slug: string; hasApiKey: boolean }>(
       `/admin/vendors/${vendorId}/api-key`,
       { method: "PATCH", body: JSON.stringify({ apiKey }) },
     ),
-  getModels: () =>
-    request<ConversationModelInfo[]>("/admin/models"),
+  getModels: () => request<ConversationModelInfo[]>("/admin/models"),
   createModel: (data: { vendorId: string; name: string; slug: string }) =>
     request<ConversationModelInfo>("/admin/models", {
       method: "POST",

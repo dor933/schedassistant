@@ -1,5 +1,5 @@
 import {
-  SingleChat, Agent, Thread, EpisodicMemory, GroupMember, User, sequelize,
+  SingleChat, Thread, EpisodicMemory, GroupMember, User, Agent, sequelize,
 } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 import { logger } from "../logger";
@@ -7,6 +7,28 @@ import { logger } from "../logger";
 const AGENT_SERVICE_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:3001";
 
 export class SessionsService {
+  private async assertConversationAccess(
+    userId: string,
+    conversationType: string,
+    conversationId: string,
+  ): Promise<void> {
+    if (conversationType === "single") {
+      const sc = await SingleChat.findOne({ where: { id: conversationId, userId } });
+      if (!sc) {
+        throw Object.assign(new Error("Conversation not found."), { status: 404 });
+      }
+      return;
+    }
+    if (conversationType === "group") {
+      const m = await GroupMember.findOne({ where: { groupId: conversationId, userId } });
+      if (!m) {
+        throw Object.assign(new Error("You are not a member of this group."), { status: 403 });
+      }
+      return;
+    }
+    throw Object.assign(new Error("Invalid conversation type."), { status: 400 });
+  }
+
   async getSessions(userId: string, groupId?: string, singleChatId?: string) {
     const params = new URLSearchParams();
     if (groupId) params.set("groupId", groupId);
@@ -33,23 +55,14 @@ export class SessionsService {
     return data;
   }
 
-  async searchHistory(threadId: string, q?: string) {
-    const params = new URLSearchParams();
-    if (q) params.set("q", q);
-    const response = await fetch(`${AGENT_SERVICE_URL}/api/history/${threadId}/search?${params}`);
-    return response.json();
-  }
-
-  async getHistory(threadId: string, limit?: string, offset?: string) {
-    const params = new URLSearchParams();
-    if (limit) params.set("limit", limit);
-    if (offset) params.set("offset", offset);
-    const qs = params.toString();
-    const response = await fetch(`${AGENT_SERVICE_URL}/api/history/${threadId}${qs ? `?${qs}` : ""}`);
-    return response.json();
-  }
-
-  async getConversationHistory(conversationType: string, conversationId: string, limit?: string, offset?: string) {
+  async getConversationHistory(
+    userId: string,
+    conversationType: string,
+    conversationId: string,
+    limit?: string,
+    offset?: string,
+  ) {
+    await this.assertConversationAccess(userId, conversationType, conversationId);
     const params = new URLSearchParams();
     if (limit) params.set("limit", limit);
     if (offset) params.set("offset", offset);
@@ -60,25 +73,15 @@ export class SessionsService {
     return response.json();
   }
 
-  async getAvailableAgents() {
-    return Agent.findAll({
-      where: { singleChatId: null, groupId: null },
-      attributes: ["id", "definition"],
-      order: [["created_at", "ASC"]],
-    });
-  }
-
-  async createSingleChat(userId: string, agentId: string) {
-    const agent = await Agent.findByPk(agentId, { attributes: ["id", "definition", "singleChatId", "groupId"] });
-    if (!agent) throw Object.assign(new Error("Agent not found."), { status: 404 });
-    if (agent.singleChatId || agent.groupId) {
-      throw Object.assign(new Error("This agent is already attached to another conversation."), { status: 409 });
-    }
-
-    const sc = await SingleChat.create({ userId, agentId, title: agent.definition || "Agent Chat" });
-    await agent.update({ singleChatId: sc.id });
-
-    return { id: sc.id, agentId: sc.agentId, title: sc.title, model: null };
+  async searchConversationHistory(userId: string, conversationType: string, conversationId: string, q?: string) {
+    await this.assertConversationAccess(userId, conversationType, conversationId);
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    const qs = params.toString();
+    const response = await fetch(
+      `${AGENT_SERVICE_URL}/api/history/conversation/${conversationType}/${conversationId}/search?${qs}`,
+    );
+    return response.json();
   }
 
   async deleteSingleChat(scId: string, userId: string) {
@@ -86,16 +89,17 @@ export class SessionsService {
     if (!sc) throw Object.assign(new Error("Single chat not found."), { status: 404 });
     if (sc.userId !== userId) throw Object.assign(new Error("You can only delete your own chats."), { status: 403 });
 
-    const owner = await User.findByPk(userId, { attributes: ["defaultAgentId"] });
-    if (owner && owner.defaultAgentId && sc.agentId === owner.defaultAgentId) {
-      throw Object.assign(new Error("You cannot delete your default agent chat."), { status: 403 });
-    }
-
     const chatCount = await SingleChat.count({ where: { userId } });
     if (chatCount <= 1) throw Object.assign(new Error("You cannot delete your last remaining chat."), { status: 403 });
 
-    const threads = await Thread.findAll({ where: { singleChatId: scId }, attributes: ["id"] });
-    const threadIds = threads.map((t) => t.id);
+    const agent = sc.agentId
+      ? await Agent.findByPk(sc.agentId, { attributes: ["groupId"] })
+      : null;
+    const isPoolAgent = agent != null && !agent.groupId;
+
+    // Pool agents share one LangGraph thread across users — never delete that thread here.
+    const threadIds =
+      !isPoolAgent && sc.activeThreadId ? [sc.activeThreadId] : [];
 
     await sequelize.transaction(async (t) => {
       if (threadIds.length > 0) {
@@ -105,12 +109,10 @@ export class SessionsService {
           await sequelize.query(`DELETE FROM checkpoint_writes WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
           await sequelize.query(`DELETE FROM checkpoints WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
         }
-        await Thread.destroy({ where: { singleChatId: scId }, transaction: t });
+        await Thread.destroy({ where: { id: { [Op.in]: threadIds } }, transaction: t });
       }
       await sc.destroy({ transaction: t });
     });
-
-    await Agent.update({ singleChatId: null }, { where: { singleChatId: scId } });
 
     logger.info("Single chat deleted with cascade", { scId, userId, threadCount: threadIds.length });
     return { deleted: true };

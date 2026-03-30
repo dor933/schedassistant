@@ -32,10 +32,9 @@ async function main(): Promise<void> {
   app.use("/api/notifications", notificationsRouter);
   app.use("/api/admin", adminRouter);
 
-  // In production, serve the React SPA from client/dist.
   const clientDist = path.join(__dirname, "..", "client", "dist");
   app.use(express.static(clientDist));
-  // Express 5 / path-to-regexp v8 rejects bare "*"; use middleware for SPA fallback.
+
   app.use((req, res, next) => {
     if (req.method !== "GET" || req.path.startsWith("/api")) {
       return next();
@@ -46,7 +45,6 @@ async function main(): Promise<void> {
   const httpServer = createServer(app);
   attachSocketIO(httpServer);
 
-  // Connect to agent_service socket for receiving chat replies
   connectToAgentService();
 
   httpServer.listen(PORT, () => {

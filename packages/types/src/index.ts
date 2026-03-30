@@ -25,10 +25,13 @@ export interface AgentAttributes {
   definition: string | null;
   /** Detailed instructions merged into the system prompt each turn. */
   coreInstructions: string | null;
-  /** Exclusive 1:1 link — set when this agent is attached to a single chat. */
-  singleChatId: SingleChatId | null;
-  /** Exclusive 1:1 link — set when this agent is attached to a group. */
+  /** Set when this agent is dedicated to a group; single-user chats use `single_chats` only. */
   groupId: GroupId | null;
+  /**
+   * Pool agents only: shared LangGraph `thread_id` for all `single_chats` with this agent.
+   * Null for group-bound agents.
+   */
+  activeThreadId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -108,9 +111,6 @@ export interface ThreadAttributes {
   /** The thread ID — also used as the LangGraph checkpoint thread_id. */
   id: string;
   userId: UserId | null;
-  groupId: GroupId | null;
-  /** Set for 1:1 user↔agent threads; null for group-only or legacy rows. */
-  singleChatId: SingleChatId | null;
   /** The agent serving this thread — used for agent-level memory & summary retrieval. */
   agentId: AgentId | null;
   title?: string | null;
@@ -160,8 +160,6 @@ export interface UserAttributes {
   password?: string | null;
   /** FK to `roles.id` — determines the user's access level. */
   roleId?: string | null;
-  /** FK to `agents.id` — the agent auto-created on first login. */
-  defaultAgentId?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -187,6 +185,10 @@ export interface AssembledContext {
   coreMemory: string;
   episodicSnippets: string[];
   recentSessionSummaries: SessionSummary[];
+  /** Messages formatted from LangGraph checkpoint state for this turn (max 50 in snapshot). */
+  recentCheckpointMessageCount: number;
+  /** Rows pulled from `conversation_messages` for this single chat or group (max 50). */
+  recentConversationMessageCount: number;
   /** Set for 1:1 / non-group turns; omitted when `groupMemberIdentities` is used. */
   userIdentity: UserIdentity | null;
   /**

@@ -69,42 +69,12 @@ module.exports = {
       name: "group_members_user_id",
     });
 
-    await queryInterface.addColumn("threads", "group_id", {
-      type: Sequelize.UUID,
-      allowNull: true,
-      references: { model: "groups", key: "id" },
-      onUpdate: "CASCADE",
-      onDelete: "SET NULL",
-    });
-
-    await queryInterface.addIndex("threads", ["group_id"], {
-      name: "threads_group_id",
-    });
-    await queryInterface.addIndex(
-      "threads",
-      ["group_id", "summarized_at"],
-      { name: "threads_group_id_summarized_at" },
-    );
-    await queryInterface.addIndex(
-      "threads",
-      ["group_id", "updated_at"],
-      { name: "threads_group_id_updated_at" },
-    );
+    // Threads are keyed by `agents.id` (`threads.agent_id`) and by
+    // `groups.active_thread_id` / `single_chats.active_thread_id` / `agents.active_thread_id` —
+    // not by `group_id` / `single_chat_id` on the thread row.
   },
 
   async down(queryInterface, _Sequelize) {
-    await queryInterface.removeIndex(
-      "threads",
-      "threads_group_id_updated_at",
-    );
-    await queryInterface.removeIndex(
-      "threads",
-      "threads_group_id_summarized_at",
-    );
-    await queryInterface.removeIndex("threads", "threads_group_id");
-
-    await queryInterface.removeColumn("threads", "group_id");
-
     await queryInterface.dropTable("group_members");
     await queryInterface.dropTable("groups");
   },

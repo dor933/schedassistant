@@ -23,13 +23,10 @@ import {
   sendMessage,
   getUnreadCounts,
   getConversationHistory,
-  searchHistory,
-  getAgentsList,
-  createSingleChat,
+  searchConversationHistory,
   deleteSingleChat,
   getGroupMembers,
   type Session,
-  type AgentListItem,
   type GroupMemberInfo,
   type SearchResult,
 } from "../api";
@@ -275,14 +272,15 @@ export default function ChatPage() {
 
   const handleSearch = useCallback(async (query: string) => {
     setSearchQuery(query);
-    if (!query.trim() || !activeSession) {
+    if (!query.trim() || !activeConv) {
       setSearchResults([]);
       setSearchIdx(-1);
       return;
     }
     setSearching(true);
     try {
-      const { results } = await searchHistory(activeSession.threadId, query.trim());
+      const convType = activeConv.type === "group" ? "group" as const : "single" as const;
+      const { results } = await searchConversationHistory(activeConv.id, convType, query.trim());
       setSearchResults(results);
       const idx = results.length > 0 ? results.length - 1 : -1;
       setSearchIdx(idx);
@@ -293,7 +291,7 @@ export default function ChatPage() {
     } finally {
       setSearching(false);
     }
-  }, [activeSession]);
+  }, [activeConv]);
 
   const navigateToResult = useCallback(async (result: SearchResult) => {
     if (!activeConv) return;
@@ -529,43 +527,6 @@ export default function ChatPage() {
     setSidebarOpen(false);
   }, []);
 
-  // New Chat modal
-  const [showNewChat, setShowNewChat] = useState(false);
-  const [availableAgents, setAvailableAgents] = useState<AgentListItem[]>([]);
-  const [agentsLoaded, setAgentsLoaded] = useState(false);
-  const [creatingChat, setCreatingChat] = useState(false);
-
-  const handleOpenNewChat = useCallback(() => {
-    setShowNewChat(true);
-    setAgentsLoaded(false);
-    getAgentsList()
-      .then((agents) => { setAvailableAgents(agents); setAgentsLoaded(true); })
-      .catch(() => setAgentsLoaded(true));
-  }, []);
-
-  async function handleCreateNewChat(agentId: string) {
-    setCreatingChat(true);
-    try {
-      const sc = await createSingleChat(agentId);
-      setConversations((prev) => {
-        if (!prev) return prev;
-        return { ...prev, singleChats: [sc, ...prev.singleChats] };
-      });
-      setShowNewChat(false);
-      setActiveConv({
-        type: "single",
-        id: sc.id,
-        name: sc.title || "Agent Chat",
-        agentId: sc.agentId,
-        model: sc.model,
-      });
-    } catch (err: any) {
-      alert(err.message || "Failed to create chat");
-    } finally {
-      setCreatingChat(false);
-    }
-  }
-
   // Delete Chat confirmation
   const [deleteTarget, setDeleteTarget] = useState<{
     id: string;
@@ -717,8 +678,6 @@ export default function ChatPage() {
     }
   }, [activeConv?.type, activeConv?.id]);
 
-  const filteredAgents = availableAgents;
-
   return (
     <Stack direction="row" sx={{ height: "100dvh", bgcolor: "rgb(249 250 251 / 0.5)", overflow: "hidden" }}>
       {/* Mobile sidebar toggle — hidden when sidebar is open */}
@@ -760,9 +719,7 @@ export default function ChatPage() {
           unreadCounts={unreadCounts}
           typingConversations={typingConversations}
           isAdmin={user?.role === "admin" || user?.role === "super_admin"}
-          defaultAgentId={user?.defaultAgentId ?? null}
           onSelectConversation={handleSelectConversation}
-          onNewChat={handleOpenNewChat}
           onDeleteChat={(id, title) => setDeleteTarget({ id, title })}
           onLogout={logout}
           userName={user?.displayName ?? user?.id ?? null}
@@ -1141,76 +1098,6 @@ export default function ChatPage() {
           vendorSlug={activeConv?.type === "group" ? (activeConv.model?.vendor?.slug ?? undefined) : undefined}
         />
       </Stack>
-
-      {/* New Chat Modal */}
-      {showNewChat && (
-        <Stack
-          alignItems={{ xs: "stretch", sm: "center" }}
-          justifyContent={{ xs: "flex-end", sm: "center" }}
-          className="animate-fade-in"
-          sx={{ position: "fixed", inset: 0, zIndex: 50, bgcolor: "rgba(0,0,0,0.3)", backdropFilter: "blur(4px)" }}
-        >
-          <Box
-            className="animate-scale-in border border-gray-200/60 bg-white/95 shadow-glass-lg backdrop-blur-xl"
-            sx={{
-              width: "100%",
-              maxWidth: "24rem",
-              borderRadius: { xs: "1rem 1rem 0 0", sm: "1rem" },
-              p: { xs: 2.5, sm: 3 },
-              mx: { xs: 0, sm: 2 },
-            }}
-          >
-            <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-              <Box>
-                <Box component="h3" className="text-base font-bold text-gray-900">New Chat</Box>
-                <Box component="p" className="text-xs text-gray-500">
-                  Choose an agent to start a conversation with.
-                </Box>
-              </Box>
-              <Box
-                component="button"
-                onClick={() => setShowNewChat(false)}
-                className="rounded-xl p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
-              >
-                <X className="h-4 w-4" />
-              </Box>
-            </Stack>
-
-            {!agentsLoaded ? (
-              <Stack alignItems="center" justifyContent="center" sx={{ py: 4 }}>
-                <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
-              </Stack>
-            ) : filteredAgents.length === 0 ? (
-              <Box component="p" className="text-center text-sm text-gray-400" sx={{ py: 3 }}>
-                No available agents. Ask an admin to create one first.
-              </Box>
-            ) : (
-              <Stack spacing={0.5} sx={{ maxHeight: 240, overflowY: "auto" }}>
-                {filteredAgents.map((a) => (
-                  <Stack
-                    key={a.id}
-                    component="button"
-                    direction="row"
-                    alignItems="center"
-                    spacing={1.5}
-                    onClick={() => handleCreateNewChat(a.id)}
-                    disabled={creatingChat}
-                    className="w-full rounded-xl text-left text-sm transition-all duration-150 hover:bg-indigo-50/70 active:scale-[0.98] disabled:opacity-50"
-                    sx={{ px: 1.5, py: 1.5, cursor: "pointer" }}
-                  >
-                    <Box className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm" sx={{ flexShrink: 0 }}>
-                      <Sparkles className="h-4 w-4" />
-                    </Box>
-                    <Box component="span" className="font-medium text-gray-900">
-                      {a.definition || `Agent ${a.id.slice(0, 8)}`}
-                    </Box>
-                  </Stack>
-                ))}
-              </Stack>
-            )}
-          </Box>
-        </Stack>
-      )}
 
       {/* Group Info Panel */}
       {showGroupInfo && activeConv?.type === "group" && (

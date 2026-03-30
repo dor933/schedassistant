@@ -2,6 +2,9 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
+COPY investlan.crt /etc/ssl/certs/investlan.crt
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/investlan.crt
+
 COPY package.json tsconfig.base.json ./
 COPY packages/ ./packages/
 COPY apps/mcp_server/ ./apps/mcp_server/
@@ -14,6 +17,9 @@ RUN npm run build --workspace=mcp_server
 # --- Stage 2: Production ---
 FROM node:20-alpine AS runner
 WORKDIR /app
+
+COPY investlan.crt /etc/ssl/certs/investlan.crt
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/investlan.crt
 
 COPY package.json ./
 COPY --from=builder /app/node_modules/ ./node_modules/

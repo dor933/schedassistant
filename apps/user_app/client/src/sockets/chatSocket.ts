@@ -40,7 +40,6 @@ export function getChatSocket(token: string): Socket {
   }
 
   socket = io({
-    path: "/claw/socket.io",
     auth: { token },
     transports: ["websocket", "polling"],
     autoConnect: true,

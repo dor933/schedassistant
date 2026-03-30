@@ -1,4 +1,4 @@
-import { Group, SingleChat } from "@scheduling-agent/database";
+import { Agent, Group, SingleChat } from "@scheduling-agent/database";
 import { logger } from "../logger";
 
 /**
@@ -14,7 +14,9 @@ export async function resolveCanonicalThreadId(
   singleChatId: string | null | undefined,
 ): Promise<string> {
   if (groupId) {
-    const group = await Group.findByPk(groupId, { attributes: ["activeThreadId"] });
+    const group = await Group.findByPk(groupId, {
+      attributes: ["activeThreadId"],
+    });
     if (group?.activeThreadId) {
       if (group.activeThreadId !== clientThreadId) {
         logger.info("Resolved canonical thread (group)", {
@@ -26,16 +28,30 @@ export async function resolveCanonicalThreadId(
       return group.activeThreadId;
     }
   } else if (singleChatId) {
-    const sc = await SingleChat.findByPk(singleChatId, { attributes: ["activeThreadId"] });
-    if (sc?.activeThreadId) {
-      if (sc.activeThreadId !== clientThreadId) {
+    const sc = await SingleChat.findByPk(singleChatId, {
+      attributes: ["activeThreadId", "agentId"],
+    });
+    let canonical: string | null = null;
+    if (sc?.agentId) {
+      const agent = await Agent.findByPk(sc.agentId, {
+        attributes: ["activeThreadId", "groupId"],
+      });
+      if (agent && !agent.groupId && agent.activeThreadId) {
+        canonical = agent.activeThreadId;
+      }
+    }
+    if (!canonical && sc?.activeThreadId) {
+      canonical = sc.activeThreadId;
+    }
+    if (canonical) {
+      if (canonical !== clientThreadId) {
         logger.info("Resolved canonical thread (single chat)", {
           singleChatId,
           clientThreadId,
-          canonicalThreadId: sc.activeThreadId,
+          canonicalThreadId: canonical,
         });
       }
-      return sc.activeThreadId;
+      return canonical;
     }
   }
 

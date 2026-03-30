@@ -7,11 +7,12 @@ const sessionsController = new SessionsController();
 
 router.get("/", authMiddleware, sessionsController.getSessions);
 router.post("/", authMiddleware, sessionsController.createSession);
+router.get(
+  "/history/conversation/:conversationType/:conversationId/search",
+  authMiddleware,
+  sessionsController.searchConversationHistory,
+);
 router.get("/history/conversation/:conversationType/:conversationId", authMiddleware, sessionsController.getConversationHistory);
-router.get("/history/:threadId/search", authMiddleware, sessionsController.searchHistory);
-router.get("/history/:threadId", authMiddleware, sessionsController.getHistory);
-router.get("/agents", authMiddleware, sessionsController.getAvailableAgents);
-router.post("/single-chats", authMiddleware, sessionsController.createSingleChat);
 router.delete("/single-chats/:id", authMiddleware, sessionsController.deleteSingleChat);
 router.get("/groups/:groupId/members", authMiddleware, sessionsController.getGroupMembers);
 

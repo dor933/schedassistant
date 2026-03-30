@@ -57,10 +57,9 @@ export async function executeChatTurn(
       const modelSlug = await resolveModelSlug(singleChatId, groupId);
       logger.info("Executing chat turn", { threadId, userId, agentId, modelSlug, msgLen: message.length });
 
-      // Group threads are shared — don't tie them to a specific user.
-      await ensureSession(threadId, groupId ? null : userId, {
-        groupId: groupId ?? null,
-        singleChatId: singleChatId ?? null,
+      // Group + pool-agent single chats: shared thread — `threads.user_id` is null; scope lives on `groups` / `single_chats` / `agents`.
+      const sessionUserId = groupId || singleChatId ? null : userId;
+      await ensureSession(threadId, sessionUserId, {
         agentId: agentId ?? null,
       });
 
@@ -166,8 +165,6 @@ export async function storeMessageOnly(
 ): Promise<void> {
   // Group threads are shared — don't tie them to a specific user.
   await ensureSession(threadId, groupId ? null : userId, {
-    groupId: groupId ?? null,
-    singleChatId: singleChatId ?? null,
     agentId: agentId ?? null,
   });
 

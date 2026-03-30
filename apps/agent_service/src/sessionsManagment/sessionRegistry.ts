@@ -3,8 +3,6 @@ import type { UserId } from "@scheduling-agent/types";
 import { logger } from "../logger";
 
 export type EnsureSessionScope = {
-  groupId?: string | null;
-  singleChatId?: string | null;
   agentId?: string | null;
 };
 
@@ -13,31 +11,30 @@ export type EnsureSessionScope = {
  * user. Creates one if it doesn't exist yet (new conversation),
  * or returns the existing row (resumed conversation).
  *
- * For group chats, `userId` is null — the thread is shared across
- * all group members. For single chats, a mismatch would indicate a
- * session-isolation breach.
+ * For group chats and **pool-agent** direct chats (`single_chats` with an agent where
+ * `group_id` IS NULL), `userId` is null — one LangGraph thread per agent, shared by
+ * all users; transcript isolation is `conversation_messages.single_chat_id`.
+ * A mismatch on a user-owned thread would indicate a session-isolation breach.
  */
 export async function ensureSession(
   threadId: string,
   userId: UserId | null,
   scope: EnsureSessionScope = {},
 ): Promise<Thread> {
-  const { groupId = null, singleChatId = null, agentId = null } = scope;
+  const { agentId = null } = scope;
 
   const [session, created] = await Thread.findOrCreate({
     where: { id: threadId },
     defaults: {
       id: threadId,
       userId,
-      groupId,
-      singleChatId,
       agentId,
       lastActivityAt: new Date(),
     },
   });
 
   if (created) {
-    logger.info("Session created", { threadId, userId, groupId, singleChatId });
+    logger.info("Session created", { threadId, userId, agentId });
   }
 
   // Isolation check only for user-owned threads (single chats), not shared group threads.
@@ -48,16 +45,9 @@ export async function ensureSession(
     );
   }
 
-  // Bump activity; backfill scope columns if the client now supplies them.
+  // Bump activity; backfill `agent_id` if the client now supplies it.
   if (!created) {
-    const patch: { lastActivityAt: Date; groupId?: string | null; singleChatId?: string | null; agentId?: string | null } =
-      { lastActivityAt: new Date() };
-    if (groupId != null && session.groupId == null) {
-      patch.groupId = groupId;
-    }
-    if (singleChatId != null && session.singleChatId == null) {
-      patch.singleChatId = singleChatId;
-    }
+    const patch: { lastActivityAt: Date; agentId?: string | null } = { lastActivityAt: new Date() };
     if (agentId != null && session.agentId == null) {
       patch.agentId = agentId;
     }

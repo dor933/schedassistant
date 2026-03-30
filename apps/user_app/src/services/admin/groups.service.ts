@@ -22,9 +22,9 @@ export class GroupsService {
       throw Object.assign(new Error("At least one user (besides yourself) must be added to the group."), { status: 400 });
     }
 
-    const agent = await Agent.findByPk(agentId, { attributes: ["id", "singleChatId", "groupId", "definition"] });
+    const agent = await Agent.findByPk(agentId, { attributes: ["id", "groupId", "definition"] });
     if (!agent) throw Object.assign(new Error("Agent not found."), { status: 404 });
-    if (agent.singleChatId || agent.groupId) {
+    if (agent.groupId) {
       throw Object.assign(new Error("This agent is already attached to another conversation."), { status: 409 });
     }
 
@@ -68,7 +68,9 @@ export class GroupsService {
     const members = await GroupMember.findAll({ where: { groupId: group.id }, attributes: ["userId"] });
     const memberUserIds = members.map((m) => m.userId);
 
-    const threads = await Thread.findAll({ where: { groupId: group.id }, attributes: ["id"] });
+    const threads = group.agentId
+      ? await Thread.findAll({ where: { agentId: group.agentId }, attributes: ["id"] })
+      : [];
     const threadIds = threads.map((t) => t.id);
 
     await sequelize.transaction(async (t) => {
@@ -79,7 +81,7 @@ export class GroupsService {
           await sequelize.query(`DELETE FROM checkpoint_writes WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
           await sequelize.query(`DELETE FROM checkpoints WHERE thread_id = :tid`, { replacements: { tid }, transaction: t });
         }
-        await Thread.destroy({ where: { groupId: group.id }, transaction: t });
+        await Thread.destroy({ where: { agentId: group.agentId }, transaction: t });
       }
       await GroupMember.destroy({ where: { groupId: group.id }, transaction: t });
       await group.destroy({ transaction: t });

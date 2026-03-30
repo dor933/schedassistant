@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { Group, SingleChat, Thread } from "@scheduling-agent/database";
+import { Agent, Group, SingleChat, Thread } from "@scheduling-agent/database";
 import { logger } from "../logger";
 
 /**
@@ -20,9 +20,7 @@ export async function rotateThread(
 
   await Thread.create({
     id: newThreadId,
-    userId: null, // will be set by ensureSession on first invoke
-    groupId: groupId ?? null,
-    singleChatId: singleChatId ?? null,
+    userId: null,
     agentId: agentId ?? null,
     lastActivityAt: new Date(),
   });
@@ -33,10 +31,14 @@ export async function rotateThread(
       { where: { id: groupId } },
     );
   } else if (singleChatId) {
-    await SingleChat.update(
-      { activeThreadId: newThreadId },
-      { where: { id: singleChatId } },
-    );
+    const aid =
+      agentId ??
+      (await SingleChat.findByPk(singleChatId, { attributes: ["agentId"] }))?.agentId ??
+      null;
+    if (aid) {
+      await Agent.update({ activeThreadId: newThreadId }, { where: { id: aid } });
+      await SingleChat.update({ activeThreadId: newThreadId }, { where: { agentId: aid } });
+    }
   }
 
   logger.info("Thread rotated", { newThreadId, groupId, singleChatId, agentId });

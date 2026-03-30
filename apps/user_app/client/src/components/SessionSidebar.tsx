@@ -1,7 +1,6 @@
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
 import {
-  Plus,
   MessageCircle,
   Users,
   Settings,
@@ -34,9 +33,7 @@ interface SessionSidebarProps {
   unreadCounts: Record<string, number>;
   typingConversations: Set<string>;
   isAdmin?: boolean;
-  defaultAgentId: string | null;
   onSelectConversation: (conv: ConversationRef) => void;
-  onNewChat: () => void;
   onDeleteChat: (chatId: string, chatTitle: string) => void;
   onLogout: () => void;
   userName: string | null;
@@ -83,9 +80,7 @@ export default function SessionSidebar({
   unreadCounts,
   typingConversations,
   isAdmin,
-  defaultAgentId,
   onSelectConversation,
-  onNewChat,
   onDeleteChat,
   onLogout,
   userName,
@@ -108,17 +103,6 @@ export default function SessionSidebar({
           </Box>
         </Box>
       </Stack>
-
-      {/* New Chat Button */}
-      <Box sx={{ px: 1.5, pb: 1 }}>
-        <button
-          onClick={onNewChat}
-          className="flex w-full items-center gap-2.5 rounded-xl border border-gray-200/80 bg-white px-3.5 py-2.5 text-sm font-medium text-gray-700 shadow-glass transition-all duration-200 hover:border-indigo-200 hover:bg-indigo-50/50 hover:text-indigo-700 hover:shadow-md active:scale-[0.98]"
-        >
-          <Plus className="h-4 w-4" />
-          New Chat
-        </button>
-      </Box>
 
       {/* Conversation List */}
       <Box component="nav" sx={{ flex: 1, overflowY: "auto", px: 1.5, py: 1 }}>
@@ -180,7 +164,7 @@ export default function SessionSidebar({
                       </Box>
                     )}
                   </Stack>
-                  {singleChats.length > 1 && sc.agentId !== defaultAgentId && (
+                  {singleChats.length > 1 && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();

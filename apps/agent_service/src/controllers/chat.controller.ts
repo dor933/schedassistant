@@ -6,10 +6,22 @@ const chatService = new ChatService();
 
 export class ChatController {
   send = async (req: Request, res: Response) => {
-    const { userId, threadId, message, groupId, singleChatId, agentId, requestId, mentionsAgent, displayName } = req.body;
+    const {
+      userId,
+      threadId,
+      message,
+      groupId,
+      singleChatId,
+      agentId,
+      requestId,
+      mentionsAgent,
+      displayName,
+    } = req.body;
 
     if (!userId || !threadId || !message) {
-      return res.status(400).json({ error: "userId, threadId, and message are required." });
+      return res
+        .status(400)
+        .json({ error: "userId, threadId, and message are required." });
     }
 
     try {

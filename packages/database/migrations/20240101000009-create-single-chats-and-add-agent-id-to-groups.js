@@ -52,16 +52,7 @@ module.exports = {
       name: "single_chats_user_id_agent_id_unique",
     });
 
-    // 2. Add FK on threads.single_chat_id → single_chats.id
-    // Column already exists from migration 0007; add the FK constraint.
-    await queryInterface.sequelize.query(`
-      ALTER TABLE threads
-      ADD CONSTRAINT threads_single_chat_id_fk
-      FOREIGN KEY (single_chat_id) REFERENCES single_chats(id)
-      ON UPDATE CASCADE ON DELETE SET NULL;
-    `);
-
-    // 3. Add agent_id to groups
+    // 2. Add agent_id to groups
     await queryInterface.addColumn("groups", "agent_id", {
       type: Sequelize.UUID,
       allowNull: true,
@@ -78,10 +69,6 @@ module.exports = {
   async down(queryInterface, _Sequelize) {
     await queryInterface.removeIndex("groups", "groups_agent_id");
     await queryInterface.removeColumn("groups", "agent_id");
-
-    await queryInterface.sequelize.query(`
-      ALTER TABLE threads DROP CONSTRAINT IF EXISTS threads_single_chat_id_fk;
-    `);
 
     await queryInterface.dropTable("single_chats");
   },

@@ -1,51 +1,25 @@
-import fs from "fs";
-import path from "path";
 import bcrypt from "bcrypt";
 import {
-  User, Role, Group, GroupMember, SingleChat, Agent, LLMModel, Vendor,
+  User,
+  Role,
+  Group,
+  GroupMember,
+  SingleChat,
+  Agent,
+  LLMModel,
+  Vendor,
 } from "@scheduling-agent/database";
 import { signToken } from "../middlewares/auth";
-
-type CoreInstructionsFile = {
-  description: string;
-  core_description: string;
-};
-
-let defaultAgentInstructionsCache: CoreInstructionsFile | null = null;
-
-function getDefaultAgentInstructions(): CoreInstructionsFile {
-  if (!defaultAgentInstructionsCache) {
-    const filePath = path.join(__dirname, "../../../coreInstructions.json");
-    const raw = fs.readFileSync(filePath, "utf-8");
-    defaultAgentInstructionsCache = JSON.parse(raw) as CoreInstructionsFile;
-  }
-  return defaultAgentInstructionsCache;
-}
 
 export class AuthService {
   async login(userName: string, password: string) {
     const user = await User.findOne({ where: { userName } });
-    if (!user || !user.password) throw Object.assign(new Error("Invalid credentials."), { status: 401 });
+    if (!user || !user.password)
+      throw Object.assign(new Error("Invalid credentials."), { status: 401 });
 
     const valid = await bcrypt.compare(password, user.password);
-    if (!valid) throw Object.assign(new Error("Invalid credentials."), { status: 401 });
-
-    // Ensure the user has at least one single chat with a personal agent
-    const existingChats = await SingleChat.findAll({ where: { userId: user.id }, limit: 1 });
-    if (existingChats.length === 0) {
-      const defaults = getDefaultAgentInstructions();
-      const agent = await Agent.create({
-        definition: defaults.description,
-        coreInstructions: defaults.core_description,
-      });
-      const sc = await SingleChat.create({
-        userId: user.id,
-        agentId: agent.id,
-        title: "Default Chat",
-      });
-      await agent.update({ singleChatId: sc.id });
-      await user.update({ defaultAgentId: agent.id });
-    }
+    if (!valid)
+      throw Object.assign(new Error("Invalid credentials."), { status: 401 });
 
     let roleName = "user";
     if (user.roleId) {
@@ -59,6 +33,7 @@ export class AuthService {
       role: roleName,
     });
 
+    await this.ensurePoolAgentSingleChats(user.id);
     const conversations = await this.loadUserConversations(user.id);
 
     return {
@@ -68,7 +43,6 @@ export class AuthService {
         displayName: user.displayName,
         userIdentity: user.userIdentity,
         role: roleName,
-        defaultAgentId: user.defaultAgentId,
       },
       conversations,
     };
@@ -76,9 +50,10 @@ export class AuthService {
 
   async getMe(userId: string) {
     const user = await User.findByPk(userId, {
-      attributes: ["id", "displayName", "userIdentity", "roleId", "defaultAgentId"],
+      attributes: ["id", "displayName", "userIdentity", "roleId"],
     });
-    if (!user) throw Object.assign(new Error("User not found."), { status: 404 });
+    if (!user)
+      throw Object.assign(new Error("User not found."), { status: 404 });
 
     let roleName = "user";
     if (user.roleId) {
@@ -86,6 +61,7 @@ export class AuthService {
       if (role) roleName = role.name;
     }
 
+    await this.ensurePoolAgentSingleChats(user.id);
     const conversations = await this.loadUserConversations(user.id);
 
     return {
@@ -93,9 +69,28 @@ export class AuthService {
       displayName: user.displayName,
       userIdentity: user.userIdentity,
       role: roleName,
-      defaultAgentId: user.defaultAgentId,
       conversations,
     };
+  }
+
+  /**
+   * Ensures a `single_chats` row exists for every pool agent (not group-bound) for this user.
+   */
+  private async ensurePoolAgentSingleChats(userId: string): Promise<void> {
+    const poolAgents = await Agent.findAll({
+      where: { groupId: null },
+      attributes: ["id", "definition"],
+    });
+    for (const agent of poolAgents) {
+      await SingleChat.findOrCreate({
+        where: { userId, agentId: agent.id },
+        defaults: {
+          userId,
+          agentId: agent.id,
+          title: agent.definition?.trim() || "Agent Chat",
+        },
+      });
+    }
   }
 
   async loadUserConversations(userId: string) {
@@ -114,7 +109,9 @@ export class AuthService {
       });
       groups = await Promise.all(
         groupRows.map(async (g) => {
-          const agent = await Agent.findByPk(g.agentId, { attributes: ["definition"] });
+          const agent = await Agent.findByPk(g.agentId, {
+            attributes: ["definition"],
+          });
           return {
             id: g.id,
             name: g.name,
@@ -145,14 +142,20 @@ export class AuthService {
 
   private async resolveModelInfo(modelId: string | null) {
     if (!modelId) return null;
-    const model = await LLMModel.findByPk(modelId, { attributes: ["id", "name", "slug", "vendorId"] });
+    const model = await LLMModel.findByPk(modelId, {
+      attributes: ["id", "name", "slug", "vendorId"],
+    });
     if (!model) return null;
-    const vendor = await Vendor.findByPk(model.vendorId, { attributes: ["id", "name", "slug"] });
+    const vendor = await Vendor.findByPk(model.vendorId, {
+      attributes: ["id", "name", "slug"],
+    });
     return {
       id: model.id,
       name: model.name,
       slug: model.slug,
-      vendor: vendor ? { id: vendor.id, name: vendor.name, slug: vendor.slug } : null,
+      vendor: vendor
+        ? { id: vendor.id, name: vendor.name, slug: vendor.slug }
+        : null,
     };
   }
 }

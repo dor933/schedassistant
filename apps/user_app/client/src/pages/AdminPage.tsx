@@ -40,8 +40,7 @@ function AgentCard({
   agent: AdminAgent;
   onSaved: () => void;
 }) {
-  const isAttached = !!(agent.singleChatId || agent.groupId);
-  const isDefault = !!agent.isDefault;
+  const isAttached = !!agent.groupId;
   const [editing, setEditing] = useState(false);
   const [definition, setDefinition] = useState(agent.definition ?? "");
   const [instructions, setInstructions] = useState(
@@ -128,19 +127,14 @@ function AgentCard({
         <div
           onClick={agent.editable ? () => setEditing(true) : undefined}
           className={agent.editable ? "cursor-pointer text-gray-700 hover:text-indigo-600 transition-colors duration-200" : "text-gray-700 opacity-75"}
-          title={isDefault ? "Default user agent — editing disabled" : !agent.editable ? "You don't have permission to edit this agent" : "Click to edit"}
+          title={!agent.editable ? "You don't have permission to edit this agent" : "Click to edit"}
         >
-          {agent.definition && (
+              {agent.definition && (
             <p className="mb-1 text-sm font-semibold text-gray-900">
               {agent.definition}
-              {isDefault && (
-                <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-semibold text-amber-600 uppercase">
-                  default
-                </span>
-              )}
               {isAttached ? (
                 <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[9px] font-semibold text-indigo-500 uppercase">
-                  {agent.singleChatId ? "single chat" : "group"}
+                  group
                 </span>
               ) : (
                 <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-semibold text-emerald-600 uppercase">
@@ -426,7 +420,7 @@ export default function AdminPage() {
       setModels(m);
       setVendors(v);
       setRoles(r);
-      const unattached = a.filter((x) => !x.singleChatId && !x.groupId);
+      const unattached = a.filter((x) => !x.groupId);
       if (unattached.length > 0 && !newGroupAgentId) setNewGroupAgentId(unattached[0].id);
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
     } catch {
@@ -802,7 +796,7 @@ export default function AdminPage() {
                     />
                     <div className="absolute left-0 right-0 z-20 mt-1.5 max-h-52 overflow-y-auto rounded-xl border border-gray-200/80 bg-white/95 p-1 shadow-glass-lg backdrop-blur-xl">
                       {agents
-                        .filter((a) => !a.singleChatId && !a.groupId)
+                        .filter((a) => !a.groupId)
                         .map((a) => {
                           const isSelected = a.id === newGroupAgentId;
                           return (
@@ -842,7 +836,7 @@ export default function AdminPage() {
                             </button>
                           );
                         })}
-                      {agents.filter((a) => !a.singleChatId && !a.groupId).length === 0 && (
+                      {agents.filter((a) => !a.groupId).length === 0 && (
                         <p className="py-3 text-center text-xs text-gray-400">
                           No unattached agents available. Create one first.
                         </p>

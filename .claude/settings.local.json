@@ -35,7 +35,7 @@
       "Bash(docker exec:*)",
       "Bash(docker ps:*)",
       "Bash(curl:*)",
-      "Bash(curl -sv http://localhost:3010/claw/api/auth/login -H 'Content-Type: application/json' -d '{\"\"\"\"userName\"\"\"\":\"\"\"\"systemadmin\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"Sys@dm1n!2026#Gr4hamy\"\"\"\"}')",
+      "Bash(curl -sv http://localhost:3010/api/auth/login -H 'Content-Type: application/json' -d '{\"\"\"\"userName\"\"\"\":\"\"\"\"systemadmin\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"Sys@dm1n!2026#Gr4hamy\"\"\"\"}')",
       "Bash(curl -s http://localhost:3010/api/auth/login -H 'Content-Type: application/json' -d '{\"\"\"\"userName\"\"\"\":\"\"\"\"systemadmin\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"Sys@dm1n!2026#Gr4hamy\"\"\"\"}')",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(''''role:'''', d.get\\(''''user'''',{}\\).get\\(''''role'''',''''N/A''''\\)\\)\")",
       "Bash(curl -s http://localhost:3010/api/auth/login -H 'Content-Type: application/json' -d '{\"\"\"\"userName\"\"\"\":\"\"\"\"danz\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"Sys@dm1n!2026#Gr4hamy\"\"\"\"}')",

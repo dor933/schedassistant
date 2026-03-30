@@ -9,6 +9,8 @@ import type {
 } from "@scheduling-agent/types";
 
 import { getCoreMemory } from "../../../sessionsManagment/coreMemoryManager";
+import { loadRecentConversationMessagesForContext } from "../../../sessionsManagment/conversationLogForContext";
+import { formatCheckpointMessagesForSystemPrompt } from "../../../sessionsManagment/checkpointMessagesForContext";
 import { retrieveEpisodicMemory } from "../../../rag/episodicRetrieval";
 import { loadRecentSessionSummaries } from "../../../sessionsManagment/sessionSummaryLoader";
 import { embedText } from "../../../rag/embeddings";
@@ -22,15 +24,15 @@ import { logger } from "../../../logger";
  * helper inside one), following the same structural pattern as the nodes
  * in `graphs-example/nodes/vulnerabilityNodes.ts`.
  *
- * It assembles core memory, episodic snippets (user-scoped), and recent session
- * summaries scoped to the active `group_id` or `single_chat_id`, then formats
- * into a system prompt that the model receives as durable instructions.
+ * It assembles core memory, a snapshot of LangGraph checkpoint messages (thread
+ * state), up to 50 recent rows from `conversation_messages` for this conversation
+ * scope, episodic snippets, and recent session summaries, then formats into a system prompt.
  */
 export async function buildContext(
   state: AgentState,
   _config: RunnableConfig,
 ): Promise<AssembledContext> {
-  const { userId, userInput, threadId, groupId, singleChatId, agentId } = state;
+  const { userId, userInput, threadId, groupId, singleChatId, agentId, messages } = state;
 
   // ── 0. Agent definition + core instructions (DB) ───────────────────
   let agentDefinition: string | null = null;
@@ -91,6 +93,18 @@ export async function buildContext(
   // ── 2. Core context: formatted users.user_identity (single-chat; group uses members above) ──
   const coreMemory = await getCoreMemory(userId, groupId);
 
+  // ── 2b. LangGraph checkpoint snapshot (system prompt) — same messages follow as chat history in callModel ──
+  const checkpointLog = formatCheckpointMessagesForSystemPrompt(messages, {
+    singleChatId: singleChatId ?? null,
+    groupId: groupId ?? null,
+  });
+
+  // ── 2c. Durable conversation log (DB; this single chat or group only; survives thread rotation) ──
+  const conversationLog = await loadRecentConversationMessagesForContext(
+    singleChatId ?? null,
+    groupId ?? null,
+  );
+
   // ── 3. Episodic snippets (pgvector, scoped by agentId) ────────────
   let episodicSnippets: string[] = [];
   if (userInput) {
@@ -109,6 +123,8 @@ export async function buildContext(
     agentDefinition,
     agentCoreInstructions,
     coreMemory,
+    checkpointLog.body,
+    conversationLog.body,
     episodicSnippets,
     recentSessionSummaries,
     groupMemberIdentities,
@@ -119,6 +135,8 @@ export async function buildContext(
     coreMemory,
     episodicSnippets,
     recentSessionSummaries,
+    recentCheckpointMessageCount: checkpointLog.messageCount,
+    recentConversationMessageCount: conversationLog.messageCount,
     userIdentity,
     groupMemberIdentities,
     systemPrompt,
@@ -143,6 +161,8 @@ export async function contextBuilderNode(
       hasAgentDef: !!ctx.agentCoreInstructions,
       episodicCount: ctx.episodicSnippets.length,
       summaryCount: ctx.recentSessionSummaries.length,
+      checkpointLogCount: ctx.recentCheckpointMessageCount,
+      conversationLogCount: ctx.recentConversationMessageCount,
       promptLen: ctx.systemPrompt.length,
     });
 
@@ -164,6 +184,8 @@ function formatSystemPrompt(
   agentDefinition: string | null,
   agentCoreInstructions: string | null,
   coreMemory: string,
+  checkpointLogBody: string,
+  conversationLogBody: string,
   episodicSnippets: string[],
   recentSummaries: SessionSummary[],
   groupMembers: GroupMemberContextProfile[] | null,
@@ -216,6 +238,19 @@ function formatSystemPrompt(
   if (coreMemTrim.length > 0) {
     sections.push("## Core memory (long-term preferences & facts about the user)");
     sections.push(coreMemory);
+    sections.push("");
+  }
+
+  const checkpointTrim = checkpointLogBody.trim();
+  if (checkpointTrim.length > 0) {
+    sections.push(checkpointTrim);
+    sections.push("");
+  }
+
+  const logTrim = conversationLogBody.trim();
+  if (logTrim.length > 0) {
+    sections.push("## Recent messages (durable conversation log)");
+    sections.push(logTrim);
     sections.push("");
   }
 

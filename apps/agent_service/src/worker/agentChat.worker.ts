@@ -34,11 +34,24 @@ export function startAgentChatWorker(
   const worker = new Worker<AgentChatJobData, AgentChatJobResult, string>(
     AGENT_CHAT_QUEUE_NAME,
     async (job) => {
-      const { userId, threadId: clientThreadId, message, groupId, singleChatId, agentId, requestId, mentionsAgent, displayName } =
-        job.data;
+      const {
+        userId,
+        threadId: clientThreadId,
+        message,
+        groupId,
+        singleChatId,
+        agentId,
+        requestId,
+        mentionsAgent,
+        displayName,
+      } = job.data;
 
       // Resolve the canonical thread for this conversation (handles stale client IDs after rotation).
-      const threadId = await resolveCanonicalThreadId(clientThreadId, groupId ?? null, singleChatId ?? null);
+      const threadId = await resolveCanonicalThreadId(
+        clientThreadId,
+        groupId ?? null,
+        singleChatId ?? null,
+      );
 
       // Conversation-scoped lock key — ensures serialization even when threadId rotates.
       const lockKey = groupId
@@ -47,13 +60,29 @@ export function startAgentChatWorker(
           ? `conv:single:${singleChatId}`
           : threadId;
 
-      logger.info("Processing chat job", { requestId, userId, threadId, clientThreadId, groupId, singleChatId, mentionsAgent });
+      logger.info("Processing chat job", {
+        requestId,
+        userId,
+        threadId,
+        clientThreadId,
+        groupId,
+        singleChatId,
+        mentionsAgent,
+      });
 
       // Group message without @mention → store only, no agent invocation
       if (groupId && mentionsAgent === false) {
         try {
           await withThreadLock(lockRedis, lockKey, async () => {
-            await storeMessageOnly(graph, { userId, threadId, message, groupId, singleChatId, agentId, displayName });
+            await storeMessageOnly(graph, {
+              userId,
+              threadId,
+              message,
+              groupId,
+              singleChatId,
+              agentId,
+              displayName,
+            });
             await writeConversationMessage({
               groupId: groupId ?? null,
               singleChatId: singleChatId ?? null,
@@ -66,7 +95,11 @@ export function startAgentChatWorker(
           });
           return { threadId, reply: "", systemPrompt: null };
         } catch (err: any) {
-          logger.error("Store-only failed", { requestId, threadId, error: err?.message });
+          logger.error("Store-only failed", {
+            requestId,
+            threadId,
+            error: err?.message,
+          });
           throw err;
         }
       }
@@ -119,7 +152,11 @@ export function startAgentChatWorker(
           return turnResult;
         });
 
-        logger.info("Chat turn completed", { requestId, threadId, replyLen: result.reply.length });
+        logger.info("Chat turn completed", {
+          requestId,
+          threadId,
+          replyLen: result.reply.length,
+        });
 
         emitAgentReply({
           requestId,
@@ -137,7 +174,11 @@ export function startAgentChatWorker(
 
         return result;
       } catch (err: any) {
-        logger.error("Chat turn failed", { requestId, threadId, error: err?.message });
+        logger.error("Chat turn failed", {
+          requestId,
+          threadId,
+          error: err?.message,
+        });
 
         emitAgentReply({
           requestId,
