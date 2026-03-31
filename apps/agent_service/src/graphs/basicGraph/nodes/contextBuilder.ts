@@ -14,6 +14,7 @@ import { formatCheckpointMessagesForSystemPrompt } from "../../../sessionsManagm
 import { retrieveEpisodicMemory } from "../../../rag/episodicRetrieval";
 import { loadRecentSessionSummaries } from "../../../sessionsManagment/sessionSummaryLoader";
 import { embedText } from "../../../rag/embeddings";
+import { formatUserIdentityForPrompt } from "../../../utils/formatUserIdentityForPrompt";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 
@@ -263,13 +264,9 @@ function formatSystemPrompt(
         `User ${m.userId}`;
       sections.push(`### ${label}`);
       sections.push(`- **userId:** ${m.userId}`);
-      if (m.userIdentity && Object.keys(m.userIdentity).length > 0) {
-        const pairs = Object.entries(m.userIdentity)
-          .filter(([, v]) => v !== undefined && v !== null)
-          .map(([k, v]) => `- **${k}:** ${v}`);
-        if (pairs.length > 0) {
-          sections.push(...pairs);
-        }
+      const profile = formatUserIdentityForPrompt(m.userIdentity);
+      if (profile) {
+        sections.push(...profile.split("\n"));
       }
       sections.push("");
     }

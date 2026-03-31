@@ -1,19 +1,12 @@
 import { User } from "@scheduling-agent/database";
 import type { UserIdentity, UserId } from "@scheduling-agent/types";
+import { formatUserIdentityForPrompt } from "../utils/formatUserIdentityForPrompt";
 import { logger } from "../logger";
 
 const EMPTY_PLACEHOLDER = "No core memory entries yet.";
 
 /** Freeform text is stored under this key when `content` is not valid JSON. */
 const FREEFORM_KEY = "agentNotes";
-
-function formatUserIdentityMarkdown(identity: UserIdentity | null | undefined): string {
-  if (!identity || Object.keys(identity).length === 0) return "";
-  return Object.entries(identity)
-    .filter(([, v]) => v !== undefined && v !== null)
-    .map(([k, v]) => `- **${k}:** ${String(v)}`)
-    .join("\n");
-}
 
 function tryParseIdentityObject(content: string): Record<string, unknown> | null {
   try {
@@ -43,7 +36,7 @@ export async function getCoreMemory(
 
   try {
     const user = await User.findByPk(userId, { attributes: ["userIdentity"] });
-    const idPart = formatUserIdentityMarkdown(user?.userIdentity ?? null);
+    const idPart = formatUserIdentityForPrompt(user?.userIdentity ?? null);
     return idPart || EMPTY_PLACEHOLDER;
   } catch (err) {
     logger.error("Failed to load user_identity for core memory", { userId, error: String(err) });
