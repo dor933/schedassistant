@@ -7,7 +7,7 @@ const sessionsService = new SessionsService();
 export class SessionsController {
   getSessions = async (req: Request, res: Response) => {
     try {
-      const sessions = await sessionsService.getSessions(req.params.userId as string, {
+      const sessions = await sessionsService.getSessions(Number(req.params.userId), {
         groupId: req.query.groupId as string | undefined,
         singleChatId: req.query.singleChatId as string | undefined,
       });

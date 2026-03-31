@@ -1,10 +1,11 @@
 import { Agent, Group, SingleChat, Thread } from "@scheduling-agent/database";
+import type { UserId } from "@scheduling-agent/types";
 import { ensureCanonicalThreadId } from "../sessionsManagment/canonicalThread";
 import { logger } from "../logger";
 
 export class SessionsService {
   async getSessions(
-    userId: string,
+    userId: UserId,
     query: { groupId?: string; singleChatId?: string },
   ) {
     const attributes = [
@@ -76,7 +77,7 @@ export class SessionsService {
    * Idempotent with chat enqueue.
    */
   async createSession(data: {
-    userId: string;
+    userId: UserId;
     title?: string;
     groupId?: string;
     singleChatId?: string;

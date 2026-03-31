@@ -24,14 +24,13 @@ module.exports = {
           LOWER(REGEXP_REPLACE(display_name, '[^a-zA-Z0-9_]', '', 'g')),
           ''
         ),
-        LOWER(REPLACE(id, 'USR-', ''))
+        'user' || id::text
       )
       WHERE user_name IS NULL
     `);
 
-    // Handle the SYSTEM user explicitly
     await queryInterface.sequelize.query(`
-      UPDATE users SET user_name = 'system' WHERE id = 'SYSTEM' AND (user_name IS NULL OR user_name = '')
+      UPDATE users SET user_name = 'system' WHERE id = 1 AND (user_name IS NULL OR user_name = '')
     `);
 
     // 3. Deduplicate: append a suffix for any collisions

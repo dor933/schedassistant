@@ -17,7 +17,7 @@ export function getAgentIO(): Server {
  */
 export interface AgentReplyPayload {
   requestId: string;
-  userId: string;
+  userId: number;
   threadId: string;
   groupId: string | null;
   singleChatId: string | null;
@@ -31,7 +31,7 @@ export interface AgentReplyPayload {
 
 export interface AgentErrorPayload {
   requestId: string;
-  userId: string;
+  userId: number;
   threadId: string;
   groupId: string | null;
   singleChatId: string | null;
@@ -44,7 +44,7 @@ export type AgentChatPayload = AgentReplyPayload | AgentErrorPayload;
 /** Emitted when the worker starts processing a job. */
 export interface AgentTypingPayload {
   threadId: string;
-  userId: string;
+  userId: number;
   groupId: string | null;
   singleChatId: string | null;
 }

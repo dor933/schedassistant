@@ -11,6 +11,7 @@ import {
 } from "@langfuse/tracing";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import type { UserId } from "@scheduling-agent/types";
 
 let langfuseClient: LangfuseClient | null = null;
 let tracerProvider: NodeTracerProvider | null = null;
@@ -111,7 +112,7 @@ export function getLangfuseClient(): LangfuseClient | null {
  * LangChain callback handler for LLM / graph runs. Returns `null` when Langfuse is not configured.
  */
 export function getLangfuseCallbackHandler(
-  userId?: string,
+  userId?: UserId,
   metadata?: Record<string, unknown>,
 ): CallbackHandler | null {
   if (!isLangfuseConfigured()) {
@@ -120,7 +121,7 @@ export function getLangfuseCallbackHandler(
 
   try {
     const params: ConstructorParameters<typeof CallbackHandler>[0] = {};
-    if (userId) params.userId = userId;
+    if (userId != null) params.userId = String(userId);
     if (metadata) params.traceMetadata = metadata;
     return new CallbackHandler(params);
   } catch (error) {

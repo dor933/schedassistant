@@ -58,7 +58,7 @@ export interface Conversations {
 export interface LoginResponse {
   token: string;
   user: {
-    id: string;
+    id: number;
     displayName: string | null;
     userIdentity: Record<string, unknown> | null;
     role: string;
@@ -80,8 +80,10 @@ export interface RegisterData {
   userIdentity?: {
     role?: string;
     department?: string;
-    timezone?: string;
+    /** Place and IANA zone together, e.g. `Israel (Asia/Jerusalem)`. */
     location?: string;
+    /** @deprecated Use `location` with zone embedded. */
+    timezone?: string;
   };
 }
 
@@ -93,7 +95,7 @@ export function register(data: RegisterData) {
 }
 
 export interface MeResponse {
-  id: string;
+  id: number;
   displayName: string | null;
   role: string;
   conversations: Conversations;
@@ -107,7 +109,7 @@ export function getMe() {
 
 export interface Session {
   threadId: string;
-  userId: string | null;
+  userId: number | null;
   groupId: string | null;
   singleChatId: string | null;
   title: string | null;
@@ -199,7 +201,7 @@ export function deleteSingleChat(id: string) {
 // ─── Group Members ────────────────────────────────────────────────────────────
 
 export interface GroupMemberInfo {
-  userId: string;
+  userId: number;
   displayName: string | null;
 }
 
@@ -272,7 +274,7 @@ export function getUnreadCounts() {
 // ─── Admin ───────────────────────────────────────────────────────────────────
 
 export interface AdminUser {
-  id: string;
+  id: number;
   displayName: string | null;
   userIdentity: Record<string, unknown> | null;
   role: string;
@@ -289,6 +291,8 @@ export interface AdminAgent {
   id: string;
   definition: string | null;
   coreInstructions: string | null;
+  /** Persona traits (tone, etc.) — rendered as "Your Characteristics" in the agent context. */
+  characteristics: Record<string, unknown> | null;
   /** Number of groups using this agent (same agent can back multiple groups). */
   groupCount: number;
   editable: boolean;
@@ -304,7 +308,7 @@ export interface AdminGroup {
 
 export interface AdminGroupMember {
   id: string;
-  userId: string;
+  userId: number;
   createdAt: string;
 }
 
@@ -312,21 +316,29 @@ export const admin = {
   getRoles: () => request<AdminRole[]>("/admin/roles"),
   getUsers: () => request<AdminUser[]>("/admin/users"),
   getAgents: () => request<AdminAgent[]>("/admin/agents"),
-  createAgent: (data: { definition?: string; coreInstructions?: string }) =>
+  createAgent: (data: {
+    definition?: string;
+    coreInstructions?: string;
+    characteristics?: Record<string, unknown> | null;
+  }) =>
     request<AdminAgent>("/admin/agents", {
       method: "POST",
       body: JSON.stringify(data),
     }),
   updateAgent: (
     id: string,
-    data: { definition?: string; coreInstructions?: string },
+    data: {
+      definition?: string;
+      coreInstructions?: string;
+      characteristics?: Record<string, unknown> | null;
+    },
   ) =>
     request<AdminAgent>(`/admin/agents/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
   updateUser: (
-    id: string,
+    id: number,
     data: {
       displayName?: string;
       userIdentity?: Record<string, unknown>;
@@ -338,7 +350,7 @@ export const admin = {
       body: JSON.stringify(data),
     }),
   getGroups: () => request<AdminGroup[]>("/admin/groups"),
-  createGroup: (name: string, agentId: string, memberUserIds: string[]) =>
+  createGroup: (name: string, agentId: string, memberUserIds: number[]) =>
     request<AdminGroup>("/admin/groups", {
       method: "POST",
       body: JSON.stringify({ name, agentId, memberUserIds }),
@@ -354,12 +366,12 @@ export const admin = {
     }),
   getGroupMembers: (groupId: string) =>
     request<AdminGroupMember[]>(`/admin/groups/${groupId}/members`),
-  addGroupMember: (groupId: string, userId: string) =>
+  addGroupMember: (groupId: string, userId: number) =>
     request<AdminGroupMember>(`/admin/groups/${groupId}/members`, {
       method: "POST",
       body: JSON.stringify({ userId }),
     }),
-  removeGroupMember: (groupId: string, userId: string) =>
+  removeGroupMember: (groupId: string, userId: number) =>
     request<{ deleted: number }>(`/admin/groups/${groupId}/members/${userId}`, {
       method: "DELETE",
     }),

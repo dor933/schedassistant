@@ -1,5 +1,5 @@
 import { User } from "@scheduling-agent/database";
-import type { UserIdentity } from "@scheduling-agent/types";
+import type { UserIdentity, UserId } from "@scheduling-agent/types";
 import { logger } from "../logger";
 
 const EMPTY_PLACEHOLDER = "No core memory entries yet.";
@@ -34,7 +34,7 @@ function tryParseIdentityObject(content: string): Record<string, unknown> | null
  * - **Group chat:** empty string — per-member identity is under **Group chat / Members** in `contextBuilder`.
  */
 export async function getCoreMemory(
-  userId: string,
+  userId: UserId,
   groupId: string | null | undefined,
 ): Promise<string> {
   if (groupId) {
@@ -60,7 +60,7 @@ export async function getCoreMemory(
  *   `user_identity`. If not valid JSON, the text is appended to the `agentNotes` string field.
  */
 export async function updateCoreMemory(
-  userId: string,
+  userId: UserId,
   action: "append" | "rewrite",
   content: string,
 ): Promise<boolean> {

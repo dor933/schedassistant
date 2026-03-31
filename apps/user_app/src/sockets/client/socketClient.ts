@@ -11,7 +11,7 @@ let agentSocket: Socket | null = null;
 /** Payload shape emitted by agent_service on `agent:reply`. */
 interface AgentReplyOk {
   requestId: string;
-  userId: string;
+  userId: number;
   threadId: string;
   groupId: string | null;
   singleChatId: string | null;
@@ -25,7 +25,7 @@ interface AgentReplyOk {
 
 interface AgentReplyError {
   requestId: string;
-  userId: string;
+  userId: number;
   threadId: string;
   groupId: string | null;
   singleChatId: string | null;
@@ -38,7 +38,7 @@ type AgentReplyPayload = AgentReplyOk | AgentReplyError;
 /** Typing indicator from agent_service. */
 interface AgentTypingPayload {
   threadId: string;
-  userId: string;
+  userId: number;
   groupId: string | null;
   singleChatId: string | null;
 }

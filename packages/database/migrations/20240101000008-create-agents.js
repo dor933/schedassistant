@@ -23,6 +23,10 @@ module.exports = {
         type: Sequelize.TEXT,
         allowNull: true,
       },
+      characteristics: {
+        type: Sequelize.JSONB,
+        allowNull: true,
+      },
       active_thread_id: {
         type: Sequelize.STRING,
         allowNull: true,
@@ -51,20 +55,28 @@ module.exports = {
     });
 
     const corePath = path.join(__dirname, "../../../apps/coreInstructions.json");
-    const { description, core_description } = JSON.parse(fs.readFileSync(corePath, "utf8"));
+    const raw = JSON.parse(fs.readFileSync(corePath, "utf8"));
+    const { description, core_description, characteristics } = raw;
+    const charsJson = JSON.stringify(
+      characteristics != null && typeof characteristics === "object"
+        ? characteristics
+        : {},
+    );
 
     await queryInterface.sequelize.query(
-      `INSERT INTO agents (id, definition, core_instructions, active_thread_id, created_at, updated_at)
-       VALUES (CAST(:id AS uuid), :def, :core, NULL, NOW(), NOW())
+      `INSERT INTO agents (id, definition, core_instructions, characteristics, active_thread_id, created_at, updated_at)
+       VALUES (CAST(:id AS uuid), :def, :core, CAST(:chars AS jsonb), NULL, NOW(), NOW())
        ON CONFLICT (id) DO UPDATE SET
          definition = EXCLUDED.definition,
          core_instructions = EXCLUDED.core_instructions,
+         characteristics = EXCLUDED.characteristics,
          updated_at = NOW()`,
       {
         replacements: {
           id: DEFAULT_AGENT_ID,
           def: description,
           core: core_description,
+          chars: charsJson,
         },
       },
     );

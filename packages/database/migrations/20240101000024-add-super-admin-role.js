@@ -24,7 +24,7 @@ module.exports = {
 
     // 2. Reassign SYSTEM user from admin → super_admin
     await queryInterface.sequelize.query(
-      `UPDATE users SET role_id = :roleId, updated_at = NOW() WHERE id = 'SYSTEM'`,
+      `UPDATE users SET role_id = :roleId, updated_at = NOW() WHERE id = 1`,
       { replacements: { roleId: superAdminRoleId } },
     );
   },
@@ -35,7 +35,7 @@ module.exports = {
 
     // Revert SYSTEM back to admin
     await queryInterface.sequelize.query(
-      `UPDATE users SET role_id = :roleId, updated_at = NOW() WHERE id = 'SYSTEM'`,
+      `UPDATE users SET role_id = :roleId, updated_at = NOW() WHERE id = 1`,
       { replacements: { roleId: adminRoleId } },
     );
 

@@ -1,4 +1,5 @@
 import { LLMModel, Vendor, SingleChat, Group } from "@scheduling-agent/database";
+import type { UserId } from "@scheduling-agent/types";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 
@@ -26,7 +27,7 @@ export class ModelsService {
     return vendors.map((v) => ({ id: v.id, name: v.name, slug: v.slug, hasApiKey: !!v.apiKey }));
   }
 
-  async createModel(vendorId: string, name: string, slug: string, actorId: string) {
+  async createModel(vendorId: string, name: string, slug: string, actorId: UserId) {
     const vendor = await Vendor.findByPk(vendorId);
     if (!vendor) throw Object.assign(new Error("Vendor not found."), { status: 404 });
 
@@ -47,7 +48,7 @@ export class ModelsService {
     return result;
   }
 
-  async deleteModel(modelId: string, actorId: string) {
+  async deleteModel(modelId: string, actorId: UserId) {
     const model = await LLMModel.findByPk(modelId);
     if (!model) throw Object.assign(new Error("Model not found."), { status: 404 });
 
@@ -66,7 +67,7 @@ export class ModelsService {
     return { deleted: true };
   }
 
-  async setVendorApiKey(vendorId: string, apiKey: string | undefined, actorId: string) {
+  async setVendorApiKey(vendorId: string, apiKey: string | undefined, actorId: UserId) {
     const vendor = await Vendor.findByPk(vendorId);
     if (!vendor) throw Object.assign(new Error("Vendor not found."), { status: 404 });
     await vendor.update({ apiKey: apiKey || null });
@@ -74,7 +75,7 @@ export class ModelsService {
     return { id: vendor.id, name: vendor.name, slug: vendor.slug, hasApiKey: !!apiKey };
   }
 
-  async setSingleChatModel(singleChatId: string, modelId: string | null, actorId: string) {
+  async setSingleChatModel(singleChatId: string, modelId: string | null, actorId: UserId) {
     const sc = await SingleChat.findByPk(singleChatId);
     if (!sc) throw Object.assign(new Error("Single chat not found."), { status: 404 });
 
@@ -106,7 +107,7 @@ export class ModelsService {
     return null;
   }
 
-  private broadcast(type: string, message: string, data: Record<string, unknown>, actorId: string) {
+  private broadcast(type: string, message: string, data: Record<string, unknown>, actorId: UserId) {
     try {
       getIO().emit("admin:change", { type, message, data, actorId });
     } catch (err) {

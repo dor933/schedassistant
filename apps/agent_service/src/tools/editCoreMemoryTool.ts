@@ -6,7 +6,7 @@ import { updateCoreMemory } from "../sessionsManagment/coreMemoryManager";
  * LangChain tool factory: updates `users.user_identity` (JSONB) for the **current** thread user.
  * `userId` is fixed by the server from graph state — the model only chooses action + content.
  */
-export function createEditCoreMemoryTool(userId: string) {
+export function createEditCoreMemoryTool(userId: number) {
   return tool(
     async (input) => {
       const { action, content } = input;

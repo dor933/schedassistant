@@ -71,7 +71,7 @@ export default function ChatPage() {
     new Set(),
   );
   const [userTyping, setUserTyping] = useState<
-    Map<string, Map<string, string>>
+    Map<string, Map<number, string>>
   >(new Map());
   const userTypingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
@@ -124,7 +124,9 @@ export default function ChatPage() {
       s.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user",
     [],
   );
-  const myName = sanitize(user?.displayName ?? user?.id ?? "");
+  const myName = sanitize(
+    String(user?.displayName ?? user?.id ?? ""),
+  );
 
   const toMessage = useCallback(
     (
@@ -458,7 +460,7 @@ export default function ChatPage() {
 
     const onUserTyping = (data: {
       groupId: string;
-      userId: string;
+      userId: number;
       displayName: string;
     }) => {
       const key = `${data.groupId}:${data.userId}`;
@@ -492,7 +494,7 @@ export default function ChatPage() {
 
     const onGroupUserMessage = (data: {
       groupId: string;
-      userId: string;
+      userId: number;
       displayName: string;
       message: string;
     }) => {
@@ -515,7 +517,7 @@ export default function ChatPage() {
       type: string;
       message: string;
       data: any;
-      actorId?: string;
+      actorId?: number;
     }) => {
       if (data.actorId === user?.id) return;
 
@@ -808,7 +810,10 @@ export default function ChatPage() {
           onSelectConversation={handleSelectConversation}
           onDeleteChat={(id, title) => setDeleteTarget({ id, title })}
           onLogout={logout}
-          userName={user?.displayName ?? user?.id ?? null}
+          userName={
+            user?.displayName ??
+            (user?.id != null ? String(user.id) : null)
+          }
         />
       </Box>
 
@@ -1431,7 +1436,7 @@ export default function ChatPage() {
               </Box>
               <Stack spacing={0.5} sx={{ maxHeight: 240, overflowY: "auto" }}>
                 {groupMembersList.map((m) => {
-                  const name = m.displayName || m.userId;
+                  const name = m.displayName ?? String(m.userId);
                   const isCurrentUser = m.userId === user?.id;
                   return (
                     <Stack

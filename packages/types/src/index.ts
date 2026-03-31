@@ -1,14 +1,20 @@
 // ─── User ────────────────────────────────────────────────────────────────────
 
-/** Canonical user identifier used across the system (`users.id`). */
-export type UserId = string;
+/** Canonical user identifier (`users.id` — integer, auto-generated). */
+export type UserId = number;
 
 /** Structured identity data stored in the `user_identity` JSONB column on `users`. */
 export interface UserIdentity {
+  /** Stable profile fields (name, title, location, etc.) — iterate with `Object.entries`. */
+  general?: Record<string, unknown>;
+  /** Role- or function-specific context — iterate with `Object.entries`. */
+  scope?: Record<string, unknown>;
   role?: string;
   department?: string;
   manager?: string;
+  /** Place and IANA timezone together, e.g. `Israel (Asia/Jerusalem)` — prefer this over separate `timezone`. */
   location?: string;
+  /** @deprecated Prefer `location` with timezone embedded. Kept for older rows. */
   timezone?: string;
   startDate?: string;
   [key: string]: unknown;
@@ -25,6 +31,8 @@ export interface AgentAttributes {
   definition: string | null;
   /** Detailed instructions merged into the system prompt each turn. */
   coreInstructions: string | null;
+  /** Structured persona traits (tone, style, etc.) — rendered as "Your Characteristics" in context. */
+  characteristics: Record<string, unknown> | null;
   /**
    * Canonical LangGraph checkpoint `thread_id` for this agent.
    * All groups and single chats that reference this agent share this thread / history.

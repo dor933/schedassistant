@@ -13,7 +13,7 @@ class GroupMember
 {
   declare id: string;
   declare groupId: string;
-  declare userId: string;
+  declare userId: number;
   declare createdAt: Date;
 }
 
@@ -31,7 +31,7 @@ GroupMember.init(
       references: { model: "groups", key: "id" },
     },
     userId: {
-      type: DataTypes.STRING,
+      type: DataTypes.INTEGER,
       allowNull: false,
       field: "user_id",
       references: { model: "users", key: "id" },

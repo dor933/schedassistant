@@ -9,14 +9,16 @@ import {
 import { QueryTypes } from "sequelize";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
+import type { UserId } from "@scheduling-agent/types";
 
 export class AgentsService {
-  async getAll(callerId: string, callerRole: string) {
+  async getAll(callerId: UserId, callerRole: string) {
     const agents = await Agent.findAll({
       attributes: [
         "id",
         "definition",
         "coreInstructions",
+        "characteristics",
         "createdAt",
       ],
       order: [["created_at", "DESC"]],
@@ -43,11 +45,13 @@ export class AgentsService {
   async create(
     definition?: string,
     coreInstructions?: string,
-    actorId?: string,
+    characteristics?: Record<string, unknown> | null,
+    actorId?: UserId,
   ) {
     const agent = await Agent.create({
       definition: definition ?? null,
       coreInstructions: coreInstructions ?? null,
+      characteristics: characteristics ?? null,
     });
 
     // Eagerly create a SingleChat for every user and notify them in real time
@@ -87,9 +91,13 @@ export class AgentsService {
 
   async update(
     agentId: string,
-    callerId: string,
+    callerId: UserId,
     callerRole: string,
-    data: { definition?: string; coreInstructions?: string },
+    data: {
+      definition?: string;
+      coreInstructions?: string;
+      characteristics?: Record<string, unknown> | null;
+    },
   ) {
     const agent = await Agent.findByPk(agentId);
     if (!agent)
@@ -107,6 +115,8 @@ export class AgentsService {
     if (data.definition !== undefined) patch.definition = data.definition;
     if (data.coreInstructions !== undefined)
       patch.coreInstructions = data.coreInstructions;
+    if (data.characteristics !== undefined)
+      patch.characteristics = data.characteristics;
     await agent.update(patch);
     this.broadcast(
       "agent_updated",
@@ -118,7 +128,7 @@ export class AgentsService {
   }
 
   async getEditableAgentIds(
-    userId: string,
+    userId: UserId,
     role: string,
   ): Promise<Set<string>> {
     if (role === "super_admin") {
@@ -158,7 +168,7 @@ export class AgentsService {
     type: string,
     message: string,
     data: Record<string, unknown>,
-    actorId?: string,
+    actorId?: UserId,
   ) {
     try {
       getIO().emit("admin:change", { type, message, data, actorId });

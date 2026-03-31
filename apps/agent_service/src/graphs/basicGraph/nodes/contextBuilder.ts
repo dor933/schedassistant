@@ -34,18 +34,24 @@ export async function buildContext(
 ): Promise<AssembledContext> {
   const { userId, userInput, threadId, groupId, singleChatId, agentId, messages } = state;
 
-  // ── 0. Agent definition + core instructions (DB) ───────────────────
+  // ── 0. Agent definition + core instructions + characteristics (DB) ──
   let agentDefinition: string | null = null;
   let agentCoreInstructions: string | null = null;
+  let agentCharacteristics: Record<string, unknown> | null = null;
   if (agentId) {
     try {
       const agent = await Agent.findByPk(agentId, {
-        attributes: ["definition", "coreInstructions"],
+        attributes: ["definition", "coreInstructions", "characteristics"],
       });
       const def = agent?.definition?.trim();
       agentDefinition = def && def.length > 0 ? def : null;
       const text = agent?.coreInstructions?.trim();
       agentCoreInstructions = text && text.length > 0 ? text : null;
+      const ch = agent?.characteristics;
+      agentCharacteristics =
+        ch != null && typeof ch === "object" && !Array.isArray(ch)
+          ? (ch as Record<string, unknown>)
+          : null;
     } catch {
       // agents table / row missing — continue without DB instructions.
     }
@@ -132,6 +138,7 @@ export async function buildContext(
   const systemPrompt = formatSystemPrompt(
     agentDefinition,
     agentCoreInstructions,
+    agentCharacteristics,
     coreMemory,
     checkpointLog.body,
     conversationLog.body,
@@ -190,9 +197,30 @@ export async function contextBuilderNode(
 
 // ─── Formatting helpers ──────────────────────────────────────────────────────
 
+function formatCharacteristicsSection(
+  characteristics: Record<string, unknown> | null,
+): string {
+  if (!characteristics || Object.keys(characteristics).length === 0) {
+    return "";
+  }
+  const lines: string[] = ["## Your Characteristics", ""];
+  for (const [key, value] of Object.entries(characteristics)) {
+    if (value === undefined || value === null) continue;
+    const formatted =
+      typeof value === "object"
+        ? JSON.stringify(value)
+        : String(value);
+    lines.push(`- **${key}:** ${formatted}`);
+  }
+  if (lines.length <= 2) return "";
+  lines.push("");
+  return lines.join("\n");
+}
+
 function formatSystemPrompt(
   agentDefinition: string | null,
   agentCoreInstructions: string | null,
+  agentCharacteristics: Record<string, unknown> | null,
   coreMemory: string,
   checkpointLogBody: string,
   conversationLogBody: string,
@@ -212,6 +240,11 @@ function formatSystemPrompt(
     sections.push("## Agent instructions");
     sections.push(agentCoreInstructions);
     sections.push("");
+  }
+
+  const charSection = formatCharacteristicsSection(agentCharacteristics);
+  if (charSection) {
+    sections.push(charSection);
   }
 
   // Identity: group (all members) or single user

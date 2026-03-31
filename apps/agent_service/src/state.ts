@@ -11,7 +11,7 @@ import type { BaseMessage } from "@langchain/core/messages";
  */
 export const AgentAnnotation = Annotation.Root({
   /** The user who owns this conversation thread (`users.id`). */
-  userId: Annotation<string>,
+  userId: Annotation<number>,
 
   /** The LangGraph thread_id for this conversation (mirrors configurable.thread_id). */
   threadId: Annotation<string>,

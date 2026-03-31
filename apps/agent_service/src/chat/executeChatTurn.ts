@@ -1,6 +1,7 @@
 import type { CompiledStateGraph } from "@langchain/langgraph";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { HumanMessage } from "@langchain/core/messages";
+import type { UserId } from "@scheduling-agent/types";
 import { Thread } from "@scheduling-agent/database";
 import { ensureSession } from "../sessionsManagment/sessionRegistry";
 import { rotateThread } from "../sessionsManagment/threadRotation";
@@ -14,7 +15,7 @@ function sanitizeMsgName(raw: string): string {
 }
 
 export type ChatTurnPayload = {
-  userId: string;
+  userId: UserId;
   threadId: string;
   message: string;
   /** When set, scopes session registry + context summaries to this group. */
@@ -73,7 +74,9 @@ export async function executeChatTurn(
       });
 
       // Use HumanMessage with `name` so the LLM and history know who sent it.
-      const senderName = sanitizeMsgName(displayName || userId);
+      const senderName = sanitizeMsgName(
+        displayName?.trim() ? displayName : String(userId),
+      );
       const humanMsg = new HumanMessage({ content: message, name: senderName });
 
       const result = await graph.invoke(
@@ -168,7 +171,9 @@ export async function storeMessageOnly(
     agentId: agentId ?? null,
   });
 
-  const senderName = sanitizeMsgName(displayName || userId);
+  const senderName = sanitizeMsgName(
+    displayName?.trim() ? displayName : String(userId),
+  );
   await graph.updateState(
     { configurable: { thread_id: threadId } },
     { messages: [new HumanMessage({ content: message, name: senderName })] },

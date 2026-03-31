@@ -1,13 +1,14 @@
 import {
   SingleChat, GroupMember, User, ConversationMessage, MessageNotification
 } from "@scheduling-agent/database";
+import type { UserId } from "@scheduling-agent/types";
 import { logger } from "../logger";
 
 const AGENT_SERVICE_URL = process.env.AGENT_SERVICE_URL ?? "http://localhost:3001";
 
 export class SessionsService {
   private async assertConversationAccess(
-    userId: string,
+    userId: UserId,
     conversationType: string,
     conversationId: string,
   ): Promise<void> {
@@ -28,7 +29,7 @@ export class SessionsService {
     throw Object.assign(new Error("Invalid conversation type."), { status: 400 });
   }
 
-  async getSessions(userId: string, groupId?: string, singleChatId?: string) {
+  async getSessions(userId: UserId, groupId?: string, singleChatId?: string) {
     const params = new URLSearchParams();
     if (groupId) params.set("groupId", groupId);
     if (singleChatId) params.set("singleChatId", singleChatId);
@@ -38,7 +39,7 @@ export class SessionsService {
     return response.json();
   }
 
-  async createSession(userId: string, title?: string, groupId?: string, singleChatId?: string) {
+  async createSession(userId: UserId, title?: string, groupId?: string, singleChatId?: string) {
     const response = await fetch(`${AGENT_SERVICE_URL}/api/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -55,7 +56,7 @@ export class SessionsService {
   }
 
   async getConversationHistory(
-    userId: string,
+    userId: UserId,
     conversationType: string,
     conversationId: string,
     limit?: string,
@@ -72,7 +73,7 @@ export class SessionsService {
     return response.json();
   }
 
-  async searchConversationHistory(userId: string, conversationType: string, conversationId: string, q?: string) {
+  async searchConversationHistory(userId: UserId, conversationType: string, conversationId: string, q?: string) {
     await this.assertConversationAccess(userId, conversationType, conversationId);
     const params = new URLSearchParams();
     if (q) params.set("q", q);
@@ -83,7 +84,7 @@ export class SessionsService {
     return response.json();
   }
 
-  async deleteSingleChat(scId: string, userId: string) {
+  async deleteSingleChat(scId: string, userId: UserId) {
     const sc = await SingleChat.findByPk(scId);
     if (!sc) throw Object.assign(new Error("Single chat not found."), { status: 404 });
     if (sc.userId !== userId) throw Object.assign(new Error("You can only delete your own chats."), { status: 403 });
@@ -97,7 +98,7 @@ export class SessionsService {
     return { cleared: true };
   }
 
-  async getGroupMembers(groupId: string, userId: string) {
+  async getGroupMembers(groupId: string, userId: UserId) {
     const membership = await GroupMember.findOne({ where: { groupId, userId } });
     if (!membership) throw Object.assign(new Error("You are not a member of this group."), { status: 403 });
 

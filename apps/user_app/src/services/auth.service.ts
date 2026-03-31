@@ -10,6 +10,7 @@ import {
   Vendor,
 } from "@scheduling-agent/database";
 import { signToken } from "../middlewares/auth";
+import type { UserId } from "@scheduling-agent/types";
 
 export class AuthService {
   async login(userName: string, password: string) {
@@ -48,7 +49,7 @@ export class AuthService {
     };
   }
 
-  async getMe(userId: string) {
+  async getMe(userId: UserId) {
     const user = await User.findByPk(userId, {
       attributes: ["id", "displayName", "userIdentity", "roleId"],
     });
@@ -77,7 +78,7 @@ export class AuthService {
    * Ensures a `single_chats` row exists for every agent for this user (DM surface;
    * same agent may also be used in groups — shared LangGraph thread is on `agents`).
    */
-  private async ensureAgentSingleChats(userId: string): Promise<void> {
+  private async ensureAgentSingleChats(userId: UserId): Promise<void> {
     const agents = await Agent.findAll({
       attributes: ["id", "definition"],
     });
@@ -93,7 +94,7 @@ export class AuthService {
     }
   }
 
-  async loadUserConversations(userId: string) {
+  async loadUserConversations(userId: UserId) {
     const memberships = await GroupMember.findAll({
       where: { userId },
       attributes: ["groupId"],

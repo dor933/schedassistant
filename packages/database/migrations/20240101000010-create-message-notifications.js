@@ -15,14 +15,14 @@ module.exports = {
         allowNull: false,
       },
       recipient_id: {
-        type: Sequelize.STRING,
+        type: Sequelize.INTEGER,
         allowNull: false,
         references: { model: "users", key: "id" },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
       sender_id: {
-        type: Sequelize.STRING,
+        type: Sequelize.INTEGER,
         allowNull: true,
         references: { model: "users", key: "id" },
         onUpdate: "CASCADE",

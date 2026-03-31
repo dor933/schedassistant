@@ -8,7 +8,7 @@ import { logger } from "../logger";
  * `threads` + `agents.active_thread_id` when missing.
  */
 export async function ensureCanonicalThreadId(params: {
-  userId: string;
+  userId: number;
   groupId?: string | null;
   singleChatId?: string | null;
 }): Promise<string> {

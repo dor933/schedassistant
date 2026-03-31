@@ -44,7 +44,7 @@ export class ChatController {
         .broadcastUserMessage(
           groupId,
           userId,
-          req.user!.displayName ?? userId,
+          String(req.user!.displayName ?? userId),
           message,
           requestId,
         )

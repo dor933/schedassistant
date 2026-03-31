@@ -33,6 +33,13 @@ import {
 } from "../api";
 import { VendorIcon } from "../components/VendorModelBadge";
 
+function stringifyAgentCharacteristics(
+  c: Record<string, unknown> | null | undefined,
+): string {
+  if (!c || Object.keys(c).length === 0) return "";
+  return JSON.stringify(c, null, 2);
+}
+
 function AgentCard({
   agent,
   onSaved,
@@ -40,20 +47,47 @@ function AgentCard({
   agent: AdminAgent;
   onSaved: () => void;
 }) {
+  const { toast } = useToast();
   const isAttached = agent.groupCount > 0;
   const [editing, setEditing] = useState(false);
   const [definition, setDefinition] = useState(agent.definition ?? "");
   const [instructions, setInstructions] = useState(
     agent.coreInstructions ?? "",
   );
+  const [characteristicsJson, setCharacteristicsJson] = useState(
+    stringifyAgentCharacteristics(agent.characteristics),
+  );
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    setDefinition(agent.definition ?? "");
+    setInstructions(agent.coreInstructions ?? "");
+    setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
+  }, [agent]);
+
   async function save() {
+    let characteristics: Record<string, unknown> | null = null;
+    const trimmed = characteristicsJson.trim();
+    if (trimmed) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          toast("Characteristics must be a JSON object (e.g. {\"tone\": \"...\"}).", "error");
+          return;
+        }
+        characteristics = parsed as Record<string, unknown>;
+      } catch {
+        toast("Invalid JSON in characteristics.", "error");
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       await admin.updateAgent(agent.id, {
         definition: definition || undefined,
         coreInstructions: instructions || undefined,
+        characteristics,
       });
       setEditing(false);
       onSaved();
@@ -97,6 +131,18 @@ function AgentCard({
               className={smallInput + " resize-y"}
             />
           </div>
+          <div>
+            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+              Characteristics (JSON object)
+            </label>
+            <textarea
+              value={characteristicsJson}
+              onChange={(e) => setCharacteristicsJson(e.target.value)}
+              rows={5}
+              placeholder='{"tone": "..."}'
+              className={smallInput + " resize-y font-mono text-[11px]"}
+            />
+          </div>
           <div className="flex gap-2">
             <button
               onClick={save}
@@ -115,6 +161,7 @@ function AgentCard({
                 setEditing(false);
                 setDefinition(agent.definition ?? "");
                 setInstructions(agent.coreInstructions ?? "");
+                setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
               }}
               className="inline-flex items-center gap-1.5 rounded-xl bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-200"
             >
@@ -146,6 +193,12 @@ function AgentCard({
           <p className="line-clamp-3 text-xs text-gray-500 leading-relaxed">
             {agent.coreInstructions || "(no instructions)"}
           </p>
+          {agent.characteristics &&
+            Object.keys(agent.characteristics).length > 0 && (
+              <pre className="mt-2 max-h-24 overflow-hidden text-[10px] leading-snug text-gray-400 font-mono line-clamp-4">
+                {stringifyAgentCharacteristics(agent.characteristics)}
+              </pre>
+            )}
           {agent.editable && (
             <p className="mt-2 flex items-center gap-1 text-[10px] font-medium text-indigo-500">
               <Pencil className="h-2.5 w-2.5" />
@@ -180,12 +233,19 @@ function UserCard({
   const [department, setDepartment] = useState(
     (u.userIdentity as any)?.department ?? "",
   );
-  const [timezone, setTimezone] = useState(
-    (u.userIdentity as any)?.timezone ?? "",
-  );
-  const [location, setLocation] = useState(
-    (u.userIdentity as any)?.location ?? "",
-  );
+  const [locationAndTimezone, setLocationAndTimezone] = useState(() => {
+    const id = u.userIdentity as Record<string, unknown> | null | undefined;
+    const loc = id?.location;
+    const tz = id?.timezone;
+    if (typeof loc === "string" && loc) {
+      if (typeof tz === "string" && tz && !loc.includes(tz)) {
+        return `${loc} (${tz})`;
+      }
+      return loc;
+    }
+    if (typeof tz === "string" && tz) return tz;
+    return "";
+  });
   const [saving, setSaving] = useState(false);
 
   async function save() {
@@ -194,8 +254,7 @@ function UserCard({
       const identity: Record<string, string> = {};
       if (role) identity.role = role;
       if (department) identity.department = department;
-      if (timezone) identity.timezone = timezone;
-      if (location) identity.location = location;
+      if (locationAndTimezone.trim()) identity.location = locationAndTimezone.trim();
 
       await admin.updateUser(u.id, {
         displayName: displayName || undefined,
@@ -269,23 +328,14 @@ function UserCard({
                 className={inputClass}
               />
             </div>
-            <div>
+            <div className="col-span-2">
               <label className="mb-1 block text-[10px] font-medium text-gray-500">
-                Timezone
+                Location &amp; timezone
               </label>
               <input
-                value={timezone}
-                onChange={(e) => setTimezone(e.target.value)}
-                className={inputClass}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-[10px] font-medium text-gray-500">
-                Location
-              </label>
-              <input
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
+                value={locationAndTimezone}
+                onChange={(e) => setLocationAndTimezone(e.target.value)}
+                placeholder="e.g. Israel (Asia/Jerusalem)"
                 className={inputClass}
               />
             </div>
@@ -386,9 +436,10 @@ export default function AdminPage() {
 
   const [newAgentDefinition, setNewAgentDefinition] = useState("");
   const [newAgentInstructions, setNewAgentInstructions] = useState("");
+  const [newAgentCharacteristics, setNewAgentCharacteristics] = useState("");
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupAgentId, setNewGroupAgentId] = useState("");
-  const [newGroupMembers, setNewGroupMembers] = useState<string[]>([]);
+  const [newGroupMembers, setNewGroupMembers] = useState<number[]>([]);
   const [addMemberUserId, setAddMemberUserId] = useState("");
   const [newModelVendorId, setNewModelVendorId] = useState("");
   const [newModelName, setNewModelName] = useState("");
@@ -440,7 +491,7 @@ export default function AdminPage() {
     if (!token) return;
     const socket = getChatSocket(token);
 
-    const onAdminChange = (data: { type: string; message: string; actorId?: string }) => {
+    const onAdminChange = (data: { type: string; message: string; actorId?: number }) => {
       if (data.actorId === user?.id) return;
       toast(data.message, "info");
       reloadRef.current();
@@ -462,15 +513,38 @@ export default function AdminPage() {
   }, [selectedGroup?.id]);
 
   async function handleCreateAgent() {
-    if (!newAgentDefinition.trim() && !newAgentInstructions.trim()) return;
+    if (
+      !newAgentDefinition.trim() &&
+      !newAgentInstructions.trim() &&
+      !newAgentCharacteristics.trim()
+    ) {
+      return;
+    }
+    let characteristics: Record<string, unknown> | undefined;
+    const chTrim = newAgentCharacteristics.trim();
+    if (chTrim) {
+      try {
+        const parsed = JSON.parse(chTrim) as unknown;
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setError("Characteristics must be a JSON object.");
+          return;
+        }
+        characteristics = parsed as Record<string, unknown>;
+      } catch {
+        setError("Invalid JSON in characteristics.");
+        return;
+      }
+    }
     setError("");
     try {
       await admin.createAgent({
         definition: newAgentDefinition.trim() || undefined,
         coreInstructions: newAgentInstructions.trim() || undefined,
+        characteristics,
       });
       setNewAgentDefinition("");
       setNewAgentInstructions("");
+      setNewAgentCharacteristics("");
       flash("Agent created.");
       await reload();
     } catch (err: any) {
@@ -478,7 +552,7 @@ export default function AdminPage() {
     }
   }
 
-  function toggleGroupMember(userId: string) {
+  function toggleGroupMember(userId: number) {
     setNewGroupMembers((prev) =>
       prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId],
     );
@@ -506,7 +580,7 @@ export default function AdminPage() {
     if (!selectedGroup || !addMemberUserId) return;
     setError("");
     try {
-      await admin.addGroupMember(selectedGroup.id, addMemberUserId);
+      await admin.addGroupMember(selectedGroup.id, Number(addMemberUserId));
       setAddMemberUserId("");
       flash("Member added.");
       const m = await admin.getGroupMembers(selectedGroup.id);
@@ -516,7 +590,7 @@ export default function AdminPage() {
     }
   }
 
-  async function handleRemoveMember(userId: string) {
+  async function handleRemoveMember(userId: number) {
     if (!selectedGroup) return;
     try {
       await admin.removeGroupMember(selectedGroup.id, userId);
@@ -611,8 +685,8 @@ export default function AdminPage() {
     setTimeout(() => setSuccess(""), 3000);
   }
 
-  function getUserName(id: string) {
-    return users.find((x) => x.id === id)?.displayName || id;
+  function getUserName(id: number) {
+    return users.find((x) => x.id === id)?.displayName || String(id);
   }
 
   const inputClass =
@@ -705,10 +779,19 @@ export default function AdminPage() {
                 rows={3}
                 className={inputClass}
               />
+              <textarea
+                value={newAgentCharacteristics}
+                onChange={(e) => setNewAgentCharacteristics(e.target.value)}
+                placeholder='Characteristics (optional JSON), e.g. {"tone": "..."}'
+                rows={3}
+                className={inputClass + " font-mono text-xs"}
+              />
               <button
                 onClick={handleCreateAgent}
                 disabled={
-                  !newAgentDefinition.trim() && !newAgentInstructions.trim()
+                  !newAgentDefinition.trim() &&
+                  !newAgentInstructions.trim() &&
+                  !newAgentCharacteristics.trim()
                 }
                 className={btnPrimary}
               >
@@ -875,7 +958,7 @@ export default function AdminPage() {
                                 : "bg-gray-200 text-gray-500"
                             }`}
                           >
-                            {(u.displayName || u.id).charAt(0).toUpperCase()}
+                            {String(u.displayName || u.id).charAt(0).toUpperCase()}
                           </span>
                           {u.displayName || u.id}
                           {selected && <X className="h-3 w-3 ml-0.5" />}
@@ -1036,7 +1119,7 @@ export default function AdminPage() {
                           ({m.userId})
                         </span>
                       </span>
-                      {m.userId !== "SYSTEM" && (
+                      {m.userId !== 1 && (
                         <button
                           onClick={() => handleRemoveMember(m.userId)}
                           className="inline-flex flex-shrink-0 items-center gap-1 rounded-lg bg-red-50 px-2 py-1 sm:px-2.5 text-[11px] font-medium text-red-600 transition hover:bg-red-100"

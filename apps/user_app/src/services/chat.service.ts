@@ -1,4 +1,5 @@
 import { GroupMember } from "@scheduling-agent/database";
+import type { UserId } from "@scheduling-agent/types";
 import { getIO } from "../sockets/server/socketServer";
 import { logger } from "../logger";
 
@@ -8,7 +9,7 @@ const AGENT_SERVICE_URL =
 export class ChatService {
   async broadcastUserMessage(
     groupId: string,
-    userId: string,
+    userId: UserId,
     displayName: string,
     message: string,
     requestId: string,
@@ -32,7 +33,7 @@ export class ChatService {
 
   async proxyToAgentService(
     payload: Record<string, unknown>,
-    userId: string,
+    userId: UserId,
     requestId: string,
     groupId?: string,
     singleChatId?: string,
@@ -75,7 +76,7 @@ export class ChatService {
   }
 
   private emitError(
-    userId: string,
+    userId: UserId,
     requestId: string,
     groupId: string | undefined,
     singleChatId: string | undefined,

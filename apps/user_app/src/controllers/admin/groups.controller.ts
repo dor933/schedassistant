@@ -73,7 +73,11 @@ export class GroupsController {
 
   removeMember = async (req: Request, res: Response) => {
     try {
-      const result = await this.groupsService.removeMember(req.params.groupId as string, req.params.userId as string, req.user!.userId);
+      const result = await this.groupsService.removeMember(
+        req.params.groupId as string,
+        Number(req.params.userId),
+        req.user!.userId,
+      );
       return res.json(result);
     } catch (err: any) {
       if (err.status) return res.status(err.status).json({ error: err.message });

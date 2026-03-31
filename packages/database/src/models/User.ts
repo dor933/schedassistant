@@ -19,7 +19,7 @@ class User
   extends Model<UserAttributes, UserCreationAttributes>
   implements UserAttributes
 {
-  declare id: string;
+  declare id: number;
   declare userName: string;
   declare externalRef: string | null;
   declare displayName: string | null;
@@ -33,9 +33,9 @@ class User
 User.init(
   {
     id: {
-      type: DataTypes.STRING,
+      type: DataTypes.INTEGER,
       primaryKey: true,
-      defaultValue: Sequelize.literal(`('USR-' || gen_random_uuid()::text)`),
+      autoIncrement: true,
     },
     userName: {
       type: DataTypes.STRING,

@@ -1,4 +1,5 @@
 import { User, Role } from "@scheduling-agent/database";
+import type { UserId } from "@scheduling-agent/types";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 
@@ -21,9 +22,9 @@ export class UsersService {
   }
 
   async update(
-    targetId: string,
+    targetId: UserId,
     callerRole: string,
-    callerId: string,
+    callerId: UserId,
     data: { displayName?: string; userIdentity?: Record<string, unknown>; roleId?: string },
   ) {
     const user = await User.findByPk(targetId);
@@ -49,7 +50,7 @@ export class UsersService {
     return user;
   }
 
-  private broadcast(type: string, message: string, data: Record<string, unknown>, actorId: string) {
+  private broadcast(type: string, message: string, data: Record<string, unknown>, actorId: UserId) {
     try {
       getIO().emit("admin:change", { type, message, data, actorId });
     } catch (err) {

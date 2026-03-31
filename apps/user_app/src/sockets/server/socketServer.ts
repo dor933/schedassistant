@@ -41,7 +41,7 @@ export function attachSocketIO(httpServer: HttpServer): Server {
   });
 
   io.on("connection", (socket) => {
-    const userId = socket.data.userId as string;
+    const userId = socket.data.userId as number;
     void socket.join(`user:${userId}`);
 
     // ── user:typing — fan out typing indicator to other group members ──

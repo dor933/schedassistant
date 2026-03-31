@@ -16,8 +16,8 @@ class MessageNotification
 {
   declare id: string;
   declare threadId: string;
-  declare recipientId: string;
-  declare senderId: string | null;
+  declare recipientId: number;
+  declare senderId: number | null;
   declare messageId: string;
   declare preview: string | null;
   declare status: NotificationStatus;
@@ -40,13 +40,13 @@ MessageNotification.init(
       field: "thread_id",
     },
     recipientId: {
-      type: DataTypes.STRING,
+      type: DataTypes.INTEGER,
       allowNull: false,
       field: "recipient_id",
       references: { model: "users", key: "id" },
     },
     senderId: {
-      type: DataTypes.STRING,
+      type: DataTypes.INTEGER,
       allowNull: true,
       field: "sender_id",
       references: { model: "users", key: "id" },

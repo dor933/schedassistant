@@ -25,8 +25,7 @@ export default function LoginPage() {
   const [showRegPw, setShowRegPw] = useState(false);
   const [role, setRole] = useState("");
   const [department, setDepartment] = useState("");
-  const [timezone, setTimezone] = useState("");
-  const [location, setLocation] = useState("");
+  const [locationAndTimezone, setLocationAndTimezone] = useState("");
 
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -66,8 +65,8 @@ export default function LoginPage() {
     const userIdentity: Record<string, string> = {};
     if (role) userIdentity.role = role;
     if (department) userIdentity.department = department;
-    if (timezone) userIdentity.timezone = timezone;
-    if (location) userIdentity.location = location;
+    if (locationAndTimezone.trim())
+      userIdentity.location = locationAndTimezone.trim();
 
     const parsed = registerSchema.safeParse({
       userName: regUserName.trim(),
@@ -323,27 +322,15 @@ export default function LoginPage() {
                   className={inputClass}
                 />
               </div>
-              <div>
+              <div className="col-span-2">
                 <label className="mb-1 block text-xs font-medium text-gray-500">
-                  Timezone
+                  Location &amp; timezone
                 </label>
                 <input
                   type="text"
-                  value={timezone}
-                  onChange={(e) => setTimezone(e.target.value)}
-                  placeholder="e.g. Asia/Jerusalem"
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-500">
-                  Location
-                </label>
-                <input
-                  type="text"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="e.g. Tel Aviv"
+                  value={locationAndTimezone}
+                  onChange={(e) => setLocationAndTimezone(e.target.value)}
+                  placeholder="e.g. Israel (Asia/Jerusalem)"
                   className={inputClass}
                 />
               </div>

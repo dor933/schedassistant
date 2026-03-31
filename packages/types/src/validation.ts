@@ -41,8 +41,8 @@ export const registerSchema = z.object({
     .object({
       role: z.string().optional(),
       department: z.string().optional(),
-      timezone: z.string().optional(),
       location: z.string().optional(),
+      timezone: z.string().optional(),
     })
     .optional(),
 });

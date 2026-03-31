@@ -19,7 +19,7 @@ type ThreadCreationAttributes = Optional<
 
 class Thread extends Model<ThreadAttributes, ThreadCreationAttributes> implements ThreadAttributes {
   declare id: string;
-  declare userId: string | null;
+  declare userId: number | null;
   declare agentId: string | null;
   declare title: string | null;
   declare createdAt: Date;
@@ -40,7 +40,7 @@ Thread.init(
       allowNull: false,
     },
     userId: {
-      type: DataTypes.STRING,
+      type: DataTypes.INTEGER,
       allowNull: true,
       field: "user_id",
       references: { model: "users", key: "id" },

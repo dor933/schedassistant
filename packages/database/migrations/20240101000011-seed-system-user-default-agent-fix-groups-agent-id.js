@@ -16,9 +16,9 @@ module.exports = {
       "$2b$10$ntns1t390KhW5VJCrBKlV.5csFRPG3/RmYVKW8BSJJ1EhoWZ8YMm.";
 
     await queryInterface.sequelize.query(
-      `INSERT INTO users (id, display_name, user_identity, password, created_at, updated_at)
-       VALUES ('SYSTEM', 'System Admin', '{"role":"admin"}'::jsonb, :password, NOW(), NOW())
-       ON CONFLICT (id) DO NOTHING`,
+      `INSERT INTO users (display_name, user_identity, password, created_at, updated_at)
+       SELECT 'System Admin', '{"role":"admin"}'::jsonb, :password, NOW(), NOW()
+       WHERE NOT EXISTS (SELECT 1 FROM users WHERE id = 1)`,
       { replacements: { password: bcryptHash } },
     );
 

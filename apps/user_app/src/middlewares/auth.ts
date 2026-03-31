@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 const JWT_SECRET = process.env.JWT_SECRET ?? "dev-secret-change-in-production";
 
 export interface AuthPayload {
-  userId: string;
+  userId: number;
   displayName: string | null;
   role: string;
 }

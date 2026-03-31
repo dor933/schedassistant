@@ -12,7 +12,7 @@ class SingleChat
   implements SingleChatAttributes
 {
   declare id: string;
-  declare userId: string;
+  declare userId: number;
   declare agentId: string;
   declare modelId: string | null;
   declare title: string | null;
@@ -28,7 +28,7 @@ SingleChat.init(
       primaryKey: true,
     },
     userId: {
-      type: DataTypes.STRING,
+      type: DataTypes.INTEGER,
       allowNull: false,
       field: "user_id",
       references: { model: "users", key: "id" },

@@ -52,10 +52,10 @@ module.exports = {
 
     // 4. Assign admin role to SYSTEM user, user role to everyone else
     await queryInterface.sequelize.query(
-      `UPDATE users SET role_id = '00000000-0000-4000-c000-000000000001' WHERE id = 'SYSTEM'`,
+      `UPDATE users SET role_id = '00000000-0000-4000-c000-000000000001' WHERE id = 1`,
     );
     await queryInterface.sequelize.query(
-      `UPDATE users SET role_id = '00000000-0000-4000-c000-000000000002' WHERE id != 'SYSTEM' AND role_id IS NULL`,
+      `UPDATE users SET role_id = '00000000-0000-4000-c000-000000000002' WHERE id != 1 AND role_id IS NULL`,
     );
   },
 

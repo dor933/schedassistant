@@ -2,6 +2,7 @@ import {
   User, Role, Agent, Group, GroupMember, SingleChat, LLMModel, Vendor,
   ConversationMessage, sequelize,
 } from "@scheduling-agent/database";
+import type { UserId } from "@scheduling-agent/types";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 
@@ -13,9 +14,9 @@ export class GroupsService {
     });
   }
 
-  async create(name: string, agentId: string, memberUserIds: string[], adminUserId: string) {
-    const extraMembers: string[] = Array.isArray(memberUserIds)
-      ? memberUserIds.filter((id: string) => id !== adminUserId)
+  async create(name: string, agentId: string, memberUserIds: UserId[], adminUserId: UserId) {
+    const extraMembers: UserId[] = Array.isArray(memberUserIds)
+      ? memberUserIds.filter((id) => id !== adminUserId)
       : [];
     if (extraMembers.length === 0) {
       throw Object.assign(new Error("At least one user (besides yourself) must be added to the group."), { status: 400 });
@@ -48,7 +49,7 @@ export class GroupsService {
     return group;
   }
 
-  async rename(groupId: string, name: string, actorId: string) {
+  async rename(groupId: string, name: string, actorId: UserId) {
     const group = await Group.findByPk(groupId);
     if (!group) throw Object.assign(new Error("Group not found."), { status: 404 });
     if (name !== undefined) await group.update({ name });
@@ -56,7 +57,7 @@ export class GroupsService {
     return group;
   }
 
-  async remove(groupId: string, actorId: string) {
+  async remove(groupId: string, actorId: UserId) {
     const group = await Group.findByPk(groupId, { attributes: ["id", "name", "agentId"] });
     if (!group) throw Object.assign(new Error("Group not found."), { status: 404 });
 
@@ -86,7 +87,7 @@ export class GroupsService {
     });
   }
 
-  async addMember(groupId: string, userId: string, actorId: string) {
+  async addMember(groupId: string, userId: UserId, actorId: UserId) {
     const [member, created] = await GroupMember.findOrCreate({
       where: { groupId, userId },
       defaults: { groupId, userId },
@@ -107,7 +108,7 @@ export class GroupsService {
     return { member, created };
   }
 
-  async removeMember(groupId: string, targetUserId: string, actorId: string) {
+  async removeMember(groupId: string, targetUserId: UserId, actorId: UserId) {
     const targetUser = await User.findByPk(targetUserId, { attributes: ["roleId"] });
     if (targetUser?.roleId) {
       const targetRole = await Role.findByPk(targetUser.roleId, { attributes: ["name"] });
@@ -126,7 +127,7 @@ export class GroupsService {
     return { deleted };
   }
 
-  async setModel(groupId: string, modelId: string | null, actorId: string) {
+  async setModel(groupId: string, modelId: string | null, actorId: UserId) {
     const group = await Group.findByPk(groupId);
     if (!group) throw Object.assign(new Error("Group not found."), { status: 404 });
 
@@ -158,7 +159,7 @@ export class GroupsService {
     return null;
   }
 
-  private broadcast(type: string, message: string, data: Record<string, unknown>, actorId: string) {
+  private broadcast(type: string, message: string, data: Record<string, unknown>, actorId: UserId) {
     try {
       getIO().emit("admin:change", { type, message, data, actorId });
     } catch (err) {

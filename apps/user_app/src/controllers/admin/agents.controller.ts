@@ -17,7 +17,12 @@ export class AgentsController {
 
   create = async (req: Request, res: Response) => {
     try {
-      const agent = await this.agentsService.create(req.body.definition, req.body.coreInstructions, req.user!.userId);
+      const agent = await this.agentsService.create(
+        req.body.definition,
+        req.body.coreInstructions,
+        req.body.characteristics ?? null,
+        req.user!.userId,
+      );
       return res.status(201).json(agent);
     } catch (err: any) {
       logger.error("POST /agents error:", err);
@@ -31,7 +36,11 @@ export class AgentsController {
         req.params.id as string,
         req.user!.userId,
         req.user!.role,
-        { definition: req.body.definition, coreInstructions: req.body.coreInstructions },
+        {
+          definition: req.body.definition,
+          coreInstructions: req.body.coreInstructions,
+          characteristics: req.body.characteristics,
+        },
       );
       return res.json(agent);
     } catch (err: any) {

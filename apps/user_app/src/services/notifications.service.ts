@@ -1,8 +1,9 @@
 import { Sequelize } from "sequelize";
 import { MessageNotification } from "@scheduling-agent/database";
+import type { UserId } from "@scheduling-agent/types";
 
 export class NotificationsService {
-  async getUnreadCounts(userId: string): Promise<Record<string, number>> {
+  async getUnreadCounts(userId: UserId): Promise<Record<string, number>> {
     const rows = (await MessageNotification.findAll({
       where: { recipientId: userId, status: "delivered" },
       attributes: [

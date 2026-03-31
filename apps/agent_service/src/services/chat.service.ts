@@ -3,7 +3,7 @@ import type { AgentChatJobData } from "../queues/agentChat.bull";
 
 export class ChatService {
   async enqueueChat(data: {
-    userId: string;
+    userId: number;
     message: string;
     requestId?: string;
     displayName?: string;

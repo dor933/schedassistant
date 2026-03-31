@@ -16,7 +16,7 @@ import {
 import { getChatSocket, disconnectChatSocket } from "../sockets/chatSocket";
 
 interface User {
-  id: string;
+  id: number;
   displayName: string | null;
   role: string;
 }

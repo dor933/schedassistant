@@ -23,7 +23,7 @@ export const agentChatQueueEvents = new QueueEvents(AGENT_CHAT_QUEUE_NAME, {
 });
 
 export type AgentChatJobData = {
-  userId: string;
+  userId: number;
   message: string;
   requestId: string;
   displayName?: string;
