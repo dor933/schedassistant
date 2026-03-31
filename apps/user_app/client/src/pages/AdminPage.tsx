@@ -113,8 +113,8 @@ function AgentCard({
     "w-full rounded-xl border border-gray-200 bg-gray-50/80 px-3 py-2 text-xs transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10";
 
   return (
-    <div className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md">
-      <p className="font-mono text-[10px] text-gray-400 mb-2">{agent.id}</p>
+    <div className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0">
+      <p className="mb-2 break-all font-mono text-[10px] text-gray-400">{agent.id}</p>
       {editing ? (
         <div className="space-y-3">
           <div>
@@ -286,10 +286,10 @@ function UserCard({
     "w-full rounded-xl border border-gray-200 bg-gray-50/80 px-3 py-2 text-xs transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10";
 
   return (
-    <div className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md">
+    <div className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0">
       {editing ? (
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-2">
             <div>
               <label className="mb-1 block text-[10px] font-medium text-gray-500">
                 Display Name
@@ -318,7 +318,7 @@ function UserCard({
               </div>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-2">
             <div>
               <label className="mb-1 block text-[10px] font-medium text-gray-500">
                 Role
@@ -374,17 +374,17 @@ function UserCard({
           </div>
         </div>
       ) : (
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 text-xs font-bold text-gray-600">
+        <div className="flex min-w-0 items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 text-xs font-bold text-gray-600">
                 {(u.displayName || "U").charAt(0).toUpperCase()}
               </div>
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm font-semibold text-gray-900">
                   {u.displayName || "\u2014"}
                 </p>
-                <p className="font-mono text-[10px] text-gray-400">{u.id}</p>
+                <p className="break-all font-mono text-[10px] text-gray-400">{u.id}</p>
               </div>
               {u.role === "super_admin" && (
                 <span className="ml-1 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-600">
@@ -399,7 +399,7 @@ function UserCard({
             </div>
             {u.userIdentity &&
               Object.keys(u.userIdentity as object).length > 0 && (
-                <pre className="mt-2 max-h-40 max-w-full overflow-auto rounded-lg border border-gray-100 bg-gray-50/90 p-2.5 text-left text-[10px] leading-relaxed break-words whitespace-pre-wrap font-mono text-gray-700">
+                <pre className="mt-2 max-h-40 min-w-0 max-w-full overflow-auto rounded-lg border border-gray-100 bg-gray-50/90 p-2.5 text-left text-[10px] leading-relaxed break-words whitespace-pre-wrap font-mono text-gray-700">
                   {formatUserIdentityPreview(
                     u.userIdentity as Record<string, unknown>,
                   )}
@@ -409,7 +409,7 @@ function UserCard({
           {canEdit && (
             <button
               onClick={() => setEditing(true)}
-              className="rounded-xl bg-gray-100 p-2 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700"
+              className="flex-shrink-0 rounded-xl bg-gray-100 p-2 text-gray-500 transition hover:bg-gray-200 hover:text-gray-700"
             >
               <Pencil className="h-3 w-3" />
             </button>
@@ -701,10 +701,10 @@ export default function AdminPage() {
   if (!user || user.role !== "admin" && user.role !== "super_admin") return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50/30">
+    <div className="min-h-screen w-full overflow-x-hidden bg-gradient-to-br from-slate-50 via-white to-indigo-50/30">
       <header className="sticky top-0 z-10 border-b border-gray-200/60 bg-white/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6 sm:py-4">
-          <div>
+        <div className="mx-auto flex min-w-0 max-w-6xl items-center justify-between gap-2 px-4 py-3 sm:px-6 sm:py-4">
+          <div className="min-w-0">
             <h1 className="text-base sm:text-lg font-bold text-gray-900 tracking-tight">
               Admin Panel
             </h1>
@@ -712,7 +712,7 @@ export default function AdminPage() {
               Manage agents, groups, and users
             </p>
           </div>
-          <div className="flex items-center gap-1.5 sm:gap-2.5">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2.5">
             <button
               onClick={() => navigate("/")}
               className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-2.5 py-2 sm:px-3.5 text-sm font-medium text-gray-700 transition-all duration-200 hover:bg-gray-50 hover:shadow-sm active:scale-[0.98]"
@@ -731,7 +731,7 @@ export default function AdminPage() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-3 py-5 sm:px-6 sm:py-8 space-y-5 sm:space-y-8">
+      <main className="mx-auto min-w-0 max-w-6xl px-3 py-5 sm:px-6 sm:py-8 space-y-5 sm:space-y-8">
         {error && (
           <div className="flex items-center gap-2.5 sm:gap-3 rounded-2xl bg-red-50 px-4 py-3 sm:px-5 sm:py-4 text-sm text-red-700 ring-1 ring-red-100 animate-slide-up">
             <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-500" />
@@ -751,7 +751,7 @@ export default function AdminPage() {
           </div>
         )}
 
-        <div className="grid gap-5 sm:gap-8 lg:grid-cols-2">
+        <div className="grid min-w-0 gap-5 sm:gap-8 lg:grid-cols-2">
           {/* Agents */}
           <div className="rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
@@ -991,14 +991,14 @@ export default function AdminPage() {
               {groups.map((g) => (
                 <div
                   key={g.id}
-                  className={`flex items-center rounded-xl px-3.5 py-2.5 text-sm transition-all duration-150 ${
+                  className={`flex min-w-0 items-center rounded-xl px-3.5 py-2.5 text-sm transition-all duration-150 ${
                     selectedGroup?.id === g.id
                       ? "bg-gradient-to-r from-indigo-50 to-blue-50 font-medium text-indigo-700 ring-1 ring-indigo-100"
                       : "bg-gray-50 text-gray-700 hover:bg-white hover:shadow-sm hover:ring-1 hover:ring-gray-100"
                   }`}
                 >
                   {editingGroupId === g.id ? (
-                    <div className="flex flex-1 items-center gap-2">
+                    <div className="flex min-w-0 flex-1 items-center gap-2">
                       <input
                         autoFocus
                         value={editingGroupName}
@@ -1026,7 +1026,7 @@ export default function AdminPage() {
                     <>
                       <button
                         onClick={() => setSelectedGroup(g)}
-                        className="flex-1 text-left truncate"
+                        className="min-w-0 flex-1 text-left truncate"
                       >
                         {g.name}
                       </button>
