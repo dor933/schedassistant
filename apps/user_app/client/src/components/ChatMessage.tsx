@@ -80,6 +80,7 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
     <Stack
       direction="row"
       className="animate-slide-up"
+      dir="auto"
       sx={{
         justifyContent: isUser && !isOtherUser ? "flex-end" : "flex-start",
       }}
@@ -92,13 +93,12 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
           sx={{ mr: 1.5, flexShrink: 0 }}
         >
           <Box
-            className={`flex h-8 w-8 items-center justify-center rounded-xl shadow-sm ring-1 ${
-              isError
+            className={`flex h-8 w-8 items-center justify-center rounded-xl shadow-sm ring-1 ${isError
                 ? "bg-red-100 text-red-500 ring-red-200/60"
                 : vendorSlug
                   ? vendorAvatarColors[vendorSlug] ?? defaultAvatarColor
                   : defaultAvatarColor
-            }`}
+              }`}
           >
             {isError ? (
               <AlertTriangle className="h-4 w-4" />
@@ -187,11 +187,10 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
             <Box component="p" className="mb-1 mr-1 text-right text-[11px] font-semibold text-gray-400">You</Box>
           )}
           <Box
-            className={`text-sm ${
-              isUser
+            className={`text-sm ${isUser
                 ? "rounded-2xl rounded-tr-md bg-gradient-to-br from-blue-600 to-indigo-600 px-4 py-3 text-white shadow-md shadow-blue-200/50"
                 : "rounded-2xl rounded-tl-md bg-white px-4 py-3 text-gray-800 shadow-glass ring-1 ring-gray-950/[0.04]"
-            }`}
+              }`}
             sx={{ minWidth: 0, overflow: "hidden" }}
           >
             {renderContent(`chat-prose ${isUser ? "chat-prose-user" : ""}`)}

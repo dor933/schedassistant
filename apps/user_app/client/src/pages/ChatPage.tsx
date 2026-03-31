@@ -1031,8 +1031,8 @@ export default function ChatPage() {
                   }
                 }}
                 className={`flex-shrink-0 rounded-xl p-2 transition-all duration-200 ${searchOpen
-                    ? "bg-indigo-50 text-indigo-600 ring-1 ring-indigo-200/60"
-                    : "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                  ? "bg-indigo-50 text-indigo-600 ring-1 ring-indigo-200/60"
+                  : "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
                   }`}
                 title="Search in chat"
               >
@@ -1273,7 +1273,6 @@ export default function ChatPage() {
                     key={absIdx}
                     data-msg-index={absIdx}
                     // --- 3. NEW LOGIC: dir="auto" handles native Hebrew RTL logic while keeping English LTR ---
-                    dir="auto"
                     className={
                       isSearchMatch
                         ? "search-match-highlight rounded-2xl transition-colors duration-300"
@@ -1302,12 +1301,12 @@ export default function ChatPage() {
                 <Stack direction="row" className="animate-fade-in">
                   <Box
                     className={`mr-3 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${activeConv?.model?.vendor?.slug === "openai"
-                        ? "bg-emerald-50 text-emerald-700 ring-emerald-200/60"
-                        : activeConv?.model?.vendor?.slug === "anthropic"
-                          ? "bg-amber-50 text-amber-700 ring-amber-200/60"
-                          : activeConv?.model?.vendor?.slug === "google"
-                            ? "bg-blue-50 text-blue-700 ring-blue-200/60"
-                            : "bg-gray-100 text-gray-500 ring-gray-200/60"
+                      ? "bg-emerald-50 text-emerald-700 ring-emerald-200/60"
+                      : activeConv?.model?.vendor?.slug === "anthropic"
+                        ? "bg-amber-50 text-amber-700 ring-amber-200/60"
+                        : activeConv?.model?.vendor?.slug === "google"
+                          ? "bg-blue-50 text-blue-700 ring-blue-200/60"
+                          : "bg-gray-100 text-gray-500 ring-gray-200/60"
                       }`}
                   >
                     <VendorIcon slug={activeConv?.model?.vendor?.slug ?? ""} />
@@ -1427,12 +1426,12 @@ export default function ChatPage() {
                 >
                   <Box
                     className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${activeConv.model?.vendor?.slug === "openai"
-                        ? "bg-emerald-50 text-emerald-600 ring-emerald-200/60"
-                        : activeConv.model?.vendor?.slug === "anthropic"
-                          ? "bg-amber-50 text-amber-600 ring-amber-200/60"
-                          : activeConv.model?.vendor?.slug === "google"
-                            ? "bg-blue-50 text-blue-600 ring-blue-200/60"
-                            : "bg-violet-50 text-violet-600 ring-violet-200/60"
+                      ? "bg-emerald-50 text-emerald-600 ring-emerald-200/60"
+                      : activeConv.model?.vendor?.slug === "anthropic"
+                        ? "bg-amber-50 text-amber-600 ring-amber-200/60"
+                        : activeConv.model?.vendor?.slug === "google"
+                          ? "bg-blue-50 text-blue-600 ring-blue-200/60"
+                          : "bg-violet-50 text-violet-600 ring-violet-200/60"
                       }`}
                   >
                     {activeConv.model?.vendor?.slug ? (
@@ -1485,8 +1484,8 @@ export default function ChatPage() {
                     >
                       <Box
                         className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold shadow-sm ring-1 ring-gray-950/[0.04] ${isCurrentUser
-                            ? "bg-gradient-to-br from-indigo-100 to-blue-100 text-indigo-600"
-                            : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
+                          ? "bg-gradient-to-br from-indigo-100 to-blue-100 text-indigo-600"
+                          : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
                           }`}
                       >
                         {name.charAt(0).toUpperCase()}
