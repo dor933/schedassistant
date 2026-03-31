@@ -7,7 +7,8 @@ import { persistSummarizationResult } from "../../../rag/sessionSummaryChunksWri
 import { embedText } from "../../../rag/embeddings";
 import { getLangfuseCallbackHandler, observeWithContext } from "../../../langfuse";
 import { logger } from "../../../logger";
-import { EmbeddingProvider, resolveEmbeddingProviderApiKey } from "../../../rag/embeddingProvider";
+import { resolveEmbeddingProviderApiKey } from "../../../rag/embeddingProvider";
+import { EmbeddingProvider } from "../../../types/providers";
 
 /**
  * Zod schema for the structured output returned by the LLM during

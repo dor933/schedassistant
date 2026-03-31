@@ -1,8 +1,7 @@
 import { Vendor } from "@scheduling-agent/database";
 
 /** Extend when adding non-OpenAI embedding backends. */
-export type EmbeddingProvider = "openai";
-
+import { EmbeddingProvider } from "../types/providers";
 /**
  * Resolves the API key for an embedding provider (DB vendor row + env fallbacks).
  * Independent of the user-facing chat model (Anthropic, Google, etc.).

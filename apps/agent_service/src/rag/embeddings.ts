@@ -1,12 +1,12 @@
 import { OpenAIEmbeddings } from "@langchain/openai";
 
 import {
-  type EmbeddingProvider,
   resolveEmbeddingProviderApiKey,
 } from "./embeddingProvider";
+import { EmbeddingProvider } from "../types/providers";
 
 /** Which backend `getEmbeddingModel` uses; swap when multi-provider embeddings are wired. */
-const EMBEDDING_PROVIDER: EmbeddingProvider = "openai";
+const EMBEDDING_PROVIDER: EmbeddingProvider = process.env.EMBEDDING_PROVIDER as EmbeddingProvider;
 
 /**
  * Shared OpenAI embedding model instance.
@@ -20,7 +20,7 @@ let embeddingModel: OpenAIEmbeddings | null = null;
 async function getEmbeddingModel(): Promise<OpenAIEmbeddings> {
   if (embeddingModel) return embeddingModel;
 
-  const apiKey = await resolveEmbeddingProviderApiKey(EMBEDDING_PROVIDER);
+  const apiKey = await resolveEmbeddingProviderApiKey(EMBEDDING_PROVIDER as EmbeddingProvider);
   if (!apiKey) {
     throw new Error(
       "OPENAI_EMBEDDINGS_NO_KEY: Set a valid OpenAI API key for vendor \"openai\" in Admin, or OPENAI_API_KEY in agent_service. Embeddings are required for episodic RAG and are independent of the chat model (e.g. Claude).",
