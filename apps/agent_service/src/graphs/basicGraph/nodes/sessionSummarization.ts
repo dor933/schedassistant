@@ -7,7 +7,7 @@ import { persistSummarizationResult } from "../../../rag/sessionSummaryChunksWri
 import { embedText } from "../../../rag/embeddings";
 import { getLangfuseCallbackHandler, observeWithContext } from "../../../langfuse";
 import { logger } from "../../../logger";
-import { Vendor } from "@scheduling-agent/database";
+import { EmbeddingProvider, resolveEmbeddingProviderApiKey } from "../../../rag/embeddingProvider";
 
 /**
  * Zod schema for the structured output returned by the LLM during
@@ -32,11 +32,11 @@ let cachedLlm: ChatOpenAI | null = null;
 
 async function getSummarizationLlm(): Promise<ChatOpenAI> {
   if (cachedLlm) return cachedLlm;
-  const vendor = await Vendor.findOne({ where: { slug: "openai" }, attributes: ["apiKey"] });
+  const apiKey = await resolveEmbeddingProviderApiKey(process.env.EMBEDDING_PROVIDER as EmbeddingProvider);
   cachedLlm = new ChatOpenAI({
     modelName: "gpt-4o",
     temperature: 0,
-    apiKey: vendor?.apiKey ?? undefined,
+    apiKey,
   });
   return cachedLlm;
 }

@@ -106,10 +106,20 @@ export async function buildContext(
   );
 
   // ── 3. Episodic snippets (pgvector, scoped by agentId) ────────────
+  // Uses OpenAI embeddings only — not the chat model (Anthropic/Google/OpenAI chat keys are separate).
   let episodicSnippets: string[] = [];
   if (userInput) {
-    const queryEmbedding = await embedText(userInput);
-    episodicSnippets = await retrieveEpisodicMemory(agentId, queryEmbedding);
+    try {
+      const queryEmbedding = await embedText(userInput);
+      episodicSnippets = await retrieveEpisodicMemory(agentId, queryEmbedding);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn("Episodic memory skipped (OpenAI embedding failed or missing key)", {
+        threadId,
+        agentId,
+        error: message,
+      });
+    }
   }
 
   // ── 4. Recent session summaries (last 48h, max 2, scoped by agentId) ──
