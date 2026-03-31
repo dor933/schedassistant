@@ -9,7 +9,7 @@ COPY package.json tsconfig.base.json ./
 COPY packages/ ./packages/
 COPY apps/agent_service/ ./apps/agent_service/
 # Migration 20240101000008 seeds agents from ../../../apps/coreInstructions.json → /app/apps/coreInstructions.json
-COPY apps/coreInstructions.json ./apps/coreInstructions.json
+COPY apps/core_instructions/projectManager.json ./apps/core_instructions/projectManager.json
 
 
 
