@@ -57,6 +57,31 @@ interface Message {
   _absIndex?: number;
 }
 
+// --- NEW HELPER: Safely extracts thoughts and texts from JSON strings ---
+function parseContent(content: string): { thinking: string | null; text: string } {
+  try {
+    const parsed = JSON.parse(content);
+    if (Array.isArray(parsed)) {
+      let thinking = "";
+      let text = "";
+      parsed.forEach((block: any) => {
+        if (block.type === "thinking" && block.thinking) {
+          thinking += block.thinking + "\n";
+        } else if (block.type === "text" && block.text) {
+          text += block.text;
+        }
+      });
+      // Ensure we actually got valid parsed blocks before returning
+      if (thinking || text) {
+        return { thinking: thinking.trim(), text: text.trim() || content };
+      }
+    }
+  } catch {
+    // Fails silently if the content is just a normal string
+  }
+  return { thinking: null, text: content };
+}
+
 export default function ChatPage() {
   const { user, conversations, setConversations, logout } = useAuth();
   const { toast } = useToast();
@@ -97,10 +122,11 @@ export default function ChatPage() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searchIdx, setSearchIdx] = useState(-1);
   const [searching, setSearching] = useState(false);
+
   useEffect(() => {
     getUnreadCounts()
       .then(setUnreadCounts)
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -212,7 +238,7 @@ export default function ChatPage() {
           // No history available
         }
       })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => {
         if (!cancelled) setLoadingHistory(false);
       });
@@ -675,12 +701,12 @@ export default function ChatPage() {
 
     const scope = activeConv
       ? {
-          ...(isGroup
-            ? { groupId: activeConv.id }
-            : { singleChatId: activeConv.id }),
-          ...(activeConv.agentId ? { agentId: activeConv.agentId } : {}),
-          mentionsAgent,
-        }
+        ...(isGroup
+          ? { groupId: activeConv.id }
+          : { singleChatId: activeConv.id }),
+        ...(activeConv.agentId ? { agentId: activeConv.agentId } : {}),
+        mentionsAgent,
+      }
       : undefined;
 
     if (isGroup && !mentionsAgent) {
@@ -960,7 +986,7 @@ export default function ChatPage() {
             sx={{ flexShrink: 0, gap: 1 }}
           >
             {activeConv &&
-            (user?.role === "admin" || user?.role === "super_admin") ? (
+              (user?.role === "admin" || user?.role === "super_admin") ? (
               <ModelSelector
                 currentModel={activeConv.model}
                 conversationType={activeConv.type}
@@ -1004,11 +1030,10 @@ export default function ChatPage() {
                     setSearchIdx(-1);
                   }
                 }}
-                className={`flex-shrink-0 rounded-xl p-2 transition-all duration-200 ${
-                  searchOpen
+                className={`flex-shrink-0 rounded-xl p-2 transition-all duration-200 ${searchOpen
                     ? "bg-indigo-50 text-indigo-600 ring-1 ring-indigo-200/60"
                     : "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                }`}
+                  }`}
                 title="Search in chat"
               >
                 <Search className="h-4 w-4" />
@@ -1233,19 +1258,32 @@ export default function ChatPage() {
                 const absIdx = msg._absIndex ?? i;
                 const isSearchMatch =
                   searchQuery && searchResults.some((r) => r.index === absIdx);
+
+                // --- 1. NEW LOGIC: Extract thoughts and text safely ---
+                const { thinking, text } = parseContent(msg.content);
+
+                // --- 2. NEW LOGIC: Format thoughts nicely into Markdown if they exist ---
+                // We use standard Markdown blockquotes because almost all Markdown React parsers support them.
+                const formattedContent = thinking
+                  ? `> **💭 Agent Thoughts:**\n> \n> ${thinking.replace(/\n/g, '\n> ')}\n\n---\n\n${text}`
+                  : text;
+
                 return (
                   <Box
                     key={absIdx}
                     data-msg-index={absIdx}
+                    // --- 3. NEW LOGIC: dir="auto" handles native Hebrew RTL logic while keeping English LTR ---
+                    dir="auto"
                     className={
                       isSearchMatch
                         ? "search-match-highlight rounded-2xl transition-colors duration-300"
                         : ""
                     }
+                    sx={{ textAlign: 'start' }} // Ensures standard flex/text layouts respect dir="auto"
                   >
                     <ChatMessage
                       role={msg.role}
-                      content={msg.content}
+                      content={formattedContent}
                       senderName={msg.senderName}
                       vendorSlug={
                         msg.vendorSlug ?? activeConv?.model?.vendor?.slug
@@ -1263,15 +1301,14 @@ export default function ChatPage() {
               {(sending || agentIsTyping) && (
                 <Stack direction="row" className="animate-fade-in">
                   <Box
-                    className={`mr-3 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${
-                      activeConv?.model?.vendor?.slug === "openai"
+                    className={`mr-3 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${activeConv?.model?.vendor?.slug === "openai"
                         ? "bg-emerald-50 text-emerald-700 ring-emerald-200/60"
                         : activeConv?.model?.vendor?.slug === "anthropic"
                           ? "bg-amber-50 text-amber-700 ring-amber-200/60"
                           : activeConv?.model?.vendor?.slug === "google"
                             ? "bg-blue-50 text-blue-700 ring-blue-200/60"
                             : "bg-gray-100 text-gray-500 ring-gray-200/60"
-                    }`}
+                      }`}
                   >
                     <VendorIcon slug={activeConv?.model?.vendor?.slug ?? ""} />
                   </Box>
@@ -1389,15 +1426,14 @@ export default function ChatPage() {
                   sx={{ p: 1.5 }}
                 >
                   <Box
-                    className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${
-                      activeConv.model?.vendor?.slug === "openai"
+                    className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${activeConv.model?.vendor?.slug === "openai"
                         ? "bg-emerald-50 text-emerald-600 ring-emerald-200/60"
                         : activeConv.model?.vendor?.slug === "anthropic"
                           ? "bg-amber-50 text-amber-600 ring-amber-200/60"
                           : activeConv.model?.vendor?.slug === "google"
                             ? "bg-blue-50 text-blue-600 ring-blue-200/60"
                             : "bg-violet-50 text-violet-600 ring-violet-200/60"
-                    }`}
+                      }`}
                   >
                     {activeConv.model?.vendor?.slug ? (
                       <VendorIcon slug={activeConv.model.vendor.slug} />
@@ -1448,11 +1484,10 @@ export default function ChatPage() {
                       sx={{ px: 1.5, py: 1.25 }}
                     >
                       <Box
-                        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold shadow-sm ring-1 ring-gray-950/[0.04] ${
-                          isCurrentUser
+                        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold shadow-sm ring-1 ring-gray-950/[0.04] ${isCurrentUser
                             ? "bg-gradient-to-br from-indigo-100 to-blue-100 text-indigo-600"
                             : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
-                        }`}
+                          }`}
                       >
                         {name.charAt(0).toUpperCase()}
                       </Box>
