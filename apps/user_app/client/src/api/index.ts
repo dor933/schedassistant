@@ -293,7 +293,7 @@ export interface AdminAgent {
   coreInstructions: string | null;
   /** Persona traits (tone, etc.) — rendered as "Your Characteristics" in the agent context. */
   characteristics: Record<string, unknown> | null;
-  /** Number of groups using this agent (same agent can back multiple groups). */
+  /** Number of groups using this agent (an agent may back multiple groups). */
   groupCount: number;
   editable: boolean;
   createdAt: string;

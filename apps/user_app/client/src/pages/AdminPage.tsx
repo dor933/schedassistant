@@ -48,7 +48,7 @@ function AgentCard({
   onSaved: () => void;
 }) {
   const { toast } = useToast();
-  const isAttached = agent.groupCount > 0;
+  const groupCount = agent.groupCount ?? 0;
   const [editing, setEditing] = useState(false);
   const [definition, setDefinition] = useState(agent.definition ?? "");
   const [instructions, setInstructions] = useState(
@@ -179,13 +179,13 @@ function AgentCard({
               {agent.definition && (
             <p className="mb-1 text-sm font-semibold text-gray-900">
               {agent.definition}
-              {isAttached ? (
+              {groupCount > 0 ? (
                 <span className="ml-2 rounded-full bg-indigo-50 px-2 py-0.5 text-[9px] font-semibold text-indigo-500 uppercase">
-                  group
+                  {groupCount} group{groupCount === 1 ? "" : "s"}
                 </span>
               ) : (
                 <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-semibold text-emerald-600 uppercase">
-                  available
+                  no groups yet
                 </span>
               )}
             </p>
@@ -471,8 +471,7 @@ export default function AdminPage() {
       setModels(m);
       setVendors(v);
       setRoles(r);
-      const unattached = a.filter((x) => x.groupCount === 0);
-      if (unattached.length > 0 && !newGroupAgentId) setNewGroupAgentId(unattached[0].id);
+      if (a.length > 0 && !newGroupAgentId) setNewGroupAgentId(a[0].id);
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
     } catch {
       setError("Failed to load data.");
@@ -878,9 +877,7 @@ export default function AdminPage() {
                       onClick={() => setAgentDropdownOpen(false)}
                     />
                     <div className="absolute left-0 right-0 z-20 mt-1.5 max-h-52 overflow-y-auto rounded-xl border border-gray-200/80 bg-white/95 p-1 shadow-glass-lg backdrop-blur-xl">
-                      {agents
-                        .filter((a) => a.groupCount === 0)
-                        .map((a) => {
+                      {agents.map((a) => {
                           const isSelected = a.id === newGroupAgentId;
                           return (
                             <button
@@ -919,9 +916,9 @@ export default function AdminPage() {
                             </button>
                           );
                         })}
-                      {agents.filter((a) => a.groupCount === 0).length === 0 && (
+                      {agents.length === 0 && (
                         <p className="py-3 text-center text-xs text-gray-400">
-                          No unattached agents available. Create one first.
+                          No agents yet. Create an agent first.
                         </p>
                       )}
                     </div>
