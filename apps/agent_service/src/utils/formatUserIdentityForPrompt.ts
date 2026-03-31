@@ -1,37 +1,35 @@
 import type { UserIdentity } from "@scheduling-agent/types";
 
 /**
- * Renders `users.user_identity` JSON for LLM system prompts. Nested objects
- * are flattened with dotted keys so values are never `[object Object]`.
+ * Renders `users.user_identity` for LLM system prompts.
+ * Uses pretty-printed JSON so nested structures never appear as `[object Object]`.
  */
 export function formatUserIdentityForPrompt(
   identity: UserIdentity | null | undefined,
 ): string {
-  if (!identity || typeof identity !== "object") return "";
+  if (identity == null) return "";
 
-  const lines: string[] = [];
+  let data: unknown = identity;
 
-  const walk = (obj: Record<string, unknown>, prefix: string) => {
-    for (const [k, v] of Object.entries(obj)) {
-      if (v === undefined) continue;
-      const path = prefix ? `${prefix}.${k}` : k;
-      if (v === null) {
-        lines.push(`- **${path}:** null`);
-        continue;
-      }
-      if (typeof v === "object" && !Array.isArray(v)) {
-        walk(v as Record<string, unknown>, path);
-      } else {
-        const display = Array.isArray(v)
-          ? JSON.stringify(v)
-          : typeof v === "object"
-            ? JSON.stringify(v)
-            : String(v);
-        lines.push(`- **${path}:** ${display}`);
-      }
+  if (typeof data === "string") {
+    const t = data.trim();
+    if (!t) return "";
+    try {
+      data = JSON.parse(t) as unknown;
+    } catch {
+      return `- **profile:** ${t}`;
     }
-  };
+  }
 
-  walk(identity as Record<string, unknown>, "");
-  return lines.join("\n");
+  if (typeof data !== "object" || data === null) {
+    return `- **profile:** ${String(data)}`;
+  }
+
+  try {
+    const json = JSON.stringify(data, null, 2);
+    if (!json || json === "{}") return "";
+    return ["```json", json, "```"].join("\n");
+  } catch {
+    return "- **profile:** (could not serialize — possibly circular data)";
+  }
 }
