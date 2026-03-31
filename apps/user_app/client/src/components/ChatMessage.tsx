@@ -59,10 +59,15 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
   const isOtherUser = isUser && !!senderName;
   const isSelfInGroup = isUser && !isOtherUser && isGroup;
 
+  // התיקון כאן: הוספנו dir="auto" ויישור אדפטיבי (start) רק לטקסט
   const renderContent = (className?: string) => {
     if (highlightText) {
       return (
-        <Box className={className} sx={{ overflowWrap: "break-word", wordBreak: "break-word", minWidth: 0 }}>
+        <Box 
+          dir="auto" 
+          className={className} 
+          sx={{ overflowWrap: "break-word", wordBreak: "break-word", minWidth: 0, textAlign: "start" }}
+        >
           <p className="whitespace-pre-wrap">
             <HighlightedText text={content} term={highlightText} />
           </p>
@@ -70,7 +75,11 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
       );
     }
     return (
-      <Box className={className} sx={{ overflowWrap: "break-word", wordBreak: "break-word", minWidth: 0 }}>
+      <Box 
+        dir="auto" 
+        className={className} 
+        sx={{ overflowWrap: "break-word", wordBreak: "break-word", minWidth: 0, textAlign: "start" }}
+      >
         <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
       </Box>
     );
@@ -80,7 +89,7 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
     <Stack
       direction="row"
       className="animate-slide-up"
-      dir="auto"
+      // הערה: הורדנו מפה את ה dir="auto" כדי לא להפוך את כיוון ה-UI כולו!
       sx={{
         justifyContent: isUser && !isOtherUser ? "flex-end" : "flex-start",
       }}
@@ -94,10 +103,10 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
         >
           <Box
             className={`flex h-8 w-8 items-center justify-center rounded-xl shadow-sm ring-1 ${isError
-                ? "bg-red-100 text-red-500 ring-red-200/60"
-                : vendorSlug
-                  ? vendorAvatarColors[vendorSlug] ?? defaultAvatarColor
-                  : defaultAvatarColor
+              ? "bg-red-100 text-red-500 ring-red-200/60"
+              : vendorSlug
+                ? vendorAvatarColors[vendorSlug] ?? defaultAvatarColor
+                : defaultAvatarColor
               }`}
           >
             {isError ? (
@@ -164,11 +173,13 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
           </Stack>
           <Box
             component="p"
+            dir="auto"
             sx={{
               whiteSpace: "pre-wrap",
               overflowWrap: "break-word",
               wordBreak: "break-word",
               minWidth: 0,
+              textAlign: "start"
             }}
           >
             {content.replace(/^Error:\s*/, "")}
@@ -188,8 +199,8 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
           )}
           <Box
             className={`text-sm ${isUser
-                ? "rounded-2xl rounded-tr-md bg-gradient-to-br from-blue-600 to-indigo-600 px-4 py-3 text-white shadow-md shadow-blue-200/50"
-                : "rounded-2xl rounded-tl-md bg-white px-4 py-3 text-gray-800 shadow-glass ring-1 ring-gray-950/[0.04]"
+              ? "rounded-2xl rounded-tr-md bg-gradient-to-br from-blue-600 to-indigo-600 px-4 py-3 text-white shadow-md shadow-blue-200/50"
+              : "rounded-2xl rounded-tl-md bg-white px-4 py-3 text-gray-800 shadow-glass ring-1 ring-gray-950/[0.04]"
               }`}
             sx={{ minWidth: 0, overflow: "hidden" }}
           >
