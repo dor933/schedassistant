@@ -1,4 +1,6 @@
-const BASE = "/api";
+import { APP_URL_PREFIX } from "../constants";
+
+const BASE = `${APP_URL_PREFIX}/api`;
 
 function getToken(): string | null {
   return localStorage.getItem("token");

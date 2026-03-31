@@ -1,4 +1,5 @@
 import { io, type Socket } from "socket.io-client";
+import { APP_URL_PREFIX } from "../constants";
 
 /** Mirrors the payload emitted by user_app server on `chat:reply`. */
 export type ChatReplyPayload =
@@ -40,6 +41,7 @@ export function getChatSocket(token: string): Socket {
   }
 
   socket = io({
+    path: `${APP_URL_PREFIX}/socket.io`,
     auth: { token },
     transports: ["websocket", "polling"],
     autoConnect: true,
