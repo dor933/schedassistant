@@ -18,6 +18,45 @@ import { formatUserIdentityForPrompt } from "../../../utils/formatUserIdentityFo
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 
+/** Seeded executive accounts (see `20240101000026-seed-executive-users.js`). */
+const GRAHAMY_EXECUTIVE_USER_NAMES = ["dor", "dan", "maor"] as const;
+
+/**
+ * Loads Dor, Dan, and Maor from the DB and formats a fixed-order section for the system prompt.
+ */
+async function loadGrahamyExecutivesSection(): Promise<string> {
+  try {
+    const users = await User.findAll({
+      where: { userName: { [Op.in]: [...GRAHAMY_EXECUTIVE_USER_NAMES] } },
+      attributes: ["id", "userName", "displayName", "userIdentity"],
+    });
+    const byUserName = new Map(users.map((u) => [u.userName, u]));
+    const blocks: string[] = [];
+
+    for (const userName of GRAHAMY_EXECUTIVE_USER_NAMES) {
+      const u = byUserName.get(userName);
+      if (!u) continue;
+      const label = u.displayName?.trim() || userName;
+      blocks.push(`### ${label}`);
+      blocks.push(`- **userName:** ${u.userName}`);
+      blocks.push(`- **userId:** ${u.id}`);
+      const profile = formatUserIdentityForPrompt(u.userIdentity);
+      if (profile) {
+        blocks.push(profile);
+      }
+      blocks.push("");
+    }
+
+    if (blocks.length === 0) return "";
+    return ["## Grahamy executives", "", ...blocks].join("\n");
+  } catch (err) {
+    logger.warn("Grahamy executives section skipped", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return "";
+  }
+}
+
 /**
  * Builds the complete LLM context for one conversation turn.
  *
@@ -135,11 +174,14 @@ export async function buildContext(
     { excludeThreadId: threadId },
   );
 
+  const grahamyExecutivesSection = await loadGrahamyExecutivesSection();
+
   // ── 5. Assemble system prompt ──────────────────────────────────────
   const systemPrompt = formatSystemPrompt(
     agentDefinition,
     agentCoreInstructions,
     agentCharacteristics,
+    grahamyExecutivesSection,
     coreMemory,
     checkpointLog.body,
     conversationLog.body,
@@ -222,6 +264,7 @@ function formatSystemPrompt(
   agentDefinition: string | null,
   agentCoreInstructions: string | null,
   agentCharacteristics: Record<string, unknown> | null,
+  grahamyExecutivesSection: string,
   coreMemory: string,
   checkpointLogBody: string,
   conversationLogBody: string,
@@ -246,6 +289,12 @@ function formatSystemPrompt(
   const charSection = formatCharacteristicsSection(agentCharacteristics);
   if (charSection) {
     sections.push(charSection);
+  }
+
+  const execTrim = grahamyExecutivesSection.trim();
+  if (execTrim.length > 0) {
+    sections.push(execTrim);
+    sections.push("");
   }
 
   // Identity: group (all members) or single user

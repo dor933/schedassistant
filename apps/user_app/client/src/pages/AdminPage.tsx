@@ -40,6 +40,17 @@ function stringifyAgentCharacteristics(
   return JSON.stringify(c, null, 2);
 }
 
+function formatUserIdentityPreview(
+  identity: Record<string, unknown> | null | undefined,
+): string {
+  if (!identity || Object.keys(identity).length === 0) return "";
+  try {
+    return JSON.stringify(identity, null, 2);
+  } catch {
+    return String(identity);
+  }
+}
+
 function AgentCard({
   agent,
   onSaved,
@@ -386,20 +397,14 @@ function UserCard({
                 </span>
               )}
             </div>
-            {u.userIdentity && (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {Object.entries(u.userIdentity)
-                  .filter(([, v]) => v)
-                  .map(([k, v]) => (
-                    <span
-                      key={k}
-                      className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-medium text-indigo-600"
-                    >
-                      {k}: {String(v)}
-                    </span>
-                  ))}
-              </div>
-            )}
+            {u.userIdentity &&
+              Object.keys(u.userIdentity as object).length > 0 && (
+                <pre className="mt-2 max-h-40 max-w-full overflow-auto rounded-lg border border-gray-100 bg-gray-50/90 p-2.5 text-left text-[10px] leading-relaxed break-words whitespace-pre-wrap font-mono text-gray-700">
+                  {formatUserIdentityPreview(
+                    u.userIdentity as Record<string, unknown>,
+                  )}
+                </pre>
+              )}
           </div>
           {canEdit && (
             <button
