@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import Box from "@mui/material/Box";
+import Stack from "@mui/material/Stack";
+import Container from "@mui/material/Container";
 import { useAuth } from "../context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { getChatSocket } from "../sockets/chatSocket";
@@ -113,7 +116,7 @@ function AgentCard({
     "w-full rounded-xl border border-gray-200 bg-gray-50/80 px-3 py-2 text-xs transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10";
 
   return (
-    <div className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0">
+    <Box className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0">
       <p className="mb-2 break-all font-mono text-[10px] text-gray-400">{agent.id}</p>
       {editing ? (
         <div className="space-y-3">
@@ -218,7 +221,7 @@ function AgentCard({
           )}
         </div>
       )}
-    </div>
+    </Box>
   );
 }
 
@@ -286,7 +289,7 @@ function UserCard({
     "w-full rounded-xl border border-gray-200 bg-gray-50/80 px-3 py-2 text-xs transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10";
 
   return (
-    <div className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0">
+    <Box className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0">
       {editing ? (
         <div className="space-y-3">
           <div className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-2">
@@ -416,7 +419,7 @@ function UserCard({
           )}
         </div>
       )}
-    </div>
+    </Box>
   );
 }
 
@@ -701,10 +704,22 @@ export default function AdminPage() {
   if (!user || user.role !== "admin" && user.role !== "super_admin") return null;
 
   return (
-    <div className="min-h-screen w-full overflow-x-hidden bg-gradient-to-br from-slate-50 via-white to-indigo-50/30">
-      <header className="sticky top-0 z-10 border-b border-gray-200/60 bg-white/80 backdrop-blur-xl">
-        <div className="mx-auto flex min-w-0 max-w-6xl items-center justify-between gap-2 px-4 py-3 sm:px-6 sm:py-4">
-          <div className="min-w-0">
+    <Stack
+      component="main"
+      className="min-h-screen w-full bg-gradient-to-br from-slate-50 via-white to-indigo-50/30"
+    >
+      {/* Single content column: max width + horizontal padding so nothing exceeds the viewport */}
+      <Container
+        maxWidth={false}
+        disableGutters
+        className="mx-auto box-border w-full min-w-0 max-w-6xl px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-8"
+      >
+        <Stack
+          component="header"
+          direction="row"
+          className="sticky top-0 z-10 -mx-4 mb-6 min-w-0 items-center justify-between gap-3 border-b border-gray-200/60 bg-white/90 px-4 py-3 backdrop-blur-xl sm:-mx-6 sm:mb-8 sm:px-6 sm:py-4 lg:-mx-8 lg:px-8"
+        >
+          <div className="min-w-0 pr-2">
             <h1 className="text-base sm:text-lg font-bold text-gray-900 tracking-tight">
               Admin Panel
             </h1>
@@ -728,10 +743,9 @@ export default function AdminPage() {
               <span className="hidden sm:inline">Sign Out</span>
             </button>
           </div>
-        </div>
-      </header>
+        </Stack>
 
-      <main className="mx-auto min-w-0 max-w-6xl px-3 py-5 sm:px-6 sm:py-8 space-y-5 sm:space-y-8">
+        <Stack component="section" className="w-full min-w-0 space-y-6 sm:space-y-8">
         {error && (
           <div className="flex items-center gap-2.5 sm:gap-3 rounded-2xl bg-red-50 px-4 py-3 sm:px-5 sm:py-4 text-sm text-red-700 ring-1 ring-red-100 animate-slide-up">
             <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-500" />
@@ -751,9 +765,9 @@ export default function AdminPage() {
           </div>
         )}
 
-        <div className="grid min-w-0 gap-5 sm:gap-8 lg:grid-cols-2">
+        <Box className="grid w-full min-w-0 grid-cols-1 gap-5 sm:gap-6 lg:gap-8 lg:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
           {/* Agents */}
-          <div className="rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+          <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm">
                 <Bot className="h-4 w-4" />
@@ -812,7 +826,7 @@ export default function AdminPage() {
           </div>
 
           {/* Users */}
-          <div className="rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+          <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 text-white shadow-sm">
                 <Users2 className="h-4 w-4" />
@@ -830,7 +844,7 @@ export default function AdminPage() {
           </div>
 
           {/* Groups */}
-          <div className="rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+          <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm">
                 <FolderOpen className="h-4 w-4" />
@@ -1064,7 +1078,7 @@ export default function AdminPage() {
           </div>
 
           {/* Group Members */}
-          <div className="rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+          <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm">
                 <UserPlus className="h-4 w-4" />
@@ -1146,7 +1160,7 @@ export default function AdminPage() {
           </div>
 
           {/* API Keys */}
-          <div className="lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+          <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm">
                 <KeyRound className="h-4 w-4" />
@@ -1154,17 +1168,17 @@ export default function AdminPage() {
               API Keys
             </h2>
 
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid w-full min-w-0 grid-cols-1 gap-3 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
               {vendors.map((v) => (
                 <div
                   key={v.id}
-                  className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200"
+                  className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200"
                 >
-                  <div className="flex items-center gap-2.5 mb-3">
+                  <div className="mb-3 flex min-w-0 items-center gap-2.5">
                     <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600">
                       <VendorIcon slug={v.slug} />
                     </div>
-                    <span className="text-sm font-semibold text-gray-900">{v.name}</span>
+                    <span className="min-w-0 truncate text-sm font-semibold text-gray-900">{v.name}</span>
                     {v.hasApiKey ? (
                       <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
                         Configured
@@ -1203,7 +1217,7 @@ export default function AdminPage() {
           </div>
 
           {/* Models */}
-          <div className="lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+          <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-pink-500 to-rose-600 text-white shadow-sm">
                 <Cpu className="h-4 w-4" />
@@ -1214,7 +1228,7 @@ export default function AdminPage() {
               </span>
             </h2>
 
-            <div className="mb-5 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mb-5 grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(4,minmax(0,1fr))] [&>*]:min-w-0">
               <select
                 value={newModelVendorId}
                 onChange={(e) => setNewModelVendorId(e.target.value)}
@@ -1274,11 +1288,11 @@ export default function AdminPage() {
               </button>
             </div>
 
-            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
               {models.map((m) => (
                 <div
                   key={m.id}
-                  className="flex items-center gap-2.5 sm:gap-3 rounded-xl border border-gray-200/60 bg-white p-3 sm:p-3.5 shadow-glass transition-all duration-200 hover:shadow-md"
+                  className="flex min-w-0 items-center gap-2.5 sm:gap-3 rounded-xl border border-gray-200/60 bg-white p-3 sm:p-3.5 shadow-glass transition-all duration-200 hover:shadow-md"
                 >
                   <div className="flex h-8 w-8 sm:h-9 sm:w-9 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600">
                     <VendorIcon slug={m.vendor?.slug ?? ""} />
@@ -1305,8 +1319,9 @@ export default function AdminPage() {
               ))}
             </div>
           </div>
-        </div>
-      </main>
-    </div>
+        </Box>
+      </Stack>
+      </Container>
+    </Stack>
   );
 }
