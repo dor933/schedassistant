@@ -25,6 +25,14 @@ export interface UserIdentity {
 /** Canonical agent identifier (`agents.id`). */
 export type AgentId = string;
 
+/** Shape of an entry in `agents.ongoing_requests` (JSONB). */
+export interface OngoingRequest {
+  id: string;
+  userId: UserId;
+  request: string;
+  createdAt: string;
+}
+
 export interface AgentAttributes {
   id: AgentId;
   /** Short role label: "AI Default Agent", "Senior backend developer", etc. */
@@ -33,6 +41,8 @@ export interface AgentAttributes {
   coreInstructions: string | null;
   /** Structured persona traits (tone, style, etc.) — rendered as "Your Characteristics" in context. */
   characteristics: Record<string, unknown> | null;
+  /** Ongoing user requests for this agent. */
+  ongoingRequests: OngoingRequest[] | null;
   /**
    * Canonical LangGraph checkpoint `thread_id` for this agent.
    * All groups and single chats that reference this agent share this thread / history.
@@ -187,6 +197,7 @@ export interface AssembledContext {
   /** From `agents.core_instructions` when `agentId` is set in graph state. */
   agentCoreInstructions: string | null;
   coreMemory: string;
+  ongoingRequests: string[] | null;
   episodicSnippets: string[];
   recentSessionSummaries: SessionSummary[];
   /** Messages formatted from LangGraph checkpoint state for this turn (max 50 in snapshot). */

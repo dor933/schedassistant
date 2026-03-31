@@ -1,6 +1,6 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
-import type { AgentAttributes } from "@scheduling-agent/types";
+import type { AgentAttributes, OngoingRequest } from "@scheduling-agent/types";
 
 type AgentCreationAttributes = Optional<
   AgentAttributes,
@@ -10,6 +10,7 @@ type AgentCreationAttributes = Optional<
   | "definition"
   | "coreInstructions"
   | "characteristics"
+  | "ongoingRequests"
   | "activeThreadId"
 >;
 
@@ -18,6 +19,7 @@ class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements A
   declare definition: string | null;
   declare coreInstructions: string | null;
   declare characteristics: Record<string, unknown> | null;
+  declare ongoingRequests: OngoingRequest[] | null;
   declare activeThreadId: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
@@ -42,6 +44,11 @@ Agent.init(
     characteristics: {
       type: DataTypes.JSONB,
       allowNull: true,
+    },
+    ongoingRequests: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      field: "ongoing_requests",
     },
     activeThreadId: {
       type: DataTypes.STRING,

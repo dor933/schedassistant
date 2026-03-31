@@ -54,7 +54,7 @@ module.exports = {
       name: "agents_active_thread_id",
     });
 
-    const corePath = path.join(__dirname, "../../../apps/coreInstructions.json");
+    const corePath = path.join(__dirname, "../../../apps/core_instructions/projectManager.json");
     const raw = JSON.parse(fs.readFileSync(corePath, "utf8"));
     const { description, core_description, characteristics } = raw;
     const charsJson = JSON.stringify(

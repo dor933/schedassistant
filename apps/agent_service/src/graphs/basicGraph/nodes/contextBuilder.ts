@@ -5,6 +5,7 @@ import type {
   AssembledContext,
   GroupMemberContextProfile,
   UserIdentity,
+  OngoingRequest,
   SessionSummary,
 } from "@scheduling-agent/types";
 
@@ -74,14 +75,15 @@ export async function buildContext(
 ): Promise<AssembledContext> {
   const { userId, userInput, threadId, groupId, singleChatId, agentId, messages } = state;
 
-  // ── 0. Agent definition + core instructions + characteristics (DB) ──
+  // ── 0. Agent definition + core instructions + characteristics + ongoing requests (DB) ──
   let agentDefinition: string | null = null;
   let agentCoreInstructions: string | null = null;
   let agentCharacteristics: Record<string, unknown> | null = null;
+  let ongoingRequestsRows: OngoingRequest[] = [];
   if (agentId) {
     try {
       const agent = await Agent.findByPk(agentId, {
-        attributes: ["definition", "coreInstructions", "characteristics"],
+        attributes: ["definition", "coreInstructions", "characteristics", "ongoingRequests"],
       });
       const def = agent?.definition?.trim();
       agentDefinition = def && def.length > 0 ? def : null;
@@ -92,10 +94,30 @@ export async function buildContext(
         ch != null && typeof ch === "object" && !Array.isArray(ch)
           ? (ch as Record<string, unknown>)
           : null;
+      const raw = agent?.ongoingRequests;
+      if (Array.isArray(raw)) {
+        ongoingRequestsRows = raw.filter(
+          (r): r is OngoingRequest =>
+            r != null &&
+            typeof r === "object" &&
+            typeof (r as OngoingRequest).id === "string" &&
+            typeof (r as OngoingRequest).userId === "number" &&
+            typeof (r as OngoingRequest).request === "string" &&
+            typeof (r as OngoingRequest).createdAt === "string",
+        );
+      }
     } catch {
       // agents table / row missing — continue without DB instructions.
     }
   }
+
+  const ongoingRequests: string[] | null =
+    ongoingRequestsRows.length > 0
+      ? ongoingRequestsRows.map(
+          (r) =>
+            `- **id:** \`${r.id}\` · **userId:** ${r.userId} · **since:** ${r.createdAt}\n  ${r.request}`,
+        )
+      : null;
 
   // ── 1. User identity: all group members (junction) vs single user ─────────
   let userIdentity: UserIdentity | null = null;
@@ -183,6 +205,7 @@ export async function buildContext(
     agentCharacteristics,
     grahamyExecutivesSection,
     coreMemory,
+    ongoingRequests,
     checkpointLog.body,
     conversationLog.body,
     episodicSnippets,
@@ -193,6 +216,7 @@ export async function buildContext(
   return {
     agentCoreInstructions,
     coreMemory,
+    ongoingRequests,
     episodicSnippets,
     recentSessionSummaries,
     recentCheckpointMessageCount: checkpointLog.messageCount,
@@ -266,6 +290,7 @@ function formatSystemPrompt(
   agentCharacteristics: Record<string, unknown> | null,
   grahamyExecutivesSection: string,
   coreMemory: string,
+  ongoingRequestLines: string[] | null,
   checkpointLogBody: string,
   conversationLogBody: string,
   episodicSnippets: string[],
@@ -327,6 +352,19 @@ function formatSystemPrompt(
   if (coreMemTrim.length > 0) {
     sections.push("## Core memory (long-term preferences & facts about the user)");
     sections.push(coreMemory);
+    sections.push("");
+  }
+
+  if (ongoingRequestLines && ongoingRequestLines.length > 0) {
+    sections.push("## Ongoing requests (this agent, all users)");
+    sections.push(
+      "These are open follow-ups or tasks tied to this agent persona. " +
+        "Use `remove_ongoing_request` with the **id** when done; use `add_ongoing_request` to track new ones.",
+    );
+    sections.push("");
+    for (const line of ongoingRequestLines) {
+      sections.push(line);
+    }
     sections.push("");
   }
 

@@ -22,6 +22,10 @@ import { resolveModelSlug } from "../../../chat/modelResolution";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import { createEditCoreMemoryTool } from "../../../tools/editCoreMemoryTool";
+import {
+  createAddOngoingRequestTool,
+  createRemoveOngoingRequestTool,
+} from "../../../tools/ongoingRequestsTools";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 8;
@@ -193,7 +197,8 @@ export async function callModelNode(
   state: AgentState,
   config: RunnableConfig,
 ): Promise<Partial<AgentState>> {
-  const { systemPrompt, messages: stateMessages, singleChatId, groupId, threadId, userId } = state;
+  const { systemPrompt, messages: stateMessages, singleChatId, groupId, threadId, userId, agentId } =
+    state;
 
   const modelSlug = await resolveModelSlug(singleChatId, groupId);
 
@@ -215,7 +220,13 @@ export async function callModelNode(
   logger.info("Calling LLM", { modelSlug, vendorSlug: vendor.slug, messageCount: stateMessages.length });
 
   const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
-  const tools = [createEditCoreMemoryTool(state.userId)];
+  const tools: StructuredToolInterface[] = [createEditCoreMemoryTool(state.userId)];
+  if (agentId) {
+    tools.push(
+      createAddOngoingRequestTool(agentId, state.userId),
+      createRemoveOngoingRequestTool(agentId),
+    );
+  }
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),
   );
@@ -305,9 +316,7 @@ export async function callModelNode(
           content = `Error: unknown tool "${tc.name ?? ""}".`;
         } else {
           try {
-            content = String(
-              await t.invoke((tc.args ?? {}) as { action: "append" | "rewrite"; content: string }),
-            );
+            content = String(await t.invoke(tc.args ?? {}));
             const raw = tc.args as Record<string, unknown> | undefined;
             const text = typeof raw?.content === "string" ? raw.content : "";
             logger.info("Tool call completed", {
@@ -318,6 +327,12 @@ export async function callModelNode(
               round,
               action: typeof raw?.action === "string" ? raw.action : undefined,
               contentLength: text.length,
+              argsPreview:
+                raw != null
+                  ? JSON.stringify(raw).length > 400
+                    ? `${JSON.stringify(raw).slice(0, 400)}…`
+                    : JSON.stringify(raw)
+                  : undefined,
               resultPreview:
                 content.length > 300 ? `${content.slice(0, 300)}…` : content,
             });
