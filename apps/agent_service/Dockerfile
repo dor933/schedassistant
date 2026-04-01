@@ -28,6 +28,9 @@
                    @modelcontextprotocol/server-fetch \
                    @modelcontextprotocol/server-brave-search \
                    @modelcontextprotocol/server-github
+
+    RUN apk add --no-cache python3 py3-pip git
+    RUN pip3 install --break-system-packages uv               
     
     COPY package.json ./
     COPY --from=builder /app/node_modules/ ./node_modules/

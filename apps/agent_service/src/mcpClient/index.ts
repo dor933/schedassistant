@@ -22,11 +22,28 @@ const ALL_SERVERS_CONFIG = {
     transport: "stdio",
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-github"],
-  }
+  },
+  fmp: {
+    transport: "sse",
+    url: `https://financialmodelingprep.com/mcp?apikey=${process.env.FMP_API_KEY}`,
+  },
+  massive_market_data: {
+    transport: "stdio",
+    command: "uvx",
+    args: [
+      "--from", 
+      "git+https://github.com/massive-com/mcp_massive@v0.4.0",
+      "mcp_massive"
+    ],
+    env: {
+      MASSIVE_API_KEY: process.env.MASSIVE_API_KEY,
+      ...process.env
+    }
+  },
 };
 
 const AGENT_PERMISSIONS: Record<string, (keyof typeof ALL_SERVERS_CONFIG)[]> = {
-  "general_agent": ["filesystem", "bash", "github", "fetch"], 
+  "general_agent": ["filesystem", "bash", "github", "fetch", "fmp", "massive_market_data"], 
 };
 
 const clientsCache = new Map<string, MultiServerMCPClient>();
@@ -36,7 +53,7 @@ export default async function getMcpTools(agentName: string = "general_agent") {
   const requiredServers = AGENT_PERMISSIONS[agentName];
   if (!requiredServers) {
     console.warn(`No MCP servers defined for agent: ${agentName}`);
-    return []; // 
+    return [];
   }
 
   if (clientsCache.has(agentName)) {
