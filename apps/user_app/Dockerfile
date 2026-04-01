@@ -2,9 +2,6 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
-COPY investlan.crt /etc/ssl/certs/investlan.crt
-ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/investlan.crt
-
 COPY package.json tsconfig.base.json ./
 COPY packages/ ./packages/
 COPY apps/user_app/ ./apps/user_app/
@@ -22,9 +19,6 @@ RUN cd apps/user_app/client && npm install --no-package-lock && npm run build
 # --- Stage 2: Production ---
 FROM node:20-alpine AS runner
 WORKDIR /app
-
-COPY investlan.crt /etc/ssl/certs/investlan.crt
-ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/investlan.crt
 
 COPY package.json ./
 COPY --from=builder /app/node_modules/ ./node_modules/

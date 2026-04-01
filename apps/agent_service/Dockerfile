@@ -2,9 +2,6 @@
     FROM node:20-alpine AS builder
     WORKDIR /app
     
-    COPY investlan.crt /etc/ssl/certs/investlan.crt
-    ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/investlan.crt
-    
     COPY package.json tsconfig.base.json ./
     COPY packages/ ./packages/
     COPY apps/agent_service/ ./apps/agent_service/
@@ -19,9 +16,6 @@
     # --- Stage 2: Production ---
     FROM node:20-alpine AS runner
     WORKDIR /app
-    
-    COPY investlan.crt /etc/ssl/certs/investlan.crt
-    ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/investlan.crt
     
     RUN apk add --no-cache python3 py3-pip git bash
     RUN pip3 install --break-system-packages uv 
