@@ -10,7 +10,7 @@ const ALL_SERVERS_CONFIG = {
   bash: {
     transport: "stdio",
     command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-bash"],
+    args: ["-y", "mcp-shell"], 
   },
   fetch: {
     transport: "stdio",
