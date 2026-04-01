@@ -35,7 +35,7 @@ const ALL_SERVERS_CONFIG = {
     args: [
       "--from", 
       "git+https://github.com/massive-com/mcp_massive@v0.4.0",
-      "mcp_massive"
+      "mcp_polygon"
     ],
     env: {
       MASSIVE_API_KEY: process.env.MASSIVE_API_KEY,
