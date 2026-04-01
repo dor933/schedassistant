@@ -26,7 +26,7 @@ const ALL_SERVERS_CONFIG = {
   docker: {
     transport: "stdio",
     command: "npx",
-    args: ["-y", "github:0xshariq/docker-mcp-server"], 
+    args: ["-y", "@alisaitteke/docker-mcp"], 
   },
  
   massive_market_data: {

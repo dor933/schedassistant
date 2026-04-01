@@ -20,7 +20,7 @@
     RUN apk add --no-cache python3 py3-pip git bash
     RUN pip3 install --break-system-packages uv 
     
-    RUN npm install -g --unsafe-perm @modelcontextprotocol/server-filesystem mcp-shell @modelcontextprotocol/server-github
+    RUN npm install -g --unsafe-perm @modelcontextprotocol/server-filesystem mcp-shell @modelcontextprotocol/server-github @alisaitteke/docker-mcp
     COPY package.json ./
     COPY --from=builder /app/node_modules/ ./node_modules/
     COPY --from=builder /app/packages/ ./packages/

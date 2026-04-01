@@ -1,5 +1,5 @@
 # --- Stage 1: Build server + client ---
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 
 COPY package.json tsconfig.base.json ./
@@ -17,7 +17,7 @@ RUN npm run build --workspace=user_app
 RUN cd apps/user_app/client && npm install --no-package-lock && npm run build
 
 # --- Stage 2: Production ---
-FROM node:20-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 COPY package.json ./
