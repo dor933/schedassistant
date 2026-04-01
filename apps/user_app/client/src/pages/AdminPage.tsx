@@ -24,6 +24,8 @@ import {
   CheckCircle2,
   AlertCircle,
   KeyRound,
+  Plug,
+  Terminal,
 } from "lucide-react";
 import {
   admin,
@@ -32,6 +34,7 @@ import {
   type AdminGroup,
   type AdminGroupMember,
   type AdminRole,
+  type AdminMcpServer,
   type ConversationModelInfo,
 } from "../api";
 import { VendorIcon } from "../components/VendorModelBadge";
@@ -77,9 +80,11 @@ export default function AdminPage() {
   const [vendorApiKeys, setVendorApiKeys] = useState<Record<string, string>>({});
   const [savingKeyVendorId, setSavingKeyVendorId] = useState<string | null>(null);
 
+  const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
   const [newAgentDefinition, setNewAgentDefinition] = useState("");
   const [newAgentInstructions, setNewAgentInstructions] = useState("");
   const [newAgentCharacteristics, setNewAgentCharacteristics] = useState("");
+  const [newAgentMcpServerIds, setNewAgentMcpServerIds] = useState<number[]>([]);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupAgentId, setNewGroupAgentId] = useState("");
   const [newGroupMembers, setNewGroupMembers] = useState<number[]>([]);
@@ -91,6 +96,13 @@ export default function AdminPage() {
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
 
+  const [newMcpName, setNewMcpName] = useState("");
+  const [newMcpTransport, setNewMcpTransport] = useState("stdio");
+  const [newMcpCommand, setNewMcpCommand] = useState("");
+  const [newMcpArgs, setNewMcpArgs] = useState("");
+  const [newMcpEnv, setNewMcpEnv] = useState("");
+  const [creatingMcp, setCreatingMcp] = useState(false);
+
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -100,13 +112,14 @@ export default function AdminPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [u, a, g, m, v, r] = await Promise.all([
+      const [u, a, g, m, v, r, mcp] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
         admin.getModels(),
         admin.getVendors(),
         admin.getRoles(),
+        admin.getMcpServers(),
       ]);
       setUsers(u);
       setAgents(a);
@@ -114,6 +127,7 @@ export default function AdminPage() {
       setModels(m);
       setVendors(v);
       setRoles(r);
+      setMcpServers(mcp);
       if (a.length > 0 && !newGroupAgentId) setNewGroupAgentId(a[0].id);
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
     } catch {
@@ -183,14 +197,64 @@ export default function AdminPage() {
         definition: newAgentDefinition.trim() || undefined,
         coreInstructions: newAgentInstructions.trim() || undefined,
         characteristics,
+        mcpServerIds: newAgentMcpServerIds.length > 0 ? newAgentMcpServerIds : undefined,
       });
       setNewAgentDefinition("");
       setNewAgentInstructions("");
       setNewAgentCharacteristics("");
+      setNewAgentMcpServerIds([]);
       flash("Agent created.");
       await reload();
     } catch (err: any) {
       setError(err.message);
+    }
+  }
+
+  async function handleCreateMcpServer() {
+    if (!newMcpName.trim() || !newMcpCommand.trim()) return;
+
+    // Parse args: comma-separated string to array
+    const args = newMcpArgs.trim()
+      ? newMcpArgs.split(",").map((a) => a.trim()).filter(Boolean)
+      : [];
+
+    // Parse env: optional JSON object
+    let env: Record<string, string> | undefined;
+    if (newMcpEnv.trim()) {
+      try {
+        const parsed = JSON.parse(newMcpEnv.trim());
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setError("Environment must be a JSON object.");
+          return;
+        }
+        env = parsed as Record<string, string>;
+      } catch {
+        setError("Invalid JSON in environment variables.");
+        return;
+      }
+    }
+
+    setError("");
+    setCreatingMcp(true);
+    try {
+      await admin.createMcpServer({
+        name: newMcpName.trim(),
+        transport: newMcpTransport.trim() || "stdio",
+        command: newMcpCommand.trim(),
+        args,
+        env,
+      });
+      setNewMcpName("");
+      setNewMcpTransport("stdio");
+      setNewMcpCommand("");
+      setNewMcpArgs("");
+      setNewMcpEnv("");
+      flash("MCP server created.");
+      await reload();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setCreatingMcp(false);
     }
   }
 
@@ -439,6 +503,49 @@ export default function AdminPage() {
                 rows={3}
                 className={inputClass + " font-mono text-xs"}
               />
+              {/* MCP Server selection */}
+              <div>
+                <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  MCP Servers
+                  <span className="ml-1 normal-case font-normal text-gray-400">(tools available to this agent)</span>
+                </label>
+                <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                  {mcpServers.map((s) => {
+                    const selected = newAgentMcpServerIds.includes(s.id);
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() =>
+                          setNewAgentMcpServerIds((prev) =>
+                            selected ? prev.filter((id) => id !== s.id) : [...prev, s.id],
+                          )
+                        }
+                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                          selected
+                            ? "bg-violet-100 text-violet-700 ring-1 ring-violet-200 shadow-sm"
+                            : "bg-white text-gray-500 ring-1 ring-gray-200 hover:bg-gray-100 hover:text-gray-700"
+                        }`}
+                      >
+                        <span
+                          className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
+                            selected
+                              ? "bg-violet-500 text-white"
+                              : "bg-gray-200 text-gray-500"
+                          }`}
+                        >
+                          {s.name.charAt(0).toUpperCase()}
+                        </span>
+                        {s.name}
+                        {selected && <X className="h-3 w-3 ml-0.5" />}
+                      </button>
+                    );
+                  })}
+                  {mcpServers.length === 0 && (
+                    <p className="text-xs text-gray-400 py-1">No MCP servers configured.</p>
+                  )}
+                </div>
+              </div>
               <button
                 onClick={handleCreateAgent}
                 disabled={
@@ -455,7 +562,7 @@ export default function AdminPage() {
 
             <div className="max-h-[400px] overflow-y-auto space-y-2.5">
               {agents.map((a) => (
-                <AgentCard key={a.id} agent={a} onSaved={reload} />
+                <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allMcpServers={mcpServers} onSaved={reload} />
               ))}
             </div>
           </div>
@@ -850,6 +957,159 @@ export default function AdminPage() {
               ))}
             </div>
           </div>
+
+          {/* MCP Servers — super_admin only */}
+          {user?.role === "super_admin" && (
+          <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 text-white shadow-sm">
+                <Plug className="h-4 w-4" />
+              </div>
+              MCP Servers
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+                {mcpServers.length}
+              </span>
+            </h2>
+
+            {/* Create form */}
+            <div className="mb-5 space-y-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Add new server</p>
+              <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
+                {/* Name */}
+                <div className="relative group">
+                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Name</label>
+                  <input
+                    type="text"
+                    value={newMcpName}
+                    onChange={(e) => setNewMcpName(e.target.value)}
+                    placeholder='e.g. "filesystem"'
+                    className={inputClass}
+                  />
+                  <div className="absolute right-3 top-[26px] cursor-help">
+                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Name</strong> is a unique identifier for this server. It appears when assigning servers to agents (e.g. "filesystem", "github", "bash").
+                    </div>
+                  </div>
+                </div>
+
+                {/* Transport */}
+                <div className="relative group">
+                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Transport</label>
+                  <select
+                    value={newMcpTransport}
+                    onChange={(e) => setNewMcpTransport(e.target.value)}
+                    className={inputClass}
+                  >
+                    <option value="stdio">stdio</option>
+                    <option value="sse">sse</option>
+                  </select>
+                  <div className="absolute right-8 top-[26px] cursor-help">
+                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Transport</strong> defines how the agent communicates with the server. <strong>stdio</strong> launches a local process; <strong>sse</strong> connects to a remote HTTP endpoint.
+                    </div>
+                  </div>
+                </div>
+
+                {/* Command */}
+                <div className="relative group">
+                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Command</label>
+                  <input
+                    type="text"
+                    value={newMcpCommand}
+                    onChange={(e) => setNewMcpCommand(e.target.value)}
+                    placeholder='e.g. "npx" or "uvx"'
+                    className={inputClass + " font-mono text-xs"}
+                  />
+                  <div className="absolute right-3 top-[26px] cursor-help">
+                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Command</strong> is the executable used to start the MCP server process (e.g. <code className="rounded bg-gray-100 px-1">npx</code>, <code className="rounded bg-gray-100 px-1">uvx</code>, <code className="rounded bg-gray-100 px-1">node</code>).
+                    </div>
+                  </div>
+                </div>
+
+                {/* Args */}
+                <div className="relative group">
+                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Arguments</label>
+                  <input
+                    type="text"
+                    value={newMcpArgs}
+                    onChange={(e) => setNewMcpArgs(e.target.value)}
+                    placeholder='Comma-separated, e.g. "-y, @modelcontextprotocol/server-filesystem, /data"'
+                    className={inputClass + " font-mono text-xs"}
+                  />
+                  <div className="absolute right-3 top-[26px] cursor-help">
+                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Arguments</strong> are passed to the command as a list. Enter them separated by commas. For example: <code className="rounded bg-gray-100 px-1">-y, @modelcontextprotocol/server-filesystem, /app/data</code>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Env — full width */}
+              <div className="relative group">
+                <label className="mb-1 block text-[10px] font-medium text-gray-500">Environment Variables (optional)</label>
+                <textarea
+                  value={newMcpEnv}
+                  onChange={(e) => setNewMcpEnv(e.target.value)}
+                  placeholder={'{\n  "API_KEY": "{{MY_ENV_VAR}}"\n}'}
+                  rows={3}
+                  className={inputClass + " font-mono text-xs resize-y"}
+                />
+                <div className="absolute right-3 top-[22px] cursor-help">
+                  <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                  <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-72 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                    <strong>Environment variables</strong> are passed to the server process as a JSON object. Use <code className="rounded bg-gray-100 px-1">{`{{VAR_NAME}}`}</code> syntax to reference host environment variables at runtime. Leave empty if none are needed.
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={handleCreateMcpServer}
+                disabled={!newMcpName.trim() || !newMcpCommand.trim() || creatingMcp}
+                className={btnPrimary}
+              >
+                {creatingMcp ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
+                {creatingMcp ? "Creating..." : "Add MCP Server"}
+              </button>
+            </div>
+
+            {/* Existing servers list */}
+            <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
+              {mcpServers.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex min-w-0 items-start gap-3 rounded-xl border border-gray-200/60 bg-white p-3.5 shadow-glass transition-all duration-200 hover:shadow-md"
+                >
+                  <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-purple-100 text-violet-600">
+                    <Terminal className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{s.name}</p>
+                    <p className="mt-0.5 font-mono text-[10px] text-gray-400 truncate">
+                      {s.command} {s.args.join(" ")}
+                    </p>
+                    <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-semibold text-violet-500 uppercase">
+                      {s.transport}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {mcpServers.length === 0 && (
+                <p className="col-span-full py-6 text-center text-xs text-gray-400">
+                  No MCP servers configured yet.
+                </p>
+              )}
+            </div>
+          </div>
+          )}
 
           {/* Models */}
           <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">

@@ -40,9 +40,13 @@ export class UsersService {
       throw Object.assign(new Error("You do not have permission to edit this user."), { status: 403 });
     }
 
+    // Admins can only edit identity for regular users, not for admin/super_admin
+    const targetIsAdminOrAbove = targetRoleName === "admin" || targetRoleName === "super_admin";
+    const canEditIdentity = callerRole === "super_admin" || !targetIsAdminOrAbove;
+
     const patch: Record<string, any> = {};
     if (data.displayName !== undefined) patch.displayName = data.displayName;
-    if (data.userIdentity !== undefined) patch.userIdentity = data.userIdentity;
+    if (data.userIdentity !== undefined && canEditIdentity) patch.userIdentity = data.userIdentity;
     if (data.roleId !== undefined && callerRole === "super_admin") patch.roleId = data.roleId;
     await user.update(patch);
 

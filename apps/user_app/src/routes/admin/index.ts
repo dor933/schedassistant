@@ -6,6 +6,7 @@ import { usersRouter } from "./users.routes";
 import { agentsRouter } from "./agents.routes";
 import { groupsRouter } from "./groups.routes";
 import { modelsRouter } from "./models.routes";
+import { mcpServersRouter } from "./mcpServers.routes";
 
 const router = Router();
 
@@ -16,6 +17,7 @@ router.use("/roles", rolesRouter);
 router.use("/users", usersRouter);
 router.use("/agents", agentsRouter);
 router.use("/groups", groupsRouter);
+router.use("/mcp-servers", mcpServersRouter);
 // models router handles /models, /vendors, and /single-chats paths
 router.use("/", modelsRouter);
 

@@ -22,8 +22,11 @@ export default function UserCard({
   }) {
     const isSuperAdmin = currentUserRole === "super_admin";
     const targetIsSuperAdmin = u.role === "super_admin";
+    const targetIsAdminOrAbove = u.role === "admin" || u.role === "super_admin";
     // Admins cannot edit super_admin users; super_admins can edit anyone
     const canEdit = isSuperAdmin || !targetIsSuperAdmin;
+    // Admins can only see/change identity for regular users (not admin/super_admin)
+    const canEditIdentity = isSuperAdmin || !targetIsAdminOrAbove;
     const [editing, setEditing] = useState(false);
     const [displayName, setDisplayName] = useState(u.displayName ?? "");
     const [selectedRoleId, setSelectedRoleId] = useState(u.roleId ?? "");
@@ -105,6 +108,7 @@ export default function UserCard({
                 </div>
               )}
             </div>
+            {canEditIdentity && (
             <div className="grid grid-cols-1 min-[380px]:grid-cols-2 gap-2">
               <div>
                 <label className="mb-1 block text-[10px] font-medium text-gray-500">
@@ -138,6 +142,7 @@ export default function UserCard({
                 />
               </div>
             </div>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={save}
@@ -184,7 +189,7 @@ export default function UserCard({
                   </span>
                 )}
               </div>
-              {u.userIdentity &&
+              {canEditIdentity && u.userIdentity &&
                 Object.keys(u.userIdentity as object).length > 0 && (
                   <pre className="mt-2 max-h-40 min-w-0 max-w-full overflow-auto rounded-lg border border-gray-100 bg-gray-50/90 p-2.5 text-left text-[10px] leading-relaxed break-words whitespace-pre-wrap font-mono text-gray-700">
                     {formatUserIdentityPreview(

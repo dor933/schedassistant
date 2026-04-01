@@ -4,6 +4,8 @@ import {
   GroupMember,
   Group,
   User,
+  McpServer,
+  AgentMcpServer,
   sequelize,
 } from "@scheduling-agent/database";
 import { QueryTypes } from "sequelize";
@@ -19,6 +21,7 @@ export class AgentsService {
         "definition",
         "coreInstructions",
         "characteristics",
+        "createdByUserId",
         "createdAt",
       ],
       order: [["created_at", "DESC"]],
@@ -35,10 +38,18 @@ export class AgentsService {
 
     const editableIds = await this.getEditableAgentIds(callerId, callerRole);
 
+    // Fetch MCP server assignments for all agents in one query
+    const mcpLinks = await AgentMcpServer.findAll({ attributes: ["agentId", "mcpServerId"] });
+    const mcpServerIdsByAgent: Record<string, number[]> = {};
+    for (const link of mcpLinks) {
+      (mcpServerIdsByAgent[link.agentId] ??= []).push(link.mcpServerId);
+    }
+
     return agents.map((a) => ({
       ...a.toJSON(),
       groupCount: groupCountByAgent[a.id] ?? 0,
       editable: editableIds.has(a.id),
+      mcpServerIds: mcpServerIdsByAgent[a.id] ?? [],
     }));
   }
 
@@ -47,12 +58,24 @@ export class AgentsService {
     coreInstructions?: string,
     characteristics?: Record<string, unknown> | null,
     actorId?: UserId,
+    mcpServerIds?: number[],
   ) {
     const agent = await Agent.create({
       definition: definition ?? null,
       coreInstructions: coreInstructions ?? null,
       characteristics: characteristics ?? null,
+      createdByUserId: actorId ?? null,
     });
+
+    // Link MCP servers to the agent
+    if (mcpServerIds && mcpServerIds.length > 0) {
+      await AgentMcpServer.bulkCreate(
+        mcpServerIds.map((mcpServerId) => ({
+          agentId: agent.id,
+          mcpServerId,
+        })),
+      );
+    }
 
     // Eagerly create a SingleChat for every user and notify them in real time
     try {
@@ -97,6 +120,7 @@ export class AgentsService {
       definition?: string;
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
+      mcpServerIds?: number[];
     },
   ) {
     const agent = await Agent.findByPk(agentId);
@@ -111,13 +135,31 @@ export class AgentsService {
       );
     }
 
+    // Admins can only update coreInstructions for agents they created; super_admin can always
+    const canEditCoreInstructions =
+      callerRole === "super_admin" || agent.createdByUserId === callerId;
+
     const patch: Record<string, any> = {};
     if (data.definition !== undefined) patch.definition = data.definition;
-    if (data.coreInstructions !== undefined)
+    if (data.coreInstructions !== undefined && canEditCoreInstructions)
       patch.coreInstructions = data.coreInstructions;
     if (data.characteristics !== undefined)
       patch.characteristics = data.characteristics;
     await agent.update(patch);
+
+    // Sync MCP server assignments if provided
+    if (data.mcpServerIds !== undefined) {
+      await AgentMcpServer.destroy({ where: { agentId: agent.id } });
+      if (data.mcpServerIds.length > 0) {
+        await AgentMcpServer.bulkCreate(
+          data.mcpServerIds.map((mcpServerId) => ({
+            agentId: agent.id,
+            mcpServerId,
+          })),
+        );
+      }
+    }
+
     this.broadcast(
       "agent_updated",
       `Agent "${agent.definition || "Unnamed"}" updated`,

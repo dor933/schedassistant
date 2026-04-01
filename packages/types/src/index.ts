@@ -50,6 +50,26 @@ export interface AgentAttributes {
    * All groups and single chats that reference this agent share this thread / history.
    */
   activeThreadId: string | null;
+  /** The user who created this agent (null for legacy/seeded agents). */
+  createdByUserId: UserId | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// ─── MCP Servers ────────────────────────────────────────────────────────────
+
+export interface McpServerAttributes {
+  id: number;
+  /** Unique display name for this MCP server (e.g. "filesystem", "bash"). */
+  name: string;
+  /** Transport protocol — currently only "stdio" is supported. */
+  transport: string;
+  /** CLI command to launch the server (e.g. "npx", "uvx"). */
+  command: string;
+  /** Arguments passed to the command. */
+  args: string[];
+  /** Optional environment variables. Placeholders like `{{VAR}}` are resolved at runtime. */
+  env: Record<string, string> | null;
   createdAt: Date;
   updatedAt: Date;
 }

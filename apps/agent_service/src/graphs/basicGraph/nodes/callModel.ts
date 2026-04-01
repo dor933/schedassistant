@@ -222,7 +222,7 @@ export async function callModelNode(
   logger.info("Calling LLM", { modelSlug, vendorSlug: vendor.slug, messageCount: stateMessages.length });
 
   const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
-    const tools: StructuredToolInterface[] = [EditUserIdentityTool(state.userId), EditAgentNameTool(agentId), ...(await getMcpTools()) as StructuredToolInterface[]];
+    const tools: StructuredToolInterface[] = [EditUserIdentityTool(state.userId), EditAgentNameTool(agentId), ...(await getMcpTools(agentId)) as StructuredToolInterface[]];
   tools.push(
     AddOngoingRequestTool(agentId, state.userId),
     RemoveOngoingRequestTool(agentId),

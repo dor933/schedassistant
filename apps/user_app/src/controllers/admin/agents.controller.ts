@@ -22,6 +22,7 @@ export class AgentsController {
         req.body.coreInstructions,
         req.body.characteristics ?? null,
         req.user!.userId,
+        req.body.mcpServerIds,
       );
       return res.status(201).json(agent);
     } catch (err: any) {
@@ -40,6 +41,7 @@ export class AgentsController {
           definition: req.body.definition,
           coreInstructions: req.body.coreInstructions,
           characteristics: req.body.characteristics,
+          mcpServerIds: req.body.mcpServerIds,
         },
       );
       return res.json(agent);

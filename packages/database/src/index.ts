@@ -11,3 +11,5 @@ export { Thread } from "./models/Thread";
 export { EpisodicMemory, EMBEDDING_DIMENSION } from "./models/EpisodicMemory";
 export { MessageNotification } from "./models/MessageNotification";
 export { ConversationMessage } from "./models/ConversationMessage";
+export { McpServer } from "./models/McpServer";
+export { AgentMcpServer } from "./models/AgentMcpServer";

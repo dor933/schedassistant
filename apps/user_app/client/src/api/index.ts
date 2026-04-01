@@ -296,7 +296,19 @@ export interface AdminAgent {
   /** Number of groups using this agent (an agent may back multiple groups). */
   groupCount: number;
   editable: boolean;
+  /** The user who created this agent (null for legacy/seeded agents). */
+  createdByUserId: number | null;
+  /** MCP servers assigned to this agent. */
+  mcpServerIds: number[];
   createdAt: string;
+}
+
+export interface AdminMcpServer {
+  id: number;
+  name: string;
+  transport: string;
+  command: string;
+  args: string[];
 }
 
 export interface AdminGroup {
@@ -316,10 +328,23 @@ export const admin = {
   getRoles: () => request<AdminRole[]>("/admin/roles"),
   getUsers: () => request<AdminUser[]>("/admin/users"),
   getAgents: () => request<AdminAgent[]>("/admin/agents"),
+  getMcpServers: () => request<AdminMcpServer[]>("/admin/mcp-servers"),
+  createMcpServer: (data: {
+    name: string;
+    transport: string;
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+  }) =>
+    request<AdminMcpServer>("/admin/mcp-servers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   createAgent: (data: {
     definition?: string;
     coreInstructions?: string;
     characteristics?: Record<string, unknown> | null;
+    mcpServerIds?: number[];
   }) =>
     request<AdminAgent>("/admin/agents", {
       method: "POST",
@@ -331,6 +356,7 @@ export const admin = {
       definition?: string;
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
+      mcpServerIds?: number[];
     },
   ) =>
     request<AdminAgent>(`/admin/agents/${id}`, {

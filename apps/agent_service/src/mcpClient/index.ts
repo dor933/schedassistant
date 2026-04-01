@@ -1,80 +1,64 @@
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
-
-
-const ALL_SERVERS_CONFIG = {
-  filesystem: {
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-filesystem", process.env.DATA_DIR || "/app/data"],
-  },
-  bash: {
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "mcp-shell"], 
-  },
-  fetch: {
-    transport: "stdio",
-    command: "uvx",
-    args: ["mcp-server-fetch"],
-  },
-
-  github: {
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-github"],
-  },
-  docker: {
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@alisaitteke/docker-mcp"], 
-  },
- 
-  massive_market_data: {
-    transport: "stdio",
-    command: "uvx",
-    args: [
-      "--from", 
-      "git+https://github.com/massive-com/mcp_massive@v0.4.0",
-      "mcp_polygon"
-    ],
-    env: {
-      MASSIVE_API_KEY: process.env.MASSIVE_API_KEY,
-      ...process.env
-    }
-  },
-};
-
-const AGENT_PERMISSIONS: Record<string, (keyof typeof ALL_SERVERS_CONFIG)[]> = {
-  "general_agent": ["filesystem", "bash", "github", "fetch", "massive_market_data", "docker"], 
-};
+import { McpServer, AgentMcpServer } from "@scheduling-agent/database";
 
 const clientsCache = new Map<string, MultiServerMCPClient>();
 
+/**
+ * Resolve env placeholders like `{{VAR}}` with actual process.env values.
+ */
+function resolveEnv(env: Record<string, string> | null): Record<string, string> | undefined {
+  if (!env) return undefined;
+  const resolved: Record<string, string> = {};
+  for (const [key, val] of Object.entries(env)) {
+    const match = val.match(/^\{\{(\w+)\}\}$/);
+    resolved[key] = match ? (process.env[match[1]] ?? "") : val;
+  }
+  return { ...resolved, ...process.env as Record<string, string> };
+}
 
-export default async function getMcpTools(agentName: string = "general_agent") {
-  const requiredServers = AGENT_PERMISSIONS[agentName];
-  if (!requiredServers) {
-    console.warn(`No MCP servers defined for agent: ${agentName}`);
+export default async function getMcpTools(agentId: string) {
+  if (clientsCache.has(agentId)) {
+    console.log(`Loading cached MCP tools for agent: ${agentId}`);
+    return await clientsCache.get(agentId)!.getTools();
+  }
+
+  // Fetch the MCP servers assigned to this agent
+  const links = await AgentMcpServer.findAll({
+    where: { agentId },
+    attributes: ["mcpServerId"],
+  });
+
+  if (links.length === 0) {
+    console.warn(`No MCP servers assigned to agent: ${agentId}`);
     return [];
   }
 
-  if (clientsCache.has(agentName)) {
-    console.log(`Loading cached MCP tools for agent: ${agentName}`);
-    return await clientsCache.get(agentName)!.getTools();
-  }
-
-  console.log(`Initializing new MCP client for agent: ${agentName}...`);
-
-  const agentSpecificConfig: any = {};
-  for (const serverName of requiredServers) {
-    agentSpecificConfig[serverName] = ALL_SERVERS_CONFIG[serverName];
-  }
-
-  const client = new MultiServerMCPClient({
-    mcpServers: agentSpecificConfig,
+  const serverIds = links.map((l) => l.mcpServerId);
+  const servers = await McpServer.findAll({
+    where: { id: serverIds },
   });
 
-  clientsCache.set(agentName, client);
+  if (servers.length === 0) {
+    console.warn(`No MCP server records found for agent: ${agentId}`);
+    return [];
+  }
+
+  console.log(
+    `Initializing MCP client for agent ${agentId} with servers: ${servers.map((s) => s.name).join(", ")}`,
+  );
+
+  const mcpServers: Record<string, any> = {};
+  for (const server of servers) {
+    mcpServers[server.name] = {
+      transport: server.transport,
+      command: server.command,
+      args: server.args,
+      ...(server.env ? { env: resolveEnv(server.env) } : {}),
+    };
+  }
+
+  const client = new MultiServerMCPClient({ mcpServers });
+  clientsCache.set(agentId, client);
 
   const tools = await client.getTools();
   return tools;
