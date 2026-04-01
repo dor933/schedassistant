@@ -9,7 +9,7 @@ import type {
   SessionSummary,
 } from "@scheduling-agent/types";
 
-import { getCoreMemory } from "../../../sessionsManagment/coreMemoryManager";
+import { getUserIdentity } from "../../../sessionsManagment/userIdentityManager";
 import { loadRecentConversationMessagesForContext } from "../../../sessionsManagment/conversationLogForContext";
 import { formatCheckpointMessagesForSystemPrompt } from "../../../sessionsManagment/checkpointMessagesForContext";
 import { retrieveEpisodicMemory } from "../../../rag/episodicRetrieval";
@@ -18,6 +18,7 @@ import { embedText } from "../../../rag/embeddings";
 import { formatUserIdentityForPrompt } from "../../../utils/formatUserIdentityForPrompt";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
+import { AgentId } from "@scheduling-agent/types";
 
 /** Seeded executive accounts (see `20240101000026-seed-executive-users.js`). */
 const GRAHAMY_EXECUTIVE_USER_NAMES = ["dor", "dan", "maor"] as const;
@@ -56,6 +57,14 @@ async function loadGrahamyExecutivesSection(): Promise<string> {
     });
     return "";
   }
+}
+
+async function loadAgentNameSection(agentId: AgentId): Promise<string> {
+  const agent = await Agent.findByPk(agentId, { attributes: ["agentName"] });
+  if (agent?.agentName) {
+    return `## Your name is ${agent.agentName}\n\n`;
+  }
+  return "No name yet";
 }
 
 /**
@@ -107,7 +116,7 @@ export async function buildContext(
         );
       }
     } catch {
-      // agents table / row missing — continue without DB instructions.
+      throw new Error(`Failed to load agent from database: ${agentId}`);
     }
   }
 
@@ -159,7 +168,7 @@ export async function buildContext(
   }
 
   // ── 2. Core context: formatted users.user_identity (single-chat; group uses members above) ──
-  const coreMemory = await getCoreMemory(userId, groupId);
+  const coreMemory = await getUserIdentity(userId, groupId);
 
   // ── 2b. LangGraph checkpoint snapshot (system prompt) — same messages follow as chat history in callModel ──
   const checkpointLog = formatCheckpointMessagesForSystemPrompt(messages, {
@@ -198,12 +207,15 @@ export async function buildContext(
 
   const grahamyExecutivesSection = await loadGrahamyExecutivesSection();
 
+  const agentNameSection = await loadAgentNameSection(agentId);
+
   // ── 5. Assemble system prompt ──────────────────────────────────────
   const systemPrompt = formatSystemPrompt(
     agentDefinition,
     agentCoreInstructions,
     agentCharacteristics,
     grahamyExecutivesSection,
+    agentNameSection,
     coreMemory,
     ongoingRequests,
     checkpointLog.body,
@@ -289,6 +301,7 @@ function formatSystemPrompt(
   agentCoreInstructions: string | null,
   agentCharacteristics: Record<string, unknown> | null,
   grahamyExecutivesSection: string,
+  agentNameSection: string,
   coreMemory: string,
   ongoingRequestLines: string[] | null,
   checkpointLogBody: string,
@@ -319,6 +332,12 @@ function formatSystemPrompt(
   const execTrim = grahamyExecutivesSection.trim();
   if (execTrim.length > 0) {
     sections.push(execTrim);
+    sections.push("");
+  }
+
+  const agentNameTrim = agentNameSection.trim();
+  if (agentNameTrim.length > 0) {
+    sections.push(agentNameSection);
     sections.push("");
   }
 

@@ -1,5 +1,6 @@
 import { Annotation } from "@langchain/langgraph";
 import type { BaseMessage } from "@langchain/core/messages";
+import { AgentId } from "@scheduling-agent/types";
 
 /**
  * LangGraph state annotation for conversational agents (any specialization).
@@ -32,9 +33,9 @@ export const AgentAnnotation = Annotation.Root({
    * Which logical agent serves this thread (`agents.id`). Used to load
    * `agents.core_instructions` from the DB into the system prompt each turn.
    */
-  agentId: Annotation<string | null>({
+  agentId: Annotation<AgentId>({
     reducer: (state, update) => (update !== undefined ? update : state),
-    default: () => null,
+    default: () => "",
   }),
 
   /** Model slug resolved from the conversation's model_id (e.g. "gpt-4o", "claude-opus-4-6"). */

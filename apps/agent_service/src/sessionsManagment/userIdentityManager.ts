@@ -26,7 +26,7 @@ function tryParseIdentityObject(content: string): Record<string, unknown> | null
  * - **Single chat:** full identity for `userId`.
  * - **Group chat:** empty string — per-member identity is under **Group chat / Members** in `contextBuilder`.
  */
-export async function getCoreMemory(
+export async function getUserIdentity(
   userId: UserId,
   groupId: string | null | undefined,
 ): Promise<string> {
@@ -52,7 +52,7 @@ export async function getCoreMemory(
  * - **`append`:** `content` should be a **JSON object** string — shallow-merged into the existing
  *   `user_identity`. If not valid JSON, the text is appended to the `agentNotes` string field.
  */
-export async function updateCoreMemory(
+export async function updateUserIdentity(
   userId: UserId,
   action: "append" | "rewrite",
   content: string,
@@ -60,7 +60,7 @@ export async function updateCoreMemory(
   try {
     const user = await User.findByPk(userId, { attributes: ["id", "userIdentity"] });
     if (!user) {
-      logger.error("updateCoreMemory: user not found", { userId });
+      logger.error("updateUserIdentity: user not found", { userId });
       return false;
     }
 
@@ -90,7 +90,7 @@ export async function updateCoreMemory(
     });
     return true;
   } catch (err) {
-    logger.error(`Core memory ${action} failed`, { userId, error: String(err) });
+    logger.error(`User identity ${action} failed`, { userId, error: String(err) });
     return false;
   }
 }

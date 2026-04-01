@@ -37,6 +37,8 @@ export interface AgentAttributes {
   id: AgentId;
   /** Short role label: "AI Default Agent", "Senior backend developer", etc. */
   definition: string | null;
+  /** Name of the agent */
+  agentName: string | null;
   /** Detailed instructions merged into the system prompt each turn. */
   coreInstructions: string | null;
   /** Structured persona traits (tone, style, etc.) — rendered as "Your Characteristics" in context. */

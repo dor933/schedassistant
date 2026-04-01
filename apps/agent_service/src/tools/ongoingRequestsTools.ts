@@ -5,7 +5,7 @@ import { addOngoingRequest, removeOngoingRequest } from "../sessionsManagment/on
 /**
  * Records a multi-step or deferred user ask in `agents.ongoing_requests` so it stays visible across turns and users.
  */
-export function createAddOngoingRequestTool(agentId: string, userId: number) {
+export function AddOngoingRequestTool(agentId: string, userId: number) {
   return tool(
     async (input) => {
       const { request } = input;
@@ -37,7 +37,7 @@ export function createAddOngoingRequestTool(agentId: string, userId: number) {
 /**
  * Removes an entry from `agents.ongoing_requests` after it has been fulfilled.
  */
-export function createRemoveOngoingRequestTool(agentId: string) {
+export function RemoveOngoingRequestTool(agentId: string) {
   return tool(
     async (input) => {
       const { request_id } = input;

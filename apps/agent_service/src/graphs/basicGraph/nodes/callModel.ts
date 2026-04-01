@@ -21,11 +21,12 @@ import { LLMModel, Vendor } from "@scheduling-agent/database";
 import { resolveModelSlug } from "../../../chat/modelResolution";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
-import { createEditCoreMemoryTool } from "../../../tools/editCoreMemoryTool";
+import { EditUserIdentityTool } from "../../../tools/editUserIdentityTool";
 import {
-  createAddOngoingRequestTool,
-  createRemoveOngoingRequestTool,
+  AddOngoingRequestTool,
+  RemoveOngoingRequestTool,
 } from "../../../tools/ongoingRequestsTools";
+import { EditAgentNameTool } from "../../../tools/agentNameTool";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 8;
@@ -220,13 +221,11 @@ export async function callModelNode(
   logger.info("Calling LLM", { modelSlug, vendorSlug: vendor.slug, messageCount: stateMessages.length });
 
   const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
-  const tools: StructuredToolInterface[] = [createEditCoreMemoryTool(state.userId)];
-  if (agentId) {
-    tools.push(
-      createAddOngoingRequestTool(agentId, state.userId),
-      createRemoveOngoingRequestTool(agentId),
-    );
-  }
+    const tools: StructuredToolInterface[] = [EditUserIdentityTool(state.userId), EditAgentNameTool(agentId)];
+  tools.push(
+    AddOngoingRequestTool(agentId, state.userId),
+    RemoveOngoingRequestTool(agentId),
+  );
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),
   );

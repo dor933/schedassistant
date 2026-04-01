@@ -12,11 +12,13 @@ type AgentCreationAttributes = Optional<
   | "characteristics"
   | "ongoingRequests"
   | "activeThreadId"
+  | "agentName"
 >;
 
 class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements AgentAttributes {
   declare id: string;
   declare definition: string | null;
+  declare agentName: string | null;
   declare coreInstructions: string | null;
   declare characteristics: Record<string, unknown> | null;
   declare ongoingRequests: OngoingRequest[] | null;
@@ -35,6 +37,11 @@ Agent.init(
     definition: {
       type: DataTypes.STRING,
       allowNull: true,
+    },
+    agentName: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: "agent_name",
     },
     coreInstructions: {
       type: DataTypes.TEXT,
