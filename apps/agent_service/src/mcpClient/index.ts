@@ -17,11 +17,7 @@ const ALL_SERVERS_CONFIG = {
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-fetch"],
   },
-  brave_search: {
-    transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-brave-search"],
-  },
+
   github: {
     transport: "stdio",
     command: "npx",
@@ -30,7 +26,7 @@ const ALL_SERVERS_CONFIG = {
 };
 
 const AGENT_PERMISSIONS: Record<string, (keyof typeof ALL_SERVERS_CONFIG)[]> = {
-  "general_agent": ["filesystem", "bash", "github", "fetch", "brave_search"], 
+  "general_agent": ["filesystem", "bash", "github", "fetch"], 
 };
 
 const clientsCache = new Map<string, MultiServerMCPClient>();
