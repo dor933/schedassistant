@@ -314,6 +314,7 @@ function formatSystemPrompt(
 
   const roleLabel = agentDefinition || "AI assistant";
   sections.push(
+    agentNameSection + "\n\n" +
     `You are a helpful ${roleLabel}. ` +
       "Use the following context about the user to inform your responses.\n",
   );
@@ -332,12 +333,6 @@ function formatSystemPrompt(
   const execTrim = grahamyExecutivesSection.trim();
   if (execTrim.length > 0) {
     sections.push(execTrim);
-    sections.push("");
-  }
-
-  const agentNameTrim = agentNameSection.trim();
-  if (agentNameTrim.length > 0) {
-    sections.push(agentNameSection);
     sections.push("");
   }
 
