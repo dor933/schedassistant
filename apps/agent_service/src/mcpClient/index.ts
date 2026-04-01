@@ -23,6 +23,11 @@ const ALL_SERVERS_CONFIG = {
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-github"],
   },
+  docker: {
+    transport: "stdio",
+    command: "npx",
+    args: ["-y", "github:0xshariq/docker-mcp-server"], 
+  },
   fmp: {
     transport: "sse",
     url: `https://financialmodelingprep.com/mcp?apikey=${process.env.FMP_API_KEY}`,
@@ -43,7 +48,7 @@ const ALL_SERVERS_CONFIG = {
 };
 
 const AGENT_PERMISSIONS: Record<string, (keyof typeof ALL_SERVERS_CONFIG)[]> = {
-  "general_agent": ["filesystem", "bash", "github", "fetch", "fmp", "massive_market_data"], 
+  "general_agent": ["filesystem", "bash", "github", "fetch", "fmp", "massive_market_data", "docker"], 
 };
 
 const clientsCache = new Map<string, MultiServerMCPClient>();
