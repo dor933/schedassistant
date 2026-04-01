@@ -27,6 +27,7 @@ import {
   RemoveOngoingRequestTool,
 } from "../../../tools/ongoingRequestsTools";
 import { EditAgentNameTool } from "../../../tools/agentNameTool";
+import getMcpTools from "../../../mcpClient";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 8;
@@ -221,7 +222,7 @@ export async function callModelNode(
   logger.info("Calling LLM", { modelSlug, vendorSlug: vendor.slug, messageCount: stateMessages.length });
 
   const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
-    const tools: StructuredToolInterface[] = [EditUserIdentityTool(state.userId), EditAgentNameTool(agentId)];
+    const tools: StructuredToolInterface[] = [EditUserIdentityTool(state.userId), EditAgentNameTool(agentId), ...(await getMcpTools()) as StructuredToolInterface[]];
   tools.push(
     AddOngoingRequestTool(agentId, state.userId),
     RemoveOngoingRequestTool(agentId),
