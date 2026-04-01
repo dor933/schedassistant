@@ -14,8 +14,8 @@ const ALL_SERVERS_CONFIG = {
   },
   fetch: {
     transport: "stdio",
-    command: "npx",
-    args: ["-y", "@modelcontextprotocol/server-fetch"],
+    command: "uvx",
+    args: ["mcp-server-fetch"],
   },
 
   github: {
