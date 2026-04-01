@@ -31,6 +31,9 @@ const ALL_SERVERS_CONFIG = {
   fmp: {
     transport: "sse",
     url: `https://financialmodelingprep.com/mcp?apikey=${process.env.FMP_API_KEY}`,
+    headers: {
+        "Accept": "application/json, text/event-stream"
+      }
   },
   massive_market_data: {
     transport: "stdio",
