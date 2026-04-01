@@ -23,10 +23,10 @@
     COPY investlan.crt /etc/ssl/certs/investlan.crt
     ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/investlan.crt
     
-    RUN apk add --no-cache python3 py3-pip git
+    RUN apk add --no-cache python3 py3-pip git bash
     RUN pip3 install --break-system-packages uv 
     
-    RUN npm install -g @modelcontextprotocol/server-filesystem @modelcontextprotocol/server-bash @modelcontextprotocol/server-fetch @modelcontextprotocol/server-github
+    RUN npm install -g --unsafe-perm @modelcontextprotocol/server-filesystem @modelcontextprotocol/server-bash @modelcontextprotocol/server-fetch @modelcontextprotocol/server-github
     
     COPY package.json ./
     COPY --from=builder /app/node_modules/ ./node_modules/
