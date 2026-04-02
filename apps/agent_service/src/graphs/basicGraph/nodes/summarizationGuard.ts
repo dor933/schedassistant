@@ -40,9 +40,9 @@ function estimateTokens(messages: BaseMessage[]): number {
     } else if (Array.isArray(content)) {
       for (const part of content) {
         if (typeof part === "string") {
-          totalChars += part.length;
+          totalChars += (part as string).length;
         } else if (part && typeof part === "object" && "text" in part) {
-          totalChars += String((part as any).text).length;
+          totalChars += String((part as { text: string }).text).length;
         }
       }
     }
