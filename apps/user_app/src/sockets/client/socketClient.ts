@@ -8,6 +8,28 @@ const AGENT_SERVICE_URL =
 
 let agentSocket: Socket | null = null;
 
+export interface ActiveJobEntry {
+  conversationId: string;
+  conversationType: "group" | "single";
+  userId: number;
+  groupId: string | null;
+}
+
+/**
+ * Queries agent_service for BullMQ jobs that are currently active or waiting.
+ * Returns an empty array if the socket is not connected or the call times out.
+ */
+export function fetchActiveJobs(): Promise<ActiveJobEntry[]> {
+  return new Promise((resolve) => {
+    if (!agentSocket?.connected) return resolve([]);
+    const timeout = setTimeout(() => resolve([]), 3000);
+    agentSocket.emit("check:active-jobs", (entries: ActiveJobEntry[]) => {
+      clearTimeout(timeout);
+      resolve(entries);
+    });
+  });
+}
+
 /** Payload shape emitted by agent_service on `agent:reply`. */
 interface AgentReplyOk {
   requestId: string;
@@ -96,8 +118,6 @@ export function connectToAgentService(): void {
 async function handleAgentTyping(payload: AgentTypingPayload): Promise<void> {
   const { userId, groupId, singleChatId } = payload;
 
-  // Only emit typing for user-facing conversations (group or single chat).
-  // Internal activity (e.g. agent-to-agent consultation) has neither set.
   if (!groupId && !singleChatId) return;
 
   const conversationId = groupId ?? singleChatId!;
@@ -132,7 +152,6 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
     singleChatId,
   } = payload;
 
-  // Internal activity (agent-to-agent consultation) has no conversation scope — skip.
   if (!groupId && !singleChatId) return;
 
   const conversationId = groupId ?? singleChatId!;

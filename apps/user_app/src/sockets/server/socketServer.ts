@@ -3,6 +3,7 @@ import { Server } from "socket.io";
 import { verifyToken } from "../../middlewares/auth";
 import { MessageNotification, GroupMember, User } from "@scheduling-agent/database";
 import { logger } from "../../logger";
+import { fetchActiveJobs } from "../client/socketClient";
 
 let ioInstance: Server | null = null;
 
@@ -43,6 +44,22 @@ export function attachSocketIO(httpServer: HttpServer): Server {
   io.on("connection", (socket) => {
     const userId = socket.data.userId as number;
     void socket.join(`user:${userId}`);
+
+    // Query agent_service for jobs still in progress and re-emit typing indicators
+    fetchActiveJobs()
+      .then((jobs) => {
+        for (const entry of jobs) {
+          const isRelevant = entry.groupId || entry.userId === userId;
+          if (!isRelevant) continue;
+          socket.emit("thread:typing", {
+            conversationId: entry.conversationId,
+            conversationType: entry.conversationType,
+          });
+        }
+      })
+      .catch((err) => {
+        logger.warn("Failed to fetch active jobs on connect", { userId, error: String(err) });
+      });
 
     // ── user:typing — fan out typing indicator to other group members ──
     socket.on("user:typing", async (data: { groupId: string }) => {

@@ -1,5 +1,6 @@
 import type { Server as HttpServer } from "node:http";
 import { Server } from "socket.io";
+import { agentChatQueue } from "./queues/agentChat.bull";
 import { logger } from "./logger";
 
 let ioInstance: Server | null = null;
@@ -41,6 +42,13 @@ export interface AgentErrorPayload {
 
 export type AgentChatPayload = AgentReplyPayload | AgentErrorPayload;
 
+export interface ActiveJobEntry {
+  conversationId: string;
+  conversationType: "group" | "single";
+  userId: number;
+  groupId: string | null;
+}
+
 /** Emitted when the worker starts processing a job. */
 export interface AgentTypingPayload {
   threadId: string;
@@ -62,6 +70,25 @@ export function attachAgentSocketIO(httpServer: HttpServer): Server {
 
   io.on("connection", (socket) => {
     logger.info("user_app socket connected", { socketId: socket.id });
+
+    socket.on("check:active-jobs", async (callback: (result: ActiveJobEntry[]) => void) => {
+      try {
+        const active = await agentChatQueue.getJobs(["active", "waiting"]);
+        const entries: ActiveJobEntry[] = active
+          .filter((j) => j.data.groupId || j.data.singleChatId)
+          .map((j) => ({
+            conversationId: (j.data.groupId ?? j.data.singleChatId)!,
+            conversationType: j.data.groupId ? "group" as const : "single" as const,
+            userId: j.data.userId,
+            groupId: j.data.groupId ?? null,
+          }));
+        callback(entries);
+      } catch (err) {
+        logger.warn("check:active-jobs failed", { error: String(err) });
+        callback([]);
+      }
+    });
+
     socket.on("disconnect", () => {
       logger.info("user_app socket disconnected", { socketId: socket.id });
     });
