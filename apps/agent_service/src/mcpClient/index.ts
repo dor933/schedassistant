@@ -4,16 +4,20 @@ import { McpServer, AgentMcpServer } from "@scheduling-agent/database";
 const clientsCache = new Map<string, MultiServerMCPClient>();
 
 /**
- * Resolve env placeholders like `{{VAR}}` with actual process.env values.
+ * Build the environment for an MCP server subprocess.
+ * Always inherits process.env so that tokens like GITHUB_PERSONAL_ACCESS_TOKEN
+ * (set on the agent_service container) reach stdio-based MCP servers.
+ * Custom env values from the DB are merged on top; {{VAR}} placeholders
+ * are resolved from process.env.
  */
-function resolveEnv(env: Record<string, string> | null): Record<string, string> | undefined {
-  if (!env) return undefined;
-  const resolved: Record<string, string> = {};
+function buildMcpEnv(env: Record<string, string> | null): Record<string, string> {
+  const base = { ...process.env } as Record<string, string>;
+  if (!env) return base;
   for (const [key, val] of Object.entries(env)) {
     const match = val.match(/^\{\{(\w+)\}\}$/);
-    resolved[key] = match ? (process.env[match[1]] ?? "") : val;
+    base[key] = match ? (process.env[match[1]] ?? "") : val;
   }
-  return { ...resolved, ...process.env as Record<string, string> };
+  return base;
 }
 
 /**
@@ -36,7 +40,7 @@ export async function getMcpToolsByServerIds(serverIds: number[], cacheKey: stri
       transport: server.transport,
       command: server.command,
       args: server.args,
-      ...(server.env ? { env: resolveEnv(server.env) } : {}),
+      env: buildMcpEnv(server.env),
     };
   }
 
@@ -82,7 +86,7 @@ export default async function getMcpTools(agentId: string) {
       transport: server.transport,
       command: server.command,
       args: server.args,
-      ...(server.env ? { env: resolveEnv(server.env) } : {}),
+      env: buildMcpEnv(server.env),
     };
   }
 
