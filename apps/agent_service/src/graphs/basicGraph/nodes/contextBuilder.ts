@@ -88,11 +88,12 @@ export async function buildContext(
   let agentDefinition: string | null = null;
   let agentCoreInstructions: string | null = null;
   let agentCharacteristics: Record<string, unknown> | null = null;
+  let agentNotes: string | null = null;
   let ongoingRequestsRows: OngoingRequest[] = [];
   if (agentId) {
     try {
       const agent = await Agent.findByPk(agentId, {
-        attributes: ["definition", "coreInstructions", "characteristics", "ongoingRequests"],
+        attributes: ["definition", "coreInstructions", "characteristics", "ongoingRequests", "agentNotes"],
       });
       const def = agent?.definition?.trim();
       agentDefinition = def && def.length > 0 ? def : null;
@@ -103,6 +104,8 @@ export async function buildContext(
         ch != null && typeof ch === "object" && !Array.isArray(ch)
           ? (ch as Record<string, unknown>)
           : null;
+      const notes = agent?.agentNotes?.trim();
+      agentNotes = notes && notes.length > 0 ? notes : null;
       const raw = agent?.ongoingRequests;
       if (Array.isArray(raw)) {
         ongoingRequestsRows = raw.filter(
@@ -214,6 +217,7 @@ export async function buildContext(
     agentDefinition,
     agentCoreInstructions,
     agentCharacteristics,
+    agentNotes,
     grahamyExecutivesSection,
     agentNameSection,
     coreMemory,
@@ -300,6 +304,7 @@ function formatSystemPrompt(
   agentDefinition: string | null,
   agentCoreInstructions: string | null,
   agentCharacteristics: Record<string, unknown> | null,
+  agentNotes: string | null,
   grahamyExecutivesSection: string,
   agentNameSection: string,
   coreMemory: string,
@@ -377,6 +382,17 @@ function formatSystemPrompt(
   const charSection = formatCharacteristicsSection(agentCharacteristics);
   if (charSection) {
     sections.push(charSection);
+  }
+
+  if (agentNotes) {
+    sections.push("## Agent notes");
+    sections.push(
+      "These are your own persistent notes — important information you chose to remember. " +
+      "Use `append_agent_notes` to add new entries and `edit_agent_notes` to correct or reorganize them.",
+    );
+    sections.push("");
+    sections.push(agentNotes);
+    sections.push("");
   }
 
   const execTrim = grahamyExecutivesSection.trim();

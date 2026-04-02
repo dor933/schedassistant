@@ -54,6 +54,8 @@ export interface AgentAttributes {
   createdByUserId: UserId | null;
   /** The default LLM model for this agent (references models.id). */
   modelId: string | null;
+  /** Free-form notes the agent maintains about important information it should always remember. */
+  agentNotes: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

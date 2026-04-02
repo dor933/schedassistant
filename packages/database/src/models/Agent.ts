@@ -15,6 +15,7 @@ type AgentCreationAttributes = Optional<
   | "agentName"
   | "createdByUserId"
   | "modelId"
+  | "agentNotes"
 >;
 
 class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements AgentAttributes {
@@ -27,6 +28,7 @@ class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements A
   declare activeThreadId: string | null;
   declare createdByUserId: UserId | null;
   declare modelId: string | null;
+  declare agentNotes: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -78,6 +80,11 @@ Agent.init(
       allowNull: true,
       field: "model_id",
       references: { model: "models", key: "id" },
+    },
+    agentNotes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "agent_notes",
     },
     createdAt: {
       type: DataTypes.DATE,
