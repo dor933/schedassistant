@@ -252,11 +252,9 @@ export async function callModelNode(
     ListAgentsTool(agentId),
     ListSystemAgentsTool(),
     DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId),
-  ];
-  tools.push(
     AddOngoingRequestTool(agentId, state.userId),
     RemoveOngoingRequestTool(agentId),
-  );
+  ];
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),
   );
