@@ -1051,8 +1051,16 @@ export default function AdminPage() {
               <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Add new server</p>
               <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
                 {/* Name */}
-                <div className="relative group">
-                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Name</label>
+                <div className="group">
+                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                    Name
+                    <span className="relative cursor-help">
+                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <strong>Name</strong> is a unique identifier for this server. It appears when assigning servers to agents (e.g. "filesystem", "github", "bash").
+                      </span>
+                    </span>
+                  </label>
                   <input
                     type="text"
                     value={newMcpName}
@@ -1060,17 +1068,19 @@ export default function AdminPage() {
                     placeholder='e.g. "filesystem"'
                     className={inputClass}
                   />
-                  <div className="absolute right-3 top-[26px] cursor-help">
-                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Name</strong> is a unique identifier for this server. It appears when assigning servers to agents (e.g. "filesystem", "github", "bash").
-                    </div>
-                  </div>
                 </div>
 
                 {/* Transport */}
-                <div className="relative group">
-                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Transport</label>
+                <div className="group">
+                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                    Transport
+                    <span className="relative cursor-help">
+                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-60 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <strong>Transport</strong> defines how the agent communicates with the server. <strong>stdio</strong> launches a local process; <strong>sse</strong> connects to a remote HTTP endpoint.
+                      </span>
+                    </span>
+                  </label>
                   <select
                     value={newMcpTransport}
                     onChange={(e) => setNewMcpTransport(e.target.value)}
@@ -1079,17 +1089,19 @@ export default function AdminPage() {
                     <option value="stdio">stdio</option>
                     <option value="sse">sse</option>
                   </select>
-                  <div className="absolute right-8 top-[26px] cursor-help">
-                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Transport</strong> defines how the agent communicates with the server. <strong>stdio</strong> launches a local process; <strong>sse</strong> connects to a remote HTTP endpoint.
-                    </div>
-                  </div>
                 </div>
 
                 {/* Command */}
-                <div className="relative group">
-                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Command</label>
+                <div className="group">
+                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                    Command
+                    <span className="relative cursor-help">
+                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-60 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <strong>Command</strong> is the executable used to start the MCP server process (e.g. <code className="rounded bg-gray-100 px-1">npx</code>, <code className="rounded bg-gray-100 px-1">uvx</code>, <code className="rounded bg-gray-100 px-1">node</code>).
+                      </span>
+                    </span>
+                  </label>
                   <input
                     type="text"
                     value={newMcpCommand}
@@ -1097,17 +1109,19 @@ export default function AdminPage() {
                     placeholder='e.g. "npx" or "uvx"'
                     className={inputClass + " font-mono text-xs"}
                   />
-                  <div className="absolute right-3 top-[26px] cursor-help">
-                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Command</strong> is the executable used to start the MCP server process (e.g. <code className="rounded bg-gray-100 px-1">npx</code>, <code className="rounded bg-gray-100 px-1">uvx</code>, <code className="rounded bg-gray-100 px-1">node</code>).
-                    </div>
-                  </div>
                 </div>
 
                 {/* Args */}
-                <div className="relative group">
-                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Arguments</label>
+                <div className="group">
+                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                    Arguments
+                    <span className="relative cursor-help">
+                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <strong>Arguments</strong> are passed to the command as a list. Enter them separated by commas. For example: <code className="rounded bg-gray-100 px-1">-y, @modelcontextprotocol/server-filesystem, /app/data</code>
+                      </span>
+                    </span>
+                  </label>
                   <input
                     type="text"
                     value={newMcpArgs}
@@ -1115,18 +1129,20 @@ export default function AdminPage() {
                     placeholder='Comma-separated, e.g. "-y, @modelcontextprotocol/server-filesystem, /data"'
                     className={inputClass + " font-mono text-xs"}
                   />
-                  <div className="absolute right-3 top-[26px] cursor-help">
-                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Arguments</strong> are passed to the command as a list. Enter them separated by commas. For example: <code className="rounded bg-gray-100 px-1">-y, @modelcontextprotocol/server-filesystem, /app/data</code>
-                    </div>
-                  </div>
                 </div>
               </div>
 
               {/* Env — full width */}
-              <div className="relative group">
-                <label className="mb-1 block text-[10px] font-medium text-gray-500">Environment Variables (optional)</label>
+              <div className="group">
+                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                  Environment Variables (optional)
+                  <span className="relative cursor-help">
+                    <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-72 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Environment variables</strong> are passed to the server process as a JSON object. Use <code className="rounded bg-gray-100 px-1">{`{{VAR_NAME}}`}</code> syntax to reference host environment variables at runtime. Leave empty if none are needed.
+                    </span>
+                  </span>
+                </label>
                 <textarea
                   value={newMcpEnv}
                   onChange={(e) => setNewMcpEnv(e.target.value)}
@@ -1134,12 +1150,6 @@ export default function AdminPage() {
                   rows={3}
                   className={inputClass + " font-mono text-xs resize-y"}
                 />
-                <div className="absolute right-3 top-[22px] cursor-help">
-                  <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                  <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-72 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                    <strong>Environment variables</strong> are passed to the server process as a JSON object. Use <code className="rounded bg-gray-100 px-1">{`{{VAR_NAME}}`}</code> syntax to reference host environment variables at runtime. Leave empty if none are needed.
-                  </div>
-                </div>
               </div>
 
               <button
@@ -1204,8 +1214,16 @@ export default function AdminPage() {
             <div className="mb-5 space-y-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Add new system agent</p>
               <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
-                <div className="relative group">
-                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Slug</label>
+                <div className="group">
+                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                    Slug
+                    <span className="relative cursor-help">
+                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <strong>Slug</strong> is the unique machine identifier used when delegating tasks to this agent (e.g. <code className="rounded bg-gray-100 px-1">stock_researcher_agent</code>).
+                      </span>
+                    </span>
+                  </label>
                   <input
                     type="text"
                     value={newSaSlug}
@@ -1213,15 +1231,17 @@ export default function AdminPage() {
                     placeholder='e.g. "stock_researcher_agent"'
                     className={inputClass + " font-mono text-xs"}
                   />
-                  <div className="absolute right-3 top-[26px] cursor-help">
-                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Slug</strong> is the unique machine identifier used when delegating tasks to this agent (e.g. <code className="rounded bg-gray-100 px-1">stock_researcher_agent</code>).
-                    </div>
-                  </div>
                 </div>
-                <div className="relative group">
-                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Name</label>
+                <div className="group">
+                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                    Name
+                    <span className="relative cursor-help">
+                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-52 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <strong>Name</strong> is the human-readable display name shown in the admin panel and in agent context.
+                      </span>
+                    </span>
+                  </label>
                   <input
                     type="text"
                     value={newSaName}
@@ -1229,16 +1249,18 @@ export default function AdminPage() {
                     placeholder='e.g. "Stock Researcher"'
                     className={inputClass}
                   />
-                  <div className="absolute right-3 top-[26px] cursor-help">
-                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-52 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Name</strong> is the human-readable display name shown in the admin panel and in agent context.
-                    </div>
-                  </div>
                 </div>
               </div>
-              <div className="relative group">
-                <label className="mb-1 block text-[10px] font-medium text-gray-500">Description</label>
+              <div className="group">
+                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                  Description
+                  <span className="relative cursor-help">
+                    <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-60 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Description</strong> helps agents decide which specialist to delegate to. Be specific about capabilities.
+                    </span>
+                  </span>
+                </label>
                 <input
                   type="text"
                   value={newSaDescription}
@@ -1246,15 +1268,17 @@ export default function AdminPage() {
                   placeholder="Short description of this agent's expertise (shown to agents when browsing specialists)"
                   className={inputClass}
                 />
-                <div className="absolute right-3 top-[26px] cursor-help">
-                  <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                  <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                    <strong>Description</strong> helps agents decide which specialist to delegate to. Be specific about capabilities.
-                  </div>
-                </div>
               </div>
-              <div className="relative group">
-                <label className="mb-1 block text-[10px] font-medium text-gray-500">Instructions</label>
+              <div className="group">
+                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                  Instructions
+                  <span className="relative cursor-help">
+                    <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Instructions</strong> are injected into the deep agent's system prompt. Include domain expertise, methodology, output format expectations, etc.
+                    </span>
+                  </span>
+                </label>
                 <textarea
                   value={newSaInstructions}
                   onChange={(e) => setNewSaInstructions(e.target.value)}
@@ -1262,16 +1286,18 @@ export default function AdminPage() {
                   rows={4}
                   className={inputClass + " resize-y"}
                 />
-                <div className="absolute right-3 top-[22px] cursor-help">
-                  <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                  <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                    <strong>Instructions</strong> are injected into the deep agent's system prompt. Include domain expertise, methodology, output format expectations, etc.
-                  </div>
-                </div>
               </div>
               <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
-                <div className="relative group">
-                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Model slug</label>
+                <div className="group">
+                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                    Model slug
+                    <span className="relative cursor-help">
+                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <strong>Model</strong> is the LLM model slug this agent uses (e.g. <code className="rounded bg-gray-100 px-1">gpt-4o</code>, <code className="rounded bg-gray-100 px-1">claude-sonnet-4-6</code>). Must match a model in the Models section.
+                      </span>
+                    </span>
+                  </label>
                   <input
                     type="text"
                     value={newSaModelSlug}
@@ -1279,12 +1305,6 @@ export default function AdminPage() {
                     placeholder='Default: gpt-4o'
                     className={inputClass + " font-mono text-xs"}
                   />
-                  <div className="absolute right-3 top-[26px] cursor-help">
-                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Model</strong> is the LLM model slug this agent uses (e.g. <code className="rounded bg-gray-100 px-1">gpt-4o</code>, <code className="rounded bg-gray-100 px-1">claude-sonnet-4-6</code>). Must match a model in the Models section.
-                    </div>
-                  </div>
                 </div>
                 <div>
                   <label className="mb-1 block text-[10px] font-medium text-gray-500">MCP Servers</label>
@@ -1470,38 +1490,44 @@ export default function AdminPage() {
                   </option>
                 ))}
               </select>
-              <div className="relative group">
+              <div className="group">
+                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                  Display name
+                  <span className="relative cursor-help">
+                    <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Name</strong> is what users see in the UI (e.g.
+                      "GPT-4o Mini", "Gemini 3.1").
+                    </span>
+                  </span>
+                </label>
                 <input
                   type="text"
                   value={newModelName}
                   onChange={(e) => setNewModelName(e.target.value)}
-                  placeholder="Display name, e.g. GPT-4o Mini"
+                  placeholder="e.g. GPT-4o Mini"
                   className={inputClass}
                 />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 cursor-help">
-                  <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                  <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                    <strong>Name</strong> is what users see in the UI (e.g.
-                    "GPT-4o Mini", "Gemini 3.1").
-                  </div>
-                </div>
               </div>
-              <div className="relative group">
+              <div className="group">
+                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                  API slug
+                  <span className="relative cursor-help">
+                    <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Slug</strong> is the exact model ID sent to the
+                      vendor API (e.g. "gpt-4o-mini", "claude-sonnet-4-6").
+                      Must be unique and match the provider's model identifier.
+                    </span>
+                  </span>
+                </label>
                 <input
                   type="text"
                   value={newModelSlug}
                   onChange={(e) => setNewModelSlug(e.target.value)}
-                  placeholder="API slug, e.g. gpt-4o-mini"
+                  placeholder="e.g. gpt-4o-mini"
                   className={inputClass + " font-mono text-xs"}
                 />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 cursor-help">
-                  <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
-                  <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                    <strong>Slug</strong> is the exact model ID sent to the
-                    vendor API (e.g. "gpt-4o-mini", "claude-sonnet-4-6").
-                    Must be unique and match the provider's model identifier.
-                  </div>
-                </div>
               </div>
               <button
                 onClick={handleCreateModel}
