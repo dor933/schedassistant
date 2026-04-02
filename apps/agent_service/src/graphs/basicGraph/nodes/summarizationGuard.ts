@@ -1,16 +1,19 @@
 import { Thread } from "@scheduling-agent/database";
+import type { BaseMessage } from "@langchain/core/messages";
 import type { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 
 /**
  * Default thresholds — override via environment variables.
  *
- * TTL_IDLE_MINUTES:  max minutes since last activity before the session
- *                    is considered expired and must be summarized.
- * MAX_MESSAGES:      max message count in the conversation before
- *                    compaction via summarization is required.
+ * TTL_IDLE_MINUTES:     max minutes since last activity before the session
+ *                       is considered expired and must be summarized.
+ * MAX_MESSAGES:         max message count in the conversation before
+ *                       compaction via summarization is required.
  * MAX_CHECKPOINT_BYTES: max checkpoint payload size (if tracked) before
  *                       summarization fires.
+ * MAX_CONTEXT_TOKENS:   max estimated token count across all messages before
+ *                       summarization fires. Prevents hitting model context limits.
  */
 const TTL_IDLE_MINUTES = parseInt(process.env.TTL_IDLE_MINUTES ?? "30", 10);
 const MAX_MESSAGES = parseInt(process.env.MAX_MESSAGES ?? "50", 10);
@@ -18,9 +21,37 @@ const MAX_CHECKPOINT_BYTES = parseInt(
   process.env.MAX_CHECKPOINT_BYTES ?? "500000",
   10,
 );
+const MAX_CONTEXT_TOKENS = parseInt(
+  process.env.MAX_CONTEXT_TOKENS ?? "80000",
+  10,
+);
 
 /**
- * Guard node that evaluates TTL and size thresholds for the current session.
+ * Estimates the token count for a list of messages.
+ * Uses the ~4 chars per token heuristic which is accurate enough for
+ * triggering summarization thresholds (not billing).
+ */
+function estimateTokens(messages: BaseMessage[]): number {
+  let totalChars = 0;
+  for (const msg of messages) {
+    const content = msg.content;
+    if (typeof content === "string") {
+      totalChars += content.length;
+    } else if (Array.isArray(content)) {
+      for (const part of content) {
+        if (typeof part === "string") {
+          totalChars += part.length;
+        } else if (part && typeof part === "object" && "text" in part) {
+          totalChars += String((part as any).text).length;
+        }
+      }
+    }
+  }
+  return Math.ceil(totalChars / 4);
+}
+
+/**
+ * Guard node that evaluates TTL, size, and token thresholds for the current session.
  *
  * Runs at the very start of every turn. Sets `needsSummarization = true`
  * when any threshold is exceeded so the routing function can branch to
@@ -40,6 +71,20 @@ export async function summarizationGuardNode(
     if (messages && messages.length >= MAX_MESSAGES) {
       logger.info("Thread size exceeded — summarization required", { threadId, messageCount: messages.length, threshold: MAX_MESSAGES });
       return { needsSummarization: true, error: null };
+    }
+
+    // ── Token check: estimated cumulative token count ────────────────
+    if (messages && messages.length > 0) {
+      const estimatedTokens = estimateTokens(messages);
+      if (estimatedTokens >= MAX_CONTEXT_TOKENS) {
+        logger.info("Thread token count exceeded — summarization required", {
+          threadId,
+          estimatedTokens,
+          threshold: MAX_CONTEXT_TOKENS,
+          messageCount: messages.length,
+        });
+        return { needsSummarization: true, error: null };
+      }
     }
 
     // ── DB-backed checks (TTL + checkpoint size) ─────────────────────
