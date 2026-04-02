@@ -53,9 +53,9 @@ function formatTimestamp(raw?: string): string | null {
       d.getDate() === now.getDate() &&
       d.getMonth() === now.getMonth() &&
       d.getFullYear() === now.getFullYear();
-    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const time = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
     if (isToday) return time;
-    return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+    return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${time}`;
   } catch {
     return null;
   }
