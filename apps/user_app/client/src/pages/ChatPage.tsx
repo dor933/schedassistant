@@ -746,6 +746,10 @@ export default function ChatPage() {
     try {
       await sendMessage(text, requestId, scope);
       const p = await replyPromise;
+      // Only append the reply if the user is still viewing the same conversation.
+      // If they switched away, the reply is already persisted in conversation_messages
+      // and will load when they navigate back.
+      if (activeConvRef.current?.id !== activeConv?.id) return;
       setTotalMessages((t) => t + 1);
       if (p.ok) {
         setMessages((prev) => [
