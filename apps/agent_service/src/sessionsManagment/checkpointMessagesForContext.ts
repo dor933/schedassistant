@@ -79,19 +79,30 @@ export function formatCheckpointMessagesForSystemPrompt(
 
   const lines: string[] = [];
   for (const m of slice) {
-    if (isHumanMessage(m)) {
-      const hm = m as HumanMessage;
+    // Messages from the checkpoint may be deserialized plain objects (no _getType).
+    // Use LangChain type checks first, fall back to raw `.role` / `._type` fields.
+    const raw = m as any;
+    const msgType: string | undefined =
+      typeof raw._getType === "function"
+        ? raw._getType()
+        : raw._type ?? raw.role ?? undefined;
+
+    const isHuman = msgType === "human" || msgType === "user" || (typeof raw._getType === "function" && isHumanMessage(m));
+    const isAI = !isHuman && (msgType === "ai" || msgType === "assistant" || (typeof raw._getType === "function" && isAIMessage(m)));
+    const isTool = !isHuman && !isAI && (msgType === "tool" || (typeof raw._getType === "function" && isToolMessage(m)));
+
+    if (isHuman) {
       const name =
-        hm.name?.trim() ||
-        ((hm as { additional_kwargs?: { name?: string } }).additional_kwargs?.name ?? "").trim() ||
+        raw.name?.trim() ||
+        raw.additional_kwargs?.name?.trim() ||
         "User";
-      lines.push(`- **${name}** (human): ${clip(textFromContent(hm.content))}`);
-    } else if (isAIMessage(m)) {
-      lines.push(`- **Assistant**: ${clip(textFromContent(m.content))}`);
-    } else if (isToolMessage(m)) {
-      lines.push(`- *(tool result)*: ${clip(textFromContent(m.content))}`);
+      lines.push(`- **${name}** (human): ${clip(textFromContent(raw.content))}`);
+    } else if (isAI) {
+      lines.push(`- **Assistant**: ${clip(textFromContent(raw.content))}`);
+    } else if (isTool) {
+      lines.push(`- *(tool result)*: ${clip(textFromContent(raw.content))}`);
     } else {
-      lines.push(`- *(message)*: ${clip(textFromContent((m as BaseMessage).content))}`);
+      lines.push(`- *(message)*: ${clip(textFromContent(raw.content ?? ""))}`);
     }
   }
 

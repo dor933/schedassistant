@@ -288,16 +288,17 @@ export async function callModelNode(
       llmMessages.push(msg);
     } else {
       const m = msg as any;
-      if (m.role === "human" || m.role === "user") {
+      const mType = m.role ?? m._type;
+      if (mType === "human" || mType === "user") {
         llmMessages.push(new HumanMessage({ content: m.content, ...(m.name ? { name: sanitizeName(m.name) } : {}) }));
-      } else if (m.role === "assistant" || m.role === "ai") {
+      } else if (mType === "assistant" || mType === "ai") {
         llmMessages.push(
           new AIMessage({
             content: normalizeAssistantContentForOpenAI(m.content),
             ...(Array.isArray(m.tool_calls) && m.tool_calls.length > 0 ? { tool_calls: m.tool_calls } : {}),
           }),
         );
-      } else if (m.role === "tool") {
+      } else if (mType === "tool") {
         llmMessages.push(
           new ToolMessage({
             content: typeof m.content === "string" ? m.content : String(m.content ?? ""),

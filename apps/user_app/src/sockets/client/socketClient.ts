@@ -95,7 +95,12 @@ export function connectToAgentService(): void {
 
 async function handleAgentTyping(payload: AgentTypingPayload): Promise<void> {
   const { userId, groupId, singleChatId } = payload;
-  const conversationId = groupId ?? singleChatId ?? payload.threadId;
+
+  // Only emit typing for user-facing conversations (group or single chat).
+  // Internal activity (e.g. agent-to-agent consultation) has neither set.
+  if (!groupId && !singleChatId) return;
+
+  const conversationId = groupId ?? singleChatId!;
   const conversationType: "group" | "single" = groupId ? "group" : "single";
 
   const browserIO = getIO();
@@ -127,7 +132,10 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
     singleChatId,
   } = payload;
 
-  const conversationId = groupId ?? singleChatId ?? threadId;
+  // Internal activity (agent-to-agent consultation) has no conversation scope — skip.
+  if (!groupId && !singleChatId) return;
+
+  const conversationId = groupId ?? singleChatId!;
   const conversationType: "group" | "single" = groupId ? "group" : "single";
 
   const clientPayload: ChatReplyToClient = {
