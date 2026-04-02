@@ -86,14 +86,4 @@ export class GroupsController {
     }
   };
 
-  setModel = async (req: Request, res: Response) => {
-    try {
-      const group = await this.groupsService.setModel(req.params.id as string, req.body.modelId, req.user!.userId);
-      return res.json(group);
-    } catch (err: any) {
-      if (err.status) return res.status(err.status).json({ error: err.message });
-      logger.error("PATCH group model error:", err);
-      return res.status(500).json({ error: err.message });
-    }
-  };
 }

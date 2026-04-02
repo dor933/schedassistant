@@ -63,14 +63,4 @@ export class ModelsController {
     }
   };
 
-  setSingleChatModel = async (req: Request, res: Response) => {
-    try {
-      const sc = await this.modelsService.setSingleChatModel(req.params.id as string, req.body.modelId, req.user!.userId);
-      return res.json(sc);
-    } catch (err: any) {
-      if (err.status) return res.status(err.status).json({ error: err.message });
-      logger.error("PATCH single-chat model error:", err);
-      return res.status(500).json({ error: err.message });
-    }
-  };
 }

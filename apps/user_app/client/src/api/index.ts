@@ -300,6 +300,8 @@ export interface AdminAgent {
   createdByUserId: number | null;
   /** MCP servers assigned to this agent. */
   mcpServerIds: number[];
+  /** The LLM model assigned to this agent (references models.id). */
+  modelId: string | null;
   createdAt: string;
 }
 
@@ -385,6 +387,7 @@ export const admin = {
     coreInstructions?: string;
     characteristics?: Record<string, unknown> | null;
     mcpServerIds?: number[];
+    modelId?: string | null;
   }) =>
     request<AdminAgent>("/admin/agents", {
       method: "POST",
@@ -397,6 +400,7 @@ export const admin = {
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
       mcpServerIds?: number[];
+      modelId?: string | null;
     },
   ) =>
     request<AdminAgent>(`/admin/agents/${id}`, {
@@ -458,14 +462,4 @@ export const admin = {
     }),
   deleteModel: (id: string) =>
     request<{ deleted: boolean }>(`/admin/models/${id}`, { method: "DELETE" }),
-  setSingleChatModel: (singleChatId: string, modelId: string) =>
-    request<unknown>(`/admin/single-chats/${singleChatId}/model`, {
-      method: "PATCH",
-      body: JSON.stringify({ modelId }),
-    }),
-  setGroupModel: (groupId: string, modelId: string) =>
-    request<unknown>(`/admin/groups/${groupId}/model`, {
-      method: "PATCH",
-      body: JSON.stringify({ modelId }),
-    }),
 };

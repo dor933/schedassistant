@@ -92,40 +92,9 @@ module.exports = {
       },
     );
 
-    // 5. Add model_id to single_chats (nullable for now, default to gpt-4o for new rows)
-    await queryInterface.addColumn("single_chats", "model_id", {
-      type: Sequelize.UUID,
-      allowNull: true,
-      references: { model: "models", key: "id" },
-      onUpdate: "CASCADE",
-      onDelete: "SET NULL",
-    });
-
-    // Backfill existing single_chats with gpt-4o
-    await queryInterface.sequelize.query(
-      `UPDATE single_chats SET model_id = :modelId WHERE model_id IS NULL`,
-      { replacements: { modelId: GPT4O_MODEL_ID } },
-    );
-
-    // 6. Add model_id to groups
-    await queryInterface.addColumn("groups", "model_id", {
-      type: Sequelize.UUID,
-      allowNull: true,
-      references: { model: "models", key: "id" },
-      onUpdate: "CASCADE",
-      onDelete: "SET NULL",
-    });
-
-    // Backfill existing groups with gpt-4o
-    await queryInterface.sequelize.query(
-      `UPDATE groups SET model_id = :modelId WHERE model_id IS NULL`,
-      { replacements: { modelId: GPT4O_MODEL_ID } },
-    );
   },
 
   async down(queryInterface, _Sequelize) {
-    await queryInterface.removeColumn("groups", "model_id");
-    await queryInterface.removeColumn("single_chats", "model_id");
     await queryInterface.dropTable("models");
     await queryInterface.dropTable("vendors");
   },

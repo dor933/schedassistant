@@ -1,5 +1,5 @@
 import {
-  User, Role, Agent, Group, GroupMember, SingleChat, LLMModel, Vendor,
+  User, Role, Agent, Group, GroupMember, SingleChat,
   ConversationMessage, sequelize,
 } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
@@ -94,7 +94,7 @@ export class GroupsService {
     });
 
     if (created) {
-      const group = await Group.findByPk(groupId, { attributes: ["id", "name", "agentId", "modelId"] });
+      const group = await Group.findByPk(groupId, { attributes: ["id", "name", "agentId"] });
       if (group) {
         const agent = await Agent.findByPk(group.agentId, { attributes: ["definition"] });
         getIO().to(`user:${userId}`).emit("conversations:updated", {
@@ -125,38 +125,6 @@ export class GroupsService {
     }
 
     return { deleted };
-  }
-
-  async setModel(groupId: string, modelId: string | null, actorId: UserId) {
-    const group = await Group.findByPk(groupId);
-    if (!group) throw Object.assign(new Error("Group not found."), { status: 404 });
-
-    if (modelId) {
-      const keyError = await this.validateModelApiKey(modelId);
-      if (keyError) throw Object.assign(new Error(keyError), { status: 400 });
-    }
-
-    await group.update({ modelId: modelId ?? null });
-
-    let modelInfo = null;
-    if (modelId) {
-      const m = await LLMModel.findByPk(modelId, { attributes: ["id", "name", "slug", "vendorId"] });
-      if (m) {
-        const v = await Vendor.findByPk(m.vendorId, { attributes: ["id", "name", "slug"] });
-        modelInfo = { id: m.id, name: m.name, slug: m.slug, vendor: v ? { id: v.id, name: v.name, slug: v.slug } : null };
-      }
-    }
-    this.broadcast("group_model_changed", `Group "${group.name}" model changed to ${modelInfo?.name ?? "default"}`, { groupId: group.id, model: modelInfo }, actorId);
-    return group;
-  }
-
-  private async validateModelApiKey(modelId: string): Promise<string | null> {
-    const model = await LLMModel.findByPk(modelId, { attributes: ["vendorId"] });
-    if (!model) return "Model not found.";
-    const vendor = await Vendor.findByPk(model.vendorId, { attributes: ["name", "apiKey"] });
-    if (!vendor) return "Vendor not found.";
-    if (!vendor.apiKey) return `API key not configured for ${vendor.name}. Set it in the admin panel first.`;
-    return null;
   }
 
   private broadcast(type: string, message: string, data: Record<string, unknown>, actorId: UserId) {

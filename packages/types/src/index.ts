@@ -52,6 +52,8 @@ export interface AgentAttributes {
   activeThreadId: string | null;
   /** The user who created this agent (null for legacy/seeded agents). */
   createdByUserId: UserId | null;
+  /** The default LLM model for this agent (references models.id). */
+  modelId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -110,7 +112,6 @@ export interface SingleChatAttributes {
   id: SingleChatId;
   userId: UserId;
   agentId: AgentId;
-  modelId: ModelId | null;
   title: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -120,7 +121,6 @@ export interface GroupAttributes {
   id: GroupId;
   name: string;
   agentId: AgentId;
-  modelId: ModelId | null;
   createdAt: Date;
   updatedAt: Date;
 }

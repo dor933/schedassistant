@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AdminAgent, AdminMcpServer } from "../api";
+import { AdminAgent, AdminMcpServer, ConversationModelInfo } from "../api";
 import { Box } from "@mui/material";
 import { Loader2, Save, X, Pencil, Plug } from "lucide-react";
 import { admin } from "../api";
@@ -11,12 +11,14 @@ export default function AgentCard({
     currentUserId,
     currentUserRole,
     allMcpServers,
+    allModels,
     onSaved,
   }: {
     agent: AdminAgent;
     currentUserId: number;
     currentUserRole: string;
     allMcpServers: AdminMcpServer[];
+    allModels: ConversationModelInfo[];
     onSaved: () => void;
   }) {
     const { toast } = useToast();
@@ -36,6 +38,9 @@ export default function AgentCard({
     const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<number[]>(
       agent.mcpServerIds ?? [],
     );
+    const [selectedModelId, setSelectedModelId] = useState<string>(
+      agent.modelId ?? "",
+    );
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
@@ -43,6 +48,7 @@ export default function AgentCard({
       setInstructions(agent.coreInstructions ?? "");
       setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
       setSelectedMcpServerIds(agent.mcpServerIds ?? []);
+      setSelectedModelId(agent.modelId ?? "");
     }, [agent]);
 
     function toggleMcpServer(id: number) {
@@ -75,6 +81,7 @@ export default function AgentCard({
           ...(canViewCoreInstructions ? { coreInstructions: instructions || undefined } : {}),
           characteristics,
           mcpServerIds: selectedMcpServerIds,
+          modelId: selectedModelId || null,
         });
         setEditing(false);
         onSaved();
@@ -191,6 +198,25 @@ export default function AgentCard({
               )}
             </div>
 
+            {/* Model */}
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                LLM Model
+              </label>
+              <select
+                value={selectedModelId}
+                onChange={(e) => setSelectedModelId(e.target.value)}
+                className={smallInput}
+              >
+                <option value="">— Default (gpt-4o) —</option>
+                {allModels.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} ({m.vendor?.name ?? "unknown"})
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Actions */}
             <div className="flex gap-2 pt-1">
               <button
@@ -212,6 +238,7 @@ export default function AgentCard({
                   setInstructions(agent.coreInstructions ?? "");
                   setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
                   setSelectedMcpServerIds(agent.mcpServerIds ?? []);
+                  setSelectedModelId(agent.modelId ?? "");
                 }}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-200"
               >
@@ -265,6 +292,16 @@ export default function AgentCard({
                   </span>
                 ))}
               </div>
+            )}
+
+            {/* Current model */}
+            {agent.modelId && (
+              <p className="mt-2 text-[10px] text-gray-400">
+                Model:{" "}
+                <span className="font-medium text-gray-600">
+                  {allModels.find((m) => m.id === agent.modelId)?.name ?? agent.modelId}
+                </span>
+              </p>
             )}
 
             {agent.editable && (

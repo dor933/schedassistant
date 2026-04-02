@@ -1,7 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import crypto from "node:crypto";
-import { Agent, SingleChat, LLMModel } from "@scheduling-agent/database";
+import { Agent, LLMModel } from "@scheduling-agent/database";
 import { getGraph } from "../deps";
 import { ensureSession } from "../sessionsManagment/sessionRegistry";
 import { createThreadLockRedis, withThreadLockTimeout, LockTimeoutError } from "../worker/threadLock";
@@ -9,18 +9,14 @@ import { getRedisConfig } from "../redisClient";
 import { logger } from "../logger";
 
 /**
- * Resolve the model slug for a target agent by looking at its single chats.
- * Falls back to "gpt-4o" if no model is configured.
+ * Resolve the model slug for a target agent from the agent's own modelId.
+ * Falls back to "gpt-4o" if no model is configured on the agent.
  */
 async function resolveModelForAgent(agentId: string): Promise<string> {
   try {
-    const sc = await SingleChat.findOne({
-      where: { agentId },
-      attributes: ["modelId"],
-      order: [["created_at", "DESC"]],
-    });
-    if (sc?.modelId) {
-      const model = await LLMModel.findByPk(sc.modelId, { attributes: ["slug"] });
+    const agent = await Agent.findByPk(agentId, { attributes: ["modelId"] });
+    if (agent?.modelId) {
+      const model = await LLMModel.findByPk(agent.modelId, { attributes: ["slug"] });
       if (model) return model.slug;
     }
   } catch { /* fall through */ }

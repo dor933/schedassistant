@@ -11,6 +11,5 @@ router.delete("/:id", groupsController.remove);
 router.get("/:groupId/members", groupsController.getMembers);
 router.post("/:groupId/members", groupsController.addMember);
 router.delete("/:groupId/members/:userId", groupsController.removeMember);
-router.patch("/:id/model", groupsController.setModel);
 
 export { router as groupsRouter };

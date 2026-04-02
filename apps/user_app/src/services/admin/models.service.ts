@@ -1,4 +1,4 @@
-import { LLMModel, Vendor, SingleChat, Group } from "@scheduling-agent/database";
+import { LLMModel, Vendor, Agent } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
@@ -52,11 +52,10 @@ export class ModelsService {
     const model = await LLMModel.findByPk(modelId);
     if (!model) throw Object.assign(new Error("Model not found."), { status: 404 });
 
-    const scCount = await SingleChat.count({ where: { modelId } });
-    const gCount = await Group.count({ where: { modelId } });
-    if (scCount > 0 || gCount > 0) {
+    const agentCount = await Agent.count({ where: { modelId } });
+    if (agentCount > 0) {
       throw Object.assign(
-        new Error(`Cannot delete — this model is in use by ${scCount} chat(s) and ${gCount} group(s). Switch them to a different model first.`),
+        new Error(`Cannot delete — this model is in use by ${agentCount} agent(s). Switch them to a different model first.`),
         { status: 409 },
       );
     }
@@ -73,29 +72,6 @@ export class ModelsService {
     await vendor.update({ apiKey: apiKey || null });
     this.broadcast("vendor_api_key_updated", `API key ${apiKey ? "set" : "removed"} for ${vendor.name}`, { vendorId: vendor.id, vendorName: vendor.name, hasApiKey: !!apiKey }, actorId);
     return { id: vendor.id, name: vendor.name, slug: vendor.slug, hasApiKey: !!apiKey };
-  }
-
-  async setSingleChatModel(singleChatId: string, modelId: string | null, actorId: UserId) {
-    const sc = await SingleChat.findByPk(singleChatId);
-    if (!sc) throw Object.assign(new Error("Single chat not found."), { status: 404 });
-
-    if (modelId) {
-      const keyError = await this.validateModelApiKey(modelId);
-      if (keyError) throw Object.assign(new Error(keyError), { status: 400 });
-    }
-
-    await sc.update({ modelId: modelId ?? null });
-
-    let modelInfo = null;
-    if (modelId) {
-      const m = await LLMModel.findByPk(modelId, { attributes: ["id", "name", "slug", "vendorId"] });
-      if (m) {
-        const v = await Vendor.findByPk(m.vendorId, { attributes: ["id", "name", "slug"] });
-        modelInfo = { id: m.id, name: m.name, slug: m.slug, vendor: v ? { id: v.id, name: v.name, slug: v.slug } : null };
-      }
-    }
-    this.broadcast("single_chat_model_changed", `Chat model changed to ${modelInfo?.name ?? "default"}`, { singleChatId, model: modelInfo }, actorId);
-    return sc;
   }
 
   private async validateModelApiKey(modelId: string): Promise<string | null> {

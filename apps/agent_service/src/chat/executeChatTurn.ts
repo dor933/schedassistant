@@ -55,7 +55,7 @@ export async function executeChatTurn(
     "agent_chat_turn",
     async () => {
       // Resolve model slug from conversation scope
-      const modelSlug = await resolveModelSlug(singleChatId, groupId);
+      const modelSlug = await resolveModelSlug(agentId);
       logger.info("Executing chat turn", { threadId, userId, agentId, modelSlug, msgLen: message.length });
 
       // Group + pool-agent single chats: shared thread — `threads.user_id` is null; scope lives on `groups` / `single_chats` / `agents`.

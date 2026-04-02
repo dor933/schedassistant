@@ -6,9 +6,11 @@ import {
   User,
   McpServer,
   AgentMcpServer,
+  LLMModel,
+  Vendor,
   sequelize,
 } from "@scheduling-agent/database";
-import { QueryTypes } from "sequelize";
+import { Op, QueryTypes } from "sequelize";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 import type { UserId } from "@scheduling-agent/types";
@@ -22,6 +24,7 @@ export class AgentsService {
         "coreInstructions",
         "characteristics",
         "createdByUserId",
+        "modelId",
         "createdAt",
       ],
       order: [["created_at", "DESC"]],
@@ -59,12 +62,14 @@ export class AgentsService {
     characteristics?: Record<string, unknown> | null,
     actorId?: UserId,
     mcpServerIds?: number[],
+    modelId?: string | null,
   ) {
     const agent = await Agent.create({
       definition: definition ?? null,
       coreInstructions: coreInstructions ?? null,
       characteristics: characteristics ?? null,
       createdByUserId: actorId ?? null,
+      modelId: modelId ?? null,
     });
 
     // Link MCP servers to the agent
@@ -121,6 +126,7 @@ export class AgentsService {
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
       mcpServerIds?: number[];
+      modelId?: string | null;
     },
   ) {
     const agent = await Agent.findByPk(agentId);
@@ -145,6 +151,7 @@ export class AgentsService {
       patch.coreInstructions = data.coreInstructions;
     if (data.characteristics !== undefined)
       patch.characteristics = data.characteristics;
+    if (data.modelId !== undefined) patch.modelId = data.modelId;
     await agent.update(patch);
 
     // Sync MCP server assignments if provided
@@ -157,6 +164,18 @@ export class AgentsService {
             mcpServerId,
           })),
         );
+      }
+    }
+
+    // Notify users who interact with this agent when the model changes
+    if (data.modelId !== undefined) {
+      try {
+        await this.notifyAgentModelChanged(agent.id, agent.modelId);
+      } catch (err) {
+        logger.error("Failed to notify users of agent model change", {
+          agentId: agent.id,
+          error: String(err),
+        });
       }
     }
 
@@ -204,6 +223,60 @@ export class AgentsService {
     }
 
     return ids;
+  }
+
+  /**
+   * Notifies all users who have a SingleChat with this agent or are in a group
+   * with this agent that the agent's model has changed.
+   */
+  private async notifyAgentModelChanged(agentId: string, modelId: string | null) {
+    // Resolve model info for the notification payload
+    let modelInfo: { id: string; name: string; slug: string; vendor: { id: string; name: string; slug: string } | null } | null = null;
+    if (modelId) {
+      const m = await LLMModel.findByPk(modelId, { attributes: ["id", "name", "slug", "vendorId"] });
+      if (m) {
+        const v = await Vendor.findByPk(m.vendorId, { attributes: ["id", "name", "slug"] });
+        modelInfo = { id: m.id, name: m.name, slug: m.slug, vendor: v ? { id: v.id, name: v.name, slug: v.slug } : null };
+      }
+    }
+
+    // Find all user IDs with a SingleChat for this agent
+    const singleChats = await SingleChat.findAll({
+      where: { agentId },
+      attributes: ["userId"],
+    });
+    const userIds = new Set<number>(singleChats.map((sc) => sc.userId));
+
+    // Find all user IDs in groups that use this agent
+    const groups = await Group.findAll({
+      where: { agentId },
+      attributes: ["id"],
+    });
+    if (groups.length > 0) {
+      const groupIds = groups.map((g) => g.id);
+      const members = await GroupMember.findAll({
+        where: { groupId: { [Op.in]: groupIds } },
+        attributes: ["userId"],
+      });
+      for (const m of members) {
+        userIds.add(m.userId);
+      }
+    }
+
+    const io = getIO();
+    for (const userId of userIds) {
+      io.to(`user:${userId}`).emit("conversations:updated", {
+        action: "agent_model_changed",
+        agentId,
+        model: modelInfo,
+      });
+    }
+
+    logger.info("Notified users of agent model change", {
+      agentId,
+      modelSlug: modelInfo?.slug ?? null,
+      userCount: userIds.size,
+    });
   }
 
   private broadcast(

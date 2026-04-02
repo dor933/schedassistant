@@ -222,7 +222,7 @@ export async function callModelNode(
   const { systemPrompt, messages: stateMessages, singleChatId, groupId, threadId, userId, agentId } =
     state;
 
-  const modelSlug = await resolveModelSlug(singleChatId, groupId);
+  const modelSlug = await resolveModelSlug(agentId);
 
   // Resolve vendor + API key from DB
   const vendor = await resolveVendor(modelSlug);

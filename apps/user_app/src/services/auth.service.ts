@@ -105,20 +105,20 @@ export class AuthService {
     if (groupIds.length > 0) {
       const groupRows = await Group.findAll({
         where: { id: groupIds },
-        attributes: ["id", "name", "agentId", "modelId"],
+        attributes: ["id", "name", "agentId"],
         order: [["name", "ASC"]],
       });
       groups = await Promise.all(
         groupRows.map(async (g) => {
           const agent = await Agent.findByPk(g.agentId, {
-            attributes: ["definition"],
+            attributes: ["definition", "modelId"],
           });
           return {
             id: g.id,
             name: g.name,
             agentId: g.agentId,
             agentDefinition: agent?.definition ?? null,
-            model: await this.resolveModelInfo(g.modelId),
+            model: await this.resolveModelInfo(agent?.modelId ?? null),
           };
         }),
       );
@@ -126,16 +126,21 @@ export class AuthService {
 
     const singleChatRows = await SingleChat.findAll({
       where: { userId },
-      attributes: ["id", "agentId", "modelId", "title"],
+      attributes: ["id", "agentId", "title"],
       order: [["created_at", "DESC"]],
     });
     const singleChats = await Promise.all(
-      singleChatRows.map(async (sc) => ({
-        id: sc.id,
-        agentId: sc.agentId,
-        title: sc.title,
-        model: await this.resolveModelInfo(sc.modelId),
-      })),
+      singleChatRows.map(async (sc) => {
+        const agent = await Agent.findByPk(sc.agentId, {
+          attributes: ["modelId"],
+        });
+        return {
+          id: sc.id,
+          agentId: sc.agentId,
+          title: sc.title,
+          model: await this.resolveModelInfo(agent?.modelId ?? null),
+        };
+      }),
     );
 
     return { groups, singleChats };

@@ -15,7 +15,7 @@ import {
   Bot,
   Search,
 } from "lucide-react";
-import { VendorIcon } from "../components/VendorModelBadge";
+import VendorModelBadge from "../components/VendorModelBadge";
 import { useAuth } from "../context/AuthContext";
 import {
   getSessions,
@@ -42,9 +42,6 @@ import SessionSidebar, {
 } from "../components/SessionSidebar";
 import ChatMessage from "../components/ChatMessage";
 import ChatInput from "../components/ChatInput";
-import VendorModelBadge from "../components/VendorModelBadge";
-import ModelSelector from "../components/ModelSelector";
-import type { ConversationModelInfo } from "../api";
 
 const PAGE_SIZE = 20;
 
@@ -985,38 +982,7 @@ export default function ChatPage() {
             alignItems="center"
             sx={{ flexShrink: 0, gap: 1 }}
           >
-            {activeConv &&
-              (user?.role === "admin" || user?.role === "super_admin") ? (
-              <ModelSelector
-                currentModel={activeConv.model}
-                conversationType={activeConv.type}
-                conversationId={activeConv.id}
-                onModelChanged={(m: ConversationModelInfo) => {
-                  setActiveConv((prev) =>
-                    prev ? { ...prev, model: m } : prev,
-                  );
-                  const conv = activeConvRef.current;
-                  if (!conv) return;
-                  setConversations((c) => {
-                    if (!c) return c;
-                    if (conv.type === "single") {
-                      return {
-                        ...c,
-                        singleChats: c.singleChats.map((sc) =>
-                          sc.id === conv.id ? { ...sc, model: m } : sc,
-                        ),
-                      };
-                    }
-                    return {
-                      ...c,
-                      groups: c.groups.map((g) =>
-                        g.id === conv.id ? { ...g, model: m } : g,
-                      ),
-                    };
-                  });
-                }}
-              />
-            ) : activeConv?.model ? (
+            {activeConv?.model ? (
               <VendorModelBadge model={activeConv.model} />
             ) : null}
             {activeConv && (
@@ -1309,7 +1275,7 @@ export default function ChatPage() {
                           : "bg-gray-100 text-gray-500 ring-gray-200/60"
                       }`}
                   >
-                    <VendorIcon slug={activeConv?.model?.vendor?.slug ?? ""} />
+                    <Bot className="h-4 w-4" />
                   </Box>
                   <Box className="rounded-2xl rounded-tl-md bg-white px-4 py-3 shadow-glass ring-1 ring-gray-950/[0.04]">
                     <Stack direction="row" spacing={0.75}>
@@ -1434,11 +1400,7 @@ export default function ChatPage() {
                           : "bg-violet-50 text-violet-600 ring-violet-200/60"
                       }`}
                   >
-                    {activeConv.model?.vendor?.slug ? (
-                      <VendorIcon slug={activeConv.model.vendor.slug} />
-                    ) : (
-                      <Bot className="h-4 w-4" />
-                    )}
+                    <Bot className="h-4 w-4" />
                   </Box>
                   <Box sx={{ minWidth: 0, flex: 1 }}>
                     <Box

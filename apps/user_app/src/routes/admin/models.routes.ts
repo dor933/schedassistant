@@ -9,6 +9,5 @@ router.get("/vendors", modelsController.getAllVendors);
 router.post("/models", modelsController.createModel);
 router.delete("/models/:id", modelsController.deleteModel);
 router.patch("/vendors/:id/api-key", modelsController.setVendorApiKey);
-router.patch("/single-chats/:id/model", modelsController.setSingleChatModel);
 
 export { router as modelsRouter };

@@ -621,7 +621,7 @@ export default function AdminPage() {
 
             <div className="max-h-[400px] overflow-y-auto space-y-2.5">
               {agents.map((a) => (
-                <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allMcpServers={mcpServers} onSaved={reload} />
+                <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allMcpServers={mcpServers} allModels={models} onSaved={reload} />
               ))}
             </div>
           </div>

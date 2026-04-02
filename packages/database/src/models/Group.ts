@@ -4,7 +4,7 @@ import type { GroupAttributes } from "@scheduling-agent/types";
 
 type GroupCreationAttributes = Optional<
   GroupAttributes,
-  "id" | "createdAt" | "updatedAt" | "modelId"
+  "id" | "createdAt" | "updatedAt"
 >;
 
 class Group
@@ -14,7 +14,6 @@ class Group
   declare id: string;
   declare name: string;
   declare agentId: string;
-  declare modelId: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -35,12 +34,6 @@ Group.init(
       allowNull: false,
       field: "agent_id",
       references: { model: "agents", key: "id" },
-    },
-    modelId: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      field: "model_id",
-      references: { model: "models", key: "id" },
     },
     createdAt: {
       type: DataTypes.DATE,

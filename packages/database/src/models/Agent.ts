@@ -14,6 +14,7 @@ type AgentCreationAttributes = Optional<
   | "activeThreadId"
   | "agentName"
   | "createdByUserId"
+  | "modelId"
 >;
 
 class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements AgentAttributes {
@@ -25,6 +26,7 @@ class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements A
   declare ongoingRequests: OngoingRequest[] | null;
   declare activeThreadId: string | null;
   declare createdByUserId: UserId | null;
+  declare modelId: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -70,6 +72,12 @@ Agent.init(
       allowNull: true,
       field: "created_by_user_id",
       references: { model: "users", key: "id" },
+    },
+    modelId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: "model_id",
+      references: { model: "models", key: "id" },
     },
     createdAt: {
       type: DataTypes.DATE,
