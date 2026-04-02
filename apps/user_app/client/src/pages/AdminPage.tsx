@@ -26,6 +26,7 @@ import {
   KeyRound,
   Plug,
   Terminal,
+  Zap,
 } from "lucide-react";
 import {
   admin,
@@ -35,6 +36,7 @@ import {
   type AdminGroupMember,
   type AdminRole,
   type AdminMcpServer,
+  type AdminSystemAgent,
   type ConversationModelInfo,
 } from "../api";
 import { VendorIcon } from "../components/VendorModelBadge";
@@ -96,6 +98,18 @@ export default function AdminPage() {
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
 
+  const [systemAgents, setSystemAgents] = useState<AdminSystemAgent[]>([]);
+  const [newSaSlug, setNewSaSlug] = useState("");
+  const [newSaName, setNewSaName] = useState("");
+  const [newSaDescription, setNewSaDescription] = useState("");
+  const [newSaInstructions, setNewSaInstructions] = useState("");
+  const [newSaModelSlug, setNewSaModelSlug] = useState("");
+  const [newSaMcpServerIds, setNewSaMcpServerIds] = useState<number[]>([]);
+  const [creatingSa, setCreatingSa] = useState(false);
+  const [editingSaId, setEditingSaId] = useState<number | null>(null);
+  const [editingSaMcpServerIds, setEditingSaMcpServerIds] = useState<number[]>([]);
+  const [savingSaId, setSavingSaId] = useState<number | null>(null);
+
   const [newMcpName, setNewMcpName] = useState("");
   const [newMcpTransport, setNewMcpTransport] = useState("stdio");
   const [newMcpCommand, setNewMcpCommand] = useState("");
@@ -112,7 +126,7 @@ export default function AdminPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [u, a, g, m, v, r, mcp] = await Promise.all([
+      const [u, a, g, m, v, r, mcp, sa] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
@@ -120,6 +134,7 @@ export default function AdminPage() {
         admin.getVendors(),
         admin.getRoles(),
         admin.getMcpServers(),
+        admin.getSystemAgents(),
       ]);
       setUsers(u);
       setAgents(a);
@@ -128,6 +143,7 @@ export default function AdminPage() {
       setVendors(v);
       setRoles(r);
       setMcpServers(mcp);
+      setSystemAgents(sa);
       if (a.length > 0 && !newGroupAgentId) setNewGroupAgentId(a[0].id);
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
     } catch {
@@ -255,6 +271,49 @@ export default function AdminPage() {
       setError(err.message);
     } finally {
       setCreatingMcp(false);
+    }
+  }
+
+  async function handleCreateSystemAgent() {
+    if (!newSaSlug.trim() || !newSaName.trim() || !newSaInstructions.trim()) return;
+    setError("");
+    setCreatingSa(true);
+    try {
+      await admin.createSystemAgent({
+        slug: newSaSlug.trim(),
+        name: newSaName.trim(),
+        description: newSaDescription.trim() || undefined,
+        instructions: newSaInstructions.trim(),
+        modelSlug: newSaModelSlug.trim() || undefined,
+        mcpServerIds: newSaMcpServerIds.length > 0 ? newSaMcpServerIds : undefined,
+      });
+      setNewSaSlug("");
+      setNewSaName("");
+      setNewSaDescription("");
+      setNewSaInstructions("");
+      setNewSaModelSlug("");
+      setNewSaMcpServerIds([]);
+      flash("System agent created.");
+      await reload();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setCreatingSa(false);
+    }
+  }
+
+  async function handleSaveSystemAgentMcp(saId: number) {
+    setSavingSaId(saId);
+    setError("");
+    try {
+      await admin.updateSystemAgent(saId, { mcpServerIds: editingSaMcpServerIds });
+      setEditingSaId(null);
+      flash("System agent MCP servers updated.");
+      await reload();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSavingSaId(null);
     }
   }
 
@@ -1105,6 +1164,265 @@ export default function AdminPage() {
               {mcpServers.length === 0 && (
                 <p className="col-span-full py-6 text-center text-xs text-gray-400">
                   No MCP servers configured yet.
+                </p>
+              )}
+            </div>
+          </div>
+          )}
+
+          {/* System Agents (Deep Agents) — super_admin only */}
+          {user?.role === "super_admin" && (
+          <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-yellow-600 text-white shadow-sm">
+                <Zap className="h-4 w-4" />
+              </div>
+              System Agents
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+                {systemAgents.length}
+              </span>
+              <span className="ml-1 text-[10px] font-normal text-gray-400">(deep agent specialists)</span>
+            </h2>
+
+            {/* Create form */}
+            <div className="mb-5 space-y-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Add new system agent</p>
+              <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
+                <div className="relative group">
+                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Slug</label>
+                  <input
+                    type="text"
+                    value={newSaSlug}
+                    onChange={(e) => setNewSaSlug(e.target.value)}
+                    placeholder='e.g. "stock_researcher_agent"'
+                    className={inputClass + " font-mono text-xs"}
+                  />
+                  <div className="absolute right-3 top-[26px] cursor-help">
+                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Slug</strong> is the unique machine identifier used when delegating tasks to this agent (e.g. <code className="rounded bg-gray-100 px-1">stock_researcher_agent</code>).
+                    </div>
+                  </div>
+                </div>
+                <div className="relative group">
+                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Name</label>
+                  <input
+                    type="text"
+                    value={newSaName}
+                    onChange={(e) => setNewSaName(e.target.value)}
+                    placeholder='e.g. "Stock Researcher"'
+                    className={inputClass}
+                  />
+                  <div className="absolute right-3 top-[26px] cursor-help">
+                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-52 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Name</strong> is the human-readable display name shown in the admin panel and in agent context.
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="relative group">
+                <label className="mb-1 block text-[10px] font-medium text-gray-500">Description</label>
+                <input
+                  type="text"
+                  value={newSaDescription}
+                  onChange={(e) => setNewSaDescription(e.target.value)}
+                  placeholder="Short description of this agent's expertise (shown to agents when browsing specialists)"
+                  className={inputClass}
+                />
+                <div className="absolute right-3 top-[26px] cursor-help">
+                  <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                  <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                    <strong>Description</strong> helps agents decide which specialist to delegate to. Be specific about capabilities.
+                  </div>
+                </div>
+              </div>
+              <div className="relative group">
+                <label className="mb-1 block text-[10px] font-medium text-gray-500">Instructions</label>
+                <textarea
+                  value={newSaInstructions}
+                  onChange={(e) => setNewSaInstructions(e.target.value)}
+                  placeholder="Detailed instructions for this specialist agent — what it does, how it should approach tasks, domain knowledge..."
+                  rows={4}
+                  className={inputClass + " resize-y"}
+                />
+                <div className="absolute right-3 top-[22px] cursor-help">
+                  <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                  <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                    <strong>Instructions</strong> are injected into the deep agent's system prompt. Include domain expertise, methodology, output format expectations, etc.
+                  </div>
+                </div>
+              </div>
+              <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
+                <div className="relative group">
+                  <label className="mb-1 block text-[10px] font-medium text-gray-500">Model slug</label>
+                  <input
+                    type="text"
+                    value={newSaModelSlug}
+                    onChange={(e) => setNewSaModelSlug(e.target.value)}
+                    placeholder='Default: gpt-4o'
+                    className={inputClass + " font-mono text-xs"}
+                  />
+                  <div className="absolute right-3 top-[26px] cursor-help">
+                    <HelpCircle className="h-4 w-4 text-gray-300 transition hover:text-gray-500" />
+                    <div className="pointer-events-none absolute bottom-full right-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <strong>Model</strong> is the LLM model slug this agent uses (e.g. <code className="rounded bg-gray-100 px-1">gpt-4o</code>, <code className="rounded bg-gray-100 px-1">claude-sonnet-4-6</code>). Must match a model in the Models section.
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] font-medium text-gray-500">MCP Servers</label>
+                  <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2 min-h-[38px]">
+                    {mcpServers.map((s) => {
+                      const selected = newSaMcpServerIds.includes(s.id);
+                      return (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() =>
+                            setNewSaMcpServerIds((prev) =>
+                              selected ? prev.filter((id) => id !== s.id) : [...prev, s.id],
+                            )
+                          }
+                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-medium transition-all duration-150 ${
+                            selected
+                              ? "bg-violet-100 text-violet-700 ring-1 ring-violet-200 shadow-sm"
+                              : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600"
+                          }`}
+                        >
+                          {selected ? "\u2713" : ""} {s.name}
+                        </button>
+                      );
+                    })}
+                    {mcpServers.length === 0 && (
+                      <p className="text-[10px] text-gray-400 py-0.5">No MCP servers available.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                onClick={handleCreateSystemAgent}
+                disabled={!newSaSlug.trim() || !newSaName.trim() || !newSaInstructions.trim() || creatingSa}
+                className={btnPrimary}
+              >
+                {creatingSa ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
+                {creatingSa ? "Creating..." : "Add System Agent"}
+              </button>
+            </div>
+
+            {/* Existing system agents list */}
+            <div className="space-y-2.5">
+              {systemAgents.map((sa) => {
+                const isEditing = editingSaId === sa.id;
+                const assignedServers = mcpServers.filter((s) => sa.mcpServerIds.includes(s.id));
+                return (
+                  <div
+                    key={sa.id}
+                    className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md"
+                  >
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-amber-100 to-yellow-100 text-amber-600">
+                        <Zap className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold text-gray-900">{sa.name}</p>
+                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-semibold text-amber-600 font-mono">
+                            {sa.slug}
+                          </span>
+                        </div>
+                        {sa.description && (
+                          <p className="mt-0.5 text-xs text-gray-500">{sa.description}</p>
+                        )}
+                        <p className="mt-1 line-clamp-2 text-[11px] text-gray-400 leading-relaxed">
+                          {sa.instructions.substring(0, 150)}{sa.instructions.length > 150 ? "..." : ""}
+                        </p>
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-medium text-gray-500 font-mono">
+                            {sa.modelSlug}
+                          </span>
+                          {/* MCP server chips — display or edit mode */}
+                          {isEditing ? (
+                            <>
+                              {mcpServers.map((s) => {
+                                const sel = editingSaMcpServerIds.includes(s.id);
+                                return (
+                                  <button
+                                    key={s.id}
+                                    type="button"
+                                    onClick={() =>
+                                      setEditingSaMcpServerIds((prev) =>
+                                        sel ? prev.filter((x) => x !== s.id) : [...prev, s.id],
+                                      )
+                                    }
+                                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-medium transition-all duration-150 ${
+                                      sel
+                                        ? "bg-violet-100 text-violet-700 ring-1 ring-violet-200 shadow-sm"
+                                        : "bg-gray-50 text-gray-400 ring-1 ring-gray-200 hover:bg-gray-100 hover:text-gray-600"
+                                    }`}
+                                  >
+                                    <Plug className="h-2.5 w-2.5" />
+                                    {s.name}
+                                    {sel && <X className="h-2.5 w-2.5" />}
+                                  </button>
+                                );
+                              })}
+                              <button
+                                onClick={() => handleSaveSystemAgentMcp(sa.id)}
+                                disabled={savingSaId === sa.id}
+                                className="inline-flex items-center gap-1 rounded-full bg-indigo-500 px-2.5 py-0.5 text-[9px] font-semibold text-white shadow-sm transition hover:bg-indigo-600 disabled:opacity-50"
+                              >
+                                {savingSaId === sa.id ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <Save className="h-2.5 w-2.5" />}
+                                Save
+                              </button>
+                              <button
+                                onClick={() => setEditingSaId(null)}
+                                className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-[9px] font-medium text-gray-500 transition hover:bg-gray-200"
+                              >
+                                <X className="h-2.5 w-2.5" />
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              {assignedServers.map((s) => (
+                                <span
+                                  key={s.id}
+                                  className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-medium text-violet-600 ring-1 ring-violet-100"
+                                >
+                                  <Plug className="h-2.5 w-2.5" />
+                                  {s.name}
+                                </span>
+                              ))}
+                              {assignedServers.length === 0 && (
+                                <span className="text-[9px] text-gray-300 italic">no MCP servers</span>
+                              )}
+                              <button
+                                onClick={() => {
+                                  setEditingSaId(sa.id);
+                                  setEditingSaMcpServerIds([...sa.mcpServerIds]);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-full bg-gray-50 px-2 py-0.5 text-[9px] font-medium text-gray-400 ring-1 ring-gray-200 transition hover:bg-gray-100 hover:text-gray-600"
+                              >
+                                <Pencil className="h-2.5 w-2.5" />
+                                Edit MCP
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {systemAgents.length === 0 && (
+                <p className="py-6 text-center text-xs text-gray-400">
+                  No system agents configured yet.
                 </p>
               )}
             </div>

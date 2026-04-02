@@ -311,6 +311,17 @@ export interface AdminMcpServer {
   args: string[];
 }
 
+export interface AdminSystemAgent {
+  id: number;
+  slug: string;
+  name: string;
+  description: string | null;
+  instructions: string;
+  modelSlug: string;
+  userId: number | null;
+  mcpServerIds: number[];
+}
+
 export interface AdminGroup {
   id: string;
   name: string;
@@ -338,6 +349,35 @@ export const admin = {
   }) =>
     request<AdminMcpServer>("/admin/mcp-servers", {
       method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getSystemAgents: () => request<AdminSystemAgent[]>("/admin/system-agents"),
+  createSystemAgent: (data: {
+    slug: string;
+    name: string;
+    description?: string;
+    instructions: string;
+    modelSlug?: string;
+    userId?: number | null;
+    mcpServerIds?: number[];
+  }) =>
+    request<AdminSystemAgent>("/admin/system-agents", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateSystemAgent: (
+    id: number,
+    data: {
+      name?: string;
+      description?: string;
+      instructions?: string;
+      modelSlug?: string;
+      userId?: number | null;
+      mcpServerIds?: number[];
+    },
+  ) =>
+    request<AdminSystemAgent>(`/admin/system-agents/${id}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
     }),
   createAgent: (data: {

@@ -42,17 +42,60 @@ export async function withThreadLock<T>(
   try {
     return await fn();
   } finally {
-    const script = `
-      if redis.call("get", KEYS[1]) == ARGV[1] then
-        return redis.call("del", KEYS[1])
-      else
-        return 0
-      end
-    `;
-    try {
-      await redis.eval(script, 1, key, token);
-    } catch {
-      // Lock may have expired; ignore.
+    await releaseLock(redis, key, token);
+  }
+}
+
+/**
+ * Tries to acquire the lock for up to `timeoutMs` milliseconds.
+ * If acquired, runs `fn` and releases. If timeout is reached, throws `LockTimeoutError`.
+ */
+export class LockTimeoutError extends Error {
+  constructor(lockKey: string, timeoutMs: number) {
+    super(`Could not acquire lock "${lockKey}" within ${timeoutMs}ms — the target agent is busy.`);
+    this.name = "LockTimeoutError";
+  }
+}
+
+export async function withThreadLockTimeout<T>(
+  redis: Redis,
+  threadId: string,
+  timeoutMs: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const key = `${LOCK_PREFIX}${threadId}`;
+  const token = randomUUID();
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const ok = await redis.set(key, token, "EX", LOCK_TTL_SEC, "NX");
+    if (ok === "OK") {
+      break;
     }
+    if (Date.now() >= deadline) {
+      throw new LockTimeoutError(key, timeoutMs);
+    }
+    await new Promise((r) => setTimeout(r, SPIN_MS));
+  }
+
+  try {
+    return await fn();
+  } finally {
+    await releaseLock(redis, key, token);
+  }
+}
+
+async function releaseLock(redis: Redis, key: string, token: string): Promise<void> {
+  const script = `
+    if redis.call("get", KEYS[1]) == ARGV[1] then
+      return redis.call("del", KEYS[1])
+    else
+      return 0
+    end
+  `;
+  try {
+    await redis.eval(script, 1, key, token);
+  } catch {
+    // Lock may have expired; ignore.
   }
 }

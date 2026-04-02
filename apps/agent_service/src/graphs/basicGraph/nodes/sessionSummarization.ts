@@ -3,12 +3,14 @@ import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 
 import type { AgentState } from "../../../state";
-import { persistSummarizationResult } from "../../../rag/sessionSummaryChunksWriter";
+import { insertEpisodicMemoryChunks } from "../../../rag/episodicMemoryChunksWriter";
 import { embedText } from "../../../rag/embeddings";
 import { getLangfuseCallbackHandler, observeWithContext } from "../../../langfuse";
 import { logger } from "../../../logger";
 import { resolveEmbeddingProviderApiKey } from "../../../rag/embeddingProvider";
 import { EmbeddingProvider } from "../../../types/providers";
+import { Thread } from "@scheduling-agent/database";
+import { SessionSummary } from "@scheduling-agent/types";
 
 /**
  * Zod schema for the structured output returned by the LLM during
@@ -23,9 +25,12 @@ const sessionSummarizationSchema = z.object({
   chunks: z
     .array(z.string())
     .describe(
-      "An array of semantically self-contained text chunks (3-8 sentences each) " +
-        "suitable for vector retrieval.  Each chunk must make sense on its own, " +
-        "include contextual framing, and never split a claim from its qualifier.",
+      "An array of high-value, semantically self-contained text chunks (3-8 sentences each) " +
+        "suitable for long-term vector retrieval. " +
+        "Only include chunks that contain genuinely important, reusable knowledge — " +
+        "facts, decisions, preferences, domain insights, or actionable outcomes worth preserving. " +
+        "Omit small talk, pleasantries, routine acknowledgements, and anything that would not " +
+        "be useful when retrieved months later. Return an empty array if nothing qualifies.",
     ),
 });
 
@@ -109,11 +114,24 @@ export async function sessionSummarizationNode(
               role: "system",
               content:
                 "You are summarizing a conversation for long-term memory (domain-agnostic: the agent may specialize in any topic). " +
-                "Produce a concise summary AND an array of semantically self-contained chunks.\n\n" +
-                "Chunking rules:\n" +
+                "Produce a concise summary AND an array of high-value, semantically self-contained chunks.\n\n" +
+                "IMPORTANT — chunk quality gate:\n" +
+                "Only create chunks for information that is genuinely valuable to store long-term " +
+                "and would be useful when retrieved weeks or months later. Good candidates:\n" +
+                "  • Confirmed facts, decisions, or conclusions reached during the conversation.\n" +
+                "  • User preferences, constraints, or profile details discovered or updated.\n" +
+                "  • Domain insights, analysis outcomes, or actionable next steps.\n" +
+                "  • Agreed-upon plans, commitments, or resolved blockers.\n\n" +
+                "Do NOT create chunks for:\n" +
+                "  • Small talk, greetings, pleasantries, or routine acknowledgements.\n" +
+                "  • Repetitive back-and-forth that adds no new information.\n" +
+                "  • Transient context that only makes sense within this session.\n" +
+                "  • Content already fully captured by the summary alone.\n\n" +
+                "If no part of the conversation qualifies, return an empty chunks array — that is perfectly fine.\n\n" +
+                "Chunking rules (when chunks ARE warranted):\n" +
                 "1. Each chunk must make sense on its own — never split mid-thought or separate a claim from its qualifier.\n" +
                 "2. Group related exchanges (e.g. a full Q&A on one topic) into one chunk.\n" +
-                "3. Aim for 3-8 sentences per chunk; prefer more chunks over fewer if topics are unrelated.\n" +
+                "3. Aim for 3-8 sentences per chunk; prefer fewer, higher-quality chunks over many thin ones.\n" +
                 "4. Include brief contextual framing so each chunk is understandable out of order.",
             },
             {
@@ -130,11 +148,25 @@ export async function sessionSummarizationNode(
           chunkCount: result.chunks.length,
         });
 
-        await persistSummarizationResult(
+        const now = new Date();
+        const summaryPayload: SessionSummary = {
+          text: result.summary,
+          createdAt: now.toISOString(),
+          messageCount: undefined,
+        };
+         // Write summary JSONB to the threads row.
+         Thread.update(
+          {
+            summary: summaryPayload,
+            summarizedAt: now,
+          },
+          { where: { id: threadId } },
+        );
+
+        await insertEpisodicMemoryChunks(
           threadId,
           userId,
           agentId,
-          result.summary,
           result.chunks,
           embedText,
         );

@@ -16,6 +16,35 @@ function resolveEnv(env: Record<string, string> | null): Record<string, string> 
   return { ...resolved, ...process.env as Record<string, string> };
 }
 
+/**
+ * Load MCP tools for a set of explicit server IDs.
+ * Used by deep agents whose tool_config specifies which MCP servers to use.
+ */
+export async function getMcpToolsByServerIds(serverIds: number[], cacheKey: string) {
+  if (serverIds.length === 0) return [];
+
+  if (clientsCache.has(cacheKey)) {
+    return await clientsCache.get(cacheKey)!.getTools();
+  }
+
+  const servers = await McpServer.findAll({ where: { id: serverIds } });
+  if (servers.length === 0) return [];
+
+  const mcpServers: Record<string, any> = {};
+  for (const server of servers) {
+    mcpServers[server.name] = {
+      transport: server.transport,
+      command: server.command,
+      args: server.args,
+      ...(server.env ? { env: resolveEnv(server.env) } : {}),
+    };
+  }
+
+  const client = new MultiServerMCPClient({ mcpServers });
+  clientsCache.set(cacheKey, client);
+  return await client.getTools();
+}
+
 export default async function getMcpTools(agentId: string) {
   if (clientsCache.has(agentId)) {
     console.log(`Loading cached MCP tools for agent: ${agentId}`);

@@ -15,7 +15,11 @@ import {
   agentChatQueue,
   agentChatQueueEvents,
 } from "./queues/agentChat.bull";
+import {
+  deepAgentQueueEvents,
+} from "./queues/deepAgent.bull";
 import { startAgentChatWorker } from "./worker/agentChat.worker";
+import { startDeepAgentWorker } from "./worker/deepAgent.worker";
 import { attachAgentSocketIO } from "./socket";
 import { logger } from "./logger";
 
@@ -45,9 +49,11 @@ async function main(): Promise<void> {
   const graph = await createSchedulerGraph();
   logger.info("Agent graph compiled with PostgresSaver checkpointer");
 
-  // 3. BullMQ: queue events + worker (per-thread serialization via Redis lock in worker).
+  // 3. BullMQ: queue events + workers.
   await agentChatQueueEvents.waitUntilReady();
+  await deepAgentQueueEvents.waitUntilReady();
   const agentChatWorker = startAgentChatWorker(graph);
+  const deepAgentWorker = startDeepAgentWorker();
 
   // 4. HTTP + Socket.IO server (chat enqueues jobs; results emitted via socket).
   const app = createServer({ agentChatQueue, graph });
@@ -66,8 +72,10 @@ async function main(): Promise<void> {
     });
     try {
       await agentChatWorker.close();
+      await deepAgentWorker.close();
       await agentChatQueue.close();
       await agentChatQueueEvents.close();
+      await deepAgentQueueEvents.close();
       await shutdownLangfuse();
       await sequelize.close();
     } catch (e) {

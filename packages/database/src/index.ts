@@ -13,3 +13,6 @@ export { MessageNotification } from "./models/MessageNotification";
 export { ConversationMessage } from "./models/ConversationMessage";
 export { McpServer } from "./models/McpServer";
 export { AgentMcpServer } from "./models/AgentMcpServer";
+export { SystemAgent } from "./models/SystemAgent";
+export { SystemAgentMcpServer } from "./models/SystemAgentMcpServer";
+export { DeepAgentDelegation } from "./models/DeepAgentDelegation";
