@@ -229,7 +229,7 @@ export async function callModelNode(
     EditUserIdentityTool(state.userId),
     EditAgentNameTool(agentId),
     ...(await getMcpTools(agentId)) as StructuredToolInterface[],
-    ConsultAgentTool(agentId, state.userId, state.singleChatId, state.groupId),
+    ConsultAgentTool(agentId, state.userId),
     ListSystemAgentsTool(),
     DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId),
   ];

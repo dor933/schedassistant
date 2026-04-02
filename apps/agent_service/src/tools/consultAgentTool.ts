@@ -1,13 +1,31 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import crypto from "node:crypto";
-import { Agent } from "@scheduling-agent/database";
+import { Agent, SingleChat, LLMModel } from "@scheduling-agent/database";
 import { getGraph } from "../deps";
 import { ensureSession } from "../sessionsManagment/sessionRegistry";
 import { createThreadLockRedis, withThreadLockTimeout, LockTimeoutError } from "../worker/threadLock";
 import { getRedisConfig } from "../redisClient";
 import { logger } from "../logger";
-import { resolveModelSlug } from "../chat/modelResolution";
+
+/**
+ * Resolve the model slug for a target agent by looking at its single chats.
+ * Falls back to "gpt-4o" if no model is configured.
+ */
+async function resolveModelForAgent(agentId: string): Promise<string> {
+  try {
+    const sc = await SingleChat.findOne({
+      where: { agentId },
+      attributes: ["modelId"],
+      order: [["created_at", "DESC"]],
+    });
+    if (sc?.modelId) {
+      const model = await LLMModel.findByPk(sc.modelId, { attributes: ["slug"] });
+      if (model) return model.slug;
+    }
+  } catch { /* fall through */ }
+  return "gpt-4o";
+}
 
 const lockRedis = createThreadLockRedis(getRedisConfig());
 
@@ -44,8 +62,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 export function ConsultAgentTool(
   callerAgentId: string,
   userId: number,
-  singleChatId: string | null,
-  groupId: string | null,
 ) {
   return tool(
     async (input) => {
@@ -88,7 +104,8 @@ export function ConsultAgentTool(
               );
             }
 
-            const modelSlug = await resolveModelSlug(singleChatId, groupId);
+            // Resolve model from agent B's own config, NOT from agent A's conversation
+            const modelSlug = await resolveModelForAgent(targetAgentId);
 
             const result = await withTimeout(
               graph.invoke(
