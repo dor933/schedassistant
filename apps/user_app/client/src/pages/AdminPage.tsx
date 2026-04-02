@@ -118,6 +118,12 @@ export default function AdminPage() {
   const [newMcpArgs, setNewMcpArgs] = useState("");
   const [newMcpEnv, setNewMcpEnv] = useState("");
   const [creatingMcp, setCreatingMcp] = useState(false);
+  const [editingMcpId, setEditingMcpId] = useState<number | null>(null);
+  const [editMcpTransport, setEditMcpTransport] = useState("stdio");
+  const [editMcpCommand, setEditMcpCommand] = useState("");
+  const [editMcpArgs, setEditMcpArgs] = useState("");
+  const [editMcpEnv, setEditMcpEnv] = useState("");
+  const [savingMcpId, setSavingMcpId] = useState<number | null>(null);
 
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -275,6 +281,72 @@ export default function AdminPage() {
       setError(err.message);
     } finally {
       setCreatingMcp(false);
+    }
+  }
+
+  function mcpHumanReadableLaunch(command: string, argsCsv: string): string {
+    const args = argsCsv.trim()
+      ? argsCsv.split(",").map((a) => a.trim()).filter(Boolean)
+      : [];
+    const quote = (a: string) => (/[\s"'\\]/.test(a) ? JSON.stringify(a) : a);
+    return [command.trim(), ...args.map(quote)].filter(Boolean).join(" ");
+  }
+
+  function openMcpEdit(s: AdminMcpServer) {
+    setEditingMcpId(s.id);
+    setEditMcpTransport(s.transport || "stdio");
+    setEditMcpCommand(s.command);
+    setEditMcpArgs(s.args.length > 0 ? s.args.join(", ") : "");
+    setEditMcpEnv(
+      s.env && typeof s.env === "object" && Object.keys(s.env).length > 0
+        ? JSON.stringify(s.env, null, 2)
+        : "",
+    );
+    setError("");
+  }
+
+  async function handleSaveMcpEdit() {
+    if (editingMcpId == null || !editMcpCommand.trim()) return;
+
+    let env: Record<string, string> | null = null;
+    if (editMcpEnv.trim()) {
+      try {
+        const parsed = JSON.parse(editMcpEnv.trim());
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setError("Environment must be a JSON object.");
+          return;
+        }
+        const obj = parsed as Record<string, string>;
+        env = Object.keys(obj).length > 0 ? obj : null;
+      } catch {
+        setError("Invalid JSON in environment variables.");
+        return;
+      }
+    }
+
+    const args = editMcpArgs.trim()
+      ? editMcpArgs.split(",").map((a) => a.trim()).filter(Boolean)
+      : [];
+
+    setError("");
+    setSavingMcpId(editingMcpId);
+    try {
+      const { launchSummary } = await admin.updateMcpServer(editingMcpId, {
+        transport: editMcpTransport.trim() || "stdio",
+        command: editMcpCommand.trim(),
+        args,
+        env,
+      });
+      setEditingMcpId(null);
+      flash(
+        `MCP server updated. Effective launch: ${launchSummary.humanReadable}. ` +
+          "Restart agent_service so running agents reload MCP connections.",
+      );
+      await reload();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSavingMcpId(null);
     }
   }
 
@@ -1171,20 +1243,133 @@ export default function AdminPage() {
               {mcpServers.map((s) => (
                 <div
                   key={s.id}
-                  className="flex min-w-0 items-start gap-3 rounded-xl border border-gray-200/60 bg-white p-3.5 shadow-glass transition-all duration-200 hover:shadow-md"
+                  className={`min-w-0 rounded-xl border border-gray-200/60 bg-white p-3.5 shadow-glass transition-all duration-200 hover:shadow-md ${
+                    editingMcpId === s.id ? "col-span-full" : ""
+                  }`}
                 >
-                  <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-purple-100 text-violet-600">
-                    <Terminal className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-gray-900 truncate">{s.name}</p>
-                    <p className="mt-0.5 font-mono text-[10px] text-gray-400 truncate">
-                      {s.command} {s.args.join(" ")}
-                    </p>
-                    <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-semibold text-violet-500 uppercase">
-                      {s.transport}
-                    </span>
-                  </div>
+                  {editingMcpId === s.id ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-purple-100 text-violet-600">
+                            <Terminal className="h-4 w-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-gray-900 truncate">{s.name}</p>
+                            <p className="text-[10px] text-gray-400">Name cannot be changed here.</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setEditingMcpId(null)}
+                          className="flex-shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                          title="Cancel"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1 block text-[10px] font-medium text-gray-500">Transport</label>
+                          <select
+                            value={editMcpTransport}
+                            onChange={(e) => setEditMcpTransport(e.target.value)}
+                            className={inputClass}
+                          >
+                            <option value="stdio">stdio</option>
+                            <option value="sse">sse</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[10px] font-medium text-gray-500">Command</label>
+                          <input
+                            type="text"
+                            value={editMcpCommand}
+                            onChange={(e) => setEditMcpCommand(e.target.value)}
+                            className={inputClass + " font-mono text-xs"}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] font-medium text-gray-500">
+                          Arguments (comma-separated)
+                        </label>
+                        <input
+                          type="text"
+                          value={editMcpArgs}
+                          onChange={(e) => setEditMcpArgs(e.target.value)}
+                          placeholder='e.g. "-y, @modelcontextprotocol/server-filesystem, /"'
+                          className={inputClass + " font-mono text-xs"}
+                        />
+                      </div>
+                      <div>
+                        <label className="mb-1 block text-[10px] font-medium text-gray-500">
+                          Environment (JSON object, optional)
+                        </label>
+                        <textarea
+                          value={editMcpEnv}
+                          onChange={(e) => setEditMcpEnv(e.target.value)}
+                          rows={3}
+                          className={inputClass + " font-mono text-xs resize-y"}
+                          placeholder={'{\n  "KEY": "{{HOST_ENV_VAR}}"\n}'}
+                        />
+                      </div>
+                      <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-[11px] text-indigo-900">
+                        <p className="font-semibold text-indigo-800">Preview after save</p>
+                        <p className="mt-1 font-mono break-all text-indigo-950/90">
+                          {mcpHumanReadableLaunch(editMcpCommand, editMcpArgs) || "(empty command)"}
+                        </p>
+                        <p className="mt-1.5 text-[10px] text-indigo-700/80">
+                          agent_service runs: <span className="font-mono">argv[0]</span> = command, then each argument in order. DB env merges with the container process env when the MCP child starts.
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={handleSaveMcpEdit}
+                          disabled={!editMcpCommand.trim() || savingMcpId === s.id}
+                          className={btnPrimary}
+                        >
+                          {savingMcpId === s.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Save className="h-4 w-4" />
+                          )}
+                          Save changes
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingMcpId(null)}
+                          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex min-w-0 items-start gap-3">
+                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-purple-100 text-violet-600">
+                        <Terminal className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{s.name}</p>
+                        <p className="mt-0.5 font-mono text-[10px] text-gray-400 break-all">
+                          {s.command} {s.args.join(" ")}
+                        </p>
+                        <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-semibold text-violet-500 uppercase">
+                          {s.transport}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => openMcpEdit(s)}
+                        className="flex-shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-violet-50 hover:text-violet-600"
+                        title="Edit command, arguments, transport, env"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
               {mcpServers.length === 0 && (

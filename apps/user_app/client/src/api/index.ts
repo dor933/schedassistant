@@ -312,6 +312,21 @@ export interface AdminMcpServer {
   transport: string;
   command: string;
   args: string[];
+  env?: Record<string, string> | null;
+}
+
+export interface AdminMcpServerLaunchSummary {
+  transport: string;
+  executable: string;
+  arguments: string[];
+  argv: string[];
+  humanReadable: string;
+  envNote: string;
+}
+
+export interface AdminMcpServerUpdateResponse {
+  server: AdminMcpServer;
+  launchSummary: AdminMcpServerLaunchSummary;
 }
 
 export interface AdminSystemAgent {
@@ -352,6 +367,19 @@ export const admin = {
   }) =>
     request<AdminMcpServer>("/admin/mcp-servers", {
       method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateMcpServer: (
+    id: number,
+    data: {
+      args?: string[];
+      command?: string;
+      transport?: string;
+      env?: Record<string, string> | null;
+    },
+  ) =>
+    request<AdminMcpServerUpdateResponse>(`/admin/mcp-servers/${id}`, {
+      method: "PATCH",
       body: JSON.stringify(data),
     }),
   getSystemAgents: () => request<AdminSystemAgent[]>("/admin/system-agents"),

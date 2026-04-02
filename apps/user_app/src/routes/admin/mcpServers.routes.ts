@@ -6,5 +6,6 @@ const controller = new McpServersController();
 
 router.get("/", controller.getAll);
 router.post("/", controller.create);
+router.patch("/:id", controller.update);
 
 export { router as mcpServersRouter };
