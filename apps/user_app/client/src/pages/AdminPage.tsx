@@ -1133,16 +1133,16 @@ export default function AdminPage() {
               </div>
 
               {/* Env — full width */}
-              <div className="group">
+              <div className="group relative">
                 <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
                   Environment Variables (optional)
-                  <span className="relative cursor-help">
+                  <span className="cursor-help">
                     <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                    <span className="pointer-events-none absolute bottom-full right-0 sm:right-auto sm:left-0 z-50 mb-2 w-72 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Environment variables</strong> are passed to the server process as a JSON object. Use <code className="rounded bg-gray-100 px-1">{`{{VAR_NAME}}`}</code> syntax to reference host environment variables at runtime. Leave empty if none are needed.
-                    </span>
                   </span>
                 </label>
+                <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 max-w-[calc(100vw-3rem)] rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                  <strong>Environment variables</strong> are passed to the server process as a JSON object. Use <code className="rounded bg-gray-100 px-1">{`{{VAR_NAME}}`}</code> syntax to reference host environment variables at runtime. Leave empty if none are needed.
+                </span>
                 <textarea
                   value={newMcpEnv}
                   onChange={(e) => setNewMcpEnv(e.target.value)}
