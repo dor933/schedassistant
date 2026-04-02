@@ -28,7 +28,7 @@ const lockRedis = createThreadLockRedis(getRedisConfig());
 
 /** Max time to wait for the target agent's lock (seconds). */
 const CONSULT_LOCK_TIMEOUT_MS = Number(
-  process.env.CONSULT_AGENT_LOCK_TIMEOUT_MS ?? 30_000, // 30s default
+  process.env.CONSULT_AGENT_LOCK_TIMEOUT_MS ?? 60_000, // 60s default
 );
 
 /** Max time for the entire consultation (graph.invoke) to complete (ms). */
