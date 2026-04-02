@@ -1056,7 +1056,7 @@ export default function AdminPage() {
                     Name
                     <span className="relative cursor-help">
                       <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                         <strong>Name</strong> is a unique identifier for this server. It appears when assigning servers to agents (e.g. "filesystem", "github", "bash").
                       </span>
                     </span>
@@ -1076,7 +1076,7 @@ export default function AdminPage() {
                     Transport
                     <span className="relative cursor-help">
                       <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-60 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                         <strong>Transport</strong> defines how the agent communicates with the server. <strong>stdio</strong> launches a local process; <strong>sse</strong> connects to a remote HTTP endpoint.
                       </span>
                     </span>
@@ -1097,7 +1097,7 @@ export default function AdminPage() {
                     Command
                     <span className="relative cursor-help">
                       <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-60 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                         <strong>Command</strong> is the executable used to start the MCP server process (e.g. <code className="rounded bg-gray-100 px-1">npx</code>, <code className="rounded bg-gray-100 px-1">uvx</code>, <code className="rounded bg-gray-100 px-1">node</code>).
                       </span>
                     </span>
@@ -1117,7 +1117,7 @@ export default function AdminPage() {
                     Arguments
                     <span className="relative cursor-help">
                       <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                         <strong>Arguments</strong> are passed to the command as a list. Enter them separated by commas. For example: <code className="rounded bg-gray-100 px-1">-y, @modelcontextprotocol/server-filesystem, /app/data</code>
                       </span>
                     </span>
@@ -1138,7 +1138,7 @@ export default function AdminPage() {
                   Environment Variables (optional)
                   <span className="relative cursor-help">
                     <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-72 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                    <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                       <strong>Environment variables</strong> are passed to the server process as a JSON object. Use <code className="rounded bg-gray-100 px-1">{`{{VAR_NAME}}`}</code> syntax to reference host environment variables at runtime. Leave empty if none are needed.
                     </span>
                   </span>
@@ -1219,7 +1219,7 @@ export default function AdminPage() {
                     Slug
                     <span className="relative cursor-help">
                       <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                         <strong>Slug</strong> is the unique machine identifier used when delegating tasks to this agent (e.g. <code className="rounded bg-gray-100 px-1">stock_researcher_agent</code>).
                       </span>
                     </span>
@@ -1237,7 +1237,7 @@ export default function AdminPage() {
                     Name
                     <span className="relative cursor-help">
                       <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-52 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-52 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                         <strong>Name</strong> is the human-readable display name shown in the admin panel and in agent context.
                       </span>
                     </span>
@@ -1256,7 +1256,7 @@ export default function AdminPage() {
                   Description
                   <span className="relative cursor-help">
                     <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-60 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                    <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                       <strong>Description</strong> helps agents decide which specialist to delegate to. Be specific about capabilities.
                     </span>
                   </span>
@@ -1274,7 +1274,7 @@ export default function AdminPage() {
                   Instructions
                   <span className="relative cursor-help">
                     <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                    <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                       <strong>Instructions</strong> are injected into the deep agent's system prompt. Include domain expertise, methodology, output format expectations, etc.
                     </span>
                   </span>
@@ -1293,7 +1293,7 @@ export default function AdminPage() {
                     Model slug
                     <span className="relative cursor-help">
                       <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                         <strong>Model</strong> is the LLM model slug this agent uses (e.g. <code className="rounded bg-gray-100 px-1">gpt-4o</code>, <code className="rounded bg-gray-100 px-1">claude-sonnet-4-6</code>). Must match a model in the Models section.
                       </span>
                     </span>
@@ -1495,7 +1495,7 @@ export default function AdminPage() {
                   Display name
                   <span className="relative cursor-help">
                     <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-56 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                    <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                       <strong>Name</strong> is what users see in the UI (e.g.
                       "GPT-4o Mini", "Gemini 3.1").
                     </span>
@@ -1514,7 +1514,7 @@ export default function AdminPage() {
                   API slug
                   <span className="relative cursor-help">
                     <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                    <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-64 -translate-x-1/2 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                    <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                       <strong>Slug</strong> is the exact model ID sent to the
                       vendor API (e.g. "gpt-4o-mini", "claude-sonnet-4-6").
                       Must be unique and match the provider's model identifier.
