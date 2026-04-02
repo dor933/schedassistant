@@ -36,7 +36,7 @@ const CONSULT_LOCK_TIMEOUT_MS = Number(
 
 /** Max time for the entire consultation (graph.invoke) to complete (ms). */
 const CONSULT_EXECUTION_TIMEOUT_MS = Number(
-  process.env.CONSULT_AGENT_EXECUTION_TIMEOUT_MS ?? 120_000, // 2 min default
+  process.env.CONSULT_AGENT_EXECUTION_TIMEOUT_MS ?? 180_000, // 3 min default
 );
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
