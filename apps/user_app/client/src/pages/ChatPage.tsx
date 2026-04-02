@@ -86,7 +86,7 @@ export default function ChatPage() {
   const [activeConv, setActiveConv] = useState<ConversationRef | null>(null);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [sending, setSending] = useState(false);
+  const [sendingConvId, setSendingConvId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [typingConversations, setTypingConversations] = useState<Set<string>>(
@@ -696,7 +696,7 @@ export default function ChatPage() {
     };
     setTotalMessages((t) => t + 1);
     setMessages((prev) => [...prev, userMsg]);
-    setSending(true);
+    setSendingConvId(activeConv?.id ?? null);
 
     const requestId = crypto.randomUUID();
 
@@ -724,7 +724,7 @@ export default function ChatPage() {
       } catch {
         // stored silently
       } finally {
-        setSending(false);
+        setSendingConvId(null);
       }
       return;
     }
@@ -778,11 +778,12 @@ export default function ChatPage() {
         { role: "assistant", content: `Error: ${errorText}` },
       ]);
     } finally {
-      setSending(false);
+      setSendingConvId(null);
     }
   }
 
   const convName = activeConv?.name || "Select a conversation";
+  const sending = activeConv ? sendingConvId === activeConv.id : false;
   const agentIsTyping = activeConv
     ? typingConversations.has(activeConv.id)
     : false;
