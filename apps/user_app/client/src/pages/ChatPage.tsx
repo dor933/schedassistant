@@ -555,13 +555,6 @@ export default function ChatPage() {
           }
           break;
         }
-        case "single_chat_model_changed": {
-          const { singleChatId, model } = data.data;
-          if (current?.type === "single" && current.id === singleChatId) {
-            setActiveConv((prev) => (prev ? { ...prev, model } : prev));
-          }
-          break;
-        }
         case "group_renamed": {
           const { groupId, name } = data.data;
           if (current?.type === "group" && current.id === groupId) {
@@ -599,6 +592,27 @@ export default function ChatPage() {
             singleChats: [...prev.singleChats, data.singleChat],
           };
         });
+      } else if (data.action === "agent_model_changed" && data.agentId) {
+        const newModel = data.model ?? null;
+        // Update model on all conversations that use this agent
+        setConversations((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            singleChats: prev.singleChats.map((sc) =>
+              sc.agentId === data.agentId ? { ...sc, model: newModel } : sc,
+            ),
+            groups: prev.groups.map((g) =>
+              g.agentId === data.agentId ? { ...g, model: newModel } : g,
+            ),
+          };
+        });
+        // Update the active conversation if it uses this agent
+        setActiveConv((prev) =>
+          prev && prev.agentId === data.agentId
+            ? { ...prev, model: newModel }
+            : prev,
+        );
       }
     };
 

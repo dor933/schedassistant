@@ -1,6 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import crypto from "node:crypto";
+import { HumanMessage } from "@langchain/core/messages";
 import { Agent, LLMModel } from "@scheduling-agent/database";
 import { getGraph } from "../deps";
 import { ensureSession } from "../sessionsManagment/sessionRegistry";
@@ -114,11 +115,10 @@ export function ConsultAgentTool(
                   modelSlug,
                   userInput: request,
                   messages: [
-                    {
-                      role: "human",
+                    new HumanMessage({
                       content: `[Consultation request from another agent]\n\n${request}`,
                       name: "agent_consultation",
-                    },
+                    }),
                   ],
                 },
                 { configurable: { thread_id: threadId } },

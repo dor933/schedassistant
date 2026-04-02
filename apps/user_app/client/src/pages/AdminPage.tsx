@@ -42,6 +42,7 @@ import {
 import { VendorIcon } from "../components/VendorModelBadge";
 import UserCard from "../components/UserCard";
 import AgentCard from "../components/AgentCard";
+import ModelSelector from "../components/ModelSelector";
 
 export function stringifyAgentCharacteristics(
   c: Record<string, unknown> | null | undefined,
@@ -87,6 +88,7 @@ export default function AdminPage() {
   const [newAgentInstructions, setNewAgentInstructions] = useState("");
   const [newAgentCharacteristics, setNewAgentCharacteristics] = useState("");
   const [newAgentMcpServerIds, setNewAgentMcpServerIds] = useState<number[]>([]);
+  const [newAgentModelId, setNewAgentModelId] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupAgentId, setNewGroupAgentId] = useState("");
   const [newGroupMembers, setNewGroupMembers] = useState<number[]>([]);
@@ -214,11 +216,13 @@ export default function AdminPage() {
         coreInstructions: newAgentInstructions.trim() || undefined,
         characteristics,
         mcpServerIds: newAgentMcpServerIds.length > 0 ? newAgentMcpServerIds : undefined,
+        modelId: newAgentModelId,
       });
       setNewAgentDefinition("");
       setNewAgentInstructions("");
       setNewAgentCharacteristics("");
       setNewAgentMcpServerIds([]);
+      setNewAgentModelId(null);
       flash("Agent created.");
       await reload();
     } catch (err: any) {
@@ -605,6 +609,18 @@ export default function AdminPage() {
                   )}
                 </div>
               </div>
+              {/* Model selection */}
+              <div>
+                <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  LLM Model
+                </label>
+                <ModelSelector
+                  currentModel={models.find((m) => m.id === newAgentModelId) ?? null}
+                  onModelChanged={(m) => setNewAgentModelId(m?.id ?? null)}
+                  compact
+                />
+              </div>
+
               <button
                 onClick={handleCreateAgent}
                 disabled={
