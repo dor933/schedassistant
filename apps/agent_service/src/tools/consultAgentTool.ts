@@ -140,7 +140,17 @@ export function ConsultAgentTool(
                   m.role === "assistant",
               );
 
-            return lastAi?.content ?? "The consulted agent did not produce a response.";
+            const rawContent = lastAi?.content;
+            if (rawContent == null) return "The consulted agent did not produce a response.";
+            if (typeof rawContent === "string") return rawContent;
+            // content is an array of blocks (e.g. [{type:"thinking",...},{type:"text",text:"..."}])
+            if (Array.isArray(rawContent)) {
+              return rawContent
+                .filter((b: any) => b?.type === "text" && typeof b.text === "string")
+                .map((b: any) => b.text)
+                .join("\n") || "The consulted agent did not produce a text response.";
+            }
+            return String(rawContent);
           },
         );
 
