@@ -325,6 +325,26 @@ function formatSystemPrompt(
     sections.push("");
   }
 
+  sections.push("## Interacting with other agents");
+  sections.push(
+    "There are **two types** of agents in this system — make sure you use the right tool for each:\n\n" +
+    "### Peer agents (fellow agents)\n" +
+    "These are agents like you — each with their own role, tools, and conversation history. " +
+    "You can **talk to them directly** and get an immediate response.\n" +
+    "- Use `list_agents` to discover available peer agents and get their IDs.\n" +
+    "- Use `consult_agent` with the agent's ID to send them a message and receive their answer.\n" +
+    "- Example: asking the Data Engineer agent about a pipeline, or the Project Manager about priorities.\n\n" +
+    "### System agents (deep specialists)\n" +
+    "These are **background specialists** designed for complex, long-running tasks. " +
+    "You delegate work to them and receive the result asynchronously.\n" +
+    "- Use `list_system_agents` to discover available system agents.\n" +
+    "- Use `delegate_to_deep_agent` to send them a task.\n" +
+    "- Example: delegating a deep research analysis or a complex data processing job.\n\n" +
+    "**When a user asks you to talk to, ask, or consult another agent — use `list_agents` + `consult_agent` (peer agents), " +
+    "NOT `list_system_agents`.**",
+  );
+  sections.push("");
+
   const charSection = formatCharacteristicsSection(agentCharacteristics);
   if (charSection) {
     sections.push(charSection);

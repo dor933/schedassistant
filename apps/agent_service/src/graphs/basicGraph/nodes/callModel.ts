@@ -29,6 +29,7 @@ import {
 import { EditAgentNameTool } from "../../../tools/agentNameTool";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
+import { ListAgentsTool } from "../../../tools/listAgentsTool";
 import { DelegateToDeepAgentTool } from "../../../tools/delegateToDeepAgentTool";
 import getMcpTools from "../../../mcpClient";
 
@@ -47,6 +48,22 @@ async function resolveVendor(modelSlug: string): Promise<{ slug: string; apiKey:
   const vendor = await Vendor.findByPk(model.vendorId, { attributes: ["slug", "apiKey"] });
   if (!vendor) return null;
   return { slug: vendor.slug, apiKey: vendor.apiKey ?? null, modelName: model.name };
+}
+
+/**
+ * Strips `signature` fields from `thinking` content blocks in an AI message's content.
+ * Anthropic thinking blocks include large base64 signatures that are not needed for
+ * conversation continuity and waste significant context tokens when re-sent.
+ */
+function stripThinkingSignatures(content: unknown): unknown {
+  if (!Array.isArray(content)) return content;
+  return content.map((part) => {
+    if (part && typeof part === "object" && (part as Record<string, unknown>).type === "thinking") {
+      const { signature, ...rest } = part as Record<string, unknown>;
+      return rest;
+    }
+    return part;
+  });
 }
 
 /**
@@ -230,6 +247,7 @@ export async function callModelNode(
     EditAgentNameTool(agentId),
     ...(await getMcpTools(agentId)) as StructuredToolInterface[],
     ConsultAgentTool(agentId, state.userId),
+    ListAgentsTool(agentId),
     ListSystemAgentsTool(),
     DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId),
   ];
@@ -263,6 +281,10 @@ export async function callModelNode(
       if (name && typeof name === "string") {
         (msg as any).name = sanitizeName(name);
       }
+      // Strip thinking-block signatures from prior AI messages to save context tokens
+      if (isAIMessage(msg) && Array.isArray(msg.content)) {
+        (msg as any).content = stripThinkingSignatures(msg.content);
+      }
       llmMessages.push(msg);
     } else {
       const m = msg as any;
@@ -295,6 +317,11 @@ export async function callModelNode(
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const response = await modelWithTools.invoke(working, config);
+
+      // Strip thinking-block signatures from the response before checkpoint storage
+      if (response instanceof AIMessage && Array.isArray(response.content)) {
+        (response as any).content = stripThinkingSignatures(response.content);
+      }
 
       const toolCalls =
         response instanceof AIMessage ? response.tool_calls : undefined;
