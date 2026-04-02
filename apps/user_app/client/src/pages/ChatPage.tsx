@@ -733,7 +733,7 @@ export default function ChatPage() {
       const timeout = window.setTimeout(() => {
         pendingReplies.current.delete(requestId);
         reject(new Error("Timed out waiting for assistant reply."));
-      }, 120_000);
+      }, 240_000);
 
       pendingReplies.current.set(requestId, (p) => {
         window.clearTimeout(timeout);

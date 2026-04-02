@@ -1,0 +1,26 @@
+# Stop and remove containers, networks, and named/anon volumes of THIS stack
+c
+S&P Check Value
+https://www.investing.com/indices/us-spx-500-historical-data
+
+
+# Start clean
+docker compose up --build
+# (Optional) force container re-create + reset anon volumes
+docker compose down --volumes --remove-orphans --rmi local
+
+# restore database
+pg_restore -U stock_user -d stock_analyzer --clean --if-exists -v db_dump_new.dump
+
+always work in functions with plain objects when using sequalize and *not* with sequalize types. 
+
+getting row objects from sequalize:
+
+      const sampleAnalysis = await this.analysis.findAll({
+        where: { status: "completed" },
+        order: [["requested_at", "DESC"]],
+        limit: 4,
+        ****** raw: true, ******
+      });
+
+every change in nginx.conf/docker-compose.yaml/env files/Docker Files - remember to update in all environments.
