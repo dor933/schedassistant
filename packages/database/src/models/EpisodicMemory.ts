@@ -59,11 +59,24 @@ EpisodicMemory.init(
       allowNull: false,
     },
     embedding: {
-      // pgvector column — Sequelize does not have a built-in vector type.
-      // The migration creates the column as `vector(1536)`; here we store as
-      // an array and let the raw-query retrieval path handle casting.
-      type: DataTypes.ARRAY(DataTypes.FLOAT),
+      // pgvector `vector(1536)` column. Sequelize has no built-in vector type,
+      // so we store/retrieve as a string in pgvector literal format "[0.1,0.2,…]".
+      // The custom set/get below transparently converts between number[] and that format.
+      type: "VECTOR(1536)" as any,
       allowNull: false,
+      set(this: EpisodicMemory, val: number[]) {
+        this.setDataValue("embedding" as any, `[${val.join(",")}]` as any);
+      },
+      get(this: EpisodicMemory) {
+        const raw = this.getDataValue("embedding" as any);
+        if (!raw) return raw;
+        if (Array.isArray(raw)) return raw as number[];
+        const str = String(raw);
+        if (str.startsWith("[")) {
+          return JSON.parse(str) as number[];
+        }
+        return raw;
+      },
     },
     metadata: {
       type: DataTypes.JSONB,
