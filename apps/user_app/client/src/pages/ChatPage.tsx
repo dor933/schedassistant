@@ -51,6 +51,7 @@ interface Message {
   senderName?: string;
   vendorSlug?: string;
   modelName?: string;
+  createdAt?: string;
   _absIndex?: number;
 }
 
@@ -159,6 +160,7 @@ export default function ChatPage() {
         senderName?: string;
         vendorSlug?: string;
         modelName?: string;
+        createdAt?: string;
       },
       absIndex?: number,
     ): Message => ({
@@ -170,6 +172,7 @@ export default function ChatPage() {
           : undefined,
       vendorSlug: h.vendorSlug,
       modelName: h.modelName,
+      createdAt: h.createdAt,
       _absIndex: absIndex,
     }),
     [sanitize, myName],
@@ -1275,6 +1278,7 @@ export default function ChatPage() {
                       highlightText={
                         searchQuery && isSearchMatch ? searchQuery : undefined
                       }
+                      createdAt={msg.createdAt}
                     />
                   </Box>
                 );

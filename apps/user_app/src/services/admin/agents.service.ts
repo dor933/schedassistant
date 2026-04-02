@@ -84,6 +84,15 @@ export class AgentsService {
 
     // Eagerly create a SingleChat for every user and notify them in real time
     try {
+      let modelInfo: { id: string; name: string; slug: string; vendor: { id: string; name: string; slug: string } | null } | null = null;
+      if (agent.modelId) {
+        const m = await LLMModel.findByPk(agent.modelId, { attributes: ["id", "name", "slug", "vendorId"] });
+        if (m) {
+          const v = await Vendor.findByPk(m.vendorId, { attributes: ["id", "name", "slug"] });
+          modelInfo = { id: m.id, name: m.name, slug: m.slug, vendor: v ? { id: v.id, name: v.name, slug: v.slug } : null };
+        }
+      }
+
       const allUsers = await User.findAll({ attributes: ["id"] });
       for (const u of allUsers) {
         const [sc] = await SingleChat.findOrCreate({
@@ -100,7 +109,7 @@ export class AgentsService {
             id: sc.id,
             agentId: agent.id,
             title: sc.title,
-            model: null,
+            model: modelInfo,
           },
         });
       }

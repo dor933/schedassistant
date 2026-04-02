@@ -157,6 +157,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (prev.singleChats.some((sc: any) => sc.id === data.singleChat.id)) return prev;
           return { ...prev, singleChats: [...prev.singleChats, data.singleChat] };
         });
+      } else if (data.action === "agent_model_changed" && data.agentId) {
+        const newModel = data.model ?? null;
+        setConversations((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            singleChats: prev.singleChats.map((sc: any) =>
+              sc.agentId === data.agentId ? { ...sc, model: newModel } : sc,
+            ),
+            groups: prev.groups.map((g: any) =>
+              g.agentId === data.agentId ? { ...g, model: newModel } : g,
+            ),
+          };
+        });
       }
     };
 

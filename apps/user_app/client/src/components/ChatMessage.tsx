@@ -43,6 +43,24 @@ function HighlightedText({ text, term }: { text: string; term: string }) {
   );
 }
 
+function formatTimestamp(raw?: string): string | null {
+  if (!raw) return null;
+  try {
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return null;
+    const now = new Date();
+    const isToday =
+      d.getDate() === now.getDate() &&
+      d.getMonth() === now.getMonth() &&
+      d.getFullYear() === now.getFullYear();
+    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (isToday) return time;
+    return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+  } catch {
+    return null;
+  }
+}
+
 interface ChatMessageProps {
   role: "user" | "assistant";
   content: string;
@@ -51,13 +69,15 @@ interface ChatMessageProps {
   modelName?: string | null;
   isGroup?: boolean;
   highlightText?: string;
+  createdAt?: string;
 }
 
-export default function ChatMessage({ role, content, senderName, vendorSlug, modelName, isGroup, highlightText }: ChatMessageProps) {
+export default function ChatMessage({ role, content, senderName, vendorSlug, modelName, isGroup, highlightText, createdAt }: ChatMessageProps) {
   const isUser = role === "user";
   const isError = !isUser && content.startsWith("Error:");
   const isOtherUser = isUser && !!senderName;
   const isSelfInGroup = isUser && !isOtherUser && isGroup;
+  const ts = formatTimestamp(createdAt);
 
   // התיקון כאן: הוספנו dir="auto" ויישור אדפטיבי (start) רק לטקסט
   const renderContent = (className?: string) => {
@@ -149,41 +169,43 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
 
       {/* Bubble */}
       {isError ? (
-        <Box
-          className="rounded-2xl rounded-tl-md border border-red-200/60 bg-red-50 shadow-sm"
-          sx={{
-            maxWidth: { xs: "88%", sm: "75%" },
-            px: 2,
-            py: 1.5,
-            fontSize: "0.875rem",
-            lineHeight: "1.625",
-            color: "rgb(153 27 27)",
-            minWidth: 0,
-            overflow: "hidden",
-          }}
-        >
-          <Stack
-            direction="row"
-            alignItems="center"
-            spacing={0.75}
-            sx={{ mb: 0.75, fontSize: "0.75rem", fontWeight: 600, color: "rgb(239 68 68)" }}
-          >
-            <AlertTriangle className="h-3.5 w-3.5" />
-            <span>Error</span>
-          </Stack>
+        <Box sx={{ maxWidth: { xs: "88%", sm: "75%" }, minWidth: 0 }}>
           <Box
-            component="p"
-            dir="auto"
+            className="rounded-2xl rounded-tl-md border border-red-200/60 bg-red-50 shadow-sm"
             sx={{
-              whiteSpace: "pre-wrap",
-              overflowWrap: "break-word",
-              wordBreak: "break-word",
+              px: 2,
+              py: 1.5,
+              fontSize: "0.875rem",
+              lineHeight: "1.625",
+              color: "rgb(153 27 27)",
               minWidth: 0,
-              textAlign: "start"
+              overflow: "hidden",
             }}
           >
-            {content.replace(/^Error:\s*/, "")}
+            <Stack
+              direction="row"
+              alignItems="center"
+              spacing={0.75}
+              sx={{ mb: 0.75, fontSize: "0.75rem", fontWeight: 600, color: "rgb(239 68 68)" }}
+            >
+              <AlertTriangle className="h-3.5 w-3.5" />
+              <span>Error</span>
+            </Stack>
+            <Box
+              component="p"
+              dir="auto"
+              sx={{
+                whiteSpace: "pre-wrap",
+                overflowWrap: "break-word",
+                wordBreak: "break-word",
+                minWidth: 0,
+                textAlign: "start"
+              }}
+            >
+              {content.replace(/^Error:\s*/, "")}
+            </Box>
           </Box>
+          {ts && <Box className="mt-1 ml-1 text-[10px] text-gray-400" sx={{ userSelect: "none" }}>{ts}</Box>}
         </Box>
       ) : isOtherUser ? (
         <Box sx={{ maxWidth: { xs: "88%", sm: "75%" }, minWidth: 0 }}>
@@ -191,6 +213,7 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
           <Box className="rounded-2xl rounded-tl-md bg-white px-4 py-3 text-sm text-gray-800 shadow-glass ring-1 ring-gray-950/[0.04]" sx={{ minWidth: 0, overflow: "hidden" }}>
             {renderContent("chat-prose")}
           </Box>
+          {ts && <Box className="mt-1 ml-1 text-[10px] text-gray-400" sx={{ userSelect: "none" }}>{ts}</Box>}
         </Box>
       ) : (
         <Box sx={{ maxWidth: { xs: "88%", sm: "75%" }, minWidth: 0 }}>
@@ -206,6 +229,14 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
           >
             {renderContent(`chat-prose ${isUser ? "chat-prose-user" : ""}`)}
           </Box>
+          {ts && (
+            <Box
+              className={`mt-1 text-[10px] text-gray-400 ${isUser ? "mr-1 text-right" : "ml-1"}`}
+              sx={{ userSelect: "none" }}
+            >
+              {ts}
+            </Box>
+          )}
         </Box>
       )}
 

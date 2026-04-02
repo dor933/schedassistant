@@ -34,6 +34,7 @@ export class HistoryService {
       ...(r.modelSlug ? { modelSlug: r.modelSlug } : {}),
       ...(r.vendorSlug ? { vendorSlug: r.vendorSlug } : {}),
       ...(r.modelName ? { modelName: r.modelName } : {}),
+      createdAt: (r as any).createdAt ?? null,
     }));
 
     return { messages, total };

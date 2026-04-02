@@ -126,6 +126,7 @@ export interface HistoryMessage {
   modelSlug?: string;
   vendorSlug?: string;
   modelName?: string;
+  createdAt?: string;
 }
 
 export interface PaginatedHistory {
