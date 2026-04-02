@@ -195,13 +195,24 @@ export function startAgentChatWorker(
 
         return turnResult;
       } catch (err: any) {
+        const errorText = err?.message ?? "Agent processing failed";
+
         logger.error("Chat turn failed", {
           requestId,
           threadId: threadIdForError,
-          error: err?.message,
+          error: errorText,
         });
 
         if (threadIdForError) {
+          await writeConversationMessage({
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+            threadId: threadIdForError,
+            role: "assistant",
+            content: errorText,
+            requestId,
+          });
+
           emitAgentReply({
             requestId,
             userId,
@@ -209,7 +220,7 @@ export function startAgentChatWorker(
             groupId: groupId ?? null,
             singleChatId: singleChatId ?? null,
             ok: false,
-            error: err?.message ?? "Agent processing failed",
+            error: errorText,
           });
         }
         throw err;
