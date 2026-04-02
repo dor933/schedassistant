@@ -452,15 +452,13 @@ export default function ChatPage() {
       if (cb) {
         cb(p);
         pendingReplies.current.delete(p.requestId);
-        markConversationSeen(p.conversationId, p.conversationType);
-        return;
       }
 
       const current = activeConvRef.current;
       const isForActiveConv = current && current.id === p.conversationId;
 
       if (isForActiveConv) {
-        if (p.ok) {
+        if (!cb && p.ok) {
           setTotalMessages((t) => t + 1);
           setMessages((prev) => [
             ...prev,

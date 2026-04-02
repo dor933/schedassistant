@@ -173,15 +173,14 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
 
       const recipientIds = members.map((m) => m.userId);
 
+      // Create notifications BEFORE emitting to browsers so that when a client
+      // immediately responds with `message:seen`, the row already exists in the DB.
       for (const recipientId of recipientIds) {
-        browserIO.to(`user:${recipientId}`).emit("chat:reply", clientPayload);
-
-        // Create notification for every member except the original sender
         if (recipientId !== userId) {
           await MessageNotification.create({
             threadId,
             recipientId,
-            senderId: null, // agent-generated
+            senderId: null,
             messageId: requestId,
             preview: preview ?? null,
             status: "delivered",
@@ -190,16 +189,17 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
           });
         }
       }
+
+      for (const recipientId of recipientIds) {
+        browserIO.to(`user:${recipientId}`).emit("chat:reply", clientPayload);
+      }
     } catch (err) {
       logger.error("Group fan-out error", { groupId, error: String(err) });
-      // Fallback: at least deliver to the sender
       browserIO.to(`user:${userId}`).emit("chat:reply", clientPayload);
     }
   } else {
-    // Single chat: deliver only to the sender
-    browserIO.to(`user:${userId}`).emit("chat:reply", clientPayload);
-
-    // Create notification for the user (so unread counts work when they switch away)
+    // Single chat: create notification BEFORE emitting so that the client's
+    // immediate `message:seen` response can find and update the row.
     if (payload.ok) {
       try {
         await MessageNotification.create({
@@ -216,6 +216,8 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
         logger.error("Notification create error", { threadId, error: String(err) });
       }
     }
+
+    browserIO.to(`user:${userId}`).emit("chat:reply", clientPayload);
   }
 }
 
