@@ -6,8 +6,9 @@
  * and starts an Express HTTP server on port 3001.
  */
 
+import fs from "node:fs";
 import { createServer as createHttpServer } from "node:http";
-import { sequelize } from "@scheduling-agent/database";
+import { sequelize, Agent } from "@scheduling-agent/database";
 import { createSchedulerGraph } from "./graphs/basicGraph/index";
 import { createServer } from "./server";
 import { initializeLangfuse, isLangfuseConfigured, shutdownLangfuse } from "./langfuse";
@@ -42,6 +43,19 @@ async function main(): Promise<void> {
   // 1. Verify database connectivity.
   await sequelize.authenticate();
   logger.info("Database connection OK");
+
+  // 1b. Ensure workspace directories exist for all agents.
+  try {
+    const agents = await Agent.findAll({ attributes: ["id", "workspacePath"] });
+    for (const agent of agents) {
+      if (agent.workspacePath) {
+        fs.mkdirSync(agent.workspacePath, { recursive: true });
+      }
+    }
+    logger.info("Agent workspace directories verified", { count: agents.length });
+  } catch (err) {
+    logger.warn("Failed to verify workspace directories", { error: String(err) });
+  }
 
   // 2. Create checkpointer + compile graph with Postgres persistence.
   // Chat turns (worker → executeChatTurn) pass `agentId` in graph state; contextBuilder

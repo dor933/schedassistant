@@ -14,6 +14,14 @@ import { logger } from "./logger";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
+/** Must match Vite `base` / client `APP_URL_PREFIX`. Empty = served at root. */
+function appUrlPrefix(): string {
+  const raw = process.env.APP_URL_PREFIX;
+  if (raw === "") return "";
+  if (raw !== undefined) return raw.replace(/\/$/, "") || "";
+  return process.env.NODE_ENV === "production" ? "/claw" : "";
+}
+
 async function main(): Promise<void> {
   logger.info("Starting user_app…");
 
@@ -21,9 +29,21 @@ async function main(): Promise<void> {
   logger.info("Database connection OK");
 
   const app = express();
+  const appPrefix = appUrlPrefix();
 
   app.use(cors());
   app.use(express.json());
+
+  // Rewrite /claw/... → /... so static + /api match (same as nginx strip_prefix)
+  if (appPrefix) {
+    app.use((req, res, next) => {
+      const url = req.url;
+      if (url === appPrefix || url.startsWith(`${appPrefix}/`) || url.startsWith(`${appPrefix}?`)) {
+        req.url = url.slice(appPrefix.length) || "/";
+      }
+      next();
+    });
+  }
 
   // API routes
   app.use("/api/auth", authRouter);
@@ -43,7 +63,7 @@ async function main(): Promise<void> {
   });
 
   const httpServer = createServer(app);
-  attachSocketIO(httpServer);
+  attachSocketIO(httpServer, appPrefix);
 
   connectToAgentService();
 

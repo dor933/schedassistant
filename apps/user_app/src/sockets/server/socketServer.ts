@@ -18,9 +18,10 @@ export function getIO(): Server {
  * Attaches Socket.IO to the shared HTTP server (same port as Express).
  * Clients authenticate with `socket.io-client` using `auth: { token }` (JWT).
  */
-export function attachSocketIO(httpServer: HttpServer): Server {
+export function attachSocketIO(httpServer: HttpServer, appUrlPrefix = ""): Server {
+  const socketPath = appUrlPrefix ? `${appUrlPrefix}/socket.io` : "/socket.io";
   const io = new Server(httpServer, {
-    path: "/socket.io",
+    path: socketPath,
     cors: {
       origin: true,
       credentials: true,

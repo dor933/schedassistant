@@ -16,6 +16,7 @@ type AgentCreationAttributes = Optional<
   | "createdByUserId"
   | "modelId"
   | "agentNotes"
+  | "workspacePath"
 >;
 
 class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements AgentAttributes {
@@ -29,6 +30,7 @@ class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements A
   declare createdByUserId: UserId | null;
   declare modelId: string | null;
   declare agentNotes: string | null;
+  declare workspacePath: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -85,6 +87,11 @@ Agent.init(
       type: DataTypes.TEXT,
       allowNull: true,
       field: "agent_notes",
+    },
+    workspacePath: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "workspace_path",
     },
     createdAt: {
       type: DataTypes.DATE,

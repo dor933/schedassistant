@@ -56,6 +56,8 @@ export interface AgentAttributes {
   modelId: string | null;
   /** Free-form notes the agent maintains about important information it should always remember. */
   agentNotes: string | null;
+  /** Absolute path to this agent's persistent workspace folder for .md files. */
+  workspacePath: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

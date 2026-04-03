@@ -89,11 +89,12 @@ export async function buildContext(
   let agentCoreInstructions: string | null = null;
   let agentCharacteristics: Record<string, unknown> | null = null;
   let agentNotes: string | null = null;
+  let agentWorkspacePath: string | null = null;
   let ongoingRequestsRows: OngoingRequest[] = [];
   if (agentId) {
     try {
       const agent = await Agent.findByPk(agentId, {
-        attributes: ["definition", "coreInstructions", "characteristics", "ongoingRequests", "agentNotes"],
+        attributes: ["definition", "coreInstructions", "characteristics", "ongoingRequests", "agentNotes", "workspacePath"],
       });
       const def = agent?.definition?.trim();
       agentDefinition = def && def.length > 0 ? def : null;
@@ -106,6 +107,7 @@ export async function buildContext(
           : null;
       const notes = agent?.agentNotes?.trim();
       agentNotes = notes && notes.length > 0 ? notes : null;
+      agentWorkspacePath = agent?.workspacePath ?? null;
       const raw = agent?.ongoingRequests;
       if (Array.isArray(raw)) {
         ongoingRequestsRows = raw.filter(
@@ -218,6 +220,7 @@ export async function buildContext(
     agentCoreInstructions,
     agentCharacteristics,
     agentNotes,
+    agentWorkspacePath,
     grahamyExecutivesSection,
     agentNameSection,
     coreMemory,
@@ -305,6 +308,7 @@ function formatSystemPrompt(
   agentCoreInstructions: string | null,
   agentCharacteristics: Record<string, unknown> | null,
   agentNotes: string | null,
+  agentWorkspacePath: string | null,
   grahamyExecutivesSection: string,
   agentNameSection: string,
   coreMemory: string,
@@ -392,6 +396,23 @@ function formatSystemPrompt(
     );
     sections.push("");
     sections.push(agentNotes);
+    sections.push("");
+  }
+
+  if (agentWorkspacePath) {
+    sections.push("## Workspace");
+    sections.push(
+      "You have a persistent workspace folder where you can store, read, and edit `.md` and `.txt` files. " +
+      "These files persist across all conversations and are private to you.\n\n" +
+      "Available tools:\n" +
+      "- `workspace_list_files` — list all files in your workspace\n" +
+      "- `workspace_read_file` — read a file's content\n" +
+      "- `workspace_write_file` — create or overwrite a file\n" +
+      "- `workspace_edit_file` — replace a specific text snippet in a file\n" +
+      "- `workspace_delete_file` — delete a file\n\n" +
+      "Use your workspace for persistent documents, plans, research, templates, or any information " +
+      "you want to retain and build upon over time.",
+    );
     sections.push("");
   }
 

@@ -818,7 +818,9 @@ export default function ChatPage() {
       {!sidebarOpen && (
         <Box
           component="button"
-          onClick={() => setSidebarOpen(true)}
+          onClick={() => {
+            setSidebarOpen(true);
+          }}
           className="rounded-xl border border-gray-200/80 bg-white/90 shadow-glass backdrop-blur-sm transition-all duration-200 hover:shadow-md active:scale-95"
           sx={{
             position: "fixed",
@@ -850,6 +852,7 @@ export default function ChatPage() {
           groups={conversations?.groups ?? []}
           singleChats={conversations?.singleChats ?? []}
           activeConversationId={activeConv?.id ?? null}
+          setActiveConversation={setActiveConv}
           unreadCounts={unreadCounts}
           typingConversations={typingConversations}
           isAdmin={user?.role === "admin" || user?.role === "super_admin"}

@@ -8,7 +8,8 @@ import {
   Trash2,
 } from "lucide-react";
 import logo from "../assets/logo.svg";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+import { flushSync } from "react-dom";
 import type {
   GroupConversation,
   SingleChatConversation,
@@ -27,6 +28,10 @@ export interface ConversationRef {
 
 
 interface SessionSidebarProps {
+  /** Clears or sets the open chat; call with `null` before leaving chat (e.g. Admin). */
+  setActiveConversation: React.Dispatch<
+    React.SetStateAction<ConversationRef | null>
+  >;
   groups: GroupConversation[];
   singleChats: SingleChatConversation[];
   activeConversationId: string | null;
@@ -72,6 +77,7 @@ function VendorChatIcon({ model, isActive }: { model: ConversationModelInfo | nu
 }
 
 export default function SessionSidebar({
+  setActiveConversation,
   groups,
   singleChats,
   activeConversationId,
@@ -83,6 +89,8 @@ export default function SessionSidebar({
   onLogout,
   userName,
 }: SessionSidebarProps) {
+  const navigate = useNavigate();
+
   return (
     <Stack
       component="aside"
@@ -251,13 +259,19 @@ export default function SessionSidebar({
       {/* Admin link */}
       {isAdmin && (
         <Box sx={{ px: 1.5, py: 0.5 }}>
-          <Link
-            to="/admin"
-            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium text-gray-500 transition-all duration-150 hover:bg-white hover:text-gray-700 hover:shadow-sm"
+          <button
+            type="button"
+            onClick={() => {
+              flushSync(() => {
+                setActiveConversation(null);
+              });
+              navigate("/admin");
+            }}
+            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-gray-500 transition-all duration-150 hover:bg-white hover:text-gray-700 hover:shadow-sm"
           >
             <Settings className="h-4 w-4" />
             Admin Panel
-          </Link>
+          </button>
         </Box>
       )}
 

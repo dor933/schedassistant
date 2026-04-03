@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   Agent,
   SingleChat,
@@ -15,6 +17,8 @@ import { Op, QueryTypes } from "sequelize";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 import type { UserId } from "@scheduling-agent/types";
+
+const WORKSPACES_ROOT = path.join(process.env.DATA_DIR || "/app/data", "workspaces");
 
 export class AgentsService {
   async getAll(callerId: UserId, callerRole: string) {
@@ -80,6 +84,15 @@ export class AgentsService {
       createdByUserId: actorId ?? null,
       modelId: modelId ?? null,
     });
+
+    // Create persistent workspace folder for this agent
+    const workspacePath = path.join(WORKSPACES_ROOT, agent.id);
+    try {
+      fs.mkdirSync(workspacePath, { recursive: true });
+      await agent.update({ workspacePath });
+    } catch (err) {
+      logger.error("Failed to create workspace for agent", { agentId: agent.id, error: String(err) });
+    }
 
     // Link MCP servers to the agent
     if (mcpServerIds && mcpServerIds.length > 0) {
