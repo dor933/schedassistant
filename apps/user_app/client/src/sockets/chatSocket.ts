@@ -67,6 +67,11 @@ export function emitUserTyping(groupId: string): void {
   socket?.emit("user:typing", { groupId });
 }
 
+/** Re-fetch active agent jobs from the server and replay `thread:typing` (e.g. after returning from Admin). */
+export function emitSyncActiveTyping(): void {
+  socket?.emit("sync:active-typing");
+}
+
 export function disconnectChatSocket(): void {
   socket?.disconnect();
   socket = null;

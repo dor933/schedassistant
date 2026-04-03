@@ -34,6 +34,7 @@ import {
   getChatSocket,
   markConversationSeen,
   emitUserTyping,
+  emitSyncActiveTyping,
   type ChatReplyPayload,
 } from "../sockets/chatSocket";
 import { useToast } from "../components/Toast";
@@ -623,6 +624,8 @@ export default function ChatPage() {
     socket.on("group:user-message", onGroupUserMessage);
     socket.on("conversations:updated", onConversationsUpdated);
     socket.on("admin:change", onAdminChange);
+    // Restore sidebar "typing..." after navigating back from Admin (same socket, no reconnect).
+    emitSyncActiveTyping();
     return () => {
       socket.off("thread:typing", onTyping);
       socket.off("chat:reply", onReply);

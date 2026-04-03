@@ -45,21 +45,31 @@ export function attachSocketIO(httpServer: HttpServer): Server {
     const userId = socket.data.userId as number;
     void socket.join(`user:${userId}`);
 
+    const emitActiveJobTyping = () => {
+      fetchActiveJobs()
+        .then((jobs) => {
+          for (const entry of jobs) {
+            const isRelevant = entry.groupId || entry.userId === userId;
+            if (!isRelevant) continue;
+            socket.emit("thread:typing", {
+              conversationId: entry.conversationId,
+              conversationType: entry.conversationType,
+            });
+          }
+        })
+        .catch((err) => {
+          logger.warn("Failed to fetch active jobs", { userId, error: String(err) });
+        });
+    };
+
     // Query agent_service for jobs still in progress and re-emit typing indicators
-    fetchActiveJobs()
-      .then((jobs) => {
-        for (const entry of jobs) {
-          const isRelevant = entry.groupId || entry.userId === userId;
-          if (!isRelevant) continue;
-          socket.emit("thread:typing", {
-            conversationId: entry.conversationId,
-            conversationType: entry.conversationType,
-          });
-        }
-      })
-      .catch((err) => {
-        logger.warn("Failed to fetch active jobs on connect", { userId, error: String(err) });
-      });
+    emitActiveJobTyping();
+
+    // Client can request the same sync when returning to the chat UI (e.g. from Admin)
+    // without reconnecting the socket.
+    socket.on("sync:active-typing", () => {
+      emitActiveJobTyping();
+    });
 
     // ── user:typing — fan out typing indicator to other group members ──
     socket.on("user:typing", async (data: { groupId: string }) => {

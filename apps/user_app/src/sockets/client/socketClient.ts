@@ -176,7 +176,9 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
       : { error: payload.error }),
   };
 
-  const preview = payload.ok ? payload.reply.slice(0, 200) : undefined;
+  const preview = payload.ok
+    ? payload.reply.slice(0, 200)
+    : `Error: ${payload.error}`.slice(0, 300);
 
   logger.info("Received agent reply, fanning out", { requestId, threadId, conversationType, conversationId, ok: payload.ok });
 
@@ -209,6 +211,24 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
         }
       }
 
+      // Notify the sender on assistant errors so unread/badge appears if they are elsewhere (e.g. Admin).
+      if (!payload.ok) {
+        try {
+          await MessageNotification.create({
+            threadId,
+            recipientId: userId,
+            senderId: null,
+            messageId: requestId,
+            preview: preview ?? null,
+            status: "delivered",
+            conversationId: groupId,
+            conversationType: "group",
+          });
+        } catch (err) {
+          logger.error("Group error notification create", { error: String(err) });
+        }
+      }
+
       for (const recipientId of recipientIds) {
         browserIO.to(`user:${recipientId}`).emit("chat:reply", clientPayload);
       }
@@ -219,21 +239,20 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
   } else {
     // Single chat: create notification BEFORE emitting so that the client's
     // immediate `message:seen` response can find and update the row.
-    if (payload.ok) {
-      try {
-        await MessageNotification.create({
-          threadId,
-          recipientId: userId,
-          senderId: null,
-          messageId: requestId,
-          preview: preview ?? null,
-          status: "delivered",
-          conversationId: singleChatId ?? threadId,
-          conversationType: "single",
-        });
-      } catch (err) {
-        logger.error("Notification create error", { threadId, error: String(err) });
-      }
+    // Include assistant errors so the sidebar unread badge updates when the user is not in chat.
+    try {
+      await MessageNotification.create({
+        threadId,
+        recipientId: userId,
+        senderId: null,
+        messageId: requestId,
+        preview: preview ?? null,
+        status: "delivered",
+        conversationId: singleChatId ?? threadId,
+        conversationType: "single",
+      });
+    } catch (err) {
+      logger.error("Notification create error", { threadId, error: String(err) });
     }
 
     browserIO.to(`user:${userId}`).emit("chat:reply", clientPayload);
