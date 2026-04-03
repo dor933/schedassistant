@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { createServer } from "node:http";
 import express from "express";
 import cors from "cors";
@@ -14,13 +15,8 @@ import { logger } from "./logger";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
-/** Must match Vite `base` / client `APP_URL_PREFIX`. Empty = served at root. */
-function appUrlPrefix(): string {
-  const raw = process.env.APP_URL_PREFIX;
-  if (raw === "") return "";
-  if (raw !== undefined) return raw.replace(/\/$/, "") || "";
-  return process.env.NODE_ENV === "production" ? "/claw" : "";
-}
+/** App is always mounted under `/claw` (must match client `VITE_APP_URL_PREFIX`). */
+const APP_URL_PREFIX = "/claw";
 
 async function main(): Promise<void> {
   logger.info("Starting user_app…");
@@ -29,23 +25,18 @@ async function main(): Promise<void> {
   logger.info("Database connection OK");
 
   const app = express();
-  const appPrefix = appUrlPrefix();
 
   app.use(cors());
   app.use(express.json());
 
-  // Rewrite /claw/... → /... so static + /api match (same as nginx strip_prefix)
-  if (appPrefix) {
-    app.use((req, res, next) => {
-      const url = req.url;
-      if (url === appPrefix || url.startsWith(`${appPrefix}/`) || url.startsWith(`${appPrefix}?`)) {
-        req.url = url.slice(appPrefix.length) || "/";
-      }
-      next();
-    });
-  }
+  app.use((req, res, next) => {
+    const url = req.url;
+    if (url === APP_URL_PREFIX || url.startsWith(`${APP_URL_PREFIX}/`) || url.startsWith(`${APP_URL_PREFIX}?`)) {
+      req.url = url.slice(APP_URL_PREFIX.length) || "/";
+    }
+    next();
+  });
 
-  // API routes
   app.use("/api/auth", authRouter);
   app.use("/api/chat", chatRouter);
   app.use("/api/sessions", sessionsRouter);
@@ -63,12 +54,12 @@ async function main(): Promise<void> {
   });
 
   const httpServer = createServer(app);
-  attachSocketIO(httpServer, appPrefix);
+  attachSocketIO(httpServer, APP_URL_PREFIX);
 
   connectToAgentService();
 
   httpServer.listen(PORT, () => {
-    logger.info(`Listening on port ${PORT} (HTTP + Socket.IO)`);
+    logger.info(`Listening on port ${PORT} (HTTP + Socket.IO), app prefix "${APP_URL_PREFIX}"`);
   });
 }
 
