@@ -24,9 +24,11 @@ const SKILLS = [
 ## Scope
 Local **git** only: \`clone\`, \`status\`, \`diff\`, \`log\`, \`branch\`, \`commit\`, \`pull\`, \`push\`, \`merge\`, \`rebase\`, \`remote\`, \`fetch\`, \`config\`, etc.
 
-## Environment (never echo secrets)
-- **GIT_SSH_COMMAND** — for SSH remotes (\`git@github.com:...\`).
-- HTTPS remotes may need separate credential setup; GitHub API token does not replace \`git\` HTTPS auth unless configured.
+## Prefer SSH for Git (not the PAT)
+The agent container mounts an SSH private key (e.g. \`/root/.ssh/id_rsa\`) and sets **GIT_SSH_COMMAND** so Git uses that key.
+
+- For **clone / fetch / push** to GitHub, prefer remotes like \`git@github.com:OWNER/REPO.git\` — authentication is **SSH**, not **GITHUB_PERSONAL_ACCESS_TOKEN**.
+- Avoid relying on HTTPS + PAT for \`git\` unless the user explicitly uses HTTPS remotes and has configured credentials.
 
 ## Rules
 1. Only claim success after **real** tool output.
@@ -34,7 +36,7 @@ Local **git** only: \`clone\`, \`status\`, \`diff\`, \`log\`, \`branch\`, \`comm
 3. Report stderr honestly.
 
 ## Not in this skill
-- **GitHub REST** (issues, PRs via API) → \`mcp-github-api\`.
+- **GitHub REST** (API fork, issues, PRs via API) → \`mcp-github-api\` (PAT applies there; SSH does not).
 - **Reading/editing files** without git → \`mcp-bash-repo-files\`.
 - **Tests/builds** → \`mcp-bash-build-test\`.`,
   },
@@ -48,14 +50,18 @@ Local **git** only: \`clone\`, \`status\`, \`diff\`, \`log\`, \`branch\`, \`comm
 - **github** — \`npx -y @modelcontextprotocol/server-github\`
 
 ## Scope
-**GitHub.com HTTP API**: repos, issues, pull requests, search, labels, and related API operations exposed by this MCP server.
+**GitHub.com HTTP API** only (what this MCP exposes): issues, PRs, **fork via API**, repo metadata, search, labels, etc.
+
+## PAT vs SSH (important)
+- **GITHUB_PERSONAL_ACCESS_TOKEN** is for **REST API** calls only. It is **not** used for \`git clone\`/\`push\` over SSH — use **\`mcp-git-cli-bash\`** with \`git@github.com:...\` and the container’s **GIT_SSH_COMMAND** / deploy key instead.
+- **Fork** is an **API** action. If you get **Permission denied** / insufficient scope, the token lacks rights (e.g. classic PAT: \`repo\` / \`public_repo\` as appropriate; fine-grained: repository access + contents). **An SSH key cannot perform API fork** — either fix the token scopes or fork in the browser and then \`git clone\` via SSH.
 
 ## Environment
-- **GITHUB_PERSONAL_ACCESS_TOKEN** is passed into MCP subprocesses (merged from the agent container env). Never print it.
+- **GITHUB_PERSONAL_ACCESS_TOKEN** is merged into MCP env. Never print it.
 
 ## Not in this skill
-- Local \`git\` on disk → \`mcp-git-cli-bash\`.
-- Arbitrary HTTP URLs → \`dev-fetch-mcp\`.`,
+- Local \`git\` over SSH → \`mcp-git-cli-bash\`.
+- Arbitrary non-GitHub HTTP URLs → \`dev-fetch-mcp\`.`,
   },
   {
     slug: "mcp-bash-repo-files",
