@@ -1269,7 +1269,7 @@ export default function AdminPage() {
                     <span className="relative cursor-help">
                       <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
                       <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                        <strong>Name</strong> is a unique identifier for this server. It appears when assigning servers to agents (e.g. "filesystem", "github", "bash").
+                        <strong>Name</strong> is a unique identifier for this server. It appears when assigning servers to agents (e.g. "bash", "github", "fetch").
                       </span>
                     </span>
                   </label>
@@ -1277,7 +1277,7 @@ export default function AdminPage() {
                     type="text"
                     value={newMcpName}
                     onChange={(e) => setNewMcpName(e.target.value)}
-                    placeholder='e.g. "filesystem"'
+                    placeholder='e.g. "bash"'
                     className={inputClass}
                   />
                 </div>
@@ -1330,7 +1330,7 @@ export default function AdminPage() {
                     <span className="relative cursor-help">
                       <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
                       <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                        <strong>Arguments</strong> are passed to the command as a list. Enter them separated by commas. For example: <code className="rounded bg-gray-100 px-1">-y, @modelcontextprotocol/server-filesystem, /app/data</code>
+                        <strong>Arguments</strong> are passed to the command as a list. Enter them separated by commas. For example: <code className="rounded bg-gray-100 px-1">-y, mcp-shell</code>
                       </span>
                     </span>
                   </label>
@@ -1338,7 +1338,7 @@ export default function AdminPage() {
                     type="text"
                     value={newMcpArgs}
                     onChange={(e) => setNewMcpArgs(e.target.value)}
-                    placeholder='Comma-separated, e.g. "-y, @modelcontextprotocol/server-filesystem, /data"'
+                    placeholder='Comma-separated, e.g. "-y, mcp-shell"'
                     className={inputClass + " font-mono text-xs"}
                   />
                 </div>
@@ -1438,7 +1438,7 @@ export default function AdminPage() {
                           type="text"
                           value={editMcpArgs}
                           onChange={(e) => setEditMcpArgs(e.target.value)}
-                          placeholder='e.g. "-y, @modelcontextprotocol/server-filesystem, /"'
+                          placeholder='e.g. "-y, mcp-shell"'
                           className={inputClass + " font-mono text-xs"}
                         />
                       </div>

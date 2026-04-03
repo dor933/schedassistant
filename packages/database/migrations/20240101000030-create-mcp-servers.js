@@ -48,15 +48,6 @@ module.exports = {
     // Seed the existing hardcoded MCP servers
     await queryInterface.bulkInsert("mcp_servers", [
       {
-        name: "filesystem",
-        transport: "stdio",
-        command: "npx",
-        args: JSON.stringify(["-y", "@modelcontextprotocol/server-filesystem", "/app/data"]),
-        env: null,
-        created_at: new Date(),
-        updated_at: new Date(),
-      },
-      {
         name: "bash",
         transport: "stdio",
         command: "npx",

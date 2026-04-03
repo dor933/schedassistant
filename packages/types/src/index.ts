@@ -66,7 +66,7 @@ export interface AgentAttributes {
 
 export interface McpServerAttributes {
   id: number;
-  /** Unique display name for this MCP server (e.g. "filesystem", "bash"). */
+  /** Unique display name for this MCP server (e.g. "bash", "github"). */
   name: string;
   /** Transport protocol — currently only "stdio" is supported. */
   transport: string;
