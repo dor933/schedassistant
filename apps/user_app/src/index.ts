@@ -29,8 +29,15 @@ async function main(): Promise<void> {
   app.use(cors());
   app.use(express.json());
 
+  // Strip `/claw` for Express routes — but NOT for Socket.IO, which is registered at
+  // `${APP_URL_PREFIX}/socket.io` (see `attachSocketIO`). Rewriting `/claw/socket.io` → `/socket.io`
+  // breaks path matching and WebSockets never connect (works in dev if proxy masks this).
+  const socketIoUrlPrefix = `${APP_URL_PREFIX}/socket.io`;
   app.use((req, res, next) => {
     const url = req.url;
+    if (url.startsWith(socketIoUrlPrefix)) {
+      return next();
+    }
     if (url === APP_URL_PREFIX || url.startsWith(`${APP_URL_PREFIX}/`) || url.startsWith(`${APP_URL_PREFIX}?`)) {
       req.url = url.slice(APP_URL_PREFIX.length) || "/";
     }
@@ -50,11 +57,18 @@ async function main(): Promise<void> {
     if (req.method !== "GET" || req.path.startsWith("/api")) {
       return next();
     }
+    // Do not serve SPA HTML for Socket.IO polling / upgrade — same path as `attachSocketIO` `path` option.
+    if (req.path.startsWith(`${APP_URL_PREFIX}/socket.io`)) {
+      return next();
+    }
     res.sendFile(path.join(clientDist, "index.html"));
   });
 
-  const httpServer = createServer(app);
+  // Attach Socket.IO before Express so Engine handles `/claw/socket.io` first. With `createServer(app)`,
+  // Express ran first and could answer GET `/claw/socket.io` with `index.html` (SPA fallback), breaking handshakes.
+  const httpServer = createServer();
   attachSocketIO(httpServer, APP_URL_PREFIX);
+  httpServer.on("request", app);
 
   connectToAgentService();
 
