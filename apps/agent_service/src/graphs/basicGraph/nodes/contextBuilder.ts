@@ -1,6 +1,6 @@
 import { RunnableConfig } from "@langchain/core/runnables";
 import { Op } from "sequelize";
-import { Agent, GroupMember, User } from "@scheduling-agent/database";
+import { Agent, AgentSkill, GroupMember, User } from "@scheduling-agent/database";
 import type {
   AssembledContext,
   GroupMemberContextProfile,
@@ -90,6 +90,7 @@ export async function buildContext(
   let agentCharacteristics: Record<string, unknown> | null = null;
   let agentNotes: string | null = null;
   let agentWorkspacePath: string | null = null;
+  let agentHasLinkedSkills = false;
   let ongoingRequestsRows: OngoingRequest[] = [];
   if (agentId) {
     try {
@@ -120,6 +121,9 @@ export async function buildContext(
             typeof (r as OngoingRequest).createdAt === "string",
         );
       }
+
+      const skillLinkCount = await AgentSkill.count({ where: { agentId } });
+      agentHasLinkedSkills = skillLinkCount > 0;
     } catch {
       throw new Error(`Failed to load agent from database: ${agentId}`);
     }
@@ -221,6 +225,7 @@ export async function buildContext(
     agentCharacteristics,
     agentNotes,
     agentWorkspacePath,
+    agentHasLinkedSkills,
     grahamyExecutivesSection,
     agentNameSection,
     coreMemory,
@@ -309,6 +314,7 @@ function formatSystemPrompt(
   agentCharacteristics: Record<string, unknown> | null,
   agentNotes: string | null,
   agentWorkspacePath: string | null,
+  agentHasLinkedSkills: boolean,
   grahamyExecutivesSection: string,
   agentNameSection: string,
   coreMemory: string,
@@ -412,6 +418,21 @@ function formatSystemPrompt(
       "- `workspace_delete_file` — delete a file\n\n" +
       "Use your workspace for persistent documents, plans, research, templates, or any information " +
       "you want to retain and build upon over time.",
+    );
+    sections.push("");
+  }
+
+  if (agentHasLinkedSkills) {
+    sections.push("## Linked skills");
+    sections.push(
+      "This agent has **skills** attached — reusable instructions stored in the database. " +
+        "Full text is not inlined here; load it with tools when relevant.\n\n" +
+        "Available tools:\n" +
+        "- `list_agent_skills` — list skill ids, names, slugs, and short descriptions (not the full body)\n" +
+        "- `get_agent_skill` — load the full **skill_text** for a `skill_id` from that list\n" +
+        "- `add_agent_skill` — create a new skill and attach it to this agent when the user wants a new playbook\n\n" +
+        "When a task matches a skill’s description or the user asks you to follow stored guidance, " +
+        "call `list_agent_skills`, then `get_agent_skill` for the right id(s) before improvising.",
     );
     sections.push("");
   }
