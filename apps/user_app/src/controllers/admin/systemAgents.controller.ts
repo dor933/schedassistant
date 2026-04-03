@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { SystemAgent, SystemAgentMcpServer } from "@scheduling-agent/database";
+import { SystemAgent, SystemAgentMcpServer, SystemAgentSkill } from "@scheduling-agent/database";
 import { logger } from "../../logger";
 
 export class SystemAgentsController {
@@ -18,9 +18,18 @@ export class SystemAgentsController {
         (mcpByAgent[link.systemAgentId] ??= []).push(link.mcpServerId);
       }
 
+      const skillLinks = await SystemAgentSkill.findAll({
+        attributes: ["systemAgentId", "skillId"],
+      });
+      const skillsByAgent: Record<number, number[]> = {};
+      for (const link of skillLinks) {
+        (skillsByAgent[link.systemAgentId] ??= []).push(link.skillId);
+      }
+
       const result = agents.map((a) => ({
         ...a.toJSON(),
         mcpServerIds: mcpByAgent[a.id] ?? [],
+        skillIds: skillsByAgent[a.id] ?? [],
       }));
 
       return res.json(result);
@@ -35,7 +44,7 @@ export class SystemAgentsController {
       return res.status(403).json({ error: "Only super admins can manage system agents." });
     }
 
-    const { slug, name, description, instructions, modelSlug, userId, mcpServerIds } = req.body;
+    const { slug, name, description, instructions, modelSlug, userId, mcpServerIds, skillIds } = req.body;
 
     if (!slug?.trim() || !name?.trim() || !instructions?.trim()) {
       return res.status(400).json({ error: "Slug, name, and instructions are required." });
@@ -60,9 +69,19 @@ export class SystemAgentsController {
         );
       }
 
+      if (Array.isArray(skillIds) && skillIds.length > 0) {
+        await SystemAgentSkill.bulkCreate(
+          skillIds.map((skillId: number) => ({
+            systemAgentId: agent.id,
+            skillId,
+          })),
+        );
+      }
+
       return res.status(201).json({
         ...agent.toJSON(),
         mcpServerIds: mcpServerIds ?? [],
+        skillIds: skillIds ?? [],
       });
     } catch (err: any) {
       if (err.name === "SequelizeUniqueConstraintError") {
@@ -85,7 +104,7 @@ export class SystemAgentsController {
     }
 
     try {
-      const { name, description, instructions, modelSlug, userId, mcpServerIds } = req.body;
+      const { name, description, instructions, modelSlug, userId, mcpServerIds, skillIds } = req.body;
 
       const patch: Record<string, any> = {};
       if (name !== undefined) patch.name = name;
@@ -107,6 +126,18 @@ export class SystemAgentsController {
         }
       }
 
+      if (skillIds !== undefined) {
+        await SystemAgentSkill.destroy({ where: { systemAgentId: agent.id } });
+        if (Array.isArray(skillIds) && skillIds.length > 0) {
+          await SystemAgentSkill.bulkCreate(
+            skillIds.map((sid: number) => ({
+              systemAgentId: agent.id,
+              skillId: sid,
+            })),
+          );
+        }
+      }
+
       const currentMcpIds = mcpServerIds !== undefined
         ? mcpServerIds
         : (await SystemAgentMcpServer.findAll({
@@ -114,9 +145,17 @@ export class SystemAgentsController {
             attributes: ["mcpServerId"],
           })).map((l) => l.mcpServerId);
 
+      const currentSkillIds = skillIds !== undefined
+        ? skillIds
+        : (await SystemAgentSkill.findAll({
+            where: { systemAgentId: agent.id },
+            attributes: ["skillId"],
+          })).map((l) => l.skillId);
+
       return res.json({
         ...agent.toJSON(),
         mcpServerIds: currentMcpIds,
+        skillIds: currentSkillIds,
       });
     } catch (err: any) {
       logger.error("PATCH /system-agents/:id error:", err);

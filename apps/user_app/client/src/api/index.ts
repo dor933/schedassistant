@@ -303,6 +303,8 @@ export interface AdminAgent {
   mcpServerIds: number[];
   /** The LLM model assigned to this agent (references models.id). */
   modelId: string | null;
+  /** Linked skill ids (junction `agents_skills`). */
+  skillIds?: number[];
   createdAt: string;
 }
 
@@ -338,6 +340,17 @@ export interface AdminSystemAgent {
   modelSlug: string;
   userId: number | null;
   mcpServerIds: number[];
+  skillIds?: number[];
+}
+
+export interface AdminSkill {
+  id: number;
+  name: string;
+  slug: string | null;
+  description: string | null;
+  skillText: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AdminGroup {
@@ -382,6 +395,32 @@ export const admin = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+  getSkills: () => request<AdminSkill[]>("/admin/skills"),
+  createSkill: (data: {
+    name: string;
+    skillText: string;
+    slug?: string;
+    description?: string;
+  }) =>
+    request<AdminSkill>("/admin/skills", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateSkill: (
+    id: number,
+    data: {
+      name?: string;
+      skillText?: string;
+      slug?: string | null;
+      description?: string | null;
+    },
+  ) =>
+    request<AdminSkill>(`/admin/skills/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  deleteSkill: (id: number) =>
+    request<{ deleted: boolean }>(`/admin/skills/${id}`, { method: "DELETE" }),
   getSystemAgents: () => request<AdminSystemAgent[]>("/admin/system-agents"),
   createSystemAgent: (data: {
     slug: string;
@@ -391,6 +430,7 @@ export const admin = {
     modelSlug?: string;
     userId?: number | null;
     mcpServerIds?: number[];
+    skillIds?: number[];
   }) =>
     request<AdminSystemAgent>("/admin/system-agents", {
       method: "POST",
@@ -405,6 +445,7 @@ export const admin = {
       modelSlug?: string;
       userId?: number | null;
       mcpServerIds?: number[];
+      skillIds?: number[];
     },
   ) =>
     request<AdminSystemAgent>(`/admin/system-agents/${id}`, {
@@ -417,6 +458,7 @@ export const admin = {
     characteristics?: Record<string, unknown> | null;
     mcpServerIds?: number[];
     modelId?: string | null;
+    skillIds?: number[];
   }) =>
     request<AdminAgent>("/admin/agents", {
       method: "POST",
@@ -430,6 +472,7 @@ export const admin = {
       characteristics?: Record<string, unknown> | null;
       mcpServerIds?: number[];
       modelId?: string | null;
+      skillIds?: number[];
     },
   ) =>
     request<AdminAgent>(`/admin/agents/${id}`, {

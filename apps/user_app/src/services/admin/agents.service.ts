@@ -6,6 +6,7 @@ import {
   User,
   McpServer,
   AgentMcpServer,
+  AgentSkill,
   LLMModel,
   Vendor,
   sequelize,
@@ -48,11 +49,18 @@ export class AgentsService {
       (mcpServerIdsByAgent[link.agentId] ??= []).push(link.mcpServerId);
     }
 
+    const skillLinks = await AgentSkill.findAll({ attributes: ["agentId", "skillId"] });
+    const skillIdsByAgent: Record<string, number[]> = {};
+    for (const link of skillLinks) {
+      (skillIdsByAgent[link.agentId] ??= []).push(link.skillId);
+    }
+
     return agents.map((a) => ({
       ...a.toJSON(),
       groupCount: groupCountByAgent[a.id] ?? 0,
       editable: editableIds.has(a.id),
       mcpServerIds: mcpServerIdsByAgent[a.id] ?? [],
+      skillIds: skillIdsByAgent[a.id] ?? [],
     }));
   }
 
@@ -63,6 +71,7 @@ export class AgentsService {
     actorId?: UserId,
     mcpServerIds?: number[],
     modelId?: string | null,
+    skillIds?: number[],
   ) {
     const agent = await Agent.create({
       definition: definition ?? null,
@@ -78,6 +87,15 @@ export class AgentsService {
         mcpServerIds.map((mcpServerId) => ({
           agentId: agent.id,
           mcpServerId,
+        })),
+      );
+    }
+
+    if (skillIds && skillIds.length > 0) {
+      await AgentSkill.bulkCreate(
+        skillIds.map((skillId) => ({
+          agentId: agent.id,
+          skillId,
         })),
       );
     }
@@ -136,6 +154,7 @@ export class AgentsService {
       characteristics?: Record<string, unknown> | null;
       mcpServerIds?: number[];
       modelId?: string | null;
+      skillIds?: number[];
     },
   ) {
     const agent = await Agent.findByPk(agentId);
@@ -171,6 +190,18 @@ export class AgentsService {
           data.mcpServerIds.map((mcpServerId) => ({
             agentId: agent.id,
             mcpServerId,
+          })),
+        );
+      }
+    }
+
+    if (data.skillIds !== undefined) {
+      await AgentSkill.destroy({ where: { agentId: agent.id } });
+      if (data.skillIds.length > 0) {
+        await AgentSkill.bulkCreate(
+          data.skillIds.map((skillId) => ({
+            agentId: agent.id,
+            skillId,
           })),
         );
       }
