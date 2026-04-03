@@ -32,6 +32,7 @@ import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
 import { DelegateToDeepAgentTool } from "../../../tools/delegateToDeepAgentTool";
 import { AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
+import { agentSkillTools } from "../../../tools/skillsTools";
 import getMcpTools from "../../../mcpClient";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
@@ -257,6 +258,7 @@ export async function callModelNode(
     RemoveOngoingRequestTool(agentId),
     AppendAgentNotesTool(agentId),
     EditAgentNotesTool(agentId),
+    ...agentSkillTools(agentId),
   ];
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

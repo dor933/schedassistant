@@ -16,3 +16,6 @@ export { AgentMcpServer } from "./models/AgentMcpServer";
 export { SystemAgent } from "./models/SystemAgent";
 export { SystemAgentMcpServer } from "./models/SystemAgentMcpServer";
 export { DeepAgentDelegation } from "./models/DeepAgentDelegation";
+export { Skill } from "./models/Skill";
+export { AgentSkill } from "./models/AgentSkill";
+export { SystemAgentSkill } from "./models/SystemAgentSkill";

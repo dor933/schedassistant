@@ -15,6 +15,7 @@ import {
 } from "../queues/deepAgent.bull";
 import { agentChatQueue } from "../queues/agentChat.bull";
 import { getMcpToolsByServerIds } from "../mcpClient";
+import { systemAgentSkillTools } from "../tools/skillsTools";
 import { getRedisConfig } from "../redisClient";
 import { logger } from "../logger";
 
@@ -144,19 +145,22 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${systemAgentSlug}`)
           : [];
 
+        const skillTools = systemAgentSkillTools(systemAgent.id);
+
         logger.info("DeepAgent: creating agent", {
           delegationId,
           modelString,
           systemAgentUserId: deepAgentUserId,
           threadId,
           mcpToolCount: mcpTools.length,
+          skillToolCount: skillTools.length,
         });
 
         // Create the deep agent with the deepagents library
         const checkpointer = new MemorySaver();
         const agent = createDeepAgent({
           model: modelString,
-          tools: mcpTools as any[],
+          tools: [...mcpTools, ...skillTools] as any[],
           systemPrompt:
             `You are ${systemAgent.name}, a specialist deep agent.\n\n` +
             `${systemAgent.instructions}\n\n` +

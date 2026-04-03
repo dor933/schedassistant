@@ -105,7 +105,7 @@ export default function AdminPage() {
   const [newSaName, setNewSaName] = useState("");
   const [newSaDescription, setNewSaDescription] = useState("");
   const [newSaInstructions, setNewSaInstructions] = useState("");
-  const [newSaModelSlug, setNewSaModelSlug] = useState("");
+  const [newSaModelId, setNewSaModelId] = useState<string | null>(null);
   const [newSaMcpServerIds, setNewSaMcpServerIds] = useState<number[]>([]);
   const [creatingSa, setCreatingSa] = useState(false);
   const [editingSaId, setEditingSaId] = useState<number | null>(null);
@@ -355,19 +355,22 @@ export default function AdminPage() {
     setError("");
     setCreatingSa(true);
     try {
+      const selectedSaModel = newSaModelId
+        ? models.find((m) => m.id === newSaModelId)
+        : null;
       await admin.createSystemAgent({
         slug: newSaSlug.trim(),
         name: newSaName.trim(),
         description: newSaDescription.trim() || undefined,
         instructions: newSaInstructions.trim(),
-        modelSlug: newSaModelSlug.trim() || undefined,
+        modelSlug: selectedSaModel?.slug?.trim() || undefined,
         mcpServerIds: newSaMcpServerIds.length > 0 ? newSaMcpServerIds : undefined,
       });
       setNewSaSlug("");
       setNewSaName("");
       setNewSaDescription("");
       setNewSaInstructions("");
-      setNewSaModelSlug("");
+      setNewSaModelId(null);
       setNewSaMcpServerIds([]);
       flash("System agent created.");
       await reload();
@@ -1473,22 +1476,14 @@ export default function AdminPage() {
                 />
               </div>
               <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
-                <div className="group">
-                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-                    Model slug
-                    <span className="relative cursor-help">
-                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                        <strong>Model</strong> is the LLM model slug this agent uses (e.g. <code className="rounded bg-gray-100 px-1">gpt-4o</code>, <code className="rounded bg-gray-100 px-1">claude-sonnet-4-6</code>). Must match a model in the Models section.
-                      </span>
-                    </span>
+                <div>
+                  <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                    LLM Model
                   </label>
-                  <input
-                    type="text"
-                    value={newSaModelSlug}
-                    onChange={(e) => setNewSaModelSlug(e.target.value)}
-                    placeholder='Default: gpt-4o'
-                    className={inputClass + " font-mono text-xs"}
+                  <ModelSelector
+                    currentModel={models.find((m) => m.id === newSaModelId) ?? null}
+                    onModelChanged={(m) => setNewSaModelId(m?.id ?? null)}
+                    compact
                   />
                 </div>
                 <div>
