@@ -1323,7 +1323,7 @@ export default function ChatPage() {
         <ChatInput
           onSend={handleSend}
           onTyping={handleUserTyping}
-          disabled={sending || !activeConv}
+          disabled={!activeConv || sending || agentIsTyping}
           placeholder={
             activeConv?.type === "group" && activeConv.agentDefinition
               ? `Message... use @ to tag agent`
