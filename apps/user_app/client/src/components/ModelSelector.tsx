@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { ChevronDown, Check, Loader2 } from "lucide-react";
 import type { ConversationModelInfo } from "../api";
 import { admin } from "../api";
@@ -26,6 +26,30 @@ export default function ModelSelector({
   const [models, setModels] = useState<ConversationModelInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
+
+  const updatePosition = useCallback(() => {
+    if (!btnRef.current) return;
+    const rect = btnRef.current.getBoundingClientRect();
+    setDropdownStyle({
+      position: "fixed",
+      top: rect.bottom + 8,
+      left: rect.left,
+      width: Math.max(rect.width, 288), // min 18rem (w-72)
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("resize", updatePosition);
+    return () => {
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("resize", updatePosition);
+    };
+  }, [open, updatePosition]);
 
   useEffect(() => {
     if (!open || models.length > 0) return;
@@ -56,6 +80,7 @@ export default function ModelSelector({
   return (
     <div ref={ref} className="relative">
       <button
+        ref={btnRef}
         type="button"
         onClick={() => setOpen(!open)}
         className={
@@ -75,7 +100,10 @@ export default function ModelSelector({
       </button>
 
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-[calc(100vw-2rem)] sm:w-72 max-w-72 animate-scale-in rounded-2xl border border-gray-200/80 bg-white/95 shadow-glass-lg backdrop-blur-xl">
+        <div
+          style={dropdownStyle}
+          className="z-50 max-w-72 animate-scale-in rounded-2xl border border-gray-200/80 bg-white/95 shadow-glass-lg backdrop-blur-xl"
+        >
           <div className="p-1.5 max-h-64 overflow-y-auto">
             {loading && (
               <div className="flex items-center justify-center py-6">
