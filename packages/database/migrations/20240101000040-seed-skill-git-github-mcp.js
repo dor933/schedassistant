@@ -16,7 +16,8 @@ const SKILLS = [
     slug: "mcp-git-cli-bash",
     name: "Git CLI (bash MCP)",
     description: "Run git via bash/mcp-shell: clone, pull, push, branch, merge. Uses GIT_SSH_COMMAND when set.",
-    skillText: `# Git CLI — bash MCP (\`mcp-shell\`)
+    skillText: `
+    # Git CLI — bash MCP (\`mcp-shell\`)
 
 ## Server
 - **bash** (DB name) — \`npx -y mcp-shell\`
@@ -24,21 +25,39 @@ const SKILLS = [
 ## Scope
 Local **git** only: \`clone\`, \`status\`, \`diff\`, \`log\`, \`branch\`, \`commit\`, \`pull\`, \`push\`, \`merge\`, \`rebase\`, \`remote\`, \`fetch\`, \`config\`, etc.
 
-## Prefer SSH for Git (not the PAT)
-The agent container mounts an SSH private key (e.g. \`/root/.ssh/id_rsa\`) and sets **GIT_SSH_COMMAND** so Git uses that key.
+## Authentication — HTTPS + PAT (primary method)
 
-- For **clone / fetch / push** to GitHub, prefer remotes like \`git@github.com:OWNER/REPO.git\` — authentication is **SSH**, not **GITHUB_PERSONAL_ACCESS_TOKEN**.
-- Avoid relying on HTTPS + PAT for \`git\` unless the user explicitly uses HTTPS remotes and has configured credentials.
+> **SSH is NOT available** in this container (\`ssh\` client is not installed).
+> Do **not** attempt \`git@github.com:…\` URLs — they will fail with \`ssh: not found\`.
+
+### Clone / Fetch / Push — use HTTPS with the GitHub PAT:
+
+\`\`\`bash
+git clone https://x-access-token:\${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/OWNER/REPO.git /tmp/REPO 2>&1
+\`\`\`
+
+### Fallback order (do NOT waste turns on methods that fail):
+1. ✅ **HTTPS + PAT** — \`https://x-access-token:\${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/OWNER/REPO.git\` — **USE THIS FIRST**
+2. ❌ **SSH** — \`git@github.com:OWNER/REPO.git\` — **BROKEN** (no \`ssh\` binary in container)
+3. ❌ **Plain HTTPS** — \`https://github.com/OWNER/REPO.git\` — **BROKEN** (no interactive credentials)
+
+### Setting credentials for an already-cloned repo:
+\`\`\`bash
+cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/OWNER/REPO.git
+\`\`\`
 
 ## Rules
 1. Only claim success after **real** tool output.
 2. \`cd\` to the repo root in the same shell command when needed.
 3. Report stderr honestly.
+4. **Always start with HTTPS + PAT method** — do not try SSH or plain HTTPS.
 
 ## Not in this skill
-- **GitHub REST** (API fork, issues, PRs via API) → \`mcp-github-api\` (PAT applies there; SSH does not).
+- **GitHub REST** (API fork, issues, PRs via API) → \`mcp-github-api\` (PAT applies there too).
 - **Reading/editing files** without git → \`mcp-bash-repo-files\`.
-- **Tests/builds** → \`mcp-bash-build-test\`.`,
+- **Tests/builds** → \`mcp-bash-build-test\`.
+
+    `,
   },
   {
     slug: "mcp-github-api",
