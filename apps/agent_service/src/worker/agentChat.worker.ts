@@ -136,15 +136,23 @@ export function startAgentChatWorker(
             singleChatId: singleChatId ?? null,
           });
 
-          await writeConversationMessage({
-            groupId: groupId ?? null,
-            singleChatId: singleChatId ?? null,
-            threadId,
-            role: "user",
-            content: message,
-            senderName: displayName,
-            requestId,
-          });
+          // Delegation/consultation-chain callbacks are internal instructions
+          // for the agent — don't persist them as visible conversation messages.
+          const isDelegationCallback =
+            requestId?.startsWith("delegation-") ||
+            requestId?.startsWith("consultation-chain-");
+
+          if (!isDelegationCallback) {
+            await writeConversationMessage({
+              groupId: groupId ?? null,
+              singleChatId: singleChatId ?? null,
+              threadId,
+              role: "user",
+              content: message,
+              senderName: displayName,
+              requestId,
+            });
+          }
 
           const turnResult = await executeChatTurn(graph, {
             userId,
