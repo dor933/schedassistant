@@ -7,6 +7,7 @@ import { getGraph } from "../deps";
 import { ensureSession } from "../sessionsManagment/sessionRegistry";
 import { createThreadLockRedis, withThreadLockTimeout, LockTimeoutError } from "../worker/threadLock";
 import { getRedisConfig } from "../redisClient";
+import { setActiveConsultation, clearActiveConsultation } from "../consultationChain";
 import { logger } from "../logger";
 
 /**
@@ -59,6 +60,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 export function ConsultAgentTool(
   callerAgentId: string,
   userId: number,
+  groupId: string | null = null,
+  singleChatId: string | null = null,
 ) {
   return tool(
     async (input) => {
@@ -103,6 +106,15 @@ export function ConsultAgentTool(
 
             // Resolve model from agent B's own config, NOT from agent A's conversation
             const modelSlug = await resolveModelForAgent(targetAgentId);
+
+            // Mark Agent B as being consulted by Agent A so that if Agent B
+            // delegates to a deep agent, the result can propagate back.
+            await setActiveConsultation(targetAgentId, {
+              originAgentId: callerAgentId,
+              originGroupId: groupId,
+              originSingleChatId: singleChatId,
+              originUserId: userId,
+            });
 
             const result = await withTimeout(
               graph.invoke(
@@ -154,6 +166,8 @@ export function ConsultAgentTool(
           },
         );
 
+        await clearActiveConsultation(targetAgentId);
+
         logger.info("ConsultAgent: consultation completed", {
           callerAgentId,
           targetAgentId,
@@ -162,6 +176,7 @@ export function ConsultAgentTool(
 
         return typeof answer === "string" ? answer : String(answer);
       } catch (err: any) {
+        await clearActiveConsultation(targetAgentId);
         if (err instanceof LockTimeoutError) {
           logger.warn("ConsultAgent: target agent is busy", {
             callerAgentId,

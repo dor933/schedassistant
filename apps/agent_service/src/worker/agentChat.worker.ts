@@ -12,7 +12,9 @@ import { createThreadLockRedis, withThreadLock } from "./threadLock";
 import { emitAgentReply, emitAgentTyping } from "../socket";
 import { ensureCanonicalThreadId } from "../sessionsManagment/canonicalThread";
 import { writeConversationMessage } from "../sessionsManagment/conversationMessageWriter";
-import { Group, SingleChat } from "@scheduling-agent/database";
+import { popConsultationOrigin } from "../consultationChain";
+import { agentChatQueue } from "../queues/agentChat.bull";
+import { Group, SingleChat, Agent } from "@scheduling-agent/database";
 import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
@@ -192,6 +194,34 @@ export function startAgentChatWorker(
           ...(turnResult.vendorSlug ? { vendorSlug: turnResult.vendorSlug } : {}),
           ...(turnResult.modelName ? { modelName: turnResult.modelName } : {}),
         });
+
+        // Consultation chain: if this was a delegation_result and Agent B was
+        // consulted by Agent A, forward Agent B's processed reply to Agent A.
+        if (requestId?.startsWith("delegation-") && turnResult.reply) {
+          const delegationId = requestId.replace("delegation-", "");
+          const origin = await popConsultationOrigin(delegationId);
+          if (origin) {
+            const agentB = await Agent.findByPk(resolvedAgentId, { attributes: ["definition"] });
+            const agentBName = agentB?.definition ?? resolvedAgentId;
+            await agentChatQueue.add("delegation_result", {
+              userId: origin.originUserId,
+              message:
+                `[Response from ${agentBName} — following up on delegated task]\n\n` +
+                turnResult.reply,
+              requestId: `consultation-chain-${delegationId}`,
+              groupId: origin.originGroupId ?? null,
+              singleChatId: origin.originSingleChatId ?? null,
+              agentId: origin.originAgentId,
+              mentionsAgent: true,
+              displayName: agentBName,
+            } as any);
+            logger.info("Consultation chain: forwarded Agent B reply to Agent A", {
+              delegationId,
+              agentB: resolvedAgentId,
+              originAgentId: origin.originAgentId,
+            });
+          }
+        }
 
         return turnResult;
       } catch (err: any) {

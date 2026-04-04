@@ -18,6 +18,7 @@ import { getMcpToolsByServerIds } from "../mcpClient";
 import { systemAgentSkillTools } from "../tools/skillsTools";
 import { workspaceTools } from "../tools/workspaceTools";
 import { getRedisConfig } from "../redisClient";
+import { getLangfuseCallbackHandler, observeWithContext, flushLangfuse } from "../langfuse";
 import { logger } from "../logger";
 
 /** Max time a deep agent invocation can run before being aborted (ms). */
@@ -115,6 +116,9 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         { where: { id: delegationId } },
       );
 
+      await observeWithContext(
+        "deep_agent_run",
+        async () => {
       try {
         // Load system agent config
         const systemAgent = await SystemAgent.findByPk(systemAgentId);
@@ -177,6 +181,13 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
         // Invoke with fresh thread but constant user identity.
         // Wrapped with timeout and recursion limit to prevent runaway executions.
+        const langfuseHandler = getLangfuseCallbackHandler(userId, {
+          threadId,
+          delegationId,
+          systemAgentSlug,
+          service: "deep_agent",
+        });
+
         const result = await withTimeout(
           agent.invoke(
             {
@@ -188,6 +199,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                 user_id: String(deepAgentUserId),
               },
               recursionLimit: DEEP_AGENT_RECURSION_LIMIT,
+              ...(langfuseHandler ? { callbacks: [langfuseHandler] } : {}),
             },
           ),
           DEEP_AGENT_TIMEOUT_MS,
@@ -303,6 +315,9 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           displayName: `system:${systemAgentSlug}`,
         } as any);
       }
+        }, // end observeWithContext fn
+        { delegationId, systemAgentSlug, callerAgentId, userId },
+      ); // end observeWithContext
     },
     {
       connection: getRedisConfig(),

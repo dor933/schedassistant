@@ -2,6 +2,7 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { SystemAgent, DeepAgentDelegation } from "@scheduling-agent/database";
 import { getDeepAgentQueue } from "../queues/deepAgent.bull";
+import { linkDelegationToConsultation } from "../consultationChain";
 import { logger } from "../logger";
 
 /**
@@ -56,6 +57,10 @@ export function DelegateToDeepAgentTool(
         groupId,
         singleChatId,
       });
+
+      // If this agent is currently being consulted by another agent,
+      // link the delegation so the result propagates back up the chain.
+      await linkDelegationToConsultation(callerAgentId, delegation.id);
 
       logger.info("DelegateToDeepAgent: job enqueued", {
         delegationId: delegation.id,
