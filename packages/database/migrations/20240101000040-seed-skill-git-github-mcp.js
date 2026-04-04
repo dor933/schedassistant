@@ -54,7 +54,7 @@ cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSO
 
 ## Not in this skill
 - **GitHub REST** (API fork, issues, PRs via API) → \`mcp-github-api\` (PAT applies there too).
-- **Reading/editing files** without git → \`mcp-bash-repo-files\`.
+- **Reading/editing files** without git → \`mcp-filesystem-repo\`.
 - **Tests/builds** → \`mcp-bash-build-test\`.
 
     `,
@@ -83,27 +83,62 @@ cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSO
 - Arbitrary non-GitHub HTTP URLs → \`dev-fetch-mcp\`.`,
   },
   {
-    slug: "mcp-bash-repo-files",
-    name: "Repo files on disk (bash MCP)",
-    description: "Read/write/list project files under /app/data via shell — not git-only, not CI commands.",
-    skillText: `# Repo files — bash MCP
+    slug: "mcp-filesystem-repo",
+    name: "File editing & management (filesystem MCP)",
+    description: "Read, write, edit, create, delete, move, and search project files under /app/data. This is required inter alia for coding — writing and modifying source code.",
+    skillText: `# File editing & management — filesystem MCP
+
+> **This is your coding skill.** Whenever you need to read source code, write new files,
+> edit existing files, create directories, or move/rename files — use this skill.
+>
+> **This is NOT a shell.** You cannot run commands (\`npm\`, \`git\`, \`pytest\`, \`curl\`, etc.) through this skill.
+> For running commands, use the **bash** MCP skills (\`mcp-git-cli-bash\`, \`mcp-bash-build-test\`).
 
 ## Server
-- **bash** (\`mcp-shell\`)
+- **filesystem** (DB name) — \`npx -y @modelcontextprotocol/server-filesystem /app/data\`
 
-## Scope
-**File operations** on the repo tree: \`cat\`, \`ls\`, \`find\`, \`sed\`, \`tee\`, heredocs, small edits — typically under \`/app/data/...\`.
+## When to use this skill
+- **Reading** source code, config files, READMEs, logs on disk
+- **Writing** new source files, configs, scripts
+- **Editing** existing code (bug fixes, feature additions, refactors)
+- **Searching** for files by name or pattern in the repo tree
+- **Browsing** directory structure to understand project layout
+- **Moving / renaming** files or folders
+- **Deleting** files or folders
 
-There is no separate filesystem MCP; the shell is the path to on-disk files.
+## When NOT to use this skill
+| Need | Use instead |
+|------|-------------|
+| Run \`git clone\`, \`git commit\`, \`git push\` | \`mcp-git-cli-bash\` (bash MCP) |
+| Run \`npm install\`, \`pytest\`, \`make build\` | \`mcp-bash-build-test\` (bash MCP) |
+| Run any shell command | bash MCP skills |
+
+## Available tools
+
+### Reading
+- **\`read_text_file\`** — read a file as UTF-8 text
+- **\`read_media_file\`** — read images/audio as base64
+- **\`read_multiple_files\`** — read several files at once (fewer round-trips)
+- **\`list_directory\`** — list folder contents with type indicators
+- **\`list_directory_with_sizes\`** — list with file sizes
+- **\`directory_tree\`** — recursive JSON tree of contents
+- **\`search_files\`** — recursively find files matching a pattern
+- **\`get_file_info\`** — metadata (size, timestamps, permissions)
+- **\`list_allowed_directories\`** — see which directories are accessible
+
+### Writing & editing
+- **\`write_file\`** — create a new file or overwrite an existing one
+- **\`edit_file\`** — targeted edits using pattern matching (best for surgical code changes)
+- **\`create_directory\`** — create new directories
+- **\`move_file\`** — rename or relocate files and folders
 
 ## Practices
-- Prefer **absolute paths** when cwd is unclear.
-- Paste real command output; never invent file contents.
-
-## Not in this skill
-- **Git** protocol operations → \`mcp-git-cli-bash\`.
-- **npm test / pytest / build** → \`mcp-bash-build-test\`.
-- Agent **workspace_*** \`.md\`/.\`txt\` scratch → \`dev-in-house-workspace\`.`,
+- Use **absolute paths** under \`/app/data/...\`.
+- **Read before editing** — always read the current file content before making changes.
+- Use \`read_multiple_files\` when you need context from several files.
+- Use \`search_files\` to locate files before reading blindly.
+- Use \`edit_file\` for small, targeted changes; use \`write_file\` for full rewrites or new files.
+- Never invent file contents; always base edits on what you actually read.`,
   },
   {
     slug: "mcp-bash-build-test",
@@ -123,7 +158,7 @@ There is no separate filesystem MCP; the shell is the path to on-disk files.
 
 ## Not in this skill
 - **Git** operations → \`mcp-git-cli-bash\`.
-- **Editing source** for review without running suite → \`mcp-bash-repo-files\`.`,
+- **Editing source** for review without running suite → \`mcp-filesystem-repo\`.`,
   },
 
 
@@ -188,7 +223,7 @@ Sync answer in-thread. Do not use \`list_system_agents\` for peers.
 - **\`append_agent_notes\`** — append text.
 - **\`edit_agent_notes\`** — replace full notes (read current block from system prompt first).
 
-Not a substitute for repo files — see \`mcp-bash-repo-files\` / \`dev-in-house-workspace\`.`,
+Not a substitute for repo files — see \`mcp-filesystem-repo\` / \`dev-in-house-workspace\`.`,
   },
 
   // ─── In-house: workspace vs skill library (split) — chat agents only ───
@@ -205,7 +240,7 @@ Private **.md** and **.txt** for this agent (not the product repo):
 
 ## Related
 - Stored skill playbooks → \`dev-in-house-skill-library\`.
-- Repo source → \`mcp-bash-repo-files\`.`,
+- Repo source → \`mcp-filesystem-repo\`.`,
   },
   {
     slug: "dev-in-house-skill-library",

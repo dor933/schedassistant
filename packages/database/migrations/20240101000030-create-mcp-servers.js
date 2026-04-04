@@ -84,6 +84,15 @@ module.exports = {
         updated_at: new Date(),
       },
       {
+        name: "filesystem",
+        transport: "stdio",
+        command: "npx",
+        args: JSON.stringify(["-y", "@modelcontextprotocol/server-filesystem", "/app/data"]),
+        env: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+      },
+      {
         name: "massive_market_data",
         transport: "stdio",
         command: "uvx",
