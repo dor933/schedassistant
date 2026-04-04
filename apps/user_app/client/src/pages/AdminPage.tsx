@@ -115,6 +115,7 @@ export default function AdminPage() {
   const [editingSaId, setEditingSaId] = useState<number | null>(null);
   const [editingSaMcpServerIds, setEditingSaMcpServerIds] = useState<number[]>([]);
   const [editingSaSkillIds, setEditingSaSkillIds] = useState<number[]>([]);
+  const [editingSaModelId, setEditingSaModelId] = useState<string | null>(null);
   const [savingSaId, setSavingSaId] = useState<number | null>(null);
 
   const [skills, setSkills] = useState<AdminSkill[]>([]);
@@ -410,12 +411,16 @@ export default function AdminPage() {
     setSavingSaId(saId);
     setError("");
     try {
+      const selectedModel = editingSaModelId
+        ? models.find((m) => m.id === editingSaModelId)
+        : null;
       await admin.updateSystemAgent(saId, {
         mcpServerIds: editingSaMcpServerIds,
         skillIds: editingSaSkillIds,
+        modelSlug: selectedModel?.slug?.trim() || undefined,
       });
       setEditingSaId(null);
-      flash("System agent tools & skills updated.");
+      flash("System agent updated.");
       await reload();
     } catch (err: any) {
       setError(err.message);
@@ -1894,10 +1899,24 @@ export default function AdminPage() {
                         <p className="mt-1 line-clamp-2 text-[11px] text-gray-400 leading-relaxed">
                           {sa.instructions.substring(0, 150)}{sa.instructions.length > 150 ? "..." : ""}
                         </p>
+                        {isEditing && (
+                          <div className="mt-2">
+                            <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                              LLM Model
+                            </label>
+                            <ModelSelector
+                              currentModel={models.find((m) => m.id === editingSaModelId) ?? null}
+                              onModelChanged={(m) => setEditingSaModelId(m?.id ?? null)}
+                              compact
+                            />
+                          </div>
+                        )}
                         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-medium text-gray-500 font-mono">
-                            {sa.modelSlug}
-                          </span>
+                          {!isEditing && (
+                            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-medium text-gray-500 font-mono">
+                              {sa.modelSlug}
+                            </span>
+                          )}
                           {/* MCP server chips — display or edit mode */}
                           {isEditing ? (
                             <>
@@ -1994,6 +2013,7 @@ export default function AdminPage() {
                                   setEditingSaId(sa.id);
                                   setEditingSaMcpServerIds([...saMcp]);
                                   setEditingSaSkillIds([...saSkills]);
+                                  setEditingSaModelId(models.find((m) => m.slug === sa.modelSlug)?.id ?? null);
                                 }}
                                 className="inline-flex items-center gap-1 rounded-full bg-gray-50 px-2 py-0.5 text-[9px] font-medium text-gray-400 ring-1 ring-gray-200 transition hover:bg-gray-100 hover:text-gray-600"
                               >
