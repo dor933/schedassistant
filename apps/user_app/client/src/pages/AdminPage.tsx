@@ -1690,9 +1690,9 @@ export default function AdminPage() {
           </div>
           )}
 
-          {/* System Agents (Deep Agents) — super_admin only */}
+          {/* System Agents (Deep Agents) — super_admin only; z-10 so ModelSelector menus paint above Models section below */}
           {user?.role === "super_admin" && (
-          <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+          <div className="relative z-10 w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-yellow-600 text-white shadow-sm">
                 <Zap className="h-4 w-4" />
@@ -1704,8 +1704,8 @@ export default function AdminPage() {
               <span className="ml-1 text-[10px] font-normal text-gray-400">(deep agent specialists)</span>
             </h2>
 
-            {/* Create form */}
-            <div className="mb-5 space-y-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
+            {/* Create form — z-10 vs list below so new-agent ModelSelector is not covered by cards */}
+            <div className="relative z-10 mb-5 space-y-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Add new system agent</p>
               <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
                 <div className="group">
@@ -1869,8 +1869,8 @@ export default function AdminPage() {
               </button>
             </div>
 
-            {/* Existing system agents list */}
-            <div className="space-y-2.5">
+            {/* Existing system agents list — z-0 keeps create form (z-10) above when menus overflow */}
+            <div className="relative z-0 space-y-2.5">
               {systemAgents.map((sa) => {
                 const isEditing = editingSaId === sa.id;
                 const saMcp = sa.mcpServerIds ?? [];
@@ -1880,7 +1880,9 @@ export default function AdminPage() {
                 return (
                   <div
                     key={sa.id}
-                    className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md"
+                    className={`rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md ${
+                      isEditing ? "relative z-20" : ""
+                    }`}
                   >
                     <div className="flex min-w-0 items-start gap-3">
                       <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-amber-100 to-yellow-100 text-amber-600">
