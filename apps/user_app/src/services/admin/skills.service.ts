@@ -6,7 +6,7 @@ import type { UserId } from "@scheduling-agent/types";
 export class SkillsService {
   async getAll() {
     const rows = await Skill.findAll({
-      attributes: ["id", "name", "slug", "description", "skillText", "createdAt", "updatedAt"],
+      attributes: ["id", "name", "slug", "description", "skillText", "systemAgentAssignable", "createdAt", "updatedAt"],
       order: [["name", "ASC"]],
     });
     return rows.map((r) => r.toJSON());

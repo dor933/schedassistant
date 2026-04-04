@@ -10,9 +10,9 @@ module.exports = {
       defaultValue: null,
     });
 
-    // Backfill every existing agent with its workspace path
+    // Backfill every existing agent with its workspace path (using definition as folder name)
     await queryInterface.sequelize.query(
-      `UPDATE agents SET workspace_path = '/app/data/workspaces/' || id WHERE workspace_path IS NULL`,
+      `UPDATE agents SET workspace_path = '/app/data/workspaces/' || definition WHERE workspace_path IS NULL`,
     );
   },
 

@@ -27,6 +27,11 @@ module.exports = {
         type: Sequelize.TEXT,
         allowNull: false,
       },
+      system_agent_assignable: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: true,
+      },
       created_at: {
         type: Sequelize.DATE,
         allowNull: false,

@@ -35,8 +35,8 @@ export interface OngoingRequest {
 
 export interface AgentAttributes {
   id: AgentId;
-  /** Short role label: "AI Default Agent", "Senior backend developer", etc. */
-  definition: string | null;
+  /** Short role label: "AI Default Agent", "Senior backend developer", etc. Must be unique. */
+  definition: string;
   /** Name of the agent */
   agentName: string | null;
   /** Detailed instructions merged into the system prompt each turn. */

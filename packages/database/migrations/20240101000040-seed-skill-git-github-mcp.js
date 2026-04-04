@@ -9,7 +9,7 @@
  * @type {import('sequelize-cli').Migration}
  */
 
-/** @type {{ slug: string; name: string; description: string; skillText: string }[]} */
+/** @type {{ slug: string; name: string; description: string; skillText: string; systemAgentAssignable?: boolean }[]} */
 const SKILLS = [
   // ─── MCP: git / GitHub / bash (split so agents can take git without GitHub API, etc.) ───
   {
@@ -126,55 +126,12 @@ There is no separate filesystem MCP; the shell is the path to on-disk files.
 - **Editing source** for review without running suite → \`mcp-bash-repo-files\`.`,
   },
 
-  // ─── MCP: fetch / docker / market ───
-  {
-    slug: "dev-fetch-mcp",
-    name: "HTTP GET (fetch MCP)",
-    description: "uvx mcp-server-fetch for docs, OpenAPI, public URLs.",
-    skillText: `# fetch MCP
 
-## Server
-- **fetch** — \`uvx mcp-server-fetch\`
 
-## Scope
-Public **HTTP GET**: docs, OpenAPI, changelogs, release pages.
-
-## Not for
-- GitHub API → \`mcp-github-api\`.
-- Local repo files → \`mcp-bash-repo-files\`.
-- Docker → \`dev-docker-mcp\`.`,
-  },
-  {
-    slug: "dev-docker-mcp",
-    name: "Docker (docker MCP)",
-    description: "@alisaitteke/docker-mcp for images, containers, diagnostics.",
-    skillText: `# docker MCP
-
-## Server
-- **docker**
-
-## Scope
-Container images, running containers, logs, diagnostics. Optionally **bash** for raw \`docker\` CLI with real output.
-
-## Not for
-- Git / GitHub API / fetch — other skills.`,
-  },
-  {
-    slug: "dev-massive-market-mcp",
-    name: "Market data (massive_market_data MCP)",
-    description: "Massive/Polygon-style data; needs MASSIVE_API_KEY in MCP env.",
-    skillText: `# massive_market_data MCP
-
-## When
-Financial / market data tasks only (quotes, aggregates, tickers).
-
-## Server
-- **massive_market_data** — \`MASSIVE_API_KEY\` via env merge.`,
-  },
-
-  // ─── In-house: collaboration (split peer vs deep) ───
+  // ─── In-house: collaboration (split peer vs deep) — chat agents only ───
   {
     slug: "dev-in-house-peer-agents",
+    systemAgentAssignable: false,
     name: "Peer agents (consult_agent)",
     description: "list_agents + consult_agent — synchronous help from another chat agent.",
     skillText: `# Peer agents
@@ -191,6 +148,7 @@ Sync answer in-thread. Do not use \`list_system_agents\` for peers.
   },
   {
     slug: "dev-in-house-deep-agents",
+    systemAgentAssignable: false,
     name: "Deep agents (delegate_to_deep_agent)",
     description: "list_system_agents + delegate_to_deep_agent — async long-running specialists.",
     skillText: `# Deep / system agents
@@ -206,9 +164,10 @@ Sync answer in-thread. Do not use \`list_system_agents\` for peers.
 - Peer chat → \`dev-in-house-peer-agents\`.`,
   },
 
-  // ─── In-house: tracking & notes (split) ───
+  // ─── In-house: tracking & notes (split) — chat agents only ───
   {
     slug: "dev-in-house-ongoing-requests",
+    systemAgentAssignable: false,
     name: "Ongoing requests",
     description: "add_ongoing_request / remove_ongoing_request.",
     skillText: `# Ongoing requests
@@ -221,6 +180,7 @@ Sync answer in-thread. Do not use \`list_system_agents\` for peers.
   },
   {
     slug: "dev-in-house-agent-notes",
+    systemAgentAssignable: false,
     name: "Agent notes",
     description: "append_agent_notes / edit_agent_notes — persistent notes for this agent.",
     skillText: `# Agent notes
@@ -231,9 +191,10 @@ Sync answer in-thread. Do not use \`list_system_agents\` for peers.
 Not a substitute for repo files — see \`mcp-bash-repo-files\` / \`dev-in-house-workspace\`.`,
   },
 
-  // ─── In-house: workspace vs skill library (split) ───
+  // ─── In-house: workspace vs skill library (split) — chat agents only ───
   {
     slug: "dev-in-house-workspace",
+    systemAgentAssignable: false,
     name: "Agent workspace (.md / .txt)",
     description: "workspace_list_files, workspace_read_file, workspace_write_file, workspace_edit_file, workspace_delete_file.",
     skillText: `# Workspace tools
@@ -248,6 +209,7 @@ Private **.md** and **.txt** for this agent (not the product repo):
   },
   {
     slug: "dev-in-house-skill-library",
+    systemAgentAssignable: false,
     name: "Skill library (list / get / add)",
     description: "list_agent_skills, get_agent_skill, add_agent_skill.",
     skillText: `# Skill library
@@ -260,9 +222,10 @@ Private **.md** and **.txt** for this agent (not the product repo):
 - Markdown workspace scratch → \`dev-in-house-workspace\`.`,
   },
 
-  // ─── In-house: profile (split user vs agent name) ───
+  // ─── In-house: profile (split user vs agent name) — chat agents only ───
   {
     slug: "dev-in-house-user-identity",
+    systemAgentAssignable: false,
     name: "User identity (edit_user_identity)",
     description: "Merge JSON into users.user_identity for the current thread user.",
     skillText: `# User identity
@@ -276,6 +239,7 @@ Use for structured preferences (timezone, stack, style). Do not store secrets as
   },
   {
     slug: "dev-in-house-agent-name",
+    systemAgentAssignable: false,
     name: "Agent display name (edit_agent_name)",
     description: "Rename this agent via edit_agent_name.",
     skillText: `# Agent name
@@ -303,13 +267,13 @@ Severity groups, file paths, actionable fixes.`,
   },
 ];
 
-async function insertSkill(queryInterface, { slug, name, description, skillText }) {
+async function insertSkill(queryInterface, { slug, name, description, skillText, systemAgentAssignable }) {
   await queryInterface.sequelize.query(
-    `INSERT INTO skills (name, slug, description, skill_text, created_at, updated_at)
-     SELECT :name, :slug, :description, :skillText, NOW(), NOW()
+    `INSERT INTO skills (name, slug, description, skill_text, system_agent_assignable, created_at, updated_at)
+     SELECT :name, :slug, :description, :skillText, :systemAgentAssignable, NOW(), NOW()
      WHERE NOT EXISTS (SELECT 1 FROM skills WHERE slug = :slug)`,
     {
-      replacements: { name, slug, description, skillText },
+      replacements: { name, slug, description, skillText, systemAgentAssignable: systemAgentAssignable !== false },
     },
   );
 }

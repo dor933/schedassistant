@@ -17,8 +17,11 @@ export class AgentsController {
 
   create = async (req: Request, res: Response) => {
     try {
+      if (!req.body.definition?.trim()) {
+        return res.status(400).json({ error: "definition is required." });
+      }
       const agent = await this.agentsService.create(
-        req.body.definition,
+        req.body.definition.trim(),
         req.body.coreInstructions,
         req.body.characteristics ?? null,
         req.user!.userId,

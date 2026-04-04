@@ -290,7 +290,7 @@ export interface AdminRole {
 
 export interface AdminAgent {
   id: string;
-  definition: string | null;
+  definition: string;
   coreInstructions: string | null;
   /** Persona traits (tone, etc.) — rendered as "Your Characteristics" in the agent context. */
   characteristics: Record<string, unknown> | null;
@@ -349,6 +349,7 @@ export interface AdminSkill {
   slug: string | null;
   description: string | null;
   skillText: string;
+  systemAgentAssignable: boolean;
   createdAt: string;
   updatedAt: string;
 }

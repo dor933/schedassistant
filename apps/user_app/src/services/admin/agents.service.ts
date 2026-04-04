@@ -69,7 +69,7 @@ export class AgentsService {
   }
 
   async create(
-    definition?: string,
+    definition: string,
     coreInstructions?: string,
     characteristics?: Record<string, unknown> | null,
     actorId?: UserId,
@@ -78,15 +78,15 @@ export class AgentsService {
     skillIds?: number[],
   ) {
     const agent = await Agent.create({
-      definition: definition ?? null,
+      definition,
       coreInstructions: coreInstructions ?? null,
       characteristics: characteristics ?? null,
       createdByUserId: actorId ?? null,
       modelId: modelId ?? null,
     });
 
-    // Create persistent workspace folder for this agent
-    const workspacePath = path.join(WORKSPACES_ROOT, agent.id);
+    // Create persistent workspace folder for this agent (using definition as folder name)
+    const workspacePath = path.join(WORKSPACES_ROOT, agent.definition);
     try {
       fs.mkdirSync(workspacePath, { recursive: true });
       await agent.update({ workspacePath });

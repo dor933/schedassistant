@@ -17,7 +17,8 @@ module.exports = {
       },
       definition: {
         type: Sequelize.STRING,
-        allowNull: true,
+        allowNull: false,
+        unique: true,
       },
       core_instructions: {
         type: Sequelize.TEXT,

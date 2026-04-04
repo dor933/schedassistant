@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
-import { SystemAgent, SystemAgentMcpServer, SystemAgentSkill } from "@scheduling-agent/database";
+import { SystemAgent, SystemAgentMcpServer, SystemAgentSkill, Skill } from "@scheduling-agent/database";
+import { Op } from "sequelize";
 import { logger } from "../../logger";
 
 export class SystemAgentsController {
@@ -69,9 +70,22 @@ export class SystemAgentsController {
         );
       }
 
+      let validSkillIds: number[] = [];
       if (Array.isArray(skillIds) && skillIds.length > 0) {
+        const blocked = await Skill.findAll({
+          where: { id: { [Op.in]: skillIds }, systemAgentAssignable: false },
+          attributes: ["id", "name"],
+        });
+        if (blocked.length > 0) {
+          await agent.destroy();
+          const names = blocked.map((s) => s.name).join(", ");
+          return res.status(400).json({
+            error: `These skills cannot be assigned to system agents: ${names}`,
+          });
+        }
+        validSkillIds = skillIds;
         await SystemAgentSkill.bulkCreate(
-          skillIds.map((skillId: number) => ({
+          validSkillIds.map((skillId: number) => ({
             systemAgentId: agent.id,
             skillId,
           })),
@@ -81,7 +95,7 @@ export class SystemAgentsController {
       return res.status(201).json({
         ...agent.toJSON(),
         mcpServerIds: mcpServerIds ?? [],
-        skillIds: skillIds ?? [],
+        skillIds: validSkillIds,
       });
     } catch (err: any) {
       if (err.name === "SequelizeUniqueConstraintError") {
@@ -127,6 +141,18 @@ export class SystemAgentsController {
       }
 
       if (skillIds !== undefined) {
+        if (Array.isArray(skillIds) && skillIds.length > 0) {
+          const blocked = await Skill.findAll({
+            where: { id: { [Op.in]: skillIds }, systemAgentAssignable: false },
+            attributes: ["id", "name"],
+          });
+          if (blocked.length > 0) {
+            const names = blocked.map((s) => s.name).join(", ");
+            return res.status(400).json({
+              error: `These skills cannot be assigned to system agents: ${names}`,
+            });
+          }
+        }
         await SystemAgentSkill.destroy({ where: { systemAgentId: agent.id } });
         if (Array.isArray(skillIds) && skillIds.length > 0) {
           await SystemAgentSkill.bulkCreate(

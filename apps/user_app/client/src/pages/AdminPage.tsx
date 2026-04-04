@@ -1823,7 +1823,7 @@ export default function AdminPage() {
                   Skills
                 </label>
                 <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2 min-h-[38px]">
-                  {skills.map((sk) => {
+                  {skills.filter((sk) => sk.systemAgentAssignable !== false).map((sk) => {
                     const selected = newSaSkillIds.includes(sk.id);
                     return (
                       <button
@@ -1844,7 +1844,7 @@ export default function AdminPage() {
                       </button>
                     );
                   })}
-                  {skills.length === 0 && (
+                  {skills.filter((sk) => sk.systemAgentAssignable !== false).length === 0 && (
                     <p className="text-[10px] text-gray-400 py-0.5">No skills in library yet.</p>
                   )}
                 </div>
@@ -1924,7 +1924,7 @@ export default function AdminPage() {
                                   </button>
                                 );
                               })}
-                              {skills.map((sk) => {
+                              {skills.filter((sk) => sk.systemAgentAssignable !== false).map((sk) => {
                                 const sel = editingSaSkillIds.includes(sk.id);
                                 return (
                                   <button

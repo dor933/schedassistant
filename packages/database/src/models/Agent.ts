@@ -7,7 +7,6 @@ type AgentCreationAttributes = Optional<
   | "id"
   | "createdAt"
   | "updatedAt"
-  | "definition"
   | "coreInstructions"
   | "characteristics"
   | "ongoingRequests"
@@ -21,7 +20,7 @@ type AgentCreationAttributes = Optional<
 
 class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements AgentAttributes {
   declare id: string;
-  declare definition: string | null;
+  declare definition: string;
   declare agentName: string | null;
   declare coreInstructions: string | null;
   declare characteristics: Record<string, unknown> | null;
@@ -44,7 +43,8 @@ Agent.init(
     },
     definition: {
       type: DataTypes.STRING,
-      allowNull: true,
+      allowNull: false,
+      unique: true,
     },
     agentName: {
       type: DataTypes.STRING,
