@@ -5,7 +5,6 @@ import type {
   AssembledContext,
   GroupMemberContextProfile,
   UserIdentity,
-  OngoingRequest,
   SessionSummary,
 } from "@scheduling-agent/types";
 
@@ -91,11 +90,10 @@ export async function buildContext(
   let agentNotes: string | null = null;
   let agentWorkspacePath: string | null = null;
   let agentHasLinkedSkills = false;
-  let ongoingRequestsRows: OngoingRequest[] = [];
   if (agentId) {
     try {
       const agent = await Agent.findByPk(agentId, {
-        attributes: ["definition", "coreInstructions", "characteristics", "ongoingRequests", "agentNotes", "workspacePath"],
+        attributes: ["definition", "coreInstructions", "characteristics", "agentNotes", "workspacePath"],
       });
       const def = agent?.definition?.trim();
       agentDefinition = def && def.length > 0 ? def : null;
@@ -109,18 +107,6 @@ export async function buildContext(
       const notes = agent?.agentNotes?.trim();
       agentNotes = notes && notes.length > 0 ? notes : null;
       agentWorkspacePath = agent?.workspacePath ?? null;
-      const raw = agent?.ongoingRequests;
-      if (Array.isArray(raw)) {
-        ongoingRequestsRows = raw.filter(
-          (r): r is OngoingRequest =>
-            r != null &&
-            typeof r === "object" &&
-            typeof (r as OngoingRequest).id === "string" &&
-            typeof (r as OngoingRequest).userId === "number" &&
-            typeof (r as OngoingRequest).request === "string" &&
-            typeof (r as OngoingRequest).createdAt === "string",
-        );
-      }
 
       const skillLinkCount = await AgentSkill.count({ where: { agentId } });
       agentHasLinkedSkills = skillLinkCount > 0;
@@ -128,14 +114,6 @@ export async function buildContext(
       throw new Error(`Failed to load agent from database: ${agentId}`);
     }
   }
-
-  const ongoingRequests: string[] | null =
-    ongoingRequestsRows.length > 0
-      ? ongoingRequestsRows.map(
-          (r) =>
-            `- **id:** \`${r.id}\` · **userId:** ${r.userId} · **since:** ${r.createdAt}\n  ${r.request}`,
-        )
-      : null;
 
   // ── 1. User identity: all group members (junction) vs single user ─────────
   let userIdentity: UserIdentity | null = null;
@@ -229,7 +207,6 @@ export async function buildContext(
     grahamyExecutivesSection,
     agentNameSection,
     coreMemory,
-    ongoingRequests,
     checkpointLog.body,
     conversationLog.body,
     episodicSnippets,
@@ -240,7 +217,6 @@ export async function buildContext(
   return {
     agentCoreInstructions,
     coreMemory,
-    ongoingRequests,
     episodicSnippets,
     recentSessionSummaries,
     recentCheckpointMessageCount: checkpointLog.messageCount,
@@ -318,7 +294,6 @@ function formatSystemPrompt(
   grahamyExecutivesSection: string,
   agentNameSection: string,
   coreMemory: string,
-  ongoingRequestLines: string[] | null,
   checkpointLogBody: string,
   conversationLogBody: string,
   episodicSnippets: string[],
@@ -423,7 +398,9 @@ function formatSystemPrompt(
     sections.push("## Agent notes");
     sections.push(
       "These are your own persistent notes — important information you chose to remember. " +
-      "Use `append_agent_notes` to add new entries and `edit_agent_notes` to correct or reorganize them.",
+      "This includes pending tasks, follow-ups, project details, user preferences, and anything else worth tracking. " +
+      "Use `read_agent_notes` to get the latest version, `append_agent_notes` to add new entries, " +
+      "and `edit_agent_notes` to correct, reorganize, or remove completed items.",
     );
     sections.push("");
     sections.push(agentNotes);
@@ -498,19 +475,6 @@ function formatSystemPrompt(
   if (coreMemTrim.length > 0) {
     sections.push("## Core memory (long-term preferences & facts about the user)");
     sections.push(coreMemory);
-    sections.push("");
-  }
-
-  if (ongoingRequestLines && ongoingRequestLines.length > 0) {
-    sections.push("## Ongoing requests (this agent, all users)");
-    sections.push(
-      "These are open follow-ups or tasks tied to this agent persona. " +
-        "Use `remove_ongoing_request` with the **id** when done; use `add_ongoing_request` to track new ones.",
-    );
-    sections.push("");
-    for (const line of ongoingRequestLines) {
-      sections.push(line);
-    }
     sections.push("");
   }
 

@@ -22,22 +22,18 @@ import { resolveModelSlug } from "../../../chat/modelResolution";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import { EditUserIdentityTool } from "../../../tools/editUserIdentityTool";
-import {
-  AddOngoingRequestTool,
-  RemoveOngoingRequestTool,
-} from "../../../tools/ongoingRequestsTools";
 import { EditAgentNameTool } from "../../../tools/agentNameTool";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
 import { DelegateToDeepAgentTool } from "../../../tools/delegateToDeepAgentTool";
-import { AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
+import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import getMcpTools from "../../../mcpClient";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
-const MAX_TOOL_ROUNDS = 8;
+const MAX_TOOL_ROUNDS = 19;
 
 
 
@@ -255,8 +251,7 @@ export async function callModelNode(
     ListAgentsTool(agentId),
     ListSystemAgentsTool(),
     DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId),
-    AddOngoingRequestTool(agentId, state.userId),
-    RemoveOngoingRequestTool(agentId),
+    ReadAgentNotesTool(agentId),
     AppendAgentNotesTool(agentId),
     EditAgentNotesTool(agentId),
     ...workspaceTools(agentId),
