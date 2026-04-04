@@ -96,7 +96,7 @@ module.exports = {
         name: "massive_market_data",
         transport: "stdio",
         command: "uvx",
-        args: JSON.stringify(["--from", "git+https://github.com/massive-com/mcp_massive@v0.4.0", "mcp_polygon"]),
+        args: JSON.stringify(["--from", "git+https://github.com/massive-com/mcp_massive@v0.8.3", "mcp_massive"]),
         env: JSON.stringify({ MASSIVE_API_KEY: "{{MASSIVE_API_KEY}}" }),
         created_at: new Date(),
         updated_at: new Date(),

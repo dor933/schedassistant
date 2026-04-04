@@ -118,31 +118,56 @@ Full **curl** / **wget** access for any HTTP method: GET, POST, PUT, PATCH, DELE
   {
     slug: "mcp-massive-market-data",
     name: "Market data (massive_market_data MCP)",
-    description: "Polygon.io market data via the massive_market_data MCP server — 40+ tools for tickers, aggregates, snapshots, and more.",
-    skillText: `# Market data — massive_market_data MCP
+    description: "Massive market data via the massive_market_data MCP server — 4 tools: search_endpoints, get_endpoint_docs, call_api, query_data.",
+    skillText: `# Market data — massive_market_data MCP (v0.8.3)
 
 ## Server
 - **massive_market_data** — \`MASSIVE_API_KEY\` via env merge.
 
-## How to use
-This MCP server exposes **40+ tools** covering a wide range of Polygon.io endpoints (tickers, aggregates, snapshots, quotes, trades, options, crypto, forex, reference data, and more).
+## Architecture (v0.8.0+)
+The server exposes **4 tools** (down from 53 in v0.7.x). At startup it fetches the \`llms.txt\` documentation index from Massive and builds a BM25 search index so new endpoints are discoverable without updating the server.
 
-**Before calling any tool**, first discover what is available:
-1. **List the tools** exposed by the \`massive_market_data\` server to see every endpoint you can call.
-2. **Read the tool schemas** — each tool has typed input parameters with descriptions. Review them to understand required vs optional params and expected formats.
-3. **Pick the right tool** for the task — don't guess; match the user's request to the most specific tool available.
+## Tools
+
+### 1. \`search_endpoints\`
+Search for API endpoints and built-in financial functions by natural-language query.
+- **query** (string) — what you are looking for
+- **scope** (enum, optional) — \`endpoints\`, \`functions\`, or \`both\` (default)
+
+### 2. \`get_endpoint_docs\`
+Fetch full parameter documentation for a specific endpoint (path params, query params, types, defaults, constraints).
+- **url** (string) — the endpoint URL from search results
+
+### 3. \`call_api\`
+Call any Massive REST API endpoint.
+- **method** (string) — HTTP method
+- **path** (string) — API path
+- **params** (object) — query/body params
+- **store_as** (string, optional) — save response as an in-memory DataFrame for later SQL queries
+- **apply** (string, optional) — run built-in financial functions inline (e.g. \`"sma(close, 20)"\`)
+
+### 4. \`query_data\`
+Run SQL against stored DataFrames (embedded SQLite). Supports JOINs, CTEs, window functions, aggregations.
+- **sql** (string) — the query (\`SHOW TABLES\`, \`DESCRIBE <table>\`, \`DROP TABLE\` also work)
+- **apply** (string, optional) — financial function to apply to results
+
+## Built-in financial functions (use via \`apply\` parameter)
+- **Options Greeks (Black-Scholes):** \`bs_price\`, \`bs_delta\`, \`bs_gamma\`, \`bs_theta\`, \`bs_vega\`, \`bs_rho\`
+- **Returns analysis:** \`simple_return\`, \`log_return\`, \`cumulative_return\`, \`sharpe_ratio\`, \`sortino_ratio\`
+- **Technical indicators:** \`sma\`, \`ema\`
 
 ## Workflow
-1. Explore → understand the available tools and their parameters.
-2. Plan → decide which tool(s) answer the user's question.
-3. Execute → call the tool with the correct parameters.
-4. Interpret → summarize the response for the user.
+1. **Search** — use \`search_endpoints\` to find the right API endpoint for the task.
+2. **Read docs** — use \`get_endpoint_docs\` to understand parameters.
+3. **Call** — use \`call_api\` with \`store_as\` to fetch and store data.
+4. **Analyze** — use \`query_data\` with SQL and \`apply\` for calculations.
 
 ## Rules
 1. Only claim success after **real** tool output.
 2. Never hardcode API keys or print \`MASSIVE_API_KEY\`.
-3. For large result sets, ask the user if they want a summary or the full data.
-4. If a tool returns an error, report it honestly — do not fabricate data.`,
+3. Always start with \`search_endpoints\` — do not guess tool names or endpoints.
+4. For large result sets, ask the user if they want a summary or the full data.
+5. If a tool returns an error, report it honestly — do not fabricate data.`,
   },
 ];
 
