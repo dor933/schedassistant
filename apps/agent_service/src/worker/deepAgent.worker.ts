@@ -146,9 +146,25 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           attributes: ["mcpServerId"],
         });
         const mcpServerIds = mcpLinks.map((l) => l.mcpServerId);
-        const mcpTools = mcpServerIds.length > 0
+        const rawMcpTools = mcpServerIds.length > 0
           ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${systemAgentSlug}`)
           : [];
+
+        // deepagents has built-in tools: read_file, write_file, edit_file.
+        // MCP servers (especially filesystem) may expose tools with the same names.
+        // Filter out collisions — the agent uses deepagents' built-ins for its
+        // virtual workspace, and the remaining MCP tools for everything else.
+        const DEEP_AGENT_BUILTIN_NAMES = new Set(["read_file", "write_file", "edit_file"]);
+        const mcpTools = rawMcpTools.filter((t: any) => {
+          if (DEEP_AGENT_BUILTIN_NAMES.has(t.name)) {
+            logger.warn("DeepAgent: skipping MCP tool that conflicts with built-in", {
+              tool: t.name,
+              delegationId,
+            });
+            return false;
+          }
+          return true;
+        });
 
         const skillTools = systemAgentSkillTools(systemAgent.id);
         const wsTools = workspaceTools(callerAgentId);
