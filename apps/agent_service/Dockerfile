@@ -17,7 +17,7 @@
     FROM node:22-alpine AS runner
     WORKDIR /app
     
-    RUN apk add --no-cache python3 py3-pip git bash
+    RUN apk add --no-cache python3 py3-pip git bash curl wget
     RUN pip3 install --break-system-packages uv 
     
     RUN npm install -g --unsafe-perm @modelcontextprotocol/server-filesystem mcp-shell @modelcontextprotocol/server-github @alisaitteke/docker-mcp
