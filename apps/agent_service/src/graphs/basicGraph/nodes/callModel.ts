@@ -33,7 +33,7 @@ import { agentSkillTools } from "../../../tools/skillsTools";
 import getMcpTools from "../../../mcpClient";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
-const MAX_TOOL_ROUNDS = 19;
+const MAX_TOOL_ROUNDS = 10;
 
 
 
