@@ -45,7 +45,7 @@ export class SystemAgentsController {
       return res.status(403).json({ error: "Only super admins can manage system agents." });
     }
 
-    const { slug, name, description, instructions, modelSlug, userId, mcpServerIds, skillIds } = req.body;
+    const { slug, name, description, instructions, modelSlug, mcpServerIds, skillIds } = req.body;
 
     if (!slug?.trim() || !name?.trim() || !instructions?.trim()) {
       return res.status(400).json({ error: "Slug, name, and instructions are required." });
@@ -58,7 +58,7 @@ export class SystemAgentsController {
         description: description?.trim() || null,
         instructions: instructions.trim(),
         modelSlug: modelSlug?.trim() || "gpt-4o",
-        userId: userId ?? null,
+        userId: req.user!.userId,
       });
 
       if (Array.isArray(mcpServerIds) && mcpServerIds.length > 0) {
