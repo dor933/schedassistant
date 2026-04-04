@@ -63,7 +63,7 @@ ConversationMessage.init(
       field: "sender_name",
     },
     requestId: {
-      type: DataTypes.UUID,
+      type: DataTypes.STRING(255),
       allowNull: true,
       field: "request_id",
     },
