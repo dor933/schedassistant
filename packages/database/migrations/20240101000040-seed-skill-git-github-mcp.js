@@ -85,6 +85,7 @@ cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSO
   {
     slug: "mcp-filesystem-repo",
     name: "File editing & management (filesystem MCP)",
+    systemAgentAssignable: false,
     description: "Read, write, edit, create, delete, move, and search project files under /app/data. This is required inter alia for coding — writing and modifying source code.",
     skillText: `# File editing & management — filesystem MCP
 

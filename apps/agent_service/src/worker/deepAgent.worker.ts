@@ -17,6 +17,9 @@ import { agentChatQueue } from "../queues/agentChat.bull";
 import { getMcpToolsByServerIds } from "../mcpClient";
 import { systemAgentSkillTools } from "../tools/skillsTools";
 import { workspaceTools } from "../tools/workspaceTools";
+import { ChatOpenAI } from "@langchain/openai";
+import { ChatGoogle } from "@langchain/google";
+import { ChatAnthropic } from "@langchain/anthropic";
 import { getRedisConfig } from "../redisClient";
 import { getLangfuseCallbackHandler, observeWithContext, flushLangfuse } from "../langfuse";
 import { logger } from "../logger";
@@ -49,12 +52,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Resolves the LangChain model string for createDeepAgent.
- * Returns "provider:model" format (e.g. "openai:gpt-4o", "anthropic:claude-sonnet-4-6").
+ * Resolves a fully configured LangChain chat model instance for createDeepAgent.
+ * Uses the same vendor/apiKey/proxy config as regular agents (callModel.ts).
  */
-async function resolveModelString(
-  modelSlug: string,
-): Promise<string | null> {
+async function resolveModel(modelSlug: string) {
   const model = await LLMModel.findOne({
     where: { slug: modelSlug },
     attributes: ["id", "vendorId"],
@@ -64,8 +65,22 @@ async function resolveModelString(
     attributes: ["slug", "apiKey"],
   });
   if (!vendor?.apiKey) return null;
-  // deepagents accepts "provider:model" format
-  return `${vendor.slug}:${modelSlug}`;
+
+  switch (vendor.slug) {
+    case "anthropic":
+      return new ChatAnthropic({
+        modelName: modelSlug,
+        temperature: 0.4,
+        apiKey: vendor.apiKey,
+        ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
+      });
+    case "openai":
+      return new ChatOpenAI({ modelName: modelSlug, temperature: 0.4, apiKey: vendor.apiKey });
+    case "google":
+      return new ChatGoogle({ model: modelSlug, temperature: 0.4, apiKey: vendor.apiKey });
+    default:
+      return null;
+  }
 }
 
 export type DeepAgentWorkerHandle = {
@@ -126,9 +141,9 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           throw new Error(`System agent ${systemAgentId} not found`);
         }
 
-        // Resolve model for deepagents ("provider:model" format)
-        const modelString = await resolveModelString(systemAgent.modelSlug);
-        if (!modelString) {
+        // Resolve a fully configured LangChain model instance (with API key + proxy)
+        const chatModel = await resolveModel(systemAgent.modelSlug);
+        if (!chatModel) {
           throw new Error(
             `Cannot resolve model "${systemAgent.modelSlug}" for system agent "${systemAgentSlug}"`,
           );
@@ -171,7 +186,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
         logger.info("DeepAgent: creating agent", {
           delegationId,
-          modelString,
+          modelSlug: systemAgent.modelSlug,
           systemAgentUserId: deepAgentUserId,
           threadId,
           mcpToolCount: mcpTools.length,
@@ -182,7 +197,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         // Create the deep agent with the deepagents library
         const checkpointer = new MemorySaver();
         const agent = createDeepAgent({
-          model: modelString,
+          model: chatModel as any,
           tools: [...mcpTools, ...skillTools, ...wsTools] as any[],
           systemPrompt:
             `You are ${systemAgent.name}, a specialist deep agent.\n\n` +
