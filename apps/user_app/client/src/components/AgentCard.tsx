@@ -119,7 +119,11 @@ export default function AgentCard({
     );
 
     return (
-      <Box className="rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0">
+      <Box
+        className={`rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0 ${
+          editing ? "relative z-20" : ""
+        }`}
+      >
         <p className="mb-2 break-all font-mono text-[10px] text-gray-400">{agent.id}</p>
         {editing ? (
           <div className="space-y-3">

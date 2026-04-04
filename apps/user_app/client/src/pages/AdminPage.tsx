@@ -710,8 +710,8 @@ export default function AdminPage() {
         )}
 
         <Box className="grid w-full min-w-0 grid-cols-1 gap-5 sm:gap-6 lg:gap-8 lg:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
-          {/* Agents */}
-          <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+          {/* Agents — z-10 so ModelSelector menus paint above the Groups card below (same grid column on lg) */}
+          <div className="relative z-10 w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm">
                 <Bot className="h-4 w-4" />
