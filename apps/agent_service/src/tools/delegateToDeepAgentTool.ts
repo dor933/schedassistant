@@ -6,11 +6,11 @@ import { linkDelegationToConsultation } from "../consultationChain";
 import { logger } from "../logger";
 
 /**
- * Async deep agent delegation tool (Tier 2).
+ * Async executor agent delegation tool (Tier 2).
  *
- * Enqueues a long-running deep agent job and returns immediately.
- * The calling agent's turn ends — the deep agent runs in the background.
- * When the deep agent finishes, a delegation_result job re-invokes the caller.
+ * Enqueues a long-running executor agent job and returns immediately.
+ * The calling agent's turn ends — the executor agent runs in the background.
+ * When the executor agent finishes, a delegation_result job re-invokes the caller.
  *
  * @param callerAgentId  The agent delegating the task
  * @param userId         The user who initiated the conversation
@@ -70,24 +70,23 @@ export function DelegateToDeepAgentTool(
       });
 
       return (
-        `Deep agent task delegated successfully.\n` +
+        `Executor agent task delegated successfully.\n` +
         `- Delegation ID: ${delegation.id}\n` +
-        `- System Agent: ${systemAgent.name} (${systemAgent.slug})\n` +
+        `- Executor Agent: ${systemAgent.name} (${systemAgent.slug})\n` +
         `- Status: pending\n\n` +
-        `The specialist agent will process this in the background. ` +
+        `The executor agent will process this in the background. ` +
         `You will be notified automatically when the result is ready. ` +
-        `Inform the user that a deep analysis is underway and they will receive an update when complete.`
+        `Inform the user that the task has been delegated to a specialist and they will receive an update when complete.`
       );
     },
     {
       name: "delegate_to_deep_agent",
       description:
-        "Delegate a complex, long-running task to a specialist deep agent. " +
-        "Deep agents are autonomous specialists that can perform multi-step research, analysis, and complex reasoning. " +
-        "This is an ASYNCHRONOUS call — the deep agent will run in the background and you will NOT receive " +
-        "the result immediately. Instead, you will be re-invoked with the result once the deep agent completes. " +
-        "Use this for tasks that require extensive research, multi-step analysis, or complex tool usage that " +
-        "would take too long for a synchronous response.",
+        "Delegate a task to an executor agent — a specialist built for complex, multi-step work. " +
+        "This is an ASYNCHRONOUS call — the executor agent will run in the background and you will NOT receive " +
+        "the result immediately. Instead, you will be re-invoked with the result once it completes. " +
+        "Use this when a task requires sustained multi-step execution: deep research, code generation, " +
+        "large data aggregation, or complex analysis. For simple single-step lookups, use your own tools directly.",
       schema: z.object({
         systemAgentSlug: z
           .string()
@@ -99,7 +98,7 @@ export function DelegateToDeepAgentTool(
         request: z
           .string()
           .min(1)
-          .describe("A detailed description of the task for the deep agent, including all relevant context."),
+          .describe("A detailed description of the task for the executor agent, including all relevant context."),
       }),
     },
   );

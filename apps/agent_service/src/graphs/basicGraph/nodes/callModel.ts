@@ -308,7 +308,11 @@ export async function callModelNode(
       } else if (mType === "tool") {
         llmMessages.push(
           new ToolMessage({
-            content: typeof m.content === "string" ? m.content : String(m.content ?? ""),
+            content: typeof m.content === "string"
+              ? m.content
+              : m.content != null && typeof m.content === "object"
+                ? JSON.stringify(m.content)
+                : String(m.content ?? ""),
             tool_call_id: typeof m.tool_call_id === "string" ? m.tool_call_id : "",
           }),
         );
@@ -361,7 +365,21 @@ export async function callModelNode(
           content = `Error: unknown tool "${tc.name ?? ""}".`;
         } else {
           try {
-            content = String(await t.invoke(tc.args ?? {}));
+            const rawResult = await t.invoke(tc.args ?? {});
+            if (typeof rawResult === "string") {
+              content = rawResult;
+            } else if (
+              Array.isArray(rawResult) &&
+              rawResult.length > 0 &&
+              typeof rawResult[0] === "string"
+            ) {
+              // MCP tools return [content, artifacts] tuples
+              content = rawResult[0];
+            } else if (rawResult != null && typeof rawResult === "object") {
+              content = JSON.stringify(rawResult);
+            } else {
+              content = String(rawResult ?? "");
+            }
             const raw = tc.args as Record<string, unknown> | undefined;
             const text = typeof raw?.content === "string" ? raw.content : "";
             logger.info("Tool call completed", {

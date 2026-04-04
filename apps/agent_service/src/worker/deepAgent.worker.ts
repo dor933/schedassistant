@@ -89,7 +89,7 @@ export type DeepAgentWorkerHandle = {
 };
 
 /**
- * Deep agent worker — runs specialist agents for complex, long-running tasks
+ * Executor agent worker — runs specialist agents for tasks delegated by orchestrators,
  * using the `deepagents` library (built on LangGraph).
  *
  * Each delegation gets:
@@ -200,13 +200,15 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           model: chatModel as any,
           tools: [...mcpTools, ...skillTools, ...wsTools] as any[],
           systemPrompt:
-            `You are ${systemAgent.name}, a specialist deep agent.\n\n` +
+            `You are ${systemAgent.name}, an executor agent — a specialist responsible for carrying out tasks ` +
+            `delegated to you by orchestrator agents.\n\n` +
             `${systemAgent.instructions}\n\n` +
             `## Task Guidelines\n` +
             `- Break complex tasks into steps using your todo list\n` +
-            `- Be thorough and detailed in your analysis\n` +
+            `- Be thorough and detailed in your execution\n` +
+            `- Use your tools (MCP servers, file operations, etc.) to gather real data and produce real results\n` +
             `- Structure your response clearly with sections\n` +
-            `- Include all relevant findings and reasoning`,
+            `- Include all relevant findings, data, and reasoning`,
           checkpointer,
         });
 
@@ -261,7 +263,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             ? lastAi.content
             : lastAi?.content
               ? JSON.stringify(lastAi.content)
-              : "The deep agent did not produce a response.";
+              : "The executor agent did not produce a response.";
 
         // Mark as completed
         await DeepAgentDelegation.update(
@@ -283,8 +285,8 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         await agentChatQueue.add("delegation_result", {
           userId,
           message:
-            `[Deep Agent Result — Delegation ${delegationId}]\n` +
-            `System Agent: ${systemAgent.name} (${systemAgentSlug})\n` +
+            `[Executor Agent Result — Delegation ${delegationId}]\n` +
+            `Executor: ${systemAgent.name} (${systemAgentSlug})\n` +
             `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
             `## Result\n${resultText}`,
           requestId: `delegation-${delegationId}`,
@@ -308,11 +310,11 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         let failureReason: string;
         if (isTimeout) {
           failureReason =
-            `The deep agent timed out after ${Math.round(DEEP_AGENT_TIMEOUT_MS / 1000)} seconds. ` +
+            `The executor agent timed out after ${Math.round(DEEP_AGENT_TIMEOUT_MS / 1000)} seconds. ` +
             `The task may be too complex or the agent got stuck in a loop.`;
         } else if (isRecursionLimit) {
           failureReason =
-            `The deep agent reached the maximum number of processing steps (${DEEP_AGENT_RECURSION_LIMIT}). ` +
+            `The executor agent reached the maximum number of processing steps (${DEEP_AGENT_RECURSION_LIMIT}). ` +
             `The task may need to be broken into smaller pieces.`;
         } else {
           failureReason = err?.message ?? "Unknown error";
@@ -340,8 +342,8 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         await agentChatQueue.add("delegation_result", {
           userId,
           message:
-            `[Deep Agent Failed — Delegation ${delegationId}]\n` +
-            `System Agent: ${systemAgentSlug}\n` +
+            `[Executor Agent Failed — Delegation ${delegationId}]\n` +
+            `Executor: ${systemAgentSlug}\n` +
             `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
             `## Failure\n${failureReason}\n\n` +
             `Please inform the user about this failure and suggest alternatives ` +

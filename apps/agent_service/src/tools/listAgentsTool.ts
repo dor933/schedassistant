@@ -6,8 +6,8 @@ import { Op } from "sequelize";
 /**
  * Tool that queries the DB for peer agents (the `agents` table).
  *
- * These are fellow agents that can be consulted via `consult_agent`.
- * This is distinct from `list_system_agents`, which lists deep/specialist
+ * These are fellow orchestrator agents that can be consulted via `consult_agent`.
+ * This is distinct from `list_system_agents`, which lists executor/specialist
  * agents used for async delegation via `delegate_to_deep_agent`.
  */
 export function ListAgentsTool(callerAgentId: string) {
@@ -70,10 +70,10 @@ export function ListAgentsTool(callerAgentId: string) {
     {
       name: "list_agents",
       description:
-        "List peer agents that you can talk to and consult with. " +
-        "These are fellow agents (NOT system/deep agents) that you can interact with using `consult_agent`. " +
-        "Use this to discover which agents exist and get their IDs before consulting them. " +
-        "This is different from `list_system_agents` which lists specialist deep agents for async task delegation.",
+        "List peer agents (fellow orchestrators) that you can talk to and consult with. " +
+        "These are agents like you (NOT executor/system agents) that you can interact with using `consult_agent`. " +
+        "Use this to discover which peer agents exist and get their IDs before consulting them. " +
+        "This is different from `list_system_agents` which lists executor agents for async task delegation.",
       schema: z.object({
         query: z
           .string()

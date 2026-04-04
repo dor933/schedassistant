@@ -4,10 +4,10 @@ import { SystemAgent } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 
 /**
- * Tool that queries the DB for available system agents (deep agents).
+ * Tool that queries the DB for available executor agents (system agents).
  *
- * The agent calls this BEFORE delegating to understand what specialists
- * are available and pick the best match for the task at hand.
+ * The orchestrator agent calls this BEFORE delegating to understand what
+ * specialists are available and pick the best match for the task at hand.
  */
 export function ListSystemAgentsTool() {
   return tool(
@@ -52,7 +52,7 @@ export function ListSystemAgentsTool() {
       }
 
       lines.push(
-        "Use the `delegate_to_deep_agent` tool with the slug of the agent you want to delegate to.",
+        "Use the `delegate_to_deep_agent` tool with the slug of the executor agent you want to delegate to.",
       );
 
       return lines.join("\n");
@@ -60,9 +60,9 @@ export function ListSystemAgentsTool() {
     {
       name: "list_system_agents",
       description:
-        "Search and list available specialist deep agents that you can delegate complex tasks to. " +
-        "Call this BEFORE using `delegate_to_deep_agent` to discover which specialists exist and " +
-        "find the best match for your task. You can optionally filter by a keyword to narrow results.",
+        "Search and list available executor agents (specialists) that you can delegate tasks to. " +
+        "Call this BEFORE using `delegate_to_deep_agent` to discover which executor agents exist and " +
+        "find the best match for the task you need to delegate. You can optionally filter by a keyword to narrow results.",
       schema: z.object({
         query: z
           .string()

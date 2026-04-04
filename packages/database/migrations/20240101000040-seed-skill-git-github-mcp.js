@@ -170,7 +170,7 @@ cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSO
     systemAgentAssignable: false,
     name: "Peer agents (consult_agent)",
     description: "list_agents + consult_agent — synchronous help from another chat agent.",
-    skillText: `# Peer agents
+    skillText: `# Peer agents (fellow orchestrators)
 
 | Step | Tool |
 |------|------|
@@ -180,24 +180,26 @@ cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSO
 Sync answer in-thread. Do not use \`list_system_agents\` for peers.
 
 ## Related
-- Background specialists → \`dev-in-house-deep-agents\`.`,
+- Executor specialists → \`dev-in-house-deep-agents\`.`,
   },
   {
     slug: "dev-in-house-deep-agents",
     systemAgentAssignable: false,
-    name: "Deep agents (delegate_to_deep_agent)",
-    description: "list_system_agents + delegate_to_deep_agent — async long-running specialists.",
-    skillText: `# Deep / system agents
+    name: "Executor agents (delegate_to_deep_agent)",
+    description: "list_system_agents + delegate_to_deep_agent — async executor specialists for delegated tasks.",
+    skillText: `# Executor agents
+
+As an orchestrator, you delegate execution to executor agents. They have access to external tools, MCP servers, and specialized capabilities.
 
 | Step | Tool |
 |------|------|
 | List | \`list_system_agents\` |
 | Delegate | \`delegate_to_deep_agent\` (\`systemAgentSlug\`, \`request\`) |
 
-**Async** — you do not get the result immediately.
+**Async** — you do not get the result immediately. Craft your request with maximum clarity and context.
 
 ## Related
-- Peer chat → \`dev-in-house-peer-agents\`.`,
+- Peer orchestrators → \`dev-in-house-peer-agents\`.`,
   },
 
   // ─── In-house: tracking & notes (split) — chat agents only ───

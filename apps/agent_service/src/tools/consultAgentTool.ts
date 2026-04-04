@@ -187,7 +187,7 @@ export function ConsultAgentTool(
             `Agent "${agentLabel}" is currently busy processing another request and could not be reached ` +
             `within ${Math.round(CONSULT_LOCK_TIMEOUT_MS / 1000)} seconds. ` +
             `Please inform the user that the agent is occupied and suggest trying again shortly, ` +
-            `or consider delegating this as an async task using delegate_to_deep_agent if appropriate.`
+            `or consider delegating this to an executor agent using delegate_to_deep_agent if appropriate.`
           );
         }
 
@@ -202,7 +202,7 @@ export function ConsultAgentTool(
             `Consultation with agent "${agentLabel}" timed out after ` +
             `${Math.round(CONSULT_EXECUTION_TIMEOUT_MS / 1000)} seconds. ` +
             `The task may be too complex for a synchronous consultation. ` +
-            `Consider delegating it as an async deep agent task instead.`
+            `Consider delegating it to an executor agent via delegate_to_deep_agent instead.`
           );
         }
 
