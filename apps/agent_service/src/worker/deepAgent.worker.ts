@@ -188,8 +188,14 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           service: "deep_agent",
         });
 
+        // Bake Langfuse callbacks into the agent via withConfig so they
+        // propagate to all inner LangGraph nodes (LLM calls, tool calls, etc.).
+        const tracedAgent = langfuseHandler
+          ? agent.withConfig({ callbacks: [langfuseHandler] })
+          : agent;
+
         const result = await withTimeout(
-          agent.invoke(
+          tracedAgent.invoke(
             {
               messages: [{ role: "user" as const, content: request }],
             },
@@ -199,11 +205,13 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                 user_id: String(deepAgentUserId),
               },
               recursionLimit: DEEP_AGENT_RECURSION_LIMIT,
-              ...(langfuseHandler ? { callbacks: [langfuseHandler] } : {}),
             },
           ),
           DEEP_AGENT_TIMEOUT_MS,
         );
+
+        // Flush traces before extracting result (safety net if worker crashes later)
+        await flushLangfuse();
 
         // Extract the final response
         const messages: any[] = Array.isArray(result.messages)
