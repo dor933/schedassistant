@@ -49,9 +49,7 @@ export async function resolveModelBySlug(
           modelName: modelSlug,
           temperature: 0.4,
           apiKey: vendor.apiKey,
-          ...(process.env.MERIDIAN_URL
-            ? { anthropicApiUrl: process.env.MERIDIAN_URL }
-            : {}),
+          
         }),
         vendorSlug: "anthropic",
         modelName: model.name,
