@@ -77,7 +77,7 @@ async function resolveModel(modelSlug: string) {
     case "openai":
       return new ChatOpenAI({ modelName: modelSlug, temperature: 0.4, apiKey: vendor.apiKey });
     case "google":
-      return new ChatGoogle({ model: modelSlug, temperature: 0.4, apiKey: vendor.apiKey }).bindTools([ {googleSearch:{},},] );
+      return new ChatGoogle({ model: modelSlug, temperature: 0.4, apiKey: vendor.apiKey });
     default:
       return null;
   }
