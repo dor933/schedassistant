@@ -1,7 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import { Server } from "socket.io";
 import { verifyToken } from "../../middlewares/auth";
-import { MessageNotification, GroupMember, User } from "@scheduling-agent/database";
+import { MessageNotification } from "@scheduling-agent/database";
 import { logger } from "../../logger";
 import { fetchActiveJobs } from "../client/socketClient";
 
@@ -50,8 +50,7 @@ export function attachSocketIO(httpServer: HttpServer, appUrlPrefix = ""): Serve
       fetchActiveJobs()
         .then((jobs) => {
           for (const entry of jobs) {
-            const isRelevant = entry.groupId || entry.userId === userId;
-            if (!isRelevant) continue;
+            if (entry.userId !== userId) continue;
             socket.emit("thread:typing", {
               conversationId: entry.conversationId,
               conversationType: entry.conversationType,
@@ -72,33 +71,10 @@ export function attachSocketIO(httpServer: HttpServer, appUrlPrefix = ""): Serve
       emitActiveJobTyping();
     });
 
-    // ── user:typing — fan out typing indicator to other group members ──
-    socket.on("user:typing", async (data: { groupId: string }) => {
-      try {
-        const members = await GroupMember.findAll({
-          where: { groupId: data.groupId },
-          attributes: ["userId"],
-        });
-        const user = await User.findByPk(userId, { attributes: ["displayName"] });
-        const displayName = user?.displayName ?? userId;
-
-        for (const m of members) {
-          if (m.userId === userId) continue;
-          io.to(`user:${m.userId}`).emit("user:typing", {
-            groupId: data.groupId,
-            userId,
-            displayName,
-          });
-        }
-      } catch (err) {
-        logger.error("user:typing handler error", { userId, error: String(err) });
-      }
-    });
-
     // ── message:seen — client confirms the user has seen messages in a conversation ──
     socket.on(
       "message:seen",
-      async (data: { conversationId: string; conversationType: "group" | "single" }) => {
+      async (data: { conversationId: string; conversationType: "single" }) => {
         try {
           await MessageNotification.update(
             { status: "seen", seenAt: new Date() },

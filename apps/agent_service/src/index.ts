@@ -1,25 +1,19 @@
 /**
  * Entry point for the agent_service container.
  *
- * Initialises the PostgreSQL connection, runs the LangGraph Postgres
- * checkpointer setup, compiles the LangGraph agent with persistence,
- * and starts an Express HTTP server on port 3001.
+ * Initialises the PostgreSQL connection, starts the BullMQ deep-agent worker,
+ * and boots the Express HTTP + Socket.IO server on port 3001.
  */
 
 import fs from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { sequelize, Agent } from "@scheduling-agent/database";
-import { createSchedulerGraph } from "./graphs/basicGraph/index";
 import { createServer } from "./server";
 import { initializeLangfuse, isLangfuseConfigured, shutdownLangfuse } from "./langfuse";
 import {
   agentChatQueue,
   agentChatQueueEvents,
 } from "./queues/agentChat.bull";
-import {
-  deepAgentQueueEvents,
-} from "./queues/deepAgent.bull";
-import { startAgentChatWorker } from "./worker/agentChat.worker";
 import { startDeepAgentWorker } from "./worker/deepAgent.worker";
 import { attachAgentSocketIO } from "./socket";
 import { logger } from "./logger";
@@ -44,7 +38,7 @@ async function main(): Promise<void> {
   await sequelize.authenticate();
   logger.info("Database connection OK");
 
-  // 1b. Ensure workspace directories exist for all agents.
+  // 1b. Ensure workspace directories exist for every agent (used by workspace_* tools).
   try {
     const agents = await Agent.findAll({ attributes: ["id", "workspacePath"] });
     for (const agent of agents) {
@@ -57,20 +51,12 @@ async function main(): Promise<void> {
     logger.warn("Failed to verify workspace directories", { error: String(err) });
   }
 
-  // 2. Create checkpointer + compile graph with Postgres persistence.
-  // Chat turns (worker → executeChatTurn) pass `agentId` in graph state; contextBuilder
-  // loads `agents.core_instructions` from the DB and merges them into the system prompt.
-  const graph = await createSchedulerGraph();
-  logger.info("Agent graph compiled with PostgresSaver checkpointer");
-
-  // 3. BullMQ: queue events + workers.
+  // 2. BullMQ: queue events + deep agent worker (main chat executor).
   await agentChatQueueEvents.waitUntilReady();
-  await deepAgentQueueEvents.waitUntilReady();
-  const agentChatWorker = startAgentChatWorker(graph);
   const deepAgentWorker = startDeepAgentWorker();
 
-  // 4. HTTP + Socket.IO server (chat enqueues jobs; results emitted via socket).
-  const app = createServer({ agentChatQueue, graph });
+  // 3. HTTP + Socket.IO server (chat enqueues jobs; results emitted via socket).
+  const app = createServer({ agentChatQueue });
   const httpServer = createHttpServer(app);
   attachAgentSocketIO(httpServer);
 
@@ -85,11 +71,9 @@ async function main(): Promise<void> {
       server.close((err) => (err ? reject(err) : resolve()));
     });
     try {
-      await agentChatWorker.close();
       await deepAgentWorker.close();
       await agentChatQueue.close();
       await agentChatQueueEvents.close();
-      await deepAgentQueueEvents.close();
       await shutdownLangfuse();
       await sequelize.close();
     } catch (e) {

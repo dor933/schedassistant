@@ -51,25 +51,9 @@ module.exports = {
       unique: true,
       name: "single_chats_user_id_agent_id_unique",
     });
-
-    // 2. Add agent_id to groups
-    await queryInterface.addColumn("groups", "agent_id", {
-      type: Sequelize.UUID,
-      allowNull: true,
-      references: { model: "agents", key: "id" },
-      onUpdate: "CASCADE",
-      onDelete: "SET NULL",
-    });
-
-    await queryInterface.addIndex("groups", ["agent_id"], {
-      name: "groups_agent_id",
-    });
   },
 
   async down(queryInterface, _Sequelize) {
-    await queryInterface.removeIndex("groups", "groups_agent_id");
-    await queryInterface.removeColumn("groups", "agent_id");
-
     await queryInterface.dropTable("single_chats");
   },
 };

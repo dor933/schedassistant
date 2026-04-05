@@ -33,13 +33,8 @@ export interface AgentAttributes {
   agentName: string | null;
   /** Detailed instructions merged into the system prompt each turn. */
   coreInstructions: string | null;
-  /** Structured persona traits (tone, style, etc.) — rendered as "Your Characteristics" in context. */
+  /** Structured persona traits (tone, style, etc.). */
   characteristics: Record<string, unknown> | null;
-  /**
-   * Canonical LangGraph checkpoint `thread_id` for this agent.
-   * All groups and single chats that reference this agent share this thread / history.
-   */
-  activeThreadId: string | null;
   /** The user who created this agent (null for legacy/seeded agents). */
   createdByUserId: UserId | null;
   /** The default LLM model for this agent (references models.id). */
@@ -48,24 +43,6 @@ export interface AgentAttributes {
   agentNotes: string | null;
   /** Absolute path to this agent's persistent workspace folder for .md files. */
   workspacePath: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-// ─── MCP Servers ────────────────────────────────────────────────────────────
-
-export interface McpServerAttributes {
-  id: number;
-  /** Unique display name for this MCP server (e.g. "bash", "github"). */
-  name: string;
-  /** Transport protocol — currently only "stdio" is supported. */
-  transport: string;
-  /** CLI command to launch the server (e.g. "npx", "uvx"). */
-  command: string;
-  /** Arguments passed to the command. */
-  args: string[];
-  /** Optional environment variables. Placeholders like `{{VAR}}` are resolved at runtime. */
-  env: Record<string, string> | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -94,12 +71,15 @@ export interface ModelAttributes {
   updatedAt: Date;
 }
 
-// ─── Groups ──────────────────────────────────────────────────────────────────
+// ─── Single Chats ────────────────────────────────────────────────────────────
 
-/** Canonical group identifier (`groups.id`). */
-export type GroupId = string;
-
-/** Canonical 1:1 chat scope identifier (`single_chats.id` when that table exists). */
+/**
+ * Canonical 1:1 chat scope identifier (`single_chats.id`).
+ *
+ * This UUID is **also used as the LangGraph checkpoint `thread_id`** — the
+ * application does not keep a separate threads table. LangChain's Postgres
+ * checkpointer persists state keyed by this id.
+ */
 export type SingleChatId = string;
 
 export interface SingleChatAttributes {
@@ -111,76 +91,48 @@ export interface SingleChatAttributes {
   updatedAt: Date;
 }
 
-export interface GroupAttributes {
-  id: GroupId;
-  name: string;
-  agentId: AgentId;
-  createdAt: Date;
-  updatedAt: Date;
-}
+// ─── Episodic Memory (model-controlled vector store) ────────────────────────
 
-export interface GroupMemberAttributes {
-  id: string;
-  groupId: GroupId;
-  userId: UserId;
-  createdAt: Date;
-}
-
-// ─── Agent Sessions ──────────────────────────────────────────────────────────
-
-/** Shape of the `summary` JSONB column on `threads`. */
-export interface SessionSummary {
-  text: string;
-  createdAt: string;
-  messageCount?: number;
-  tokenCount?: number;
-}
-
-/** Attributes exposed by the `Thread` Sequelize model (`threads` table). */
-export interface ThreadAttributes {
-  /** The thread ID — also used as the LangGraph checkpoint thread_id. */
-  id: string;
-  userId: UserId | null;
-  /** The agent serving this thread — used for agent-level memory & summary retrieval. */
-  agentId: AgentId | null;
-  title?: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  archivedAt?: Date | null;
-  lastActivityAt?: Date | null;
-  ttlExpiresAt?: Date | null;
-  summarizedAt?: Date | null;
-  summary?: SessionSummary | null;
-  checkpointSizeBytes?: number | null;
-}
-
-// ─── Episodic Memory ─────────────────────────────────────────────────────────
-
-/** Metadata stored alongside each episodic chunk. */
 export interface EpisodicChunkMetadata {
-  threadId?: string;
-  chunkIndex?: number;
-  summarizedAt?: string;
+  /** Free-form tags/context the model can attach when saving a memory. */
   [key: string]: unknown;
 }
 
 /** Attributes exposed by the EpisodicMemory Sequelize model. */
 export interface EpisodicMemoryAttributes {
   id: string;
-  userId: UserId;
-  /** FK to `threads.thread_id` — kept for legacy; prefer agentId for retrieval. */
-  threadId: string;
-  /** FK to `agents.id` — primary key for memory retrieval (persists across conversations). */
-  agentId: AgentId | null;
+  /** The agent this memory belongs to (memory follows the agent across chats). */
+  agentId: AgentId;
+  /** The user on whose behalf the memory was saved (null for agent-wide). */
+  userId: UserId | null;
   content: string;
   embedding: number[];
   metadata?: EpisodicChunkMetadata | null;
   createdAt: Date;
 }
 
+// ─── Person (parent table) ───────────────────────────────────────────────────
+
+/** Canonical person id — shared primary key of `persons`, `users`, `employees`. */
+export type PersonId = number;
+
+export interface PersonAttributes {
+  id: PersonId;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ─── User (database row) ─────────────────────────────────────────────────────
+//
+// `users.id` IS `persons.id` — the same integer identifies the person across
+// every role table they belong to. A person can be a user, an employee, both,
+// or neither.
 
 export interface UserAttributes {
+  /** Equals the linked `persons.id`. */
   id: UserId;
   /** Unique login handle — lowercase alphanumeric + underscores only. */
   userName: string;
@@ -194,40 +146,21 @@ export interface UserAttributes {
   updatedAt: Date;
 }
 
+// ─── Employee (database row) ─────────────────────────────────────────────────
+
+export interface EmployeeAttributes {
+  /** Equals the linked `persons.id`. */
+  id: PersonId;
+  /** Jira user id (for tools that integrate with Jira). */
+  jiraIdNumber: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ─── Core Memory ─────────────────────────────────────────────────────────────
 
 /** The two actions supported by the editCoreMemory tool. */
 export type CoreMemoryAction = "append" | "rewrite";
-
-// ─── Context Builder ─────────────────────────────────────────────────────────
-
-/** One group member’s profile for prompt assembly (`group_members` → `users`). */
-export interface GroupMemberContextProfile {
-  userId: UserId;
-  displayName: string | null;
-  userIdentity: UserIdentity | null;
-}
-
-/** The assembled context injected into the LLM prompt each turn. */
-export interface AssembledContext {
-  /** From `agents.core_instructions` when `agentId` is set in graph state. */
-  agentCoreInstructions: string | null;
-  coreMemory: string;
-  episodicSnippets: string[];
-  recentSessionSummaries: SessionSummary[];
-  /** Messages formatted from LangGraph checkpoint state for this turn (max 50 in snapshot). */
-  recentCheckpointMessageCount: number;
-  /** Rows pulled from `conversation_messages` for this single chat or group (max 50). */
-  recentConversationMessageCount: number;
-  /** Set for 1:1 / non-group turns; omitted when `groupMemberIdentities` is used. */
-  userIdentity: UserIdentity | null;
-  /**
-   * When `group_id` is active: every member’s `users` row (via `group_members`),
-   * used instead of a single `userIdentity`.
-   */
-  groupMemberIdentities: GroupMemberContextProfile[] | null;
-  systemPrompt: string;
-}
 
 // ─── Message Notifications ───────────────────────────────────────────────────
 
@@ -235,7 +168,7 @@ export type NotificationStatus = "delivered" | "seen";
 
 export interface MessageNotificationAttributes {
   id: string;
-  /** Conversation scope: the group or single-chat the message belongs to. */
+  /** LangGraph thread id the message was produced on (equal to singleChatId). */
   threadId: string;
   /** The user this notification targets. */
   recipientId: UserId;
@@ -246,9 +179,9 @@ export interface MessageNotificationAttributes {
   /** Short preview text for the notification badge. */
   preview: string | null;
   status: NotificationStatus;
-  /** groupId or singleChatId — used so the client knows which sidebar item to badge. */
+  /** singleChatId — used so the client knows which sidebar item to badge. */
   conversationId: string;
-  conversationType: "group" | "single";
+  conversationType: "single";
   deliveredAt: Date;
   seenAt: Date | null;
 }
@@ -257,9 +190,7 @@ export interface MessageNotificationAttributes {
 
 export interface ConversationMessageAttributes {
   id: string;
-  groupId: GroupId | null;
-  singleChatId: SingleChatId | null;
-  threadId: string;
+  singleChatId: SingleChatId;
   role: "user" | "assistant";
   content: string;
   senderName: string | null;
@@ -268,14 +199,6 @@ export interface ConversationMessageAttributes {
   vendorSlug: string | null;
   modelName: string | null;
   createdAt: Date;
-}
-
-// ─── Session Summarization ───────────────────────────────────────────────────
-
-/** Schema returned by the LLM during session summarization (withStructuredOutput). */
-export interface SessionSummarizationResult {
-  summary: string;
-  chunks: string[];
 }
 
 // ─── Validation (Zod schemas) ───────────────────────────────────────────────

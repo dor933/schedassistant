@@ -28,13 +28,6 @@ module.exports = {
         type: Sequelize.JSONB,
         allowNull: true,
       },
-      active_thread_id: {
-        type: Sequelize.STRING,
-        allowNull: true,
-        references: { model: "threads", key: "id" },
-        onUpdate: "CASCADE",
-        onDelete: "SET NULL",
-      },
       created_at: {
         type: Sequelize.DATE,
         allowNull: false,
@@ -51,10 +44,6 @@ module.exports = {
       name: "agents_created_at",
     });
 
-    await queryInterface.addIndex("agents", ["active_thread_id"], {
-      name: "agents_active_thread_id",
-    });
-
     const corePath = path.join(__dirname, "../../../apps/core_instructions/projectManager.json");
     const raw = JSON.parse(fs.readFileSync(corePath, "utf8"));
     const { description, core_description, characteristics } = raw;
@@ -65,8 +54,8 @@ module.exports = {
     );
 
     await queryInterface.sequelize.query(
-      `INSERT INTO agents (id, definition, core_instructions, characteristics, active_thread_id, created_at, updated_at)
-       VALUES (CAST(:id AS uuid), :def, :core, CAST(:chars AS jsonb), NULL, NOW(), NOW())
+      `INSERT INTO agents (id, definition, core_instructions, characteristics, created_at, updated_at)
+       VALUES (CAST(:id AS uuid), :def, :core, CAST(:chars AS jsonb), NOW(), NOW())
        ON CONFLICT (id) DO UPDATE SET
          definition = EXCLUDED.definition,
          core_instructions = EXCLUDED.core_instructions,
@@ -84,7 +73,6 @@ module.exports = {
   },
 
   async down(queryInterface, _Sequelize) {
-    await queryInterface.removeIndex("agents", "agents_active_thread_id");
     await queryInterface.removeIndex("agents", "agents_created_at");
     await queryInterface.dropTable("agents");
   },

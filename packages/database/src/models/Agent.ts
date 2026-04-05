@@ -9,7 +9,6 @@ type AgentCreationAttributes = Optional<
   | "updatedAt"
   | "coreInstructions"
   | "characteristics"
-  | "activeThreadId"
   | "agentName"
   | "createdByUserId"
   | "modelId"
@@ -23,7 +22,6 @@ class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements A
   declare agentName: string | null;
   declare coreInstructions: string | null;
   declare characteristics: Record<string, unknown> | null;
-  declare activeThreadId: string | null;
   declare createdByUserId: UserId | null;
   declare modelId: string | null;
   declare agentNotes: string | null;
@@ -57,12 +55,6 @@ Agent.init(
     characteristics: {
       type: DataTypes.JSONB,
       allowNull: true,
-    },
-    activeThreadId: {
-      type: DataTypes.STRING,
-      allowNull: true,
-      field: "active_thread_id",
-      references: { model: "threads", key: "id" },
     },
     createdByUserId: {
       type: DataTypes.INTEGER,

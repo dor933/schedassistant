@@ -1,4 +1,3 @@
-import { GroupMember } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
 import { getIO } from "../sockets/server/socketServer";
 import { logger } from "../logger";
@@ -7,35 +6,10 @@ const AGENT_SERVICE_URL =
   process.env.AGENT_SERVICE_URL ?? "http://localhost:3001";
 
 export class ChatService {
-  async broadcastUserMessage(
-    groupId: string,
-    userId: UserId,
-    displayName: string,
-    message: string,
-    requestId: string,
-  ) {
-    const members = await GroupMember.findAll({
-      where: { groupId },
-      attributes: ["userId"],
-    });
-    const browserIO = getIO();
-    for (const m of members) {
-      if (m.userId === userId) continue;
-      browserIO.to(`user:${m.userId}`).emit("group:user-message", {
-        groupId,
-        userId,
-        displayName,
-        message,
-        requestId,
-      });
-    }
-  }
-
   async proxyToAgentService(
     payload: Record<string, unknown>,
     userId: UserId,
     requestId: string,
-    groupId?: string,
     singleChatId?: string,
   ) {
     try {
@@ -53,7 +27,6 @@ export class ChatService {
         this.emitError(
           userId,
           requestId,
-          groupId,
           singleChatId,
           typeof data.error === "string"
             ? data.error
@@ -68,7 +41,6 @@ export class ChatService {
       this.emitError(
         userId,
         requestId,
-        groupId,
         singleChatId,
         "Agent service unavailable.",
       );
@@ -78,21 +50,19 @@ export class ChatService {
   private emitError(
     userId: UserId,
     requestId: string,
-    groupId: string | undefined,
     singleChatId: string | undefined,
     error?: string,
   ) {
     try {
-      const conversationId = groupId ?? singleChatId ?? "";
+      const conversationId = singleChatId ?? "";
       getIO()
         .to(`user:${userId}`)
         .emit("chat:reply", {
           requestId,
           threadId: "",
-          groupId: groupId ?? null,
           singleChatId: singleChatId ?? null,
           conversationId,
-          conversationType: groupId ? "group" : "single",
+          conversationType: "single",
           ok: false,
           error: error ?? "Unknown error",
         });

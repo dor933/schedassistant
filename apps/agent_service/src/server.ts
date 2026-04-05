@@ -2,7 +2,6 @@ import express from "express";
 import cors from "cors";
 import type { Queue } from "bullmq";
 import type { AgentChatJobData, AgentChatJobResult } from "./queues/agentChat.bull";
-import type { CompiledStateGraph } from "@langchain/langgraph";
 import { setDeps } from "./deps";
 import { chatRouter } from "./routes/chat.routes";
 import { sessionsRouter } from "./routes/sessions.routes";
@@ -10,7 +9,6 @@ import { historyRouter } from "./routes/history.routes";
 
 export type CreateServerDeps = {
   agentChatQueue: Queue<AgentChatJobData, AgentChatJobResult, string>;
-  graph: CompiledStateGraph<any, any, any>;
 };
 
 /**

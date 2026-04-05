@@ -22,7 +22,7 @@ class MessageNotification
   declare preview: string | null;
   declare status: NotificationStatus;
   declare conversationId: string;
-  declare conversationType: "group" | "single";
+  declare conversationType: "single";
   declare deliveredAt: Date;
   declare seenAt: Date | null;
 }
@@ -71,7 +71,7 @@ MessageNotification.init(
       field: "conversation_id",
     },
     conversationType: {
-      type: DataTypes.ENUM("group", "single"),
+      type: DataTypes.ENUM("single"),
       allowNull: false,
       field: "conversation_type",
     },

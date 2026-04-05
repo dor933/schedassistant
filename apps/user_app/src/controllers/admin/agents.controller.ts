@@ -25,9 +25,7 @@ export class AgentsController {
         req.body.coreInstructions,
         req.body.characteristics ?? null,
         req.user!.userId,
-        req.body.mcpServerIds,
         req.body.modelId,
-        req.body.skillIds,
         req.body.agentName,
       );
       return res.status(201).json(agent);
@@ -48,9 +46,7 @@ export class AgentsController {
           agentName: req.body.agentName,
           coreInstructions: req.body.coreInstructions,
           characteristics: req.body.characteristics,
-          mcpServerIds: req.body.mcpServerIds,
           modelId: req.body.modelId,
-          skillIds: req.body.skillIds,
         },
       );
       return res.json(agent);

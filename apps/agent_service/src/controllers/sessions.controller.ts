@@ -8,7 +8,6 @@ export class SessionsController {
   getSessions = async (req: Request, res: Response) => {
     try {
       const sessions = await sessionsService.getSessions(Number(req.params.userId), {
-        groupId: req.query.groupId as string | undefined,
         singleChatId: req.query.singleChatId as string | undefined,
       });
       return res.json(sessions);
@@ -19,19 +18,19 @@ export class SessionsController {
   };
 
   createSession = async (req: Request, res: Response) => {
-    const { userId, title, groupId, singleChatId } = req.body;
+    const { userId, title, singleChatId } = req.body;
 
     if (!userId) {
       return res.status(400).json({ error: "userId is required." });
     }
-    if (!groupId && !singleChatId) {
+    if (!singleChatId) {
       return res
         .status(400)
-        .json({ error: "groupId or singleChatId is required." });
+        .json({ error: "singleChatId is required." });
     }
 
     try {
-      const result = await sessionsService.createSession({ userId, title, groupId, singleChatId });
+      const result = await sessionsService.createSession({ userId, title, singleChatId });
       return res.status(201).json(result);
     } catch (err: any) {
       logger.error("POST /api/sessions error", { error: err.message });

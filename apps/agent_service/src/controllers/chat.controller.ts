@@ -9,7 +9,6 @@ export class ChatController {
     const {
       userId,
       message,
-      groupId,
       singleChatId,
       agentId,
       requestId,
@@ -20,10 +19,10 @@ export class ChatController {
     if (!userId || !message) {
       return res.status(400).json({ error: "userId and message are required." });
     }
-    if (!groupId && !singleChatId) {
+    if (!singleChatId) {
       return res
         .status(400)
-        .json({ error: "groupId or singleChatId is required." });
+        .json({ error: "singleChatId is required." });
     }
 
     try {
@@ -32,7 +31,6 @@ export class ChatController {
         message,
         requestId,
         displayName,
-        groupId,
         singleChatId,
         agentId,
         mentionsAgent,

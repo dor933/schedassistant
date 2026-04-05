@@ -6,14 +6,10 @@ export class HistoryService {
    * not from LangGraph checkpoints. Survives thread rotation.
    */
   async getConversationHistory(
-    conversationId: string,
-    conversationType: "group" | "single",
+    singleChatId: string,
     query: { limit?: number; offset?: number },
   ) {
-    const where =
-      conversationType === "group"
-        ? { groupId: conversationId }
-        : { singleChatId: conversationId };
+    const where = { singleChatId };
 
     const total = await ConversationMessage.count({ where });
 
@@ -41,21 +37,17 @@ export class HistoryService {
   }
 
   /**
-   * Search within `conversation_messages` for one group or single chat.
+   * Search within `conversation_messages` for one single chat.
    * Indices match the chronological order used by `getConversationHistory` (ASC by `created_at`).
    */
   async searchConversationHistory(
-    conversationId: string,
-    conversationType: "group" | "single",
+    singleChatId: string,
     q: string,
   ) {
     const needle = q.trim().toLowerCase();
     if (!needle) return { results: [], total: 0 };
 
-    const where =
-      conversationType === "group"
-        ? { groupId: conversationId }
-        : { singleChatId: conversationId };
+    const where = { singleChatId };
 
     const rows = await ConversationMessage.findAll({
       where,

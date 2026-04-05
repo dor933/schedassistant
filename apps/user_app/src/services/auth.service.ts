@@ -2,8 +2,6 @@ import bcrypt from "bcrypt";
 import {
   User,
   Role,
-  Group,
-  GroupMember,
   SingleChat,
   Agent,
   LLMModel,
@@ -75,8 +73,7 @@ export class AuthService {
   }
 
   /**
-   * Ensures a `single_chats` row exists for every agent for this user (DM surface;
-   * same agent may also be used in groups — shared LangGraph thread is on `agents`).
+   * Ensures a `single_chats` row exists for every agent for this user.
    */
   private async ensureAgentSingleChats(userId: UserId): Promise<void> {
     const agents = await Agent.findAll({
@@ -95,35 +92,6 @@ export class AuthService {
   }
 
   async loadUserConversations(userId: UserId) {
-    const memberships = await GroupMember.findAll({
-      where: { userId },
-      attributes: ["groupId"],
-    });
-    const groupIds = memberships.map((m) => m.groupId);
-
-    let groups: any[] = [];
-    if (groupIds.length > 0) {
-      const groupRows = await Group.findAll({
-        where: { id: groupIds },
-        attributes: ["id", "name", "agentId"],
-        order: [["name", "ASC"]],
-      });
-      groups = await Promise.all(
-        groupRows.map(async (g) => {
-          const agent = await Agent.findByPk(g.agentId, {
-            attributes: ["definition", "modelId"],
-          });
-          return {
-            id: g.id,
-            name: g.name,
-            agentId: g.agentId,
-            agentDefinition: agent?.definition ?? null,
-            model: await this.resolveModelInfo(agent?.modelId ?? null),
-          };
-        }),
-      );
-    }
-
     const singleChatRows = await SingleChat.findAll({
       where: { userId },
       attributes: ["id", "agentId", "title"],
@@ -143,7 +111,7 @@ export class AuthService {
       }),
     );
 
-    return { groups, singleChats };
+    return { singleChats };
   }
 
   private async resolveModelInfo(modelId: string | null) {

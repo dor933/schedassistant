@@ -86,19 +86,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const onAdminChange = (data: { type: string; data: any }) => {
       switch (data.type) {
-        case "group_model_changed": {
-          const { groupId, model } = data.data;
-          setConversations((prev) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              groups: prev.groups.map((g) =>
-                g.id === groupId ? { ...g, model } : g,
-              ),
-            };
-          });
-          break;
-        }
         case "single_chat_model_changed": {
           const { singleChatId, model } = data.data;
           setConversations((prev) => {
@@ -112,46 +99,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           });
           break;
         }
-        case "group_renamed": {
-          const { groupId, name } = data.data;
-          setConversations((prev) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              groups: prev.groups.map((g) =>
-                g.id === groupId ? { ...g, name } : g,
-              ),
-            };
-          });
-          break;
-        }
-        case "group_deleted": {
-          const { groupId } = data.data;
-          setConversations((prev) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              groups: prev.groups.filter((g) => g.id !== groupId),
-            };
-          });
-          break;
-        }
       }
     };
 
     const onConversationsUpdated = (data: any) => {
-      if (data.action === "group_added" && data.group) {
-        setConversations((prev) => {
-          if (!prev) return prev;
-          if (prev.groups.some((g: any) => g.id === data.group.id)) return prev;
-          return { ...prev, groups: [...prev.groups, data.group] };
-        });
-      } else if (data.action === "group_removed" && data.groupId) {
-        setConversations((prev) => {
-          if (!prev) return prev;
-          return { ...prev, groups: prev.groups.filter((g: any) => g.id !== data.groupId) };
-        });
-      } else if (data.action === "single_chat_added" && data.singleChat) {
+      if (data.action === "single_chat_added" && data.singleChat) {
         setConversations((prev) => {
           if (!prev) return prev;
           if (prev.singleChats.some((sc: any) => sc.id === data.singleChat.id)) return prev;
@@ -165,9 +117,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ...prev,
             singleChats: prev.singleChats.map((sc: any) =>
               sc.agentId === data.agentId ? { ...sc, model: newModel } : sc,
-            ),
-            groups: prev.groups.map((g: any) =>
-              g.agentId === data.agentId ? { ...g, model: newModel } : g,
             ),
           };
         });

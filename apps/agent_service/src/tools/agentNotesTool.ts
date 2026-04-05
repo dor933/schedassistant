@@ -69,7 +69,7 @@ export function AppendAgentNotesTool(agentId: string) {
  * The agent should first read the current notes (returned in the system prompt),
  * then provide the corrected full text.
  */
-export function EditAgentNotesTool(agentId: string) {
+ export function EditAgentNotesTool(agentId: string) {
   return tool(
     async (input) => {
       const agent = await Agent.findByPk(agentId, { attributes: ["id", "agentNotes"] });
@@ -99,4 +99,12 @@ export function EditAgentNotesTool(agentId: string) {
       }),
     },
   );
+}
+
+export function agentNotesTools(agentId: string) {
+  return [
+    ReadAgentNotesTool(agentId),
+    AppendAgentNotesTool(agentId),
+    EditAgentNotesTool(agentId),
+  ];
 }

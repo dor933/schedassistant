@@ -1,101 +1,69 @@
-import { Agent, Group, SingleChat, Thread } from "@scheduling-agent/database";
+import { SingleChat } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
-import { ensureCanonicalThreadId } from "../sessionsManagment/canonicalThread";
 import { logger } from "../logger";
 
+/**
+ * Sessions service — after the deep-agent refactor, a "session" is just the
+ * single_chat itself. The LangGraph `thread_id` is equal to `single_chat.id`,
+ * so this service is a thin compatibility shim over the `single_chats` table.
+ */
 export class SessionsService {
   async getSessions(
     userId: UserId,
-    query: { groupId?: string; singleChatId?: string },
+    query: { singleChatId?: string },
   ) {
-    const attributes = [
-      "id",
-      "userId",
-      "title",
-      "createdAt",
-      "updatedAt",
-      "lastActivityAt",
-    ] as const;
-
-    if (query.groupId) {
-      const g = await Group.findByPk(query.groupId, {
-        attributes: ["agentId"],
-      });
-      if (!g?.agentId) return [];
-      const sessions = await Thread.findAll({
-        where: { agentId: g.agentId },
-        order: [["updated_at", "DESC"]],
-        attributes: [...attributes],
-      });
-      return this.mapSessions(sessions, { groupId: query.groupId });
-    }
-
     if (query.singleChatId) {
-      const owned = await SingleChat.findOne({
+      const sc = await SingleChat.findOne({
         where: { id: query.singleChatId, userId },
-        attributes: ["agentId"],
+        attributes: ["id", "title", "createdAt", "updatedAt"],
       });
-      if (!owned?.agentId) return [];
-      const agent = await Agent.findByPk(owned.agentId, {
-        attributes: ["activeThreadId"],
-      });
-      if (!agent?.activeThreadId) return [];
-      const sessions = await Thread.findAll({
-        where: { id: agent.activeThreadId },
-        order: [["updated_at", "DESC"]],
-        attributes: [...attributes],
-      });
-      return this.mapSessions(sessions, { singleChatId: query.singleChatId });
+      if (!sc) return [];
+      return [this.toSession(sc)];
     }
 
-    const sessions = await Thread.findAll({
+    const rows = await SingleChat.findAll({
       where: { userId },
       order: [["updated_at", "DESC"]],
-      attributes: [...attributes],
+      attributes: ["id", "title", "createdAt", "updatedAt"],
     });
-    return this.mapSessions(sessions, {});
+    return rows.map((sc) => this.toSession(sc));
   }
 
-  private mapSessions(
-    sessions: Thread[],
-    scope: { groupId?: string; singleChatId?: string },
-  ) {
-    return sessions.map((s) => ({
-      threadId: s.id,
-      userId: s.userId,
-      groupId: scope.groupId ?? null,
-      singleChatId: scope.singleChatId ?? null,
-      title: s.title,
-      createdAt: s.createdAt,
-      updatedAt: s.updatedAt,
-      lastActivityAt: s.lastActivityAt,
-    }));
+  private toSession(sc: SingleChat) {
+    return {
+      threadId: sc.id,
+      singleChatId: sc.id,
+      userId: null as number | null,
+      title: sc.title,
+      createdAt: sc.createdAt,
+      updatedAt: sc.updatedAt,
+      lastActivityAt: sc.updatedAt,
+    };
   }
 
   /**
-   * Ensures a LangGraph thread exists for the group or single chat (`ensureCanonicalThreadId`).
-   * Idempotent with chat enqueue.
+   * Idempotent "ensure this single chat has a session" — after the refactor,
+   * this is a no-op: the single_chat.id IS the LangGraph thread id and the
+   * single_chat row is created when the user/agent pair first appears.
    */
   async createSession(data: {
     userId: UserId;
     title?: string;
-    groupId?: string;
     singleChatId?: string;
   }) {
-    const threadId = await ensureCanonicalThreadId({
-      userId: data.userId,
-      groupId: data.groupId ?? null,
-      singleChatId: data.singleChatId ?? null,
-    });
-
-    if (data.title) {
-      await Thread.update({ title: data.title }, { where: { id: threadId } });
+    if (!data.singleChatId) {
+      return { ok: true as const };
     }
 
-    logger.info("Session ensured", {
-      threadId,
-      groupId: data.groupId ?? null,
-      singleChatId: data.singleChatId ?? null,
+    if (data.title) {
+      await SingleChat.update(
+        { title: data.title },
+        { where: { id: data.singleChatId, userId: data.userId } },
+      );
+    }
+
+    logger.info("Session ensured (single_chat)", {
+      singleChatId: data.singleChatId,
     });
 
     return { ok: true as const };

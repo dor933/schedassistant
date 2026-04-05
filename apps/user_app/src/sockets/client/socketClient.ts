@@ -1,5 +1,5 @@
 import { io, type Socket } from "socket.io-client";
-import { GroupMember, MessageNotification } from "@scheduling-agent/database";
+import { MessageNotification } from "@scheduling-agent/database";
 import { getIO } from "../server/socketServer";
 import { logger } from "../../logger";
 
@@ -10,9 +10,8 @@ let agentSocket: Socket | null = null;
 
 export interface ActiveJobEntry {
   conversationId: string;
-  conversationType: "group" | "single";
+  conversationType: "single";
   userId: number;
-  groupId: string | null;
 }
 
 /**
@@ -35,7 +34,6 @@ interface AgentReplyOk {
   requestId: string;
   userId: number;
   threadId: string;
-  groupId: string | null;
   singleChatId: string | null;
   ok: true;
   reply: string;
@@ -49,7 +47,6 @@ interface AgentReplyError {
   requestId: string;
   userId: number;
   threadId: string;
-  groupId: string | null;
   singleChatId: string | null;
   ok: false;
   error: string;
@@ -61,7 +58,6 @@ type AgentReplyPayload = AgentReplyOk | AgentReplyError;
 interface AgentTypingPayload {
   threadId: string;
   userId: number;
-  groupId: string | null;
   singleChatId: string | null;
 }
 
@@ -69,10 +65,9 @@ interface AgentTypingPayload {
 interface ChatReplyToClient {
   requestId: string;
   threadId: string;
-  groupId: string | null;
   singleChatId: string | null;
   conversationId: string;
-  conversationType: "group" | "single";
+  conversationType: "single";
   ok: boolean;
   reply?: string;
   systemPrompt?: string | null;
@@ -116,31 +111,17 @@ export function connectToAgentService(): void {
 }
 
 async function handleAgentTyping(payload: AgentTypingPayload): Promise<void> {
-  const { userId, groupId, singleChatId } = payload;
+  const { userId, singleChatId } = payload;
 
-  if (!groupId && !singleChatId) return;
+  if (!singleChatId) return;
 
-  const conversationId = groupId ?? singleChatId!;
-  const conversationType: "group" | "single" = groupId ? "group" : "single";
+  const conversationId = singleChatId;
+  const conversationType: "single" = "single";
 
   const browserIO = getIO();
   const typingPayload = { conversationId, conversationType };
 
-  if (groupId) {
-    try {
-      const members = await GroupMember.findAll({
-        where: { groupId },
-        attributes: ["userId"],
-      });
-      for (const m of members) {
-        browserIO.to(`user:${m.userId}`).emit("thread:typing", typingPayload);
-      }
-    } catch {
-      browserIO.to(`user:${userId}`).emit("thread:typing", typingPayload);
-    }
-  } else {
-    browserIO.to(`user:${userId}`).emit("thread:typing", typingPayload);
-  }
+  browserIO.to(`user:${userId}`).emit("thread:typing", typingPayload);
 }
 
 async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
@@ -148,19 +129,17 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
     requestId,
     userId,
     threadId,
-    groupId,
     singleChatId,
   } = payload;
 
-  if (!groupId && !singleChatId) return;
+  if (!singleChatId) return;
 
-  const conversationId = groupId ?? singleChatId!;
-  const conversationType: "group" | "single" = groupId ? "group" : "single";
+  const conversationId = singleChatId;
+  const conversationType: "single" = "single";
 
   const clientPayload: ChatReplyToClient = {
     requestId,
     threadId,
-    groupId,
     singleChatId,
     conversationId,
     conversationType,
@@ -184,79 +163,25 @@ async function handleAgentReply(payload: AgentReplyPayload): Promise<void> {
 
   const browserIO = getIO();
 
-  if (groupId) {
-    // Fan out to all group members
-    try {
-      const members = await GroupMember.findAll({
-        where: { groupId },
-        attributes: ["userId"],
-      });
-
-      const recipientIds = members.map((m) => m.userId);
-
-      // Create notifications BEFORE emitting to browsers so that when a client
-      // immediately responds with `message:seen`, the row already exists in the DB.
-      for (const recipientId of recipientIds) {
-        if (recipientId !== userId) {
-          await MessageNotification.create({
-            threadId,
-            recipientId,
-            senderId: null,
-            messageId: requestId,
-            preview: preview ?? null,
-            status: "delivered",
-            conversationId: groupId,
-            conversationType: "group",
-          });
-        }
-      }
-
-      // Notify the sender on assistant errors so unread/badge appears if they are elsewhere (e.g. Admin).
-      if (!payload.ok) {
-        try {
-          await MessageNotification.create({
-            threadId,
-            recipientId: userId,
-            senderId: null,
-            messageId: requestId,
-            preview: preview ?? null,
-            status: "delivered",
-            conversationId: groupId,
-            conversationType: "group",
-          });
-        } catch (err) {
-          logger.error("Group error notification create", { error: String(err) });
-        }
-      }
-
-      for (const recipientId of recipientIds) {
-        browserIO.to(`user:${recipientId}`).emit("chat:reply", clientPayload);
-      }
-    } catch (err) {
-      logger.error("Group fan-out error", { groupId, error: String(err) });
-      browserIO.to(`user:${userId}`).emit("chat:reply", clientPayload);
-    }
-  } else {
-    // Single chat: create notification BEFORE emitting so that the client's
-    // immediate `message:seen` response can find and update the row.
-    // Include assistant errors so the sidebar unread badge updates when the user is not in chat.
-    try {
-      await MessageNotification.create({
-        threadId,
-        recipientId: userId,
-        senderId: null,
-        messageId: requestId,
-        preview: preview ?? null,
-        status: "delivered",
-        conversationId: singleChatId ?? threadId,
-        conversationType: "single",
-      });
-    } catch (err) {
-      logger.error("Notification create error", { threadId, error: String(err) });
-    }
-
-    browserIO.to(`user:${userId}`).emit("chat:reply", clientPayload);
+  // Single chat: create notification BEFORE emitting so that the client's
+  // immediate `message:seen` response can find and update the row.
+  // Include assistant errors so the sidebar unread badge updates when the user is not in chat.
+  try {
+    await MessageNotification.create({
+      threadId,
+      recipientId: userId,
+      senderId: null,
+      messageId: requestId,
+      preview: preview ?? null,
+      status: "delivered",
+      conversationId: singleChatId ?? threadId,
+      conversationType: "single",
+    });
+  } catch (err) {
+    logger.error("Notification create error", { threadId, error: String(err) });
   }
+
+  browserIO.to(`user:${userId}`).emit("chat:reply", clientPayload);
 }
 
 export function disconnectFromAgentService(): void {

@@ -35,14 +35,6 @@ export interface ConversationModelInfo {
   vendor: { id: string; name: string; slug: string } | null;
 }
 
-export interface GroupConversation {
-  id: string;
-  name: string;
-  agentId: string;
-  agentDefinition: string | null;
-  model: ConversationModelInfo | null;
-}
-
 export interface SingleChatConversation {
   id: string;
   agentId: string;
@@ -51,7 +43,6 @@ export interface SingleChatConversation {
 }
 
 export interface Conversations {
-  groups: GroupConversation[];
   singleChats: SingleChatConversation[];
 }
 
@@ -110,7 +101,6 @@ export function getMe() {
 export interface Session {
   threadId: string;
   userId: number | null;
-  groupId: string | null;
   singleChatId: string | null;
   title: string | null;
   createdAt: string;
@@ -137,7 +127,7 @@ export interface PaginatedHistory {
 /** Conversation-scoped history — survives thread rotation. */
 export function getConversationHistory(
   conversationId: string,
-  conversationType: "group" | "single",
+  conversationType: "single",
   opts?: { limit?: number; offset?: number },
 ) {
   const params = new URLSearchParams();
@@ -153,10 +143,10 @@ export interface SearchResult extends HistoryMessage {
   index: number;
 }
 
-/** Search within this group or single chat’s durable transcript only. */
+/** Search within this single chat's durable transcript only. */
 export function searchConversationHistory(
   conversationId: string,
-  conversationType: "group" | "single",
+  conversationType: "single",
   q: string,
 ) {
   const params = new URLSearchParams({ q });
@@ -166,11 +156,9 @@ export function searchConversationHistory(
 }
 
 export function getSessions(scope?: {
-  groupId?: string;
   singleChatId?: string;
 }) {
   const params = new URLSearchParams();
-  if (scope?.groupId) params.set("groupId", scope.groupId);
   if (scope?.singleChatId) params.set("singleChatId", scope.singleChatId);
   const qs = params.toString();
   return request<Session[]>(`/sessions${qs ? `?${qs}` : ""}`);
@@ -178,14 +166,12 @@ export function getSessions(scope?: {
 
 export function createSession(opts?: {
   title?: string;
-  groupId?: string;
   singleChatId?: string;
 }) {
   return request<{ ok: true }>("/sessions", {
     method: "POST",
     body: JSON.stringify({
       title: opts?.title,
-      groupId: opts?.groupId,
       singleChatId: opts?.singleChatId,
     }),
   });
@@ -197,17 +183,6 @@ export function deleteSingleChat(id: string) {
   return request<{ cleared: boolean }>(`/sessions/single-chats/${id}`, {
     method: "DELETE",
   });
-}
-
-// ─── Group Members ────────────────────────────────────────────────────────────
-
-export interface GroupMemberInfo {
-  userId: number;
-  displayName: string | null;
-}
-
-export function getGroupMembers(groupId: string) {
-  return request<GroupMemberInfo[]>(`/sessions/groups/${groupId}/members`);
 }
 
 // ─── Chat ────────────────────────────────────────────────────────────────────
@@ -222,7 +197,6 @@ export async function sendMessage(
   message: string,
   requestId: string,
   scope?: {
-    groupId?: string;
     singleChatId?: string;
     agentId?: string;
     mentionsAgent?: boolean;
@@ -242,7 +216,6 @@ export async function sendMessage(
     body: JSON.stringify({
       message,
       requestId,
-      ...(scope?.groupId ? { groupId: scope.groupId } : {}),
       ...(scope?.singleChatId ? { singleChatId: scope.singleChatId } : {}),
       ...(scope?.agentId ? { agentId: scope.agentId } : {}),
       ...(scope?.mentionsAgent != null
@@ -291,81 +264,16 @@ export interface AdminRole {
 export interface AdminAgent {
   id: string;
   definition: string;
-  /** Optional display name (system prompt, @mention label in groups, list_agents). */
+  /** Optional display name (system prompt, list_agents). */
   agentName: string | null;
   coreInstructions: string | null;
   /** Persona traits (tone, etc.) — rendered as "Your Characteristics" in the agent context. */
   characteristics: Record<string, unknown> | null;
-  /** Number of groups using this agent (an agent may back multiple groups). */
-  groupCount: number;
   editable: boolean;
   /** The user who created this agent (null for legacy/seeded agents). */
   createdByUserId: number | null;
-  /** MCP servers assigned to this agent. */
-  mcpServerIds: number[];
   /** The LLM model assigned to this agent (references models.id). */
   modelId: string | null;
-  /** Linked skill ids (junction `agents_skills`). */
-  skillIds?: number[];
-  createdAt: string;
-}
-
-export interface AdminMcpServer {
-  id: number;
-  name: string;
-  transport: string;
-  command: string;
-  args: string[];
-  env?: Record<string, string> | null;
-}
-
-export interface AdminMcpServerLaunchSummary {
-  transport: string;
-  executable: string;
-  arguments: string[];
-  argv: string[];
-  humanReadable: string;
-  envNote: string;
-}
-
-export interface AdminMcpServerUpdateResponse {
-  server: AdminMcpServer;
-  launchSummary: AdminMcpServerLaunchSummary;
-}
-
-export interface AdminSystemAgent {
-  id: number;
-  slug: string;
-  name: string;
-  description: string | null;
-  instructions: string;
-  modelSlug: string;
-  userId: number | null;
-  mcpServerIds: number[];
-  skillIds?: number[];
-}
-
-export interface AdminSkill {
-  id: number;
-  name: string;
-  slug: string | null;
-  description: string | null;
-  skillText: string;
-  systemAgentAssignable: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface AdminGroup {
-  id: string;
-  name: string;
-  agentId: string;
-  createdAt: string;
-}
-
-export interface AdminGroupMember {
-  id: string;
-  userId: number;
   createdAt: string;
 }
 
@@ -373,96 +281,12 @@ export const admin = {
   getRoles: () => request<AdminRole[]>("/admin/roles"),
   getUsers: () => request<AdminUser[]>("/admin/users"),
   getAgents: () => request<AdminAgent[]>("/admin/agents"),
-  getMcpServers: () => request<AdminMcpServer[]>("/admin/mcp-servers"),
-  createMcpServer: (data: {
-    name: string;
-    transport: string;
-    command: string;
-    args: string[];
-    env?: Record<string, string>;
-  }) =>
-    request<AdminMcpServer>("/admin/mcp-servers", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  updateMcpServer: (
-    id: number,
-    data: {
-      args?: string[];
-      command?: string;
-      transport?: string;
-      env?: Record<string, string> | null;
-    },
-  ) =>
-    request<AdminMcpServerUpdateResponse>(`/admin/mcp-servers/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
-  getSkills: () => request<AdminSkill[]>("/admin/skills"),
-  createSkill: (data: {
-    name: string;
-    skillText: string;
-    slug?: string;
-    description?: string;
-  }) =>
-    request<AdminSkill>("/admin/skills", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  updateSkill: (
-    id: number,
-    data: {
-      name?: string;
-      skillText?: string;
-      slug?: string | null;
-      description?: string | null;
-    },
-  ) =>
-    request<AdminSkill>(`/admin/skills/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
-  deleteSkill: (id: number) =>
-    request<{ deleted: boolean }>(`/admin/skills/${id}`, { method: "DELETE" }),
-  getSystemAgents: () => request<AdminSystemAgent[]>("/admin/system-agents"),
-  createSystemAgent: (data: {
-    slug: string;
-    name: string;
-    description?: string;
-    instructions: string;
-    modelSlug?: string;
-    userId?: number | null;
-    mcpServerIds?: number[];
-    skillIds?: number[];
-  }) =>
-    request<AdminSystemAgent>("/admin/system-agents", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  updateSystemAgent: (
-    id: number,
-    data: {
-      name?: string;
-      description?: string;
-      instructions?: string;
-      modelSlug?: string;
-      userId?: number | null;
-      mcpServerIds?: number[];
-      skillIds?: number[];
-    },
-  ) =>
-    request<AdminSystemAgent>(`/admin/system-agents/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
   createAgent: (data: {
     definition?: string;
     agentName?: string | null;
     coreInstructions?: string;
     characteristics?: Record<string, unknown> | null;
-    mcpServerIds?: number[];
     modelId?: string | null;
-    skillIds?: number[];
   }) =>
     request<AdminAgent>("/admin/agents", {
       method: "POST",
@@ -475,9 +299,7 @@ export const admin = {
       agentName?: string | null;
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
-      mcpServerIds?: number[];
       modelId?: string | null;
-      skillIds?: number[];
     },
   ) =>
     request<AdminAgent>(`/admin/agents/${id}`, {
@@ -496,31 +318,38 @@ export const admin = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
-  getGroups: () => request<AdminGroup[]>("/admin/groups"),
-  createGroup: (name: string, agentId: string, memberUserIds: number[]) =>
-    request<AdminGroup>("/admin/groups", {
+  createPerson: (data: {
+    firstName?: string | null;
+    lastName?: string | null;
+    email?: string | null;
+    user?: {
+      userName: string;
+      password: string;
+      displayName?: string | null;
+      roleId?: string | null;
+    } | null;
+    employee?: {
+      jiraIdNumber?: string | null;
+    } | null;
+  }) =>
+    request<{
+      person: {
+        id: number;
+        firstName: string | null;
+        lastName: string | null;
+        email: string | null;
+        createdAt: string;
+      };
+      user: {
+        id: number;
+        userName: string;
+        displayName: string | null;
+        roleId: string | null;
+      } | null;
+      employee: { id: number; jiraIdNumber: string | null } | null;
+    }>("/admin/persons", {
       method: "POST",
-      body: JSON.stringify({ name, agentId, memberUserIds }),
-    }),
-  renameGroup: (groupId: string, name: string) =>
-    request<AdminGroup>(`/admin/groups/${groupId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ name }),
-    }),
-  deleteGroup: (groupId: string) =>
-    request<{ deleted: boolean }>(`/admin/groups/${groupId}`, {
-      method: "DELETE",
-    }),
-  getGroupMembers: (groupId: string) =>
-    request<AdminGroupMember[]>(`/admin/groups/${groupId}/members`),
-  addGroupMember: (groupId: string, userId: number) =>
-    request<AdminGroupMember>(`/admin/groups/${groupId}/members`, {
-      method: "POST",
-      body: JSON.stringify({ userId }),
-    }),
-  removeGroupMember: (groupId: string, userId: number) =>
-    request<{ deleted: number }>(`/admin/groups/${groupId}/members/${userId}`, {
-      method: "DELETE",
+      body: JSON.stringify(data),
     }),
   getVendors: () =>
     request<{ id: string; name: string; slug: string; hasApiKey: boolean }[]>(

@@ -1,5 +1,5 @@
 import {
-  SingleChat, GroupMember, User, ConversationMessage, MessageNotification
+  SingleChat, ConversationMessage, MessageNotification
 } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
 import { logger } from "../logger";
@@ -19,19 +19,11 @@ export class SessionsService {
       }
       return;
     }
-    if (conversationType === "group") {
-      const m = await GroupMember.findOne({ where: { groupId: conversationId, userId } });
-      if (!m) {
-        throw Object.assign(new Error("You are not a member of this group."), { status: 403 });
-      }
-      return;
-    }
     throw Object.assign(new Error("Invalid conversation type."), { status: 400 });
   }
 
-  async getSessions(userId: UserId, groupId?: string, singleChatId?: string) {
+  async getSessions(userId: UserId, singleChatId?: string) {
     const params = new URLSearchParams();
-    if (groupId) params.set("groupId", groupId);
     if (singleChatId) params.set("singleChatId", singleChatId);
     const qs = params.toString();
     const url = `${AGENT_SERVICE_URL}/api/sessions/${userId}${qs ? `?${qs}` : ""}`;
@@ -39,14 +31,13 @@ export class SessionsService {
     return response.json();
   }
 
-  async createSession(userId: UserId, title?: string, groupId?: string, singleChatId?: string) {
+  async createSession(userId: UserId, title?: string, singleChatId?: string) {
     const response = await fetch(`${AGENT_SERVICE_URL}/api/sessions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         userId,
         title,
-        ...(groupId ? { groupId } : {}),
         ...(singleChatId ? { singleChatId } : {}),
       }),
     });
@@ -96,17 +87,5 @@ export class SessionsService {
 
     logger.info("Single chat conversation cleared", { scId, userId });
     return { cleared: true };
-  }
-
-  async getGroupMembers(groupId: string, userId: UserId) {
-    const membership = await GroupMember.findOne({ where: { groupId, userId } });
-    if (!membership) throw Object.assign(new Error("You are not a member of this group."), { status: 403 });
-
-    const members = await GroupMember.findAll({ where: { groupId }, attributes: ["userId"] });
-    const userIds = members.map((m) => m.userId);
-    const users = await User.findAll({ where: { id: userIds }, attributes: ["id", "displayName"] });
-    const userMap = Object.fromEntries(users.map((u) => [u.id, u.displayName]));
-
-    return userIds.map((id) => ({ userId: id, displayName: userMap[id] ?? null }));
   }
 }

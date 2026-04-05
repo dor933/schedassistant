@@ -8,10 +8,8 @@ import {
   X,
   Loader2,
   AlertTriangle,
-  ChevronRight,
   ChevronUp,
   ChevronDown,
-  Users,
   Bot,
   Search,
 } from "lucide-react";
@@ -25,15 +23,12 @@ import {
   getConversationHistory,
   searchConversationHistory,
   deleteSingleChat,
-  getGroupMembers,
   type Session,
-  type GroupMemberInfo,
   type SearchResult,
 } from "../api";
 import {
   getChatSocket,
   markConversationSeen,
-  emitUserTyping,
   emitSyncActiveTyping,
   type ChatReplyPayload,
 } from "../sockets/chatSocket";
@@ -94,12 +89,6 @@ export default function ChatPage() {
   const [typingConversations, setTypingConversations] = useState<Set<string>>(
     new Set(),
   );
-  const [userTyping, setUserTyping] = useState<
-    Map<string, Map<number, string>>
-  >(new Map());
-  const userTypingTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-    new Map(),
-  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
@@ -129,20 +118,6 @@ export default function ChatPage() {
   }, []);
 
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [groupMembersList, setGroupMembersList] = useState<GroupMemberInfo[]>(
-    [],
-  );
-  const [showGroupInfo, setShowGroupInfo] = useState(false);
-
-  useEffect(() => {
-    if (activeConv?.type !== "group") {
-      setGroupMembersList([]);
-      return;
-    }
-    getGroupMembers(activeConv.id)
-      .then(setGroupMembersList)
-      .catch(() => setGroupMembersList([]));
-  }, [activeConv?.id, activeConv?.type]);
 
   const sanitize = useCallback(
     (s: string) =>
@@ -189,10 +164,7 @@ export default function ChatPage() {
     }
 
     let cancelled = false;
-    const scope =
-      activeConv.type === "group"
-        ? { groupId: activeConv.id }
-        : { singleChatId: activeConv.id };
+    const scope = { singleChatId: activeConv.id };
 
     setMessages([]);
     setTotalMessages(0);
@@ -218,13 +190,9 @@ export default function ChatPage() {
         setActiveSession(session);
 
         try {
-          const convType =
-            activeConv.type === "group"
-              ? ("group" as const)
-              : ("single" as const);
           const { messages: history, total } = await getConversationHistory(
             activeConv.id,
-            convType,
+            "single",
             { limit: PAGE_SIZE },
           );
           if (!cancelled) {
@@ -277,11 +245,9 @@ export default function ChatPage() {
     try {
       const offset = Math.max(0, loadedFrom - PAGE_SIZE);
       const limit = loadedFrom - offset;
-      const convType =
-        activeConv.type === "group" ? ("group" as const) : ("single" as const);
       const { messages: older } = await getConversationHistory(
         activeConv.id,
-        convType,
+        "single",
         { limit, offset },
       );
 
@@ -335,13 +301,9 @@ export default function ChatPage() {
       }
       setSearching(true);
       try {
-        const convType =
-          activeConv.type === "group"
-            ? ("group" as const)
-            : ("single" as const);
         const { results } = await searchConversationHistory(
           activeConv.id,
-          convType,
+          "single",
           query.trim(),
         );
         setSearchResults(results);
@@ -373,13 +335,9 @@ export default function ChatPage() {
         );
         setLoadingMore(true);
         try {
-          const convType =
-            activeConv.type === "group"
-              ? ("group" as const)
-              : ("single" as const);
           const { messages: page, total } = await getConversationHistory(
             activeConv.id,
-            convType,
+            "single",
             {
               limit: Math.max(
                 PAGE_SIZE,
@@ -483,61 +441,6 @@ export default function ChatPage() {
       }
     };
 
-    const onUserTyping = (data: {
-      groupId: string;
-      userId: number;
-      displayName: string;
-    }) => {
-      const key = `${data.groupId}:${data.userId}`;
-
-      const prev = userTypingTimers.current.get(key);
-      if (prev) clearTimeout(prev);
-
-      setUserTyping((map) => {
-        const next = new Map(map);
-        const groupMap = new Map(next.get(data.groupId) ?? []);
-        groupMap.set(data.userId, data.displayName);
-        next.set(data.groupId, groupMap);
-        return next;
-      });
-
-      userTypingTimers.current.set(
-        key,
-        setTimeout(() => {
-          userTypingTimers.current.delete(key);
-          setUserTyping((map) => {
-            const next = new Map(map);
-            const groupMap = new Map(next.get(data.groupId) ?? []);
-            groupMap.delete(data.userId);
-            if (groupMap.size === 0) next.delete(data.groupId);
-            else next.set(data.groupId, groupMap);
-            return next;
-          });
-        }, 3000),
-      );
-    };
-
-    const onGroupUserMessage = (data: {
-      groupId: string;
-      userId: number;
-      displayName: string;
-      message: string;
-    }) => {
-      const current = activeConvRef.current;
-      if (current?.type === "group" && current.id === data.groupId) {
-        setTotalMessages((t) => t + 1);
-        setMessages((prev) => [
-          ...prev,
-          { role: "user", content: data.message, senderName: data.displayName },
-        ]);
-      } else {
-        setUnreadCounts((prev) => ({
-          ...prev,
-          [data.groupId]: (prev[data.groupId] ?? 0) + 1,
-        }));
-      }
-    };
-
     const onAdminChange = (data: {
       type: string;
       message: string;
@@ -547,45 +450,10 @@ export default function ChatPage() {
       if (data.actorId === user?.id) return;
 
       toast(data.message, "info");
-
-      const current = activeConvRef.current;
-      switch (data.type) {
-        case "group_model_changed": {
-          const { groupId, model } = data.data;
-          if (current?.type === "group" && current.id === groupId) {
-            setActiveConv((prev) => (prev ? { ...prev, model } : prev));
-          }
-          break;
-        }
-        case "group_renamed": {
-          const { groupId, name } = data.data;
-          if (current?.type === "group" && current.id === groupId) {
-            setActiveConv((prev) => (prev ? { ...prev, name } : prev));
-          }
-          break;
-        }
-      }
     };
 
     const onConversationsUpdated = (data: any) => {
-      if (data.action === "group_added" && data.group) {
-        setConversations((prev) => {
-          if (!prev) return prev;
-          if (prev.groups.some((g) => g.id === data.group.id)) return prev;
-          return {
-            ...prev,
-            groups: [...prev.groups, data.group],
-          };
-        });
-      } else if (data.action === "group_removed" && data.groupId) {
-        setConversations((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            groups: prev.groups.filter((g) => g.id !== data.groupId),
-          };
-        });
-      } else if (data.action === "single_chat_added" && data.singleChat) {
+      if (data.action === "single_chat_added" && data.singleChat) {
         setConversations((prev) => {
           if (!prev) return prev;
           if (prev.singleChats.some((sc) => sc.id === data.singleChat.id)) return prev;
@@ -604,9 +472,6 @@ export default function ChatPage() {
             singleChats: prev.singleChats.map((sc) =>
               sc.agentId === data.agentId ? { ...sc, model: newModel } : sc,
             ),
-            groups: prev.groups.map((g) =>
-              g.agentId === data.agentId ? { ...g, model: newModel } : g,
-            ),
           };
         });
         // Update the active conversation if it uses this agent
@@ -620,8 +485,6 @@ export default function ChatPage() {
 
     socket.on("thread:typing", onTyping);
     socket.on("chat:reply", onReply);
-    socket.on("user:typing", onUserTyping);
-    socket.on("group:user-message", onGroupUserMessage);
     socket.on("conversations:updated", onConversationsUpdated);
     socket.on("admin:change", onAdminChange);
     // Restore sidebar "typing..." after navigating back from Admin (same socket, no reconnect).
@@ -629,8 +492,6 @@ export default function ChatPage() {
     return () => {
       socket.off("thread:typing", onTyping);
       socket.off("chat:reply", onReply);
-      socket.off("user:typing", onUserTyping);
-      socket.off("group:user-message", onGroupUserMessage);
       socket.off("conversations:updated", onConversationsUpdated);
       socket.off("admin:change", onAdminChange);
     };
@@ -674,10 +535,7 @@ export default function ChatPage() {
 
       if (!activeSession) {
         try {
-          const scope =
-            activeConv.type === "group"
-              ? { groupId: activeConv.id }
-              : { singleChatId: activeConv.id };
+          const scope = { singleChatId: activeConv.id };
           await createSession({
             title: text.slice(0, 60),
             ...scope,
@@ -706,34 +564,12 @@ export default function ChatPage() {
 
     const requestId = crypto.randomUUID();
 
-    const isGroup = activeConv?.type === "group";
-    const agentDef = isGroup ? activeConv?.agentDefinition : null;
-    const mentionsAgent =
-      !isGroup ||
-      (agentDef
-        ? text.toLowerCase().includes(`@${agentDef.toLowerCase()}`)
-        : text.includes("@"));
-
     const scope = activeConv
       ? {
-        ...(isGroup
-          ? { groupId: activeConv.id }
-          : { singleChatId: activeConv.id }),
+        singleChatId: activeConv.id,
         ...(activeConv.agentId ? { agentId: activeConv.agentId } : {}),
-        mentionsAgent,
       }
       : undefined;
-
-    if (isGroup && !mentionsAgent) {
-      try {
-        await sendMessage(text, requestId, scope);
-      } catch {
-        // stored silently
-      } finally {
-        setSendingConvId(null);
-      }
-      return;
-    }
 
     const replyPromise = new Promise<ChatReplyPayload>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
@@ -794,16 +630,9 @@ export default function ChatPage() {
     ? typingConversations.has(activeConv.id)
     : false;
 
-  const usersTypingNames: string[] =
-    activeConv?.type === "group"
-      ? Array.from(userTyping.get(activeConv.id)?.values() ?? [])
-      : [];
-
   const handleUserTyping = useCallback(() => {
-    if (activeConv?.type === "group") {
-      emitUserTyping(activeConv.id);
-    }
-  }, [activeConv?.type, activeConv?.id]);
+    // no-op: single chats don't emit user typing
+  }, []);
 
   return (
     <Stack
@@ -849,7 +678,6 @@ export default function ChatPage() {
         }}
       >
         <SessionSidebar
-          groups={conversations?.groups ?? []}
           singleChats={conversations?.singleChats ?? []}
           activeConversationId={activeConv?.id ?? null}
           setActiveConversation={setActiveConv}
@@ -941,60 +769,6 @@ export default function ChatPage() {
                   />
                 </Box>
                 <span>Agent is typing...</span>
-              </Stack>
-            ) : usersTypingNames.length > 0 ? (
-              <Stack
-                direction="row"
-                alignItems="center"
-                spacing={0.75}
-                className="text-xs font-medium text-blue-600"
-              >
-                <Box
-                  component="span"
-                  sx={{
-                    position: "relative",
-                    display: "flex",
-                    width: 8,
-                    height: 8,
-                  }}
-                >
-                  <Box
-                    component="span"
-                    className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75"
-                  />
-                  <Box
-                    component="span"
-                    className="relative inline-flex h-2 w-2 rounded-full bg-blue-500"
-                  />
-                </Box>
-                <span>
-                  {usersTypingNames.length === 1
-                    ? `${usersTypingNames[0]} is typing...`
-                    : `${usersTypingNames.join(", ")} are typing...`}
-                </span>
-              </Stack>
-            ) : activeConv?.type === "group" ? (
-              <Stack
-                component="button"
-                type="button"
-                direction="row"
-                alignItems="center"
-                onClick={() => setShowGroupInfo(true)}
-                className="rounded-full bg-gray-100 text-[10px] font-medium text-gray-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
-                sx={{
-                  mt: 0.25,
-                  gap: 0.5,
-                  px: 1,
-                  py: 0.25,
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                  flexShrink: 0,
-                  width: "fit-content",
-                }}
-              >
-                <Users className="h-3 w-3" />
-                <span>{groupMembersList.length + 1} members</span>
-                <ChevronRight className="h-2.5 w-2.5" />
               </Stack>
             ) : (
               <Box component="p" className="text-xs text-gray-400">
@@ -1168,8 +942,7 @@ export default function ChatPage() {
                 className="text-sm text-gray-500 leading-relaxed"
                 sx={{ maxWidth: "20rem" }}
               >
-                Choose a group or direct chat from the sidebar to start
-                messaging.
+                Choose a direct chat from the sidebar to start messaging.
               </Box>
             </Stack>
           )}
@@ -1280,7 +1053,6 @@ export default function ChatPage() {
                         msg.vendorSlug ?? activeConv?.model?.vendor?.slug
                       }
                       modelName={msg.modelName ?? activeConv?.model?.name}
-                      isGroup={activeConv?.type === "group"}
                       highlightText={
                         searchQuery && isSearchMatch ? searchQuery : undefined
                       }
@@ -1324,185 +1096,8 @@ export default function ChatPage() {
           onSend={handleSend}
           onTyping={handleUserTyping}
           disabled={!activeConv || sending || agentIsTyping}
-          placeholder={
-            activeConv?.type === "group" && activeConv.agentDefinition
-              ? `Message... use @ to tag agent`
-              : undefined
-          }
-          agentName={
-            activeConv?.type === "group"
-              ? (activeConv.agentDefinition ?? undefined)
-              : undefined
-          }
-          vendorSlug={
-            activeConv?.type === "group"
-              ? (activeConv.model?.vendor?.slug ?? undefined)
-              : undefined
-          }
         />
       </Stack>
-
-      {/* Group Info Panel */}
-      {showGroupInfo && activeConv?.type === "group" && (
-        <Stack
-          alignItems={{ xs: "stretch", sm: "center" }}
-          justifyContent={{ xs: "flex-end", sm: "center" }}
-          className="animate-fade-in"
-          onClick={() => setShowGroupInfo(false)}
-          sx={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 50,
-            bgcolor: "rgba(0,0,0,0.3)",
-            backdropFilter: "blur(4px)",
-          }}
-        >
-          <Box
-            className="animate-scale-in border border-gray-200/60 bg-white/95 shadow-glass-lg backdrop-blur-xl"
-            onClick={(e: React.MouseEvent) => e.stopPropagation()}
-            sx={{
-              width: "100%",
-              maxWidth: "24rem",
-              borderRadius: { xs: "1rem 1rem 0 0", sm: "1rem" },
-              p: { xs: 2.5, sm: 3 },
-              mx: { xs: 0, sm: 2 },
-            }}
-          >
-            {/* Header */}
-            <Stack
-              direction="row"
-              alignItems="center"
-              justifyContent="space-between"
-              sx={{ mb: 2.5 }}
-            >
-              <Stack direction="row" alignItems="center" spacing={1.5}>
-                <Box className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-md">
-                  <Users className="h-5 w-5" />
-                </Box>
-                <Box>
-                  <Box
-                    component="h3"
-                    className="text-base font-bold text-gray-900"
-                  >
-                    {activeConv.name}
-                  </Box>
-                  <Box component="p" className="text-[11px] text-gray-400">
-                    {groupMembersList.length} member
-                    {groupMembersList.length !== 1 ? "s" : ""} + 1 agent
-                  </Box>
-                </Box>
-              </Stack>
-              <Box
-                component="button"
-                onClick={() => setShowGroupInfo(false)}
-                className="rounded-xl p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
-              >
-                <X className="h-4 w-4" />
-              </Box>
-            </Stack>
-
-            {/* Agent */}
-            {activeConv.agentDefinition && (
-              <Box sx={{ mb: 2 }}>
-                <Box
-                  component="p"
-                  className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400"
-                >
-                  Agent
-                </Box>
-                <Stack
-                  direction="row"
-                  alignItems="center"
-                  spacing={1.5}
-                  className="rounded-xl bg-gradient-to-r from-gray-50 to-indigo-50/50 ring-1 ring-gray-100"
-                  sx={{ p: 1.5 }}
-                >
-                  <Box
-                    className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${activeConv.model?.vendor?.slug === "openai"
-                      ? "bg-emerald-50 text-emerald-600 ring-emerald-200/60"
-                      : activeConv.model?.vendor?.slug === "anthropic"
-                        ? "bg-amber-50 text-amber-600 ring-amber-200/60"
-                        : activeConv.model?.vendor?.slug === "google"
-                          ? "bg-blue-50 text-blue-600 ring-blue-200/60"
-                          : "bg-violet-50 text-violet-600 ring-violet-200/60"
-                      }`}
-                  >
-                    <Bot className="h-4 w-4" />
-                  </Box>
-                  <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Box
-                      component="p"
-                      className="text-sm font-semibold text-gray-900 truncate"
-                    >
-                      {activeConv.agentDefinition}
-                    </Box>
-                    {activeConv.model && (
-                      <Box
-                        component="p"
-                        className="text-[11px] text-gray-400 truncate"
-                      >
-                        {activeConv.model.vendor?.name} &middot;{" "}
-                        {activeConv.model.name}
-                      </Box>
-                    )}
-                  </Box>
-                </Stack>
-              </Box>
-            )}
-
-            {/* Members */}
-            <Box>
-              <Box
-                component="p"
-                className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400"
-              >
-                Members
-              </Box>
-              <Stack spacing={0.5} sx={{ maxHeight: 240, overflowY: "auto" }}>
-                {groupMembersList.map((m) => {
-                  const name = m.displayName ?? String(m.userId);
-                  const isCurrentUser = m.userId === user?.id;
-                  return (
-                    <Stack
-                      key={m.userId}
-                      direction="row"
-                      alignItems="center"
-                      spacing={1.5}
-                      className="rounded-xl transition-colors hover:bg-gray-50"
-                      sx={{ px: 1.5, py: 1.25 }}
-                    >
-                      <Box
-                        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold shadow-sm ring-1 ring-gray-950/[0.04] ${isCurrentUser
-                          ? "bg-gradient-to-br from-indigo-100 to-blue-100 text-indigo-600"
-                          : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
-                          }`}
-                      >
-                        {name.charAt(0).toUpperCase()}
-                      </Box>
-                      <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Box
-                          component="p"
-                          className="text-sm font-medium text-gray-900 truncate"
-                        >
-                          {name}
-                          {isCurrentUser && (
-                            <Box
-                              component="span"
-                              className="ml-1.5 text-[10px] font-semibold text-indigo-500"
-                            >
-                              you
-                            </Box>
-                          )}
-                        </Box>
-                      </Box>
-                    </Stack>
-                  );
-                })}
-              </Stack>
-            </Box>
-          </Box>
-        </Stack>
-      )}
 
       {/* Delete Chat Confirmation */}
       {deleteTarget && (

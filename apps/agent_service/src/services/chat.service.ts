@@ -7,7 +7,6 @@ export class ChatService {
     message: string;
     requestId?: string;
     displayName?: string;
-    groupId?: string;
     singleChatId?: string;
     agentId?: string;
     mentionsAgent?: boolean;
@@ -20,7 +19,6 @@ export class ChatService {
       message: data.message,
       requestId,
       ...(data.displayName ? { displayName: data.displayName } : {}),
-      ...(data.groupId != null ? { groupId: data.groupId } : {}),
       ...(data.singleChatId != null ? { singleChatId: data.singleChatId } : {}),
       ...(data.agentId != null ? { agentId: data.agentId } : {}),
       ...(data.mentionsAgent != null

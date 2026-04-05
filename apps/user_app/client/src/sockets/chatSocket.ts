@@ -6,10 +6,9 @@ export type ChatReplyPayload =
   | {
       requestId: string;
       threadId: string;
-      groupId: string | null;
       singleChatId: string | null;
       conversationId: string;
-      conversationType: "group" | "single";
+      conversationType: "single";
       ok: true;
       reply: string;
       systemPrompt: string | null;
@@ -20,10 +19,9 @@ export type ChatReplyPayload =
   | {
       requestId: string;
       threadId: string;
-      groupId: string | null;
       singleChatId: string | null;
       conversationId: string;
-      conversationType: "group" | "single";
+      conversationType: "single";
       ok: false;
       error: string;
     };
@@ -57,14 +55,9 @@ export function getChatSocket(token: string): Socket {
 /** Tells the server that the user has seen all messages in a conversation. */
 export function markConversationSeen(
   conversationId: string,
-  conversationType: "group" | "single",
+  conversationType: "single",
 ): void {
   socket?.emit("message:seen", { conversationId, conversationType });
-}
-
-/** Tells the server that the current user is typing in a group conversation. */
-export function emitUserTyping(groupId: string): void {
-  socket?.emit("user:typing", { groupId });
 }
 
 /** Re-fetch active agent jobs from the server and replay `thread:typing` (e.g. after returning from Admin). */

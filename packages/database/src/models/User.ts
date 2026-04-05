@@ -1,10 +1,9 @@
-import { DataTypes, Model, Optional, Sequelize } from "sequelize";
+import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
 import type { UserAttributes, UserIdentity } from "@scheduling-agent/types";
 
 type UserCreationAttributes = Optional<
   UserAttributes,
-  | "id"
   | "createdAt"
   | "updatedAt"
   | "externalRef"
@@ -35,7 +34,10 @@ User.init(
     id: {
       type: DataTypes.INTEGER,
       primaryKey: true,
-      autoIncrement: true,
+      allowNull: false,
+      // `id` IS `persons.id` — no auto-increment; the caller must provide it
+      // (typically by creating the Person row first and reusing its id).
+      references: { model: "persons", key: "id" },
     },
     userName: {
       type: DataTypes.STRING,

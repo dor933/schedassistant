@@ -2,7 +2,6 @@ import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
 import {
   MessageCircle,
-  Users,
   Settings,
   LogOut,
   Trash2,
@@ -11,14 +10,13 @@ import logo from "../assets/logo.svg";
 import { useNavigate } from "react-router-dom";
 import { flushSync } from "react-dom";
 import type {
-  GroupConversation,
   SingleChatConversation,
   ConversationModelInfo,
 } from "../api";
 import { VendorIcon } from "./VendorModelBadge";
 
 export interface ConversationRef {
-  type: "group" | "single";
+  type: "single";
   id: string;
   name: string;
   agentId: string;
@@ -32,7 +30,6 @@ interface SessionSidebarProps {
   setActiveConversation: React.Dispatch<
     React.SetStateAction<ConversationRef | null>
   >;
-  groups: GroupConversation[];
   singleChats: SingleChatConversation[];
   activeConversationId: string | null;
   unreadCounts: Record<string, number>;
@@ -78,7 +75,6 @@ function VendorChatIcon({ model, isActive }: { model: ConversationModelInfo | nu
 
 export default function SessionSidebar({
   setActiveConversation,
-  groups,
   singleChats,
   activeConversationId,
   unreadCounts,
@@ -185,65 +181,8 @@ export default function SessionSidebar({
           </Box>
         )}
 
-        {/* Groups */}
-        {groups.length > 0 && (
-          <Box sx={{ mb: 1.5 }}>
-            <Stack direction="row" alignItems="center" spacing={0.75} className="text-[11px] font-semibold uppercase tracking-wider text-gray-400" sx={{ mb: 0.75, px: 1.5 }}>
-              <Users className="h-3 w-3" />
-              <span>Groups</span>
-            </Stack>
-            {groups.map((g) => {
-              const isActive = activeConversationId === g.id;
-              const unread = unreadCounts[g.id] ?? 0;
-              const isTyping = typingConversations.has(g.id);
-              return (
-                <Stack
-                  key={g.id}
-                  component="button"
-                  direction="row"
-                  alignItems="center"
-                  onClick={() =>
-                    onSelectConversation({
-                      type: "group",
-                      id: g.id,
-                      name: g.name,
-                      agentId: g.agentId,
-                      agentDefinition: g.agentDefinition,
-                      model: g.model,
-                    })
-                  }
-                  className={`mb-0.5 w-full rounded-xl text-left text-sm transition-all duration-150 ${isActive
-                    ? "bg-gradient-to-r from-indigo-50 to-blue-50 font-medium text-indigo-700 shadow-sm ring-1 ring-indigo-100"
-                    : "text-gray-600 hover:bg-white hover:shadow-sm hover:ring-1 hover:ring-gray-100"
-                    }`}
-                  sx={{ px: 1.5, py: 1.25, cursor: "pointer" }}
-                >
-                  <VendorChatIcon model={g.model} isActive={isActive} />
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Box component="span" className="block truncate text-[13px]">{g.name}</Box>
-                    {isTyping && (
-                      <Box component="span" className="block text-[10px] font-medium text-emerald-500 animate-pulse-soft">
-                        typing...
-                      </Box>
-                    )}
-                  </Box>
-                  {unread > 0 && (
-                    <Box
-                      component="span"
-                      className="flex items-center justify-center rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 text-[10px] font-bold text-white shadow-sm"
-                      sx={{ ml: 1, height: 20, minWidth: 20, px: 0.75 }}
-                    >
-                      {unread > 99 ? "99+" : unread}
-                    </Box>
-                  )}
-                </Stack>
-              );
-            })}
-          </Box>
-        )}
-
         {/* Empty state */}
-        {groups.length === 0 && singleChats.length === 0 && (
+        {singleChats.length === 0 && (
           <Stack alignItems="center" justifyContent="center" sx={{ py: 6, textAlign: "center" }}>
             <Box className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-100">
               <MessageCircle className="h-5 w-5 text-gray-300" />

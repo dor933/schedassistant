@@ -3,17 +3,10 @@ import path from "node:path";
 import {
   Agent,
   SingleChat,
-  GroupMember,
-  Group,
   User,
-  McpServer,
-  AgentMcpServer,
-  AgentSkill,
   LLMModel,
   Vendor,
-  sequelize,
 } from "@scheduling-agent/database";
-import { Op, QueryTypes } from "sequelize";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 import type { UserId } from "@scheduling-agent/types";
@@ -36,36 +29,11 @@ export class AgentsService {
       order: [["created_at", "DESC"]],
     });
 
-    const countRows = await sequelize.query<{ agentId: string; cnt: string }>(
-      `SELECT agent_id AS "agentId", COUNT(*)::int AS cnt FROM groups GROUP BY agent_id`,
-      { type: QueryTypes.SELECT },
-    );
-    const groupCountByAgent: Record<string, number> = {};
-    for (const r of countRows) {
-      groupCountByAgent[r.agentId] = Number(r.cnt);
-    }
-
     const editableIds = await this.getEditableAgentIds(callerId, callerRole);
-
-    // Fetch MCP server assignments for all agents in one query
-    const mcpLinks = await AgentMcpServer.findAll({ attributes: ["agentId", "mcpServerId"] });
-    const mcpServerIdsByAgent: Record<string, number[]> = {};
-    for (const link of mcpLinks) {
-      (mcpServerIdsByAgent[link.agentId] ??= []).push(link.mcpServerId);
-    }
-
-    const skillLinks = await AgentSkill.findAll({ attributes: ["agentId", "skillId"] });
-    const skillIdsByAgent: Record<string, number[]> = {};
-    for (const link of skillLinks) {
-      (skillIdsByAgent[link.agentId] ??= []).push(link.skillId);
-    }
 
     return agents.map((a) => ({
       ...a.toJSON(),
-      groupCount: groupCountByAgent[a.id] ?? 0,
       editable: editableIds.has(a.id),
-      mcpServerIds: mcpServerIdsByAgent[a.id] ?? [],
-      skillIds: skillIdsByAgent[a.id] ?? [],
     }));
   }
 
@@ -74,9 +42,7 @@ export class AgentsService {
     coreInstructions?: string,
     characteristics?: Record<string, unknown> | null,
     actorId?: UserId,
-    mcpServerIds?: number[],
     modelId?: string | null,
-    skillIds?: number[],
     agentName?: string | null,
   ) {
     const normalizedAgentName =
@@ -99,25 +65,6 @@ export class AgentsService {
       await agent.update({ workspacePath });
     } catch (err) {
       logger.error("Failed to create workspace for agent", { agentId: agent.id, error: String(err) });
-    }
-
-    // Link MCP servers to the agent
-    if (mcpServerIds && mcpServerIds.length > 0) {
-      await AgentMcpServer.bulkCreate(
-        mcpServerIds.map((mcpServerId) => ({
-          agentId: agent.id,
-          mcpServerId,
-        })),
-      );
-    }
-
-    if (skillIds && skillIds.length > 0) {
-      await AgentSkill.bulkCreate(
-        skillIds.map((skillId) => ({
-          agentId: agent.id,
-          skillId,
-        })),
-      );
     }
 
     // Eagerly create a SingleChat for every user and notify them in real time
@@ -173,9 +120,7 @@ export class AgentsService {
       agentName?: string | null;
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
-      mcpServerIds?: number[];
       modelId?: string | null;
-      skillIds?: number[];
     },
   ) {
     const agent = await Agent.findByPk(agentId);
@@ -208,31 +153,6 @@ export class AgentsService {
       patch.characteristics = data.characteristics;
     if (data.modelId !== undefined) patch.modelId = data.modelId;
     await agent.update(patch);
-
-    // Sync MCP server assignments if provided
-    if (data.mcpServerIds !== undefined) {
-      await AgentMcpServer.destroy({ where: { agentId: agent.id } });
-      if (data.mcpServerIds.length > 0) {
-        await AgentMcpServer.bulkCreate(
-          data.mcpServerIds.map((mcpServerId) => ({
-            agentId: agent.id,
-            mcpServerId,
-          })),
-        );
-      }
-    }
-
-    if (data.skillIds !== undefined) {
-      await AgentSkill.destroy({ where: { agentId: agent.id } });
-      if (data.skillIds.length > 0) {
-        await AgentSkill.bulkCreate(
-          data.skillIds.map((skillId) => ({
-            agentId: agent.id,
-            skillId,
-          })),
-        );
-      }
-    }
 
     // Notify users who interact with this agent when the model changes
     if (data.modelId !== undefined) {
@@ -274,27 +194,11 @@ export class AgentsService {
       ids.add(sc.agentId);
     }
 
-    const memberships = await GroupMember.findAll({
-      where: { userId },
-      attributes: ["groupId"],
-    });
-    if (memberships.length > 0) {
-      const groupIds = memberships.map((m) => m.groupId);
-      const groups = await Group.findAll({
-        where: { id: groupIds },
-        attributes: ["agentId"],
-      });
-      for (const g of groups) {
-        ids.add(g.agentId);
-      }
-    }
-
     return ids;
   }
 
   /**
-   * Notifies all users who have a SingleChat with this agent or are in a group
-   * with this agent that the agent's model has changed.
+   * Notifies all users who have a SingleChat with this agent that the agent's model has changed.
    */
   private async notifyAgentModelChanged(agentId: string, modelId: string | null) {
     // Resolve model info for the notification payload
@@ -313,22 +217,6 @@ export class AgentsService {
       attributes: ["userId"],
     });
     const userIds = new Set<number>(singleChats.map((sc) => sc.userId));
-
-    // Find all user IDs in groups that use this agent
-    const groups = await Group.findAll({
-      where: { agentId },
-      attributes: ["id"],
-    });
-    if (groups.length > 0) {
-      const groupIds = groups.map((g) => g.id);
-      const members = await GroupMember.findAll({
-        where: { groupId: { [Op.in]: groupIds } },
-        attributes: ["userId"],
-      });
-      for (const m of members) {
-        userIds.add(m.userId);
-      }
-    }
 
     const io = getIO();
     for (const userId of userIds) {

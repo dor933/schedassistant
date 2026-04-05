@@ -45,7 +45,12 @@
       "Bash(find /home/office/Dev/schedassistant/apps/agent_service/node_modules -path *langgraph*checkpoint* -type f -name *.d.ts)",
       "Bash(find /c/Users/momi9/Dev/sched-assist/sched-assist-new/packages/database -type f -name *migration*)",
       "WebFetch(domain:docs.langchain.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(rm:*)",
+      "Bash(rmdir \"apps/agent_service/src/mcpClient\")",
+      "Bash(rm -rv \"apps/mcp_server\")",
+      "Bash(sed -n '522,941p' \"C:/Users/momi9/Dev/sched-assist - Copy/sched-assist-new/apps/user_app/client/src/pages/AdminPage.tsx\")",
+      "Read(//tmp/**)"
     ]
   }
 }

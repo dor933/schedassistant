@@ -12,9 +12,7 @@ class ConversationMessage
   implements ConversationMessageAttributes
 {
   declare id: string;
-  declare groupId: string | null;
-  declare singleChatId: string | null;
-  declare threadId: string;
+  declare singleChatId: string;
   declare role: "user" | "assistant";
   declare content: string;
   declare senderName: string | null;
@@ -32,22 +30,11 @@ ConversationMessage.init(
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
-    groupId: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      field: "group_id",
-      references: { model: "groups", key: "id" },
-    },
     singleChatId: {
       type: DataTypes.UUID,
-      allowNull: true,
+      allowNull: false,
       field: "single_chat_id",
       references: { model: "single_chats", key: "id" },
-    },
-    threadId: {
-      type: DataTypes.STRING,
-      allowNull: false,
-      field: "thread_id",
     },
     role: {
       type: DataTypes.STRING(16),
@@ -95,9 +82,7 @@ ConversationMessage.init(
     underscored: true,
     timestamps: false,
     indexes: [
-      { fields: ["group_id", "created_at"] },
       { fields: ["single_chat_id", "created_at"] },
-      { fields: ["thread_id"] },
     ],
   },
 );

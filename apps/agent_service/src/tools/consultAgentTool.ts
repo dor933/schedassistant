@@ -1,68 +1,43 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import crypto from "node:crypto";
-import { HumanMessage } from "@langchain/core/messages";
-import { Agent, LLMModel } from "@scheduling-agent/database";
-import { getGraph } from "../deps";
-import { ensureSession } from "../sessionsManagment/sessionRegistry";
+import type { StructuredToolInterface } from "@langchain/core/tools";
+import { Agent } from "@scheduling-agent/database";
 import { createThreadLockRedis, withThreadLockTimeout, LockTimeoutError } from "../worker/threadLock";
 import { getRedisConfig } from "../redisClient";
-import { setActiveConsultation, clearActiveConsultation } from "../consultationChain";
+import { invokeDeepAgentOneShot } from "../deepAgent/runDeepAgent";
+import { saveEpisodicMemoryChunked } from "../rag/episodicMemory";
+import { SaveMemoryTool, SearchMemoryTool } from "./memoryTools";
+import { ListAgentsTool } from "./listAgentsTool";
+import { agentNotesTools } from "./agentNotesTool";
+import { workspaceTools } from "./workspaceTools";
 import { logger } from "../logger";
-
-/**
- * Resolve the model slug for a target agent from the agent's own modelId.
- * Falls back to "gpt-4o" if no model is configured on the agent.
- */
-async function resolveModelForAgent(agentId: string): Promise<string> {
-  try {
-    const agent = await Agent.findByPk(agentId, { attributes: ["modelId"] });
-    if (agent?.modelId) {
-      const model = await LLMModel.findByPk(agent.modelId, { attributes: ["slug"] });
-      if (model) return model.slug;
-    }
-  } catch { /* fall through */ }
-  return "gpt-4o";
-}
 
 const lockRedis = createThreadLockRedis(getRedisConfig());
 
-/** Max time to wait for the target agent's lock (seconds). */
+/** Max time to wait for the target agent's lock (ms). */
 const CONSULT_LOCK_TIMEOUT_MS = Number(
   process.env.CONSULT_AGENT_LOCK_TIMEOUT_MS ?? 60_000, // 60s default
 );
 
-/** Max time for the entire consultation (graph.invoke) to complete (ms). */
+/** Max time for the entire consultation to complete (ms). */
 const CONSULT_EXECUTION_TIMEOUT_MS = Number(
   process.env.CONSULT_AGENT_EXECUTION_TIMEOUT_MS ?? 300_000, // 5 min default
 );
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`${label} timed out after ${ms}ms`)),
-      ms,
-    );
-    promise.then(
-      (v) => { clearTimeout(timer); resolve(v); },
-      (e) => { clearTimeout(timer); reject(e); },
-    );
-  });
-}
-
 /**
- * Synchronous agent-to-agent consultation tool (Tier 1).
+ * Synchronous agent-to-agent consultation.
  *
- * Includes two safety mechanisms:
- * 1. Lock timeout — if the target agent is busy, gives up after CONSULT_LOCK_TIMEOUT_MS
- * 2. Execution timeout — if the consultation takes too long, aborts after CONSULT_EXECUTION_TIMEOUT_MS
+ * The target agent is invoked as a one-shot deep-agent (ephemeral checkpoint),
+ * receives the caller's request as a user message, and returns its reply
+ * inline. The target agent sees its full tool suite (memory + notes + workspace)
+ * so it can persist anything important across its own memory.
+ *
+ * Safety:
+ * 1. Lock per target agent — if the target is already running a turn for a chat,
+ *    we wait up to `CONSULT_LOCK_TIMEOUT_MS`, then fail.
+ * 2. Execution timeout — aborts after `CONSULT_EXECUTION_TIMEOUT_MS`.
  */
-export function ConsultAgentTool(
-  callerAgentId: string,
-  userId: number,
-  groupId: string | null = null,
-  singleChatId: string | null = null,
-) {
+export function ConsultAgentTool(callerAgentId: string, userId: number) {
   return tool(
     async (input) => {
       const { targetAgentId, request } = input;
@@ -71,18 +46,15 @@ export function ConsultAgentTool(
         return "Error: an agent cannot consult itself.";
       }
 
-      const targetAgent = await Agent.findByPk(targetAgentId, {
-        attributes: ["id", "activeThreadId", "definition"],
-      });
+      const targetAgent = await Agent.findByPk(targetAgentId);
       if (!targetAgent) {
         return `Error: agent "${targetAgentId}" not found.`;
       }
 
-      const graph = getGraph();
-      const lockKey = `agent:thread:${targetAgentId}`;
       const agentLabel = targetAgent.definition || targetAgentId;
+      const lockKey = `agent:consult:${targetAgentId}`;
 
-      logger.info("ConsultAgent: starting sync consultation", {
+      logger.info("ConsultAgent: starting consultation", {
         callerAgentId,
         targetAgentId,
         requestLen: request.length,
@@ -94,79 +66,26 @@ export function ConsultAgentTool(
           lockKey,
           CONSULT_LOCK_TIMEOUT_MS,
           async () => {
-            let threadId = targetAgent.activeThreadId;
-            if (!threadId) {
-              threadId = crypto.randomUUID();
-              await ensureSession(threadId, null, { agentId: targetAgentId });
-              await Agent.update(
-                { activeThreadId: threadId },
-                { where: { id: targetAgentId } },
-              );
-            }
+            const tools: StructuredToolInterface[] = [
+              SaveMemoryTool(targetAgent.id, userId),
+              SearchMemoryTool(targetAgent.id, userId),
+              ListAgentsTool(targetAgent.id),
+              ...agentNotesTools(targetAgent.id),
+              ...workspaceTools(targetAgent.id),
+            ];
 
-            // Resolve model from agent B's own config, NOT from agent A's conversation
-            const modelSlug = await resolveModelForAgent(targetAgentId);
-
-            // Mark Agent B as being consulted by Agent A so that if Agent B
-            // delegates to a deep agent, the result can propagate back.
-            await setActiveConsultation(targetAgentId, {
-              originAgentId: callerAgentId,
-              originGroupId: groupId,
-              originSingleChatId: singleChatId,
-              originUserId: userId,
+            const result = await invokeDeepAgentOneShot({
+              agent: targetAgent,
+              tools,
+              userId,
+              userMessage: `[Consultation request from another agent]\n\n${request}`,
+              timeoutMs: CONSULT_EXECUTION_TIMEOUT_MS,
+              recursionLimit: 40,
             });
 
-            const result = await withTimeout(
-              graph.invoke(
-                {
-                  userId,
-                  threadId,
-                  groupId: null,
-                  singleChatId: null,
-                  agentId: targetAgentId,
-                  modelSlug,
-                  userInput: request,
-                  messages: [
-                    new HumanMessage({
-                      content: `[Consultation request from another agent]\n\n${request}`,
-                      name: "agent_consultation",
-                    }),
-                  ],
-                },
-                { configurable: { thread_id: threadId } },
-              ),
-              CONSULT_EXECUTION_TIMEOUT_MS,
-              `Consultation with agent "${agentLabel}"`,
-            );
-
-            if (result.error) {
-              return `Agent "${agentLabel}" encountered an error: ${result.error}`;
-            }
-
-            const messages: any[] = Array.isArray(result.messages) ? result.messages : [];
-            const lastAi = [...messages]
-              .reverse()
-              .find(
-                (m: any) =>
-                  (typeof m._getType === "function" && m._getType() === "ai") ||
-                  m.role === "assistant",
-              );
-
-            const rawContent = lastAi?.content;
-            if (rawContent == null) return "The consulted agent did not produce a response.";
-            if (typeof rawContent === "string") return rawContent;
-            // content is an array of blocks (e.g. [{type:"thinking",...},{type:"text",text:"..."}])
-            if (Array.isArray(rawContent)) {
-              return rawContent
-                .filter((b: any) => b?.type === "text" && typeof b.text === "string")
-                .map((b: any) => b.text)
-                .join("\n") || "The consulted agent did not produce a text response.";
-            }
-            return String(rawContent);
+            return result.reply;
           },
         );
-
-        await clearActiveConsultation(targetAgentId);
 
         logger.info("ConsultAgent: consultation completed", {
           callerAgentId,
@@ -174,9 +93,32 @@ export function ConsultAgentTool(
           answerLen: typeof answer === "string" ? answer.length : 0,
         });
 
-        return typeof answer === "string" ? answer : String(answer);
+        // Auto-save the consultation transcript to the target agent's episodic
+        // memory so a later conversation with that agent can recall it.
+        // Short exchanges land as a single row; longer ones are chunked by a
+        // cheap LLM into topic-focused memories.
+        //
+        // Fire-and-forget (not awaited) so the caller doesn't wait on embedding
+        // + DB writes — episodic errors are logged inside the helper.
+        const replyText =
+          typeof answer === "string" ? answer : String(answer);
+        const transcript =
+          `Consultation from agent ${callerAgentId} to ${targetAgentId}.\n\n` +
+          `## Their request\n${request}\n\n` +
+          `## My reply\n${replyText}`;
+        void saveEpisodicMemoryChunked({
+          agentId: targetAgent.id,
+          userId,
+          content: transcript,
+          metadata: {
+            kind: "consultation",
+            callerAgentId,
+            targetAgentId,
+          },
+        });
+
+        return replyText;
       } catch (err: any) {
-        await clearActiveConsultation(targetAgentId);
         if (err instanceof LockTimeoutError) {
           logger.warn("ConsultAgent: target agent is busy", {
             callerAgentId,
@@ -186,8 +128,7 @@ export function ConsultAgentTool(
           return (
             `Agent "${agentLabel}" is currently busy processing another request and could not be reached ` +
             `within ${Math.round(CONSULT_LOCK_TIMEOUT_MS / 1000)} seconds. ` +
-            `Please inform the user that the agent is occupied and suggest trying again shortly, ` +
-            `or consider delegating this to an executor agent using delegate_to_deep_agent if appropriate.`
+            `Please inform the user that the agent is occupied and suggest trying again shortly.`
           );
         }
 
@@ -201,8 +142,7 @@ export function ConsultAgentTool(
           return (
             `Consultation with agent "${agentLabel}" timed out after ` +
             `${Math.round(CONSULT_EXECUTION_TIMEOUT_MS / 1000)} seconds. ` +
-            `The task may be too complex for a synchronous consultation. ` +
-            `Consider delegating it to an executor agent via delegate_to_deep_agent instead.`
+            `The task may be too complex for a synchronous consultation.`
           );
         }
 
@@ -218,7 +158,7 @@ export function ConsultAgentTool(
       name: "consult_agent",
       description:
         "Consult another agent for their expertise. The target agent will receive your request, " +
-        "process it with its own knowledge and tools, and return an answer. " +
+        "process it with its own knowledge, memory, notes, and workspace, and return an answer. " +
         "Use this when a task falls outside your specialization and another agent is better equipped to handle it. " +
         "This is a synchronous call — you will receive the answer immediately. " +
         "If the target agent is busy or the consultation takes too long, you will receive an error message.",

@@ -20,7 +20,6 @@ export interface AgentReplyPayload {
   requestId: string;
   userId: number;
   threadId: string;
-  groupId: string | null;
   singleChatId: string | null;
   ok: true;
   reply: string;
@@ -34,7 +33,6 @@ export interface AgentErrorPayload {
   requestId: string;
   userId: number;
   threadId: string;
-  groupId: string | null;
   singleChatId: string | null;
   ok: false;
   error: string;
@@ -44,16 +42,14 @@ export type AgentChatPayload = AgentReplyPayload | AgentErrorPayload;
 
 export interface ActiveJobEntry {
   conversationId: string;
-  conversationType: "group" | "single";
+  conversationType: "single";
   userId: number;
-  groupId: string | null;
 }
 
 /** Emitted when the worker starts processing a job. */
 export interface AgentTypingPayload {
   threadId: string;
   userId: number;
-  groupId: string | null;
   singleChatId: string | null;
 }
 
@@ -75,12 +71,11 @@ export function attachAgentSocketIO(httpServer: HttpServer): Server {
       try {
         const active = await agentChatQueue.getJobs(["active", "waiting"]);
         const entries: ActiveJobEntry[] = active
-          .filter((j) => j.data.groupId || j.data.singleChatId)
+          .filter((j) => j.data.singleChatId)
           .map((j) => ({
-            conversationId: (j.data.groupId ?? j.data.singleChatId)!,
-            conversationType: j.data.groupId ? "group" as const : "single" as const,
+            conversationId: j.data.singleChatId!,
+            conversationType: "single" as const,
             userId: j.data.userId,
-            groupId: j.data.groupId ?? null,
           }));
         callback(entries);
       } catch (err) {

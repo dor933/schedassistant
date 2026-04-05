@@ -14,6 +14,5 @@ router.get(
 );
 router.get("/history/conversation/:conversationType/:conversationId", authMiddleware, sessionsController.getConversationHistory);
 router.delete("/single-chats/:id", authMiddleware, sessionsController.deleteSingleChat);
-router.get("/groups/:groupId/members", authMiddleware, sessionsController.getGroupMembers);
 
 export { router as sessionsRouter };

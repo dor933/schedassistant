@@ -17,12 +17,6 @@ export const AgentAnnotation = Annotation.Root({
   /** The LangGraph thread_id for this conversation (mirrors configurable.thread_id). */
   threadId: Annotation<string>,
 
-  /** When set, session summaries and registry rows are scoped to this group (`groups.id`). */
-  groupId: Annotation<string | null>({
-    reducer: (state, update) => (update !== undefined ? update : state),
-    default: () => null,
-  }),
-
   /** When set, session summaries and registry rows are scoped to this 1:1 chat (`single_chats.id`). */
   singleChatId: Annotation<string | null>({
     reducer: (state, update) => (update !== undefined ? update : state),

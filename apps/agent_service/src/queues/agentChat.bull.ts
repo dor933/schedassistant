@@ -27,10 +27,8 @@ export type AgentChatJobData = {
   message: string;
   requestId: string;
   displayName?: string;
-  groupId?: string | null;
   singleChatId?: string | null;
   agentId?: string | null;
-  /** When false in a group chat, the message is stored but the agent does not respond. */
   mentionsAgent?: boolean;
 };
 

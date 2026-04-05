@@ -9,7 +9,6 @@ export class SessionsController {
     try {
       const data = await this.sessionsService.getSessions(
         req.user!.userId,
-        req.query.groupId as string | undefined,
         req.query.singleChatId as string | undefined,
       );
       return res.json(data);
@@ -22,7 +21,7 @@ export class SessionsController {
   createSession = async (req: Request, res: Response) => {
     try {
       const data = await this.sessionsService.createSession(
-        req.user!.userId, req.body.title, req.body.groupId, req.body.singleChatId,
+        req.user!.userId, req.body.title, req.body.singleChatId,
       );
       return res.status(201).json(data);
     } catch (err: any) {
@@ -76,14 +75,4 @@ export class SessionsController {
     }
   };
 
-  getGroupMembers = async (req: Request, res: Response) => {
-    try {
-      const result = await this.sessionsService.getGroupMembers(req.params.groupId as string, req.user!.userId);
-      return res.json(result);
-    } catch (err: any) {
-      if (err.status) return res.status(err.status).json({ error: err.message });
-      logger.error("GET /groups/:groupId/members error", { error: err?.message });
-      return res.status(500).json({ error: err.message });
-    }
-  };
 }

@@ -16,7 +16,7 @@ export class ChatController {
   private chatService = new ChatService();
 
   send = (req: Request, res: Response) => {
-    const { message, groupId, singleChatId, agentId, mentionsAgent } =
+    const { message, singleChatId, agentId, mentionsAgent } =
       req.body;
     const userId = req.user!.userId;
 
@@ -24,8 +24,8 @@ export class ChatController {
       res.status(400).json({ error: "message is required." });
       return;
     }
-    if (!groupId && !singleChatId) {
-      res.status(400).json({ error: "groupId or singleChatId is required." });
+    if (!singleChatId) {
+      res.status(400).json({ error: "singleChatId is required." });
       return;
     }
 
@@ -34,27 +34,9 @@ export class ChatController {
     logger.info("Chat request accepted", {
       requestId,
       userId,
-      groupId,
       singleChatId,
       mentionsAgent,
     });
-
-    if (groupId) {
-      void this.chatService
-        .broadcastUserMessage(
-          groupId,
-          userId,
-          String(req.user!.displayName ?? userId),
-          message,
-          requestId,
-        )
-        .catch((err) =>
-          logger.error("Group user-message broadcast error", {
-            groupId,
-            error: String(err),
-          }),
-        );
-    }
 
     void this.chatService.proxyToAgentService(
       {
@@ -62,14 +44,12 @@ export class ChatController {
         message,
         requestId,
         displayName: req.user!.displayName ?? userId,
-        ...(groupId ? { groupId } : {}),
-        ...(singleChatId ? { singleChatId } : {}),
+        singleChatId,
         ...(agentId ? { agentId } : {}),
         ...(mentionsAgent != null ? { mentionsAgent } : {}),
       },
       userId,
       requestId,
-      groupId,
       singleChatId,
     );
 
