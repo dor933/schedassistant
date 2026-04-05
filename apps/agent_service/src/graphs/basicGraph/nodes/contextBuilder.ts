@@ -436,7 +436,8 @@ function formatSystemPrompt(
         "Available tools:\n" +
         "- `list_agent_skills` — list skill ids, names, slugs, and short descriptions (not the full body)\n" +
         "- `get_agent_skill` — load the full **skill_text** for a `skill_id` from that list\n" +
-        "- `add_agent_skill` — create a new skill and attach it to this agent when the user wants a new playbook\n\n" +
+        "- `add_agent_skill` — create a new skill and attach it to this agent when the user wants a new playbook\n" +
+        "- `edit_agent_skill` — update name, slug, description, and/or full **skill_text** for a linked skill\n\n" +
         "When a task matches a skill’s description or the user asks you to follow stored guidance, " +
         "call `list_agent_skills`, then `get_agent_skill` for the right id(s) before improvising.",
     );
