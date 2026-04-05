@@ -745,7 +745,7 @@ export default function AdminPage() {
                   type="text"
                   value={newAgentDisplayName}
                   onChange={(e) => setNewAgentDisplayName(e.target.value)}
-                  placeholder='Shown in chat, @mentions, and "Your name is …" in the system prompt'
+                  placeholder='System prompt (“Your name is …”)'
                   maxLength={120}
                   className={inputClass}
                 />

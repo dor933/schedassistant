@@ -152,7 +152,7 @@ export default function AgentCard({
               <input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Chat label, @mention, system prompt name"
+                placeholder="System prompt (“Your name is …”)"
                 maxLength={120}
                 className={smallInput}
               />
