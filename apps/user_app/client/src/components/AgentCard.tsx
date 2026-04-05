@@ -33,6 +33,7 @@ export default function AgentCard({
       agent.createdByUserId === currentUserId;
     const [editing, setEditing] = useState(false);
     const [definition, setDefinition] = useState(agent.definition ?? "");
+    const [displayName, setDisplayName] = useState(agent.agentName ?? "");
     const [instructions, setInstructions] = useState(
       agent.coreInstructions ?? "",
     );
@@ -52,6 +53,7 @@ export default function AgentCard({
 
     useEffect(() => {
       setDefinition(agent.definition ?? "");
+      setDisplayName(agent.agentName ?? "");
       setInstructions(agent.coreInstructions ?? "");
       setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
       setSelectedMcpServerIds(agent.mcpServerIds ?? []);
@@ -92,6 +94,7 @@ export default function AgentCard({
       try {
         await admin.updateAgent(agent.id, {
           definition: definition || undefined,
+          agentName: displayName.trim() || null,
           ...(canViewCoreInstructions ? { coreInstructions: instructions || undefined } : {}),
           characteristics,
           mcpServerIds: selectedMcpServerIds,
@@ -140,6 +143,20 @@ export default function AgentCard({
                 className={smallInput}
               />
               <p className={`text-[10px] text-right ${definition.length >= 30 ? "text-red-400" : "text-gray-400"}`}>{definition.length}/30</p>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                Display name <span className="font-normal normal-case text-gray-400">(optional)</span>
+              </label>
+              <input
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Chat label, @mention, system prompt name"
+                maxLength={120}
+                className={smallInput}
+              />
+              <p className={`text-[10px] text-right ${displayName.length >= 120 ? "text-red-400" : "text-gray-400"}`}>{displayName.length}/120</p>
             </div>
 
             {/* Instructions (restricted) */}
@@ -298,6 +315,7 @@ export default function AgentCard({
                 onClick={() => {
                   setEditing(false);
                   setDefinition(agent.definition ?? "");
+                  setDisplayName(agent.agentName ?? "");
                   setInstructions(agent.coreInstructions ?? "");
                   setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
                   setSelectedMcpServerIds(agent.mcpServerIds ?? []);
@@ -329,6 +347,11 @@ export default function AgentCard({
                     no groups yet
                   </span>
                 )}
+              </p>
+            )}
+            {agent.agentName?.trim() && (
+              <p className="mb-1 text-xs font-medium text-indigo-600">
+                Display name: {agent.agentName}
               </p>
             )}
             {canViewCoreInstructions && (

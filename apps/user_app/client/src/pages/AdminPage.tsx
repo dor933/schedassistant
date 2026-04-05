@@ -87,6 +87,7 @@ export default function AdminPage() {
 
   const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
   const [newAgentDefinition, setNewAgentDefinition] = useState("");
+  const [newAgentDisplayName, setNewAgentDisplayName] = useState("");
   const [newAgentInstructions, setNewAgentInstructions] = useState("");
   const [newAgentCharacteristics, setNewAgentCharacteristics] = useState("");
   const [newAgentMcpServerIds, setNewAgentMcpServerIds] = useState<number[]>([]);
@@ -241,6 +242,7 @@ export default function AdminPage() {
     try {
       await admin.createAgent({
         definition: newAgentDefinition.trim() || undefined,
+        agentName: newAgentDisplayName.trim() || null,
         coreInstructions: newAgentInstructions.trim() || undefined,
         characteristics,
         mcpServerIds: newAgentMcpServerIds.length > 0 ? newAgentMcpServerIds : undefined,
@@ -248,6 +250,7 @@ export default function AdminPage() {
         skillIds: newAgentSkillIds.length > 0 ? newAgentSkillIds : undefined,
       });
       setNewAgentDefinition("");
+      setNewAgentDisplayName("");
       setNewAgentInstructions("");
       setNewAgentCharacteristics("");
       setNewAgentMcpServerIds([]);
@@ -733,6 +736,20 @@ export default function AdminPage() {
                   className={inputClass}
                 />
                 <p className={`mt-1 text-[10px] text-right ${newAgentDefinition.length >= 30 ? "text-red-400" : "text-gray-400"}`}>{newAgentDefinition.length}/30</p>
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  Display name <span className="font-normal normal-case text-gray-400">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={newAgentDisplayName}
+                  onChange={(e) => setNewAgentDisplayName(e.target.value)}
+                  placeholder='Shown in chat, @mentions, and "Your name is …" in the system prompt'
+                  maxLength={120}
+                  className={inputClass}
+                />
+                <p className={`mt-1 text-[10px] text-right ${newAgentDisplayName.length >= 120 ? "text-red-400" : "text-gray-400"}`}>{newAgentDisplayName.length}/120</p>
               </div>
               <textarea
                 value={newAgentInstructions}

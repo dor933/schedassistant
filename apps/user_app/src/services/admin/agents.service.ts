@@ -26,6 +26,7 @@ export class AgentsService {
       attributes: [
         "id",
         "definition",
+        "agentName",
         "coreInstructions",
         "characteristics",
         "createdByUserId",
@@ -76,9 +77,15 @@ export class AgentsService {
     mcpServerIds?: number[],
     modelId?: string | null,
     skillIds?: number[],
+    agentName?: string | null,
   ) {
+    const normalizedAgentName =
+      agentName !== undefined && agentName !== null && String(agentName).trim() !== ""
+        ? String(agentName).trim()
+        : null;
     const agent = await Agent.create({
       definition,
+      agentName: normalizedAgentName,
       coreInstructions: coreInstructions ?? null,
       characteristics: characteristics ?? null,
       createdByUserId: actorId ?? null,
@@ -163,6 +170,7 @@ export class AgentsService {
     callerRole: string,
     data: {
       definition?: string;
+      agentName?: string | null;
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
       mcpServerIds?: number[];
@@ -188,6 +196,12 @@ export class AgentsService {
 
     const patch: Record<string, any> = {};
     if (data.definition !== undefined) patch.definition = data.definition;
+    if (data.agentName !== undefined) {
+      patch.agentName =
+        data.agentName === null || String(data.agentName).trim() === ""
+          ? null
+          : String(data.agentName).trim();
+    }
     if (data.coreInstructions !== undefined && canEditCoreInstructions)
       patch.coreInstructions = data.coreInstructions;
     if (data.characteristics !== undefined)
