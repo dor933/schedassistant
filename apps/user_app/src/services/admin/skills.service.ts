@@ -1,4 +1,4 @@
-import { Skill } from "@scheduling-agent/database";
+import { Skill, AgentSkill, SystemAgentSkill } from "@scheduling-agent/database";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 import type { UserId } from "@scheduling-agent/types";
@@ -70,6 +70,21 @@ export class SkillsService {
     }
 
     await skill.update(patch);
+
+    // Cascade-delete junction rows when assignability flips to false
+    if (data.primaryAgentAssignable === false && skill.primaryAgentAssignable === false) {
+      const deleted = await AgentSkill.destroy({ where: { skillId: id } });
+      if (deleted > 0) {
+        logger.info(`Unlinked skill ${id} ("${skill.name}") from ${deleted} primary agent(s) — primaryAgentAssignable set to false`);
+      }
+    }
+    if (data.systemAgentAssignable === false && skill.systemAgentAssignable === false) {
+      const deleted = await SystemAgentSkill.destroy({ where: { skillId: id } });
+      if (deleted > 0) {
+        logger.info(`Unlinked skill ${id} ("${skill.name}") from ${deleted} system agent(s) — systemAgentAssignable set to false`);
+      }
+    }
+
     this.broadcast("skill_updated", `Skill "${skill.name}" updated`, actorId);
     return skill;
   }
