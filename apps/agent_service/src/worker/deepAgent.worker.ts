@@ -149,9 +149,11 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           );
         }
 
-        // Bind Google Search grounding tool if configured in toolConfig
+        // Check if this agent uses Google Search grounding (no other tools allowed)
         const tc = systemAgent.toolConfig as Record<string, unknown> | null;
-        if (tc?.googleSearch) {
+        const useGoogleSearch = !!tc?.googleSearch;
+
+        if (useGoogleSearch) {
           chatModel = (chatModel as ChatGoogle).bindTools([{ googleSearch: {} }]) as any;
         }
 
@@ -161,50 +163,54 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         const deepAgentUserId = systemAgent.userId ?? userId;
         const threadId = crypto.randomUUID();
 
-        // Load MCP tools assigned to this system agent (via junction table)
-        const mcpLinks = await SystemAgentMcpServer.findAll({
-          where: { systemAgentId: systemAgent.id },
-          attributes: ["mcpServerId"],
-        });
-        const mcpServerIds = mcpLinks.map((l) => l.mcpServerId);
-        const rawMcpTools = mcpServerIds.length > 0
-          ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${systemAgentSlug}`)
-          : [];
+        // Google Search agents use only the built-in grounding tool — skip all other tools
+        let allTools: any[] = [];
+        if (!useGoogleSearch) {
+          // Load MCP tools assigned to this system agent (via junction table)
+          const mcpLinks = await SystemAgentMcpServer.findAll({
+            where: { systemAgentId: systemAgent.id },
+            attributes: ["mcpServerId"],
+          });
+          const mcpServerIds = mcpLinks.map((l) => l.mcpServerId);
+          const rawMcpTools = mcpServerIds.length > 0
+            ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${systemAgentSlug}`)
+            : [];
 
-        // deepagents has built-in tools: read_file, write_file, edit_file.
-        // MCP servers (especially filesystem) may expose tools with the same names.
-        // Filter out collisions — the agent uses deepagents' built-ins for its
-        // virtual workspace, and the remaining MCP tools for everything else.
-        const DEEP_AGENT_BUILTIN_NAMES = new Set(["read_file", "write_file", "edit_file"]);
-        const mcpTools = rawMcpTools.filter((t: any) => {
-          if (DEEP_AGENT_BUILTIN_NAMES.has(t.name)) {
-            logger.warn("DeepAgent: skipping MCP tool that conflicts with built-in", {
-              tool: t.name,
-              delegationId,
-            });
-            return false;
-          }
-          return true;
-        });
+          // deepagents has built-in tools: read_file, write_file, edit_file.
+          // MCP servers (especially filesystem) may expose tools with the same names.
+          // Filter out collisions — the agent uses deepagents' built-ins for its
+          // virtual workspace, and the remaining MCP tools for everything else.
+          const DEEP_AGENT_BUILTIN_NAMES = new Set(["read_file", "write_file", "edit_file"]);
+          const mcpTools = rawMcpTools.filter((t: any) => {
+            if (DEEP_AGENT_BUILTIN_NAMES.has(t.name)) {
+              logger.warn("DeepAgent: skipping MCP tool that conflicts with built-in", {
+                tool: t.name,
+                delegationId,
+              });
+              return false;
+            }
+            return true;
+          });
 
-        const skillTools = systemAgentSkillTools(systemAgent.id);
-        const wsTools = workspaceTools(callerAgentId);
+          const skillTools = systemAgentSkillTools(systemAgent.id);
+          const wsTools = workspaceTools(callerAgentId);
+          allTools = [...mcpTools, ...skillTools, ...wsTools];
+        }
 
         logger.info("DeepAgent: creating agent", {
           delegationId,
           modelSlug: systemAgent.modelSlug,
           systemAgentUserId: deepAgentUserId,
           threadId,
-          mcpToolCount: mcpTools.length,
-          skillToolCount: skillTools.length,
-          workspaceToolCount: wsTools.length,
+          toolCount: allTools.length,
+          googleSearch: useGoogleSearch,
         });
 
         // Create the deep agent with the deepagents library
         const checkpointer = new MemorySaver();
         const agent = createDeepAgent({
           model: chatModel as any,
-          tools: [...mcpTools, ...skillTools, ...wsTools] as any[],
+          tools: allTools as any[],
           systemPrompt:
             `You are ${systemAgent.name}, an executor agent — a specialist responsible for carrying out tasks ` +
             `delegated to you by orchestrator agents.\n\n` +
