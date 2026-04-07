@@ -149,23 +149,56 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           );
         }
 
-        // Check if this agent uses Google Search grounding (no other tools allowed)
+        // Check if this agent uses Google Search grounding
         const tc = systemAgent.toolConfig as Record<string, unknown> | null;
         const useGoogleSearch = !!tc?.googleSearch;
 
-        if (useGoogleSearch) {
-          chatModel = (chatModel as ChatGoogle).bindTools([{ googleSearch: {} }]) as any;
-        }
-
         // Use the system agent's constant userId for memory scoping.
-        // Each delegation gets a fresh thread_id so the deep agent starts clean,
-        // but the same userId means its episodic/store memories persist across tasks.
         const deepAgentUserId = systemAgent.userId ?? userId;
         const threadId = crypto.randomUUID();
 
-        // Google Search agents use only the built-in grounding tool — skip all other tools
-        let allTools: any[] = [];
-        if (!useGoogleSearch) {
+        let resultText: string;
+
+        if (useGoogleSearch) {
+          // ── Google Search agent: invoke the model directly with grounding ──
+          // We skip createDeepAgent entirely because it binds its own built-in
+          // tools to the model, which conflicts with ChatGoogle's googleSearch.
+          const googleModel = (chatModel as ChatGoogle).bindTools([{ googleSearch: {} }]);
+
+          logger.info("DeepAgent: invoking Google Search agent directly", {
+            delegationId,
+            modelSlug: systemAgent.modelSlug,
+            threadId,
+          });
+
+          const langfuseHandler = getLangfuseCallbackHandler(userId, {
+            threadId,
+            delegationId,
+            systemAgentSlug,
+            service: "deep_agent",
+          });
+
+          const response = await withTimeout(
+            googleModel.invoke(
+              [
+                { role: "system" as const, content: systemAgent.instructions },
+                { role: "user" as const, content: request },
+              ],
+              langfuseHandler ? { callbacks: [langfuseHandler] } : undefined,
+            ),
+            DEEP_AGENT_TIMEOUT_MS,
+          );
+
+          await flushLangfuse();
+
+          resultText =
+            typeof response.content === "string"
+              ? response.content
+              : response.content
+                ? JSON.stringify(response.content)
+                : "The web search agent did not produce a response.";
+        } else {
+          // ── Standard deep agent path ──
           // Load MCP tools assigned to this system agent (via junction table)
           const mcpLinks = await SystemAgentMcpServer.findAll({
             where: { systemAgentId: systemAgent.id },
@@ -194,116 +227,115 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
           const skillTools = systemAgentSkillTools(systemAgent.id);
           const wsTools = workspaceTools(callerAgentId);
-          allTools = [...mcpTools, ...skillTools, ...wsTools];
-        }
+          const allTools = [...mcpTools, ...skillTools, ...wsTools];
 
-        logger.info("DeepAgent: creating agent", {
-          delegationId,
-          modelSlug: systemAgent.modelSlug,
-          systemAgentUserId: deepAgentUserId,
-          threadId,
-          toolCount: allTools.length,
-          googleSearch: useGoogleSearch,
-        });
+          logger.info("DeepAgent: creating agent", {
+            delegationId,
+            modelSlug: systemAgent.modelSlug,
+            systemAgentUserId: deepAgentUserId,
+            threadId,
+            toolCount: allTools.length,
+          });
 
-        // Create the deep agent with the deepagents library
-        const checkpointer = new MemorySaver();
-        const agent = createDeepAgent({
-          model: chatModel as any,
-          tools: allTools as any[],
-          systemPrompt:
-            `You are ${systemAgent.name}, an executor agent — a specialist responsible for carrying out tasks ` +
-            `delegated to you by orchestrator agents.\n\n` +
-            `${systemAgent.instructions}\n\n` +
-            `## Task Guidelines\n` +
-            `- Break complex tasks into steps using your todo list\n` +
-            `- Be thorough and detailed in your execution\n` +
-            `- Use your tools (MCP servers, file operations, etc.) to gather real data and produce real results\n` +
-            `- Structure your response clearly with sections\n` +
-            `- Include all relevant findings, data, and reasoning\n\n` +
-            `## Storage Tiers — read carefully, they are NOT interchangeable\n` +
-            `You have access to TWO distinct file storage systems. Using the wrong one will either lose your work ` +
-            `or pollute a shared space. Understand the difference before writing anything.\n\n` +
-            `### Tier 1 — Ephemeral task scratchpad (\`read_file\` / \`write_file\` / \`edit_file\`)\n` +
-            `- A virtual filesystem that exists ONLY for the duration of this single task.\n` +
-            `- Everything here is DESTROYED when this task ends. The next time you are invoked, it will be empty.\n` +
-            `- Use it for: intermediate notes, draft sections, raw tool output you want to process, working memory ` +
-            `that helps you think through THIS task.\n` +
-            `- Do NOT put anything here that you (or the orchestrator) will need later. It will be gone.\n\n` +
-            `### Tier 2 — Shared persistent workspace (\`workspace_list_files\` / \`workspace_read_file\` / ` +
-            `\`workspace_write_file\` / \`workspace_edit_file\` / \`workspace_delete_file\`)\n` +
-            `- A real folder on disk that belongs to the orchestrator agent who delegated this task to you.\n` +
-            `- Files here PERSIST across tasks and are SHARED with the calling orchestrator. The orchestrator ` +
-            `can read what you write, and you can read what the orchestrator (or previous specialists it called) wrote.\n` +
-            `- Only \`.md\` and \`.txt\` files are allowed.\n` +
-            `- Use it for: durable findings the orchestrator needs to keep, research results worth preserving ` +
-            `across future tasks, briefs/plans the orchestrator can refer back to, cross-task context.\n` +
-            `- Because this space is shared, treat it like a team drive, not a private scratchpad: use clear, ` +
-            `descriptive filenames, do not overwrite files you did not create unless you are deliberately updating them, ` +
-            `and never put throwaway drafts here.\n\n` +
-            `### Required workflow for every task\n` +
-            `1. **Start by orienting:** call \`workspace_list_files\` before doing anything else. If any files look ` +
-            `relevant to the current task, read them with \`workspace_read_file\` — they may contain context, prior ` +
-            `research, or instructions from the orchestrator that change how you should approach the task.\n` +
-            `2. **Do your work:** use Tier 1 (\`write_file\`/\`edit_file\`) freely for scratch and intermediate reasoning.\n` +
-            `3. **Finish by persisting what matters:** if your task produced findings, conclusions, or artifacts that ` +
-            `the orchestrator or future tasks will benefit from, save them to Tier 2 with \`workspace_write_file\` ` +
-            `using a clear filename. Do not save ephemeral scratch here.`,
-          checkpointer,
-        });
+          // Create the deep agent with the deepagents library
+          const checkpointer = new MemorySaver();
+          const agent = createDeepAgent({
+            model: chatModel as any,
+            tools: allTools as any[],
+            systemPrompt:
+              `You are ${systemAgent.name}, an executor agent — a specialist responsible for carrying out tasks ` +
+              `delegated to you by orchestrator agents.\n\n` +
+              `${systemAgent.instructions}\n\n` +
+              `## Task Guidelines\n` +
+              `- Break complex tasks into steps using your todo list\n` +
+              `- Be thorough and detailed in your execution\n` +
+              `- Use your tools (MCP servers, file operations, etc.) to gather real data and produce real results\n` +
+              `- Structure your response clearly with sections\n` +
+              `- Include all relevant findings, data, and reasoning\n\n` +
+              `## Storage Tiers — read carefully, they are NOT interchangeable\n` +
+              `You have access to TWO distinct file storage systems. Using the wrong one will either lose your work ` +
+              `or pollute a shared space. Understand the difference before writing anything.\n\n` +
+              `### Tier 1 — Ephemeral task scratchpad (\`read_file\` / \`write_file\` / \`edit_file\`)\n` +
+              `- A virtual filesystem that exists ONLY for the duration of this single task.\n` +
+              `- Everything here is DESTROYED when this task ends. The next time you are invoked, it will be empty.\n` +
+              `- Use it for: intermediate notes, draft sections, raw tool output you want to process, working memory ` +
+              `that helps you think through THIS task.\n` +
+              `- Do NOT put anything here that you (or the orchestrator) will need later. It will be gone.\n\n` +
+              `### Tier 2 — Shared persistent workspace (\`workspace_list_files\` / \`workspace_read_file\` / ` +
+              `\`workspace_write_file\` / \`workspace_edit_file\` / \`workspace_delete_file\`)\n` +
+              `- A real folder on disk that belongs to the orchestrator agent who delegated this task to you.\n` +
+              `- Files here PERSIST across tasks and are SHARED with the calling orchestrator. The orchestrator ` +
+              `can read what you write, and you can read what the orchestrator (or previous specialists it called) wrote.\n` +
+              `- Only \`.md\` and \`.txt\` files are allowed.\n` +
+              `- Use it for: durable findings the orchestrator needs to keep, research results worth preserving ` +
+              `across future tasks, briefs/plans the orchestrator can refer back to, cross-task context.\n` +
+              `- Because this space is shared, treat it like a team drive, not a private scratchpad: use clear, ` +
+              `descriptive filenames, do not overwrite files you did not create unless you are deliberately updating them, ` +
+              `and never put throwaway drafts here.\n\n` +
+              `### Required workflow for every task\n` +
+              `1. **Start by orienting:** call \`workspace_list_files\` before doing anything else. If any files look ` +
+              `relevant to the current task, read them with \`workspace_read_file\` — they may contain context, prior ` +
+              `research, or instructions from the orchestrator that change how you should approach the task.\n` +
+              `2. **Do your work:** use Tier 1 (\`write_file\`/\`edit_file\`) freely for scratch and intermediate reasoning.\n` +
+              `3. **Finish by persisting what matters:** if your task produced findings, conclusions, or artifacts that ` +
+              `the orchestrator or future tasks will benefit from, save them to Tier 2 with \`workspace_write_file\` ` +
+              `using a clear filename. Do not save ephemeral scratch here.`,
+            checkpointer,
+          });
 
-        // Invoke with fresh thread but constant user identity.
-        // Wrapped with timeout and recursion limit to prevent runaway executions.
-        const langfuseHandler = getLangfuseCallbackHandler(userId, {
-          threadId,
-          delegationId,
-          systemAgentSlug,
-          service: "deep_agent",
-        });
+          // Invoke with fresh thread but constant user identity.
+          // Wrapped with timeout and recursion limit to prevent runaway executions.
+          const langfuseHandler = getLangfuseCallbackHandler(userId, {
+            threadId,
+            delegationId,
+            systemAgentSlug,
+            service: "deep_agent",
+          });
 
-        // Bake Langfuse callbacks into the agent via withConfig so they
-        // propagate to all inner LangGraph nodes (LLM calls, tool calls, etc.).
-        const tracedAgent = langfuseHandler
-          ? agent.withConfig({ callbacks: [langfuseHandler] })
-          : agent;
+          // Bake Langfuse callbacks into the agent via withConfig so they
+          // propagate to all inner LangGraph nodes (LLM calls, tool calls, etc.).
+          const tracedAgent = langfuseHandler
+            ? agent.withConfig({ callbacks: [langfuseHandler] })
+            : agent;
 
-        const result = await withTimeout(
-          tracedAgent.invoke(
-            {
-              messages: [{ role: "user" as const, content: request }],
-            },
-            {
-              configurable: {
-                thread_id: threadId,
-                user_id: String(deepAgentUserId),
+          const result = await withTimeout(
+            tracedAgent.invoke(
+              {
+                messages: [{ role: "user" as const, content: request }],
               },
-              recursionLimit: DEEP_AGENT_RECURSION_LIMIT,
-            },
-          ),
-          DEEP_AGENT_TIMEOUT_MS,
-        );
-
-        // Flush traces before extracting result (safety net if worker crashes later)
-        await flushLangfuse();
-
-        // Extract the final response
-        const messages: any[] = Array.isArray(result.messages)
-          ? result.messages
-          : [];
-        const lastAi = [...messages]
-          .reverse()
-          .find(
-            (m: any) =>
-              (typeof m._getType === "function" && m._getType() === "ai") ||
-              m.role === "assistant",
+              {
+                configurable: {
+                  thread_id: threadId,
+                  user_id: String(deepAgentUserId),
+                },
+                recursionLimit: DEEP_AGENT_RECURSION_LIMIT,
+              },
+            ),
+            DEEP_AGENT_TIMEOUT_MS,
           );
 
-        const resultText =
-          typeof lastAi?.content === "string"
-            ? lastAi.content
-            : lastAi?.content
-              ? JSON.stringify(lastAi.content)
-              : "The executor agent did not produce a response.";
+          // Flush traces before extracting result (safety net if worker crashes later)
+          await flushLangfuse();
+
+          // Extract the final response
+          const messages: any[] = Array.isArray(result.messages)
+            ? result.messages
+            : [];
+          const lastAi = [...messages]
+            .reverse()
+            .find(
+              (m: any) =>
+                (typeof m._getType === "function" && m._getType() === "ai") ||
+                m.role === "assistant",
+            );
+
+          resultText =
+            typeof lastAi?.content === "string"
+              ? lastAi.content
+              : lastAi?.content
+                ? JSON.stringify(lastAi.content)
+                : "The executor agent did not produce a response.";
+        }
 
         // Mark as completed
         await DeepAgentDelegation.update(
