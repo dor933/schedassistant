@@ -21,12 +21,12 @@ const addSkillSchema = z.object({
 });
 
 const getSkillSchema = z.object({
-  skill_id: z.number().int().positive().describe("The numeric id of the skill (from list_agent_skills)"),
+  skill_id: z.number().int().min(1).describe("The numeric id of the skill (from list_agent_skills)"),
 });
 
 const editSkillBodySchema = z
   .object({
-    skill_id: z.number().int().positive().describe("The numeric id of the skill to update"),
+    skill_id: z.number().int().min(1).describe("The numeric id of the skill to update"),
     name: z.string().min(1).optional().describe("New display name"),
     slug: z
       .string()
@@ -229,7 +229,7 @@ export function EditAgentSkillTool(agentId: string) {
 }
 
 const systemGetSkillSchema = z.object({
-  skill_id: z.number().int().positive().describe("The numeric id of the skill (from list_system_agent_skills)"),
+  skill_id: z.number().int().min(1).describe("The numeric id of the skill (from list_system_agent_skills)"),
 });
 
 export function AddSystemAgentSkillTool(systemAgentId: number) {
