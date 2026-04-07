@@ -142,11 +142,17 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         }
 
         // Resolve a fully configured LangChain model instance (with API key + proxy)
-        const chatModel = await resolveModel(systemAgent.modelSlug);
+        let chatModel = await resolveModel(systemAgent.modelSlug);
         if (!chatModel) {
           throw new Error(
             `Cannot resolve model "${systemAgent.modelSlug}" for system agent "${systemAgentSlug}"`,
           );
+        }
+
+        // Bind Google Search grounding tool if configured in toolConfig
+        const tc = systemAgent.toolConfig as Record<string, unknown> | null;
+        if (tc?.googleSearch) {
+          chatModel = (chatModel as ChatGoogle).bindTools([{ googleSearch: {} }]) as any;
         }
 
         // Use the system agent's constant userId for memory scoping.

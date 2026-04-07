@@ -2027,6 +2027,7 @@ export default function AdminPage() {
                               {assignedSaSkills.length === 0 && assignedServers.length > 0 && (
                                 <span className="text-[9px] text-gray-300 italic">no skills</span>
                               )}
+                              {!sa.locked && (
                               <button
                                 onClick={() => {
                                   setEditingSaId(sa.id);
@@ -2039,6 +2040,12 @@ export default function AdminPage() {
                                 <Pencil className="h-2.5 w-2.5" />
                                 Edit MCP & skills
                               </button>
+                              )}
+                              {sa.locked && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-gray-50 px-2 py-0.5 text-[9px] font-medium text-gray-400 ring-1 ring-gray-200">
+                                  System managed
+                                </span>
+                              )}
                             </>
                           )}
                         </div>
@@ -2075,7 +2082,7 @@ export default function AdminPage() {
                 className={inputClass}
               >
                 <option value="">Select vendor...</option>
-                {vendors.map((v) => (
+                {vendors.filter((v) => v.slug !== "google").map((v) => (
                   <option key={v.id} value={v.id}>
                     {v.name}
                   </option>
@@ -2088,7 +2095,7 @@ export default function AdminPage() {
                     <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
                     <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                       <strong>Name</strong> is what users see in the UI (e.g.
-                      "GPT-4o Mini", "Gemini 3.1").
+                      "GPT-4o Mini", "Claude Sonnet 4.6").
                     </span>
                   </span>
                 </label>

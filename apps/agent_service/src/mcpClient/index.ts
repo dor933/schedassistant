@@ -4,44 +4,6 @@ import { McpServer, AgentMcpServer } from "@scheduling-agent/database";
 const clientsCache = new Map<string, MultiServerMCPClient>();
 
 /**
- * JSON Schema keywords not supported by all model providers (e.g. Gemini).
- * Stripping them is safe — they are validation hints, not structural.
- */
-const UNSUPPORTED_SCHEMA_KEYS = new Set([
-  "exclusiveMinimum",
-  "exclusiveMaximum",
-  "$schema",
-  "examples",
-  "contentMediaType",
-  "contentEncoding",
-]);
-
-/** Recursively delete unsupported keys from a JSON Schema object (in-place). */
-function sanitizeSchema(obj: any): any {
-  if (obj == null || typeof obj !== "object") return obj;
-  if (Array.isArray(obj)) {
-    for (const item of obj) sanitizeSchema(item);
-    return obj;
-  }
-  for (const key of Object.keys(obj)) {
-    if (UNSUPPORTED_SCHEMA_KEYS.has(key)) {
-      delete obj[key];
-    } else {
-      sanitizeSchema(obj[key]);
-    }
-  }
-  return obj;
-}
-
-/** Sanitize every tool's schema so strict providers don't reject them. */
-function sanitizeToolSchemas(tools: any[]): any[] {
-  for (const tool of tools) {
-    if (tool.schema) sanitizeSchema(tool.schema);
-  }
-  return tools;
-}
-
-/**
  * Build the environment for an MCP server subprocess.
  * Always inherits process.env so that tokens like GITHUB_PERSONAL_ACCESS_TOKEN
  * (set on the agent_service container) reach stdio-based MCP servers.
@@ -66,7 +28,7 @@ export async function getMcpToolsByServerIds(serverIds: number[], cacheKey: stri
   if (serverIds.length === 0) return [];
 
   if (clientsCache.has(cacheKey)) {
-    return sanitizeToolSchemas(await clientsCache.get(cacheKey)!.getTools());
+    return clientsCache.get(cacheKey)!.getTools();
   }
 
   const servers = await McpServer.findAll({ where: { id: serverIds } });
@@ -84,13 +46,13 @@ export async function getMcpToolsByServerIds(serverIds: number[], cacheKey: stri
 
   const client = new MultiServerMCPClient({ mcpServers });
   clientsCache.set(cacheKey, client);
-  return sanitizeToolSchemas(await client.getTools());
+  return client.getTools();
 }
 
 export default async function getMcpTools(agentId: string) {
   if (clientsCache.has(agentId)) {
     console.log(`Loading cached MCP tools for agent: ${agentId}`);
-    return sanitizeToolSchemas(await clientsCache.get(agentId)!.getTools());
+    return clientsCache.get(agentId)!.getTools();
   }
 
   // Fetch the MCP servers assigned to this agent
@@ -131,6 +93,5 @@ export default async function getMcpTools(agentId: string) {
   const client = new MultiServerMCPClient({ mcpServers });
   clientsCache.set(agentId, client);
 
-  const tools = sanitizeToolSchemas(await client.getTools());
-  return tools;
+  return client.getTools();
 }

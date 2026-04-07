@@ -341,6 +341,7 @@ export interface AdminSystemAgent {
   instructions: string;
   modelSlug: string;
   userId: number | null;
+  locked?: boolean;
   mcpServerIds: number[];
   skillIds?: number[];
 }

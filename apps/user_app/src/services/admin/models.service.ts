@@ -1,4 +1,4 @@
-import { LLMModel, Vendor, Agent } from "@scheduling-agent/database";
+import { LLMModel, Vendor, Agent, SystemAgent } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
@@ -30,6 +30,7 @@ export class ModelsService {
   async createModel(vendorId: string, name: string, slug: string, actorId: UserId) {
     const vendor = await Vendor.findByPk(vendorId);
     if (!vendor) throw Object.assign(new Error("Vendor not found."), { status: 404 });
+    if (vendor.slug === "google") throw Object.assign(new Error("Google (Gemini) models cannot be added manually."), { status: 400 });
 
     const existingSlug = await LLMModel.findOne({ where: { slug } });
     if (existingSlug) throw Object.assign(new Error(`A model with slug "${slug}" already exists.`), { status: 409 });
@@ -56,6 +57,14 @@ export class ModelsService {
     if (agentCount > 0) {
       throw Object.assign(
         new Error(`Cannot delete — this model is in use by ${agentCount} agent(s). Switch them to a different model first.`),
+        { status: 409 },
+      );
+    }
+
+    const sysAgentCount = await SystemAgent.count({ where: { modelSlug: model.slug } });
+    if (sysAgentCount > 0) {
+      throw Object.assign(
+        new Error(`Cannot delete — this model is in use by ${sysAgentCount} system agent(s).`),
         { status: 409 },
       );
     }

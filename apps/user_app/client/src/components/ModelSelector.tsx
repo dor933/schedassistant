@@ -32,6 +32,7 @@ export default function ModelSelector({
     setLoading(true);
     admin
       .getModels()
+      .then((all) => all.filter((m) => m.vendor?.slug !== "google"))
       .then(setModels)
       .catch(() => {})
       .finally(() => setLoading(false));

@@ -83,6 +83,8 @@ export class AgentsService {
       agentName !== undefined && agentName !== null && String(agentName).trim() !== ""
         ? String(agentName).trim()
         : null;
+    if (modelId) await this.rejectGoogleModel(modelId);
+
     const agent = await Agent.create({
       definition,
       agentName: normalizedAgentName,
@@ -206,7 +208,10 @@ export class AgentsService {
       patch.coreInstructions = data.coreInstructions;
     if (data.characteristics !== undefined)
       patch.characteristics = data.characteristics;
-    if (data.modelId !== undefined) patch.modelId = data.modelId;
+    if (data.modelId !== undefined) {
+      if (data.modelId) await this.rejectGoogleModel(data.modelId);
+      patch.modelId = data.modelId;
+    }
     await agent.update(patch);
 
     // Sync MCP server assignments if provided
@@ -290,6 +295,16 @@ export class AgentsService {
     }
 
     return ids;
+  }
+
+  /** Reject models from the Google vendor — Gemini is not a supported provider. */
+  private async rejectGoogleModel(modelId: string) {
+    const model = await LLMModel.findByPk(modelId, { attributes: ["vendorId"] });
+    if (!model) return;
+    const vendor = await Vendor.findByPk(model.vendorId, { attributes: ["slug"] });
+    if (vendor?.slug === "google") {
+      throw Object.assign(new Error("Google (Gemini) models are not supported."), { status: 400 });
+    }
   }
 
   /**

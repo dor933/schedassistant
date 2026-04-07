@@ -7,7 +7,7 @@ export class SystemAgentsController {
   getAll = async (_req: Request, res: Response) => {
     try {
       const agents = await SystemAgent.findAll({
-        attributes: ["id", "slug", "name", "description", "instructions", "modelSlug", "userId"],
+        attributes: ["id", "slug", "name", "description", "instructions", "modelSlug", "userId", "toolConfig"],
         order: [["name", "ASC"]],
       });
 
@@ -27,11 +27,16 @@ export class SystemAgentsController {
         (skillsByAgent[link.systemAgentId] ??= []).push(link.skillId);
       }
 
-      const result = agents.map((a) => ({
-        ...a.toJSON(),
-        mcpServerIds: mcpByAgent[a.id] ?? [],
-        skillIds: skillsByAgent[a.id] ?? [],
-      }));
+      const result = agents.map((a) => {
+        const { toolConfig, ...rest } = a.toJSON();
+        const tc = toolConfig as Record<string, unknown> | null;
+        return {
+          ...rest,
+          locked: !!(tc?.locked),
+          mcpServerIds: mcpByAgent[a.id] ?? [],
+          skillIds: skillsByAgent[a.id] ?? [],
+        };
+      });
 
       return res.json(result);
     } catch (err: any) {
@@ -51,13 +56,18 @@ export class SystemAgentsController {
       return res.status(400).json({ error: "Slug, name, and instructions are required." });
     }
 
+    const resolvedModelSlug = modelSlug?.trim() || "gpt-4o";
+    if (resolvedModelSlug.startsWith("gemini")) {
+      return res.status(400).json({ error: "Google (Gemini) models are not supported." });
+    }
+
     try {
       const agent = await SystemAgent.create({
         slug: slug.trim(),
         name: name.trim(),
         description: description?.trim() || null,
         instructions: instructions.trim(),
-        modelSlug: modelSlug?.trim() || "gpt-4o",
+        modelSlug: resolvedModelSlug,
         userId: req.user!.userId,
       });
 
@@ -117,6 +127,11 @@ export class SystemAgentsController {
       return res.status(404).json({ error: "System agent not found." });
     }
 
+    const tc = agent.toolConfig as Record<string, unknown> | null;
+    if (tc?.locked) {
+      return res.status(403).json({ error: "This system agent is locked and cannot be edited." });
+    }
+
     try {
       const { name, description, instructions, modelSlug, userId, mcpServerIds, skillIds } = req.body;
 
@@ -124,7 +139,12 @@ export class SystemAgentsController {
       if (name !== undefined) patch.name = name;
       if (description !== undefined) patch.description = description;
       if (instructions !== undefined) patch.instructions = instructions;
-      if (modelSlug !== undefined) patch.modelSlug = modelSlug;
+      if (modelSlug !== undefined) {
+        if (typeof modelSlug === "string" && modelSlug.trim().startsWith("gemini")) {
+          return res.status(400).json({ error: "Google (Gemini) models are not supported." });
+        }
+        patch.modelSlug = modelSlug;
+      }
       if (userId !== undefined) patch.userId = userId;
       await agent.update(patch);
 
