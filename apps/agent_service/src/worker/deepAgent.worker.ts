@@ -24,6 +24,44 @@ import { getRedisConfig } from "../redisClient";
 import { getLangfuseCallbackHandler, observeWithContext, flushLangfuse } from "../langfuse";
 import { logger } from "../logger";
 
+/**
+ * Recursively strip JSON Schema keywords that Gemini's function-calling API
+ * does not support (e.g. exclusiveMinimum, exclusiveMaximum).
+ * Mutates the object in place and returns it for convenience.
+ */
+const UNSUPPORTED_SCHEMA_KEYS = new Set([
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "$schema",
+  "examples",
+  "contentMediaType",
+  "contentEncoding",
+]);
+
+function sanitizeSchema(obj: any): any {
+  if (obj == null || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) {
+    for (const item of obj) sanitizeSchema(item);
+    return obj;
+  }
+  for (const key of Object.keys(obj)) {
+    if (UNSUPPORTED_SCHEMA_KEYS.has(key)) {
+      delete obj[key];
+    } else {
+      sanitizeSchema(obj[key]);
+    }
+  }
+  return obj;
+}
+
+/** Sanitize tool schemas so they don't trip up model providers with strict schema validation. */
+function sanitizeToolSchemas(tools: any[]): any[] {
+  for (const tool of tools) {
+    if (tool.schema) sanitizeSchema(tool.schema);
+  }
+  return tools;
+}
+
 /** Max time a deep agent invocation can run before being aborted (ms). */
 const DEEP_AGENT_TIMEOUT_MS = Number(
   process.env.DEEP_AGENT_TIMEOUT_MS ?? 15 * 60 * 1000, // 15 min default
@@ -180,6 +218,9 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           }
           return true;
         });
+
+        // Strip JSON Schema keywords unsupported by some providers (e.g. Gemini)
+        sanitizeToolSchemas(mcpTools);
 
         const skillTools = systemAgentSkillTools(systemAgent.id);
         const wsTools = workspaceTools(callerAgentId);
