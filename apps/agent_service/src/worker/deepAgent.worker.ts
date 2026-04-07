@@ -17,6 +17,7 @@ import { agentChatQueue } from "../queues/agentChat.bull";
 import { getMcpToolsByServerIds } from "../mcpClient";
 import { systemAgentSkillTools } from "../tools/skillsTools";
 import { workspaceTools } from "../tools/workspaceTools";
+import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogle } from "@langchain/google";
 import { ChatAnthropic } from "@langchain/anthropic";
@@ -181,8 +182,8 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           const response = await withTimeout(
             googleModel.invoke(
               [
-                { role: "system" as const, content: systemAgent.instructions },
-                { role: "user" as const, content: request },
+                new SystemMessage(systemAgent.instructions),
+                new HumanMessage(request),
               ],
               langfuseHandler ? { callbacks: [langfuseHandler] } : undefined,
             ),
