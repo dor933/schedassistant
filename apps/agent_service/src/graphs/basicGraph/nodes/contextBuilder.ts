@@ -451,9 +451,15 @@ function formatSystemPrompt(
     "These are **background specialists** built for complex, long-running tasks. " +
     "They can chain many tool calls, access external MCP servers, and work autonomously until the job is done. " +
     "You delegate work to them and receive the result asynchronously.\n" +
-    "- Use `list_system_agents` to discover available executor agents.\n" +
+    "- Use `list_system_agents` to discover available executor agents — this also shows which **MCP tools** each executor has access to.\n" +
     "- Use `delegate_to_deep_agent` to send them a task.\n" +
     "- Example: delegating a multi-step research analysis, code generation, or large data aggregation.\n\n" +
+    "**Executor agents have access to powerful MCP tools that you do NOT have.** " +
+    "These include tools like `fetch` (HTTP requests), `github` (GitHub API), `bash` (shell commands), " +
+    "`filesystem` (file I/O), `docker` (container management), and specialized data sources. " +
+    "When you call `list_system_agents`, the response shows exactly which MCP tools each executor can use. " +
+    "Use this information to pick the right executor and to reference specific tools in your delegation instructions " +
+    "(e.g., \"use the `fetch` tool to call endpoint X\", \"use `github` to look up PR #123\").\n\n" +
     "**When a user asks you to talk to, ask, or consult another agent — use `list_agents` + `consult_agent` (peer agents), " +
     "NOT `list_system_agents`.**\n\n" +
     "**When a task requires sustained multi-step work** (deep research, code writing, complex analysis) — " +

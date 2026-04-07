@@ -1,6 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { SystemAgent } from "@scheduling-agent/database";
+import { SystemAgent, SystemAgentMcpServer, McpServer } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 
 /**
@@ -26,7 +26,7 @@ export function ListSystemAgentsTool() {
 
       const agents = await SystemAgent.findAll({
         where,
-        attributes: ["slug", "name", "description", "modelSlug"],
+        attributes: ["id", "slug", "name", "description", "modelSlug"],
         order: [["name", "ASC"]],
       });
 
@@ -41,12 +41,36 @@ export function ListSystemAgentsTool() {
         "",
       ];
 
+      // Batch-load MCP server names for all returned system agents
+      const agentIds = agents.map((a) => a.id);
+      const mcpLinks = await SystemAgentMcpServer.findAll({
+        where: { systemAgentId: { [Op.in]: agentIds } },
+        attributes: ["systemAgentId", "mcpServerId"],
+      });
+      const serverIds = [...new Set(mcpLinks.map((l) => l.mcpServerId))];
+      const mcpServers = serverIds.length > 0
+        ? await McpServer.findAll({ where: { id: { [Op.in]: serverIds } }, attributes: ["id", "name"] })
+        : [];
+      const serverNameById = new Map(mcpServers.map((s) => [s.id, s.name]));
+      const serversByAgent = new Map<number, string[]>();
+      for (const link of mcpLinks) {
+        const name = serverNameById.get(link.mcpServerId);
+        if (!name) continue;
+        const list = serversByAgent.get(link.systemAgentId) ?? [];
+        list.push(name);
+        serversByAgent.set(link.systemAgentId, list);
+      }
+
       for (const a of agents) {
         lines.push(`**${a.name}**`);
         lines.push(`  - Slug: \`${a.slug}\``);
         lines.push(`  - Model: ${a.modelSlug}`);
         if (a.description) {
           lines.push(`  - Description: ${a.description}`);
+        }
+        const mcpNames = serversByAgent.get(a.id);
+        if (mcpNames && mcpNames.length > 0) {
+          lines.push(`  - MCP tools: ${mcpNames.join(", ")}`);
         }
         lines.push("");
       }
