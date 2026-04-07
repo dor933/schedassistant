@@ -389,11 +389,9 @@ export function agentSkillTools(agentId: string): StructuredToolInterface[] {
   ];
 }
 
-/** Tools bound to a system agent (deep agent) id. */
+/** Read-only skill tools for system agents (deep agents). */
 export function systemAgentSkillTools(systemAgentId: number): StructuredToolInterface[] {
   return [
-    AddSystemAgentSkillTool(systemAgentId),
-    EditSystemAgentSkillTool(systemAgentId),
     ListSystemAgentSkillsTool(systemAgentId),
     GetSystemAgentSkillTool(systemAgentId),
   ];

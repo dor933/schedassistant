@@ -27,6 +27,8 @@ export class SkillsController {
           slug: req.body.slug,
           description: req.body.description,
           skillText,
+          primaryAgentAssignable: req.body.primaryAgentAssignable,
+          systemAgentAssignable: req.body.systemAgentAssignable,
         },
         req.user!.userId,
       );
@@ -53,6 +55,8 @@ export class SkillsController {
           slug: req.body.slug,
           description: req.body.description,
           skillText: req.body.skillText,
+          primaryAgentAssignable: req.body.primaryAgentAssignable,
+          systemAgentAssignable: req.body.systemAgentAssignable,
         },
         req.user!.userId,
       );

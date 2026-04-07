@@ -9,6 +9,7 @@ import {
   McpServer,
   AgentMcpServer,
   AgentSkill,
+  Skill,
   LLMModel,
   Vendor,
   sequelize,
@@ -114,6 +115,7 @@ export class AgentsService {
     }
 
     if (skillIds && skillIds.length > 0) {
+      await this.rejectNonPrimarySkills(skillIds);
       await AgentSkill.bulkCreate(
         skillIds.map((skillId) => ({
           agentId: agent.id,
@@ -228,6 +230,9 @@ export class AgentsService {
     }
 
     if (data.skillIds !== undefined) {
+      if (data.skillIds.length > 0) {
+        await this.rejectNonPrimarySkills(data.skillIds);
+      }
       await AgentSkill.destroy({ where: { agentId: agent.id } });
       if (data.skillIds.length > 0) {
         await AgentSkill.bulkCreate(
@@ -304,6 +309,21 @@ export class AgentsService {
     const vendor = await Vendor.findByPk(model.vendorId, { attributes: ["slug"] });
     if (vendor?.slug === "google") {
       throw Object.assign(new Error("Google (Gemini) models are not supported."), { status: 400 });
+    }
+  }
+
+  /** Reject skills not assignable to primary agents. */
+  private async rejectNonPrimarySkills(skillIds: number[]) {
+    const blocked = await Skill.findAll({
+      where: { id: { [Op.in]: skillIds }, primaryAgentAssignable: false },
+      attributes: ["id", "name"],
+    });
+    if (blocked.length > 0) {
+      const names = blocked.map((s) => s.name).join(", ");
+      throw Object.assign(
+        new Error(`These skills cannot be assigned to primary agents: ${names}`),
+        { status: 400 },
+      );
     }
   }
 

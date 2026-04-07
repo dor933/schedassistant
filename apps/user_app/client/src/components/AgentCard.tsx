@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { AdminAgent, AdminMcpServer, AdminSkill, ConversationModelInfo } from "../api";
+import { AdminAgent, AdminSkill, ConversationModelInfo } from "../api";
 import { Box } from "@mui/material";
-import { Loader2, Save, X, Pencil, Plug, Sparkles } from "lucide-react";
+import { Loader2, Save, X, Pencil, Sparkles } from "lucide-react";
 import { admin } from "../api";
 import { stringifyAgentCharacteristics } from "../pages/AdminPage";
 import { useToast } from "./Toast";
@@ -12,7 +12,6 @@ export default function AgentCard({
     agent,
     currentUserId,
     currentUserRole,
-    allMcpServers,
     allModels,
     allSkills,
     onSaved,
@@ -20,7 +19,6 @@ export default function AgentCard({
     agent: AdminAgent;
     currentUserId: number;
     currentUserRole: string;
-    allMcpServers: AdminMcpServer[];
     allModels: ConversationModelInfo[];
     allSkills: AdminSkill[];
     onSaved: () => void;
@@ -40,9 +38,6 @@ export default function AgentCard({
     const [characteristicsJson, setCharacteristicsJson] = useState(
       stringifyAgentCharacteristics(agent.characteristics),
     );
-    const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<number[]>(
-      agent.mcpServerIds ?? [],
-    );
     const [selectedModel, setSelectedModel] = useState<ConversationModelInfo | null>(
       agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null,
     );
@@ -56,16 +51,9 @@ export default function AgentCard({
       setDisplayName(agent.agentName ?? "");
       setInstructions(agent.coreInstructions ?? "");
       setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
-      setSelectedMcpServerIds(agent.mcpServerIds ?? []);
       setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
       setSelectedSkillIds(agent.skillIds ?? []);
     }, [agent, allModels]);
-
-    function toggleMcpServer(id: number) {
-      setSelectedMcpServerIds((prev) =>
-        prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-      );
-    }
 
     function toggleSkill(id: number) {
       setSelectedSkillIds((prev) =>
@@ -97,7 +85,6 @@ export default function AgentCard({
           agentName: displayName.trim() || null,
           ...(canViewCoreInstructions ? { coreInstructions: instructions || undefined } : {}),
           characteristics,
-          mcpServerIds: selectedMcpServerIds,
           modelId: selectedModel?.id ?? null,
           skillIds: selectedSkillIds,
         });
@@ -113,10 +100,6 @@ export default function AgentCard({
     const smallInput =
       "w-full rounded-xl border border-gray-200 bg-gray-50/80 px-3 py-2 text-xs transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10";
 
-    // Resolve assigned server names for display mode
-    const assignedServers = allMcpServers.filter((s) =>
-      (agent.mcpServerIds ?? []).includes(s.id),
-    );
     const assignedSkills = allSkills.filter((sk) =>
       (agent.skillIds ?? []).includes(sk.id),
     );
@@ -189,54 +172,6 @@ export default function AgentCard({
               />
             </div>
 
-            {/* MCP Servers */}
-            <div>
-              <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-                <Plug className="h-3 w-3" />
-                MCP Servers
-              </label>
-              <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                {allMcpServers.map((s) => {
-                  const selected = selectedMcpServerIds.includes(s.id);
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => toggleMcpServer(s.id)}
-                      className={`group/chip inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
-                        selected
-                          ? "bg-gradient-to-r from-violet-50 to-indigo-50 text-violet-700 ring-1 ring-violet-200/80 shadow-sm"
-                          : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300"
-                      }`}
-                    >
-                      <span
-                        className={`flex h-4.5 w-4.5 items-center justify-center rounded-full text-[9px] font-bold transition-colors duration-150 ${
-                          selected
-                            ? "bg-violet-500 text-white"
-                            : "bg-gray-200 text-gray-400 group-hover/chip:bg-gray-300 group-hover/chip:text-gray-500"
-                        }`}
-                        style={{ width: 18, height: 18 }}
-                      >
-                        {selected ? "\u2713" : s.name.charAt(0).toUpperCase()}
-                      </span>
-                      {s.name}
-                      {selected && (
-                        <X className="h-3 w-3 text-violet-400 transition-colors group-hover/chip:text-violet-600" />
-                      )}
-                    </button>
-                  );
-                })}
-                {allMcpServers.length === 0 && (
-                  <p className="text-[11px] text-gray-400 py-0.5">No MCP servers configured.</p>
-                )}
-              </div>
-              {selectedMcpServerIds.length > 0 && (
-                <p className="mt-1 text-[10px] text-gray-400">
-                  {selectedMcpServerIds.length} server{selectedMcpServerIds.length === 1 ? "" : "s"} selected
-                </p>
-              )}
-            </div>
-
             {/* Skills */}
             <div>
               <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -244,7 +179,7 @@ export default function AgentCard({
                 Skills
               </label>
               <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                {allSkills.map((sk) => {
+                {allSkills.filter((sk) => sk.primaryAgentAssignable !== false).map((sk) => {
                   const selected = selectedSkillIds.includes(sk.id);
                   return (
                     <button
@@ -274,7 +209,7 @@ export default function AgentCard({
                     </button>
                   );
                 })}
-                {allSkills.length === 0 && (
+                {allSkills.filter((sk) => sk.primaryAgentAssignable !== false).length === 0 && (
                   <p className="text-[11px] text-gray-400 py-0.5">No skills defined yet (super admin can add in Skills).</p>
                 )}
               </div>
@@ -318,7 +253,6 @@ export default function AgentCard({
                   setDisplayName(agent.agentName ?? "");
                   setInstructions(agent.coreInstructions ?? "");
                   setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
-                  setSelectedMcpServerIds(agent.mcpServerIds ?? []);
                   setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
                   setSelectedSkillIds(agent.skillIds ?? []);
                 }}
@@ -365,21 +299,6 @@ export default function AgentCard({
                   {stringifyAgentCharacteristics(agent.characteristics)}
                 </pre>
               )}
-
-            {/* MCP Servers display */}
-            {assignedServers.length > 0 && (
-              <div className="mt-2.5 flex flex-wrap gap-1">
-                {assignedServers.map((s) => (
-                  <span
-                    key={s.id}
-                    className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600 ring-1 ring-violet-100"
-                  >
-                    <Plug className="h-2.5 w-2.5" />
-                    {s.name}
-                  </span>
-                ))}
-              </div>
-            )}
 
             {assignedSkills.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">

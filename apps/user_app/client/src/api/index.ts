@@ -353,6 +353,7 @@ export interface AdminSkill {
   description: string | null;
   skillText: string;
   systemAgentAssignable: boolean;
+  primaryAgentAssignable: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -405,6 +406,8 @@ export const admin = {
     skillText: string;
     slug?: string;
     description?: string;
+    primaryAgentAssignable?: boolean;
+    systemAgentAssignable?: boolean;
   }) =>
     request<AdminSkill>("/admin/skills", {
       method: "POST",
@@ -417,6 +420,8 @@ export const admin = {
       skillText?: string;
       slug?: string | null;
       description?: string | null;
+      primaryAgentAssignable?: boolean;
+      systemAgentAssignable?: boolean;
     },
   ) =>
     request<AdminSkill>(`/admin/skills/${id}`, {

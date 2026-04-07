@@ -90,7 +90,6 @@ export default function AdminPage() {
   const [newAgentDisplayName, setNewAgentDisplayName] = useState("");
   const [newAgentInstructions, setNewAgentInstructions] = useState("");
   const [newAgentCharacteristics, setNewAgentCharacteristics] = useState("");
-  const [newAgentMcpServerIds, setNewAgentMcpServerIds] = useState<number[]>([]);
   const [newAgentSkillIds, setNewAgentSkillIds] = useState<number[]>([]);
   const [newAgentModelId, setNewAgentModelId] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
@@ -124,6 +123,8 @@ export default function AdminPage() {
   const [newSkillSlug, setNewSkillSlug] = useState("");
   const [newSkillDescription, setNewSkillDescription] = useState("");
   const [newSkillText, setNewSkillText] = useState("");
+  const [newSkillPrimary, setNewSkillPrimary] = useState(true);
+  const [newSkillSystem, setNewSkillSystem] = useState(true);
   const [creatingSkill, setCreatingSkill] = useState(false);
   const [deletingSkillId, setDeletingSkillId] = useState<number | null>(null);
   const [editingSkillId, setEditingSkillId] = useState<number | null>(null);
@@ -131,6 +132,8 @@ export default function AdminPage() {
   const [editSkillSlug, setEditSkillSlug] = useState("");
   const [editSkillDescription, setEditSkillDescription] = useState("");
   const [editSkillText, setEditSkillText] = useState("");
+  const [editSkillPrimary, setEditSkillPrimary] = useState(true);
+  const [editSkillSystem, setEditSkillSystem] = useState(true);
   const [savingSkillId, setSavingSkillId] = useState<number | null>(null);
 
   const [newMcpName, setNewMcpName] = useState("");
@@ -245,7 +248,6 @@ export default function AdminPage() {
         agentName: newAgentDisplayName.trim() || null,
         coreInstructions: newAgentInstructions.trim() || undefined,
         characteristics,
-        mcpServerIds: newAgentMcpServerIds.length > 0 ? newAgentMcpServerIds : undefined,
         modelId: newAgentModelId,
         skillIds: newAgentSkillIds.length > 0 ? newAgentSkillIds : undefined,
       });
@@ -253,7 +255,6 @@ export default function AdminPage() {
       setNewAgentDisplayName("");
       setNewAgentInstructions("");
       setNewAgentCharacteristics("");
-      setNewAgentMcpServerIds([]);
       setNewAgentSkillIds([]);
       setNewAgentModelId(null);
       flash("Agent created.");
@@ -434,6 +435,7 @@ export default function AdminPage() {
 
   async function handleCreateSkill() {
     if (!newSkillName.trim() || !newSkillText.trim()) return;
+    if (!newSkillPrimary && !newSkillSystem) return;
     setError("");
     setCreatingSkill(true);
     try {
@@ -442,11 +444,15 @@ export default function AdminPage() {
         skillText: newSkillText.trim(),
         slug: newSkillSlug.trim() || undefined,
         description: newSkillDescription.trim() || undefined,
+        primaryAgentAssignable: newSkillPrimary,
+        systemAgentAssignable: newSkillSystem,
       });
       setNewSkillName("");
       setNewSkillSlug("");
       setNewSkillDescription("");
       setNewSkillText("");
+      setNewSkillPrimary(true);
+      setNewSkillSystem(true);
       flash("Skill created.");
       await reload();
     } catch (err: any) {
@@ -462,6 +468,10 @@ export default function AdminPage() {
       setError("Name and skill text are required.");
       return;
     }
+    if (!editSkillPrimary && !editSkillSystem) {
+      setError("At least one of Primary or System agent must be selected.");
+      return;
+    }
     setError("");
     setSavingSkillId(editingSkillId);
     try {
@@ -470,6 +480,8 @@ export default function AdminPage() {
         skillText: editSkillText.trim(),
         slug: editSkillSlug.trim() || null,
         description: editSkillDescription.trim() || null,
+        primaryAgentAssignable: editSkillPrimary,
+        systemAgentAssignable: editSkillSystem,
       });
       setEditingSkillId(null);
       flash("Skill updated.");
@@ -503,6 +515,8 @@ export default function AdminPage() {
     setEditSkillSlug(skill.slug ?? "");
     setEditSkillDescription(skill.description ?? "");
     setEditSkillText(skill.skillText);
+    setEditSkillPrimary(skill.primaryAgentAssignable !== false);
+    setEditSkillSystem(skill.systemAgentAssignable !== false);
     setError("");
   }
 
@@ -765,49 +779,7 @@ export default function AdminPage() {
                 rows={3}
                 className={inputClass + " font-mono text-xs"}
               />
-              {/* MCP Server selection */}
-              <div>
-                <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-                  MCP Servers
-                  <span className="ml-1 normal-case font-normal text-gray-400">(tools available to this agent)</span>
-                </label>
-                <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                  {mcpServers.map((s) => {
-                    const selected = newAgentMcpServerIds.includes(s.id);
-                    return (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() =>
-                          setNewAgentMcpServerIds((prev) =>
-                            selected ? prev.filter((id) => id !== s.id) : [...prev, s.id],
-                          )
-                        }
-                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
-                          selected
-                            ? "bg-violet-100 text-violet-700 ring-1 ring-violet-200 shadow-sm"
-                            : "bg-white text-gray-500 ring-1 ring-gray-200 hover:bg-gray-100 hover:text-gray-700"
-                        }`}
-                      >
-                        <span
-                          className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
-                            selected
-                              ? "bg-violet-500 text-white"
-                              : "bg-gray-200 text-gray-500"
-                          }`}
-                        >
-                          {s.name.charAt(0).toUpperCase()}
-                        </span>
-                        {s.name}
-                        {selected && <X className="h-3 w-3 ml-0.5" />}
-                      </button>
-                    );
-                  })}
-                  {mcpServers.length === 0 && (
-                    <p className="text-xs text-gray-400 py-1">No MCP servers configured.</p>
-                  )}
-                </div>
-              </div>
+              {/* MCP Servers — managed via system agents only */}
               {/* Skills */}
               <div>
                 <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -815,7 +787,7 @@ export default function AdminPage() {
                   Skills
                 </label>
                 <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                  {skills.map((sk) => {
+                  {skills.filter((sk) => sk.primaryAgentAssignable !== false).map((sk) => {
                     const selected = newAgentSkillIds.includes(sk.id);
                     return (
                       <button
@@ -838,7 +810,7 @@ export default function AdminPage() {
                       </button>
                     );
                   })}
-                  {skills.length === 0 && (
+                  {skills.filter((sk) => sk.primaryAgentAssignable !== false).length === 0 && (
                     <p className="text-xs text-gray-400 py-1">No skills defined yet.</p>
                   )}
                 </div>
@@ -871,7 +843,7 @@ export default function AdminPage() {
 
             <div className="space-y-2.5">
               {agents.map((a) => (
-                <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allMcpServers={mcpServers} allModels={models} allSkills={skills} onSaved={reload} />
+                <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} onSaved={reload} />
               ))}
             </div>
           </div>
@@ -1589,10 +1561,33 @@ export default function AdminPage() {
                 rows={5}
                 className={inputClass + " resize-y font-mono text-xs"}
               />
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newSkillPrimary}
+                    onChange={(e) => setNewSkillPrimary(e.target.checked)}
+                    className="rounded border-gray-300 text-indigo-500 focus:ring-indigo-500/20"
+                  />
+                  Primary agents
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newSkillSystem}
+                    onChange={(e) => setNewSkillSystem(e.target.checked)}
+                    className="rounded border-gray-300 text-indigo-500 focus:ring-indigo-500/20"
+                  />
+                  System agents
+                </label>
+                {!newSkillPrimary && !newSkillSystem && (
+                  <span className="text-[10px] text-red-500">Select at least one</span>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={handleCreateSkill}
-                disabled={!newSkillName.trim() || !newSkillText.trim() || creatingSkill}
+                disabled={!newSkillName.trim() || !newSkillText.trim() || (!newSkillPrimary && !newSkillSystem) || creatingSkill}
                 className={btnPrimary}
               >
                 {creatingSkill ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -1632,11 +1627,34 @@ export default function AdminPage() {
                   rows={6}
                   className={inputClass + " resize-y font-mono text-xs"}
                 />
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editSkillPrimary}
+                      onChange={(e) => setEditSkillPrimary(e.target.checked)}
+                      className="rounded border-gray-300 text-indigo-500 focus:ring-indigo-500/20"
+                    />
+                    Primary agents
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={editSkillSystem}
+                      onChange={(e) => setEditSkillSystem(e.target.checked)}
+                      className="rounded border-gray-300 text-indigo-500 focus:ring-indigo-500/20"
+                    />
+                    System agents
+                  </label>
+                  {!editSkillPrimary && !editSkillSystem && (
+                    <span className="text-[10px] text-red-500">Select at least one</span>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={handleSaveSkillEdit}
-                    disabled={savingSkillId != null}
+                    disabled={savingSkillId != null || (!editSkillPrimary && !editSkillSystem)}
                     className={btnPrimary}
                   >
                     {savingSkillId != null ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -1693,6 +1711,14 @@ export default function AdminPage() {
                   {sk.description && (
                     <p className="mt-1.5 text-[11px] text-gray-500 line-clamp-2">{sk.description}</p>
                   )}
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {sk.primaryAgentAssignable !== false && (
+                      <span className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-medium text-blue-600 ring-1 ring-blue-100">Primary</span>
+                    )}
+                    {sk.systemAgentAssignable !== false && (
+                      <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 ring-1 ring-amber-100">System</span>
+                    )}
+                  </div>
                   <p className="mt-2 max-h-20 overflow-hidden text-[10px] leading-snug text-gray-400 font-mono line-clamp-4">
                     {sk.skillText}
                   </p>

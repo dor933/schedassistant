@@ -8,13 +8,14 @@ export interface SkillAttributes {
   description: string | null;
   skillText: string;
   systemAgentAssignable: boolean;
+  primaryAgentAssignable: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
 
 type SkillCreationAttributes = Optional<
   SkillAttributes,
-  "id" | "slug" | "description" | "systemAgentAssignable" | "createdAt" | "updatedAt"
+  "id" | "slug" | "description" | "systemAgentAssignable" | "primaryAgentAssignable" | "createdAt" | "updatedAt"
 >;
 
 class Skill extends Model<SkillAttributes, SkillCreationAttributes> implements SkillAttributes {
@@ -24,6 +25,7 @@ class Skill extends Model<SkillAttributes, SkillCreationAttributes> implements S
   declare description: string | null;
   declare skillText: string;
   declare systemAgentAssignable: boolean;
+  declare primaryAgentAssignable: boolean;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -58,6 +60,12 @@ Skill.init(
       allowNull: false,
       defaultValue: true,
       field: "system_agent_assignable",
+    },
+    primaryAgentAssignable: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      field: "primary_agent_assignable",
     },
     createdAt: {
       type: DataTypes.DATE,

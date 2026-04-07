@@ -6,21 +6,35 @@ import type { UserId } from "@scheduling-agent/types";
 export class SkillsService {
   async getAll() {
     const rows = await Skill.findAll({
-      attributes: ["id", "name", "slug", "description", "skillText", "systemAgentAssignable", "createdAt", "updatedAt"],
+      attributes: ["id", "name", "slug", "description", "skillText", "systemAgentAssignable", "primaryAgentAssignable", "createdAt", "updatedAt"],
       order: [["name", "ASC"]],
     });
     return rows.map((r) => r.toJSON());
   }
 
   async create(
-    data: { name: string; slug?: string | null; description?: string | null; skillText: string },
+    data: {
+      name: string;
+      slug?: string | null;
+      description?: string | null;
+      skillText: string;
+      primaryAgentAssignable?: boolean;
+      systemAgentAssignable?: boolean;
+    },
     actorId?: UserId,
   ) {
+    const primary = data.primaryAgentAssignable ?? true;
+    const system = data.systemAgentAssignable ?? true;
+    if (!primary && !system) {
+      throw Object.assign(new Error("At least one of primaryAgentAssignable or systemAgentAssignable must be true."), { status: 400 });
+    }
     const skill = await Skill.create({
       name: data.name.trim(),
       slug: data.slug?.trim() || null,
       description: data.description?.trim() || null,
       skillText: data.skillText,
+      primaryAgentAssignable: primary,
+      systemAgentAssignable: system,
     });
     this.broadcast("skill_created", `Skill "${skill.name}" created`, actorId);
     return skill;
@@ -28,7 +42,14 @@ export class SkillsService {
 
   async update(
     id: number,
-    data: { name?: string; slug?: string | null; description?: string | null; skillText?: string },
+    data: {
+      name?: string;
+      slug?: string | null;
+      description?: string | null;
+      skillText?: string;
+      primaryAgentAssignable?: boolean;
+      systemAgentAssignable?: boolean;
+    },
     actorId?: UserId,
   ) {
     const skill = await Skill.findByPk(id);
@@ -39,6 +60,15 @@ export class SkillsService {
     if (data.slug !== undefined) patch.slug = data.slug?.trim() || null;
     if (data.description !== undefined) patch.description = data.description?.trim() || null;
     if (data.skillText !== undefined) patch.skillText = data.skillText;
+    if (data.primaryAgentAssignable !== undefined) patch.primaryAgentAssignable = data.primaryAgentAssignable;
+    if (data.systemAgentAssignable !== undefined) patch.systemAgentAssignable = data.systemAgentAssignable;
+
+    const finalPrimary = (patch.primaryAgentAssignable as boolean | undefined) ?? skill.primaryAgentAssignable;
+    const finalSystem = (patch.systemAgentAssignable as boolean | undefined) ?? skill.systemAgentAssignable;
+    if (!finalPrimary && !finalSystem) {
+      throw Object.assign(new Error("At least one of primaryAgentAssignable or systemAgentAssignable must be true."), { status: 400 });
+    }
+
     await skill.update(patch);
     this.broadcast("skill_updated", `Skill "${skill.name}" updated`, actorId);
     return skill;
