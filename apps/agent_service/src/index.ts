@@ -10,6 +10,7 @@ import fs from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { sequelize, Agent } from "@scheduling-agent/database";
 import { createSchedulerGraph } from "./graphs/basicGraph/index";
+import { createEpicGraph } from "./graphs/epicGraph/index";
 import { createServer } from "./server";
 import { initializeLangfuse, isLangfuseConfigured, shutdownLangfuse } from "./langfuse";
 import {
@@ -57,16 +58,17 @@ async function main(): Promise<void> {
     logger.warn("Failed to verify workspace directories", { error: String(err) });
   }
 
-  // 2. Create checkpointer + compile graph with Postgres persistence.
+  // 2. Create checkpointer + compile graphs with Postgres persistence.
   // Chat turns (worker → executeChatTurn) pass `agentId` in graph state; contextBuilder
   // loads `agents.core_instructions` from the DB and merges them into the system prompt.
   const graph = await createSchedulerGraph();
-  logger.info("Agent graph compiled with PostgresSaver checkpointer");
+  const epicGraph = await createEpicGraph();
+  logger.info("Agent graphs compiled with PostgresSaver checkpointer (basic + epic)");
 
   // 3. BullMQ: queue events + workers.
   await agentChatQueueEvents.waitUntilReady();
   await deepAgentQueueEvents.waitUntilReady();
-  const agentChatWorker = startAgentChatWorker(graph);
+  const agentChatWorker = startAgentChatWorker(graph, epicGraph);
   const deepAgentWorker = startDeepAgentWorker();
 
   // 4. HTTP + Socket.IO server (chat enqueues jobs; results emitted via socket).

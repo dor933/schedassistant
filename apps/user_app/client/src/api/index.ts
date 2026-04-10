@@ -354,6 +354,7 @@ export interface AdminSkill {
   skillText: string;
   systemAgentAssignable: boolean;
   primaryAgentAssignable: boolean;
+  locked: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -369,6 +370,31 @@ export interface AdminGroupMember {
   id: string;
   userId: number;
   createdAt: string;
+}
+
+export interface AdminRepository {
+  id: string;
+  projectId: string;
+  name: string;
+  url: string;
+  defaultBranch: string;
+  architectureOverview: string | null;
+  localPath: string | null;
+  setupInstructions: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminProject {
+  id: string;
+  name: string;
+  description: string | null;
+  userId: number;
+  architectureOverview: string | null;
+  techStack: string | null;
+  repositories: AdminRepository[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export const admin = {
@@ -545,4 +571,86 @@ export const admin = {
     }),
   deleteModel: (id: string) =>
     request<{ deleted: boolean }>(`/admin/models/${id}`, { method: "DELETE" }),
+
+  // ── Projects & Repositories ───────────────────────────────────────────────
+  getProjects: () => request<AdminProject[]>("/admin/projects"),
+  getRemoteBranches: (repoName: string) =>
+    request<string[]>(`/admin/projects/remote-branches?repo=${encodeURIComponent(repoName)}`),
+  setupProject: (data: {
+    project: { name: string; description?: string; architectureOverview?: string; techStack?: string };
+    repositories: {
+      name: string;
+      branch: string;
+      generateArchitecture: boolean;
+      architectureOverview?: string;
+      setupInstructions?: string;
+    }[];
+  }) =>
+    request<{ project: AdminProject; repoResults: { name: string; ok: boolean; error?: string; archWarning?: string; pendingArchitecture?: boolean; repositoryId?: string }[] }>(
+      "/admin/projects/setup",
+      { method: "POST", body: JSON.stringify(data) },
+    ),
+  updateProject: (
+    id: string,
+    data: {
+      name?: string;
+      description?: string | null;
+      architectureOverview?: string | null;
+      techStack?: string | null;
+    },
+  ) =>
+    request<AdminProject>(`/admin/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  deleteProject: (id: string) =>
+    request<{ deleted: boolean }>(`/admin/projects/${id}`, { method: "DELETE" }),
+  addRepository: (
+    projectId: string,
+    data: {
+      name: string;
+      branch: string;
+      generateArchitecture?: boolean;
+      architectureOverview?: string;
+      setupInstructions?: string;
+    },
+  ) =>
+    request<{ repository: AdminRepository; pendingArchitecture?: boolean }>(
+      `/admin/projects/${projectId}/repositories`,
+      { method: "POST", body: JSON.stringify(data) },
+    ),
+  updateRepository: (
+    repoId: string,
+    data: {
+      name?: string;
+      url?: string;
+      defaultBranch?: string;
+      architectureOverview?: string | null;
+      localPath?: string | null;
+      setupInstructions?: string | null;
+    },
+  ) =>
+    request<AdminRepository>(`/admin/projects/repositories/${repoId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  deleteRepository: (repoId: string) =>
+    request<{ deleted: boolean }>(`/admin/projects/repositories/${repoId}`, {
+      method: "DELETE",
+    }),
+  cloneRepository: (repoId: string) =>
+    request<AdminRepository>(`/admin/projects/repositories/${repoId}/clone`, {
+      method: "POST",
+    }),
+  getRepositoryBranches: (repoId: string) =>
+    request<string[]>(`/admin/projects/repositories/${repoId}/branches`),
+  setRepositoryBranch: (repoId: string, branch: string) =>
+    request<AdminRepository>(`/admin/projects/repositories/${repoId}/branch`, {
+      method: "PATCH",
+      body: JSON.stringify({ branch }),
+    }),
+  generateArchitecture: (repoId: string) =>
+    request<AdminRepository>(`/admin/projects/repositories/${repoId}/generate-architecture`, {
+      method: "POST",
+    }),
 };

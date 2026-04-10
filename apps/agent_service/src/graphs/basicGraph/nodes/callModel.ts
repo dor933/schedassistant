@@ -30,6 +30,7 @@ import { DelegateToDeepAgentTool } from "../../../tools/delegateToDeepAgentTool"
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
+import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 10;
@@ -254,6 +255,7 @@ export async function callModelNode(
     EditAgentNotesTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
+    DelegateToEpicOrchestratorTool(agentId, state.userId, state.groupId, state.singleChatId),
   ];
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

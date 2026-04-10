@@ -24,3 +24,7 @@ getting row objects from sequalize:
       });
 
 every change in nginx.conf/docker-compose.yaml/env files/Docker Files - remember to update in all environments.
+
+Claude CLI requires authentication per-user. You logged in as root but now it's running as agent. Need to log in as the agent user:                                                    
+  
+  docker exec -it sched-assist-new-agent_service-1 su-exec agent claude login 

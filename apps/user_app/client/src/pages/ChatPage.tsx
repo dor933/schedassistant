@@ -94,6 +94,9 @@ export default function ChatPage() {
   const [typingConversations, setTypingConversations] = useState<Set<string>>(
     new Set(),
   );
+  const [epicTypingConversations, setEpicTypingConversations] = useState<Set<string>>(
+    new Set(),
+  );
   const [userTyping, setUserTyping] = useState<
     Map<string, Map<number, string>>
   >(new Map());
@@ -436,16 +439,30 @@ export default function ChatPage() {
     const onTyping = (data: {
       conversationId: string;
       conversationType: string;
+      isEpicExecution?: boolean;
     }) => {
       setTypingConversations((prev) => {
         const next = new Set(prev);
         next.add(data.conversationId);
         return next;
       });
+      if (data.isEpicExecution) {
+        setEpicTypingConversations((prev) => {
+          const next = new Set(prev);
+          next.add(data.conversationId);
+          return next;
+        });
+      }
     };
 
     const onReply = (p: ChatReplyPayload) => {
       setTypingConversations((prev) => {
+        if (!prev.has(p.conversationId)) return prev;
+        const next = new Set(prev);
+        next.delete(p.conversationId);
+        return next;
+      });
+      setEpicTypingConversations((prev) => {
         if (!prev.has(p.conversationId)) return prev;
         const next = new Set(prev);
         next.delete(p.conversationId);
@@ -739,7 +756,7 @@ export default function ChatPage() {
       const timeout = window.setTimeout(() => {
         pendingReplies.current.delete(requestId);
         reject(new Error("Timed out waiting for assistant reply."));
-      }, 240_000);
+      }, 20 * 60 * 1000);
 
       pendingReplies.current.set(requestId, (p) => {
         window.clearTimeout(timeout);
@@ -792,6 +809,9 @@ export default function ChatPage() {
   const sending = activeConv ? sendingConvId === activeConv.id : false;
   const agentIsTyping = activeConv
     ? typingConversations.has(activeConv.id)
+    : false;
+  const isEpicExecution = activeConv
+    ? epicTypingConversations.has(activeConv.id)
     : false;
 
   const usersTypingNames: string[] =
@@ -855,6 +875,7 @@ export default function ChatPage() {
           setActiveConversation={setActiveConv}
           unreadCounts={unreadCounts}
           typingConversations={typingConversations}
+          epicTypingConversations={epicTypingConversations}
           isAdmin={user?.role === "admin" || user?.role === "super_admin"}
           onSelectConversation={handleSelectConversation}
           onDeleteChat={(id, title) => setDeleteTarget({ id, title })}
@@ -920,7 +941,7 @@ export default function ChatPage() {
                 direction="row"
                 alignItems="center"
                 spacing={0.75}
-                className="text-xs font-medium text-emerald-600"
+                className={`text-xs font-medium ${isEpicExecution ? "text-violet-600" : "text-emerald-600"}`}
               >
                 <Box
                   component="span"
@@ -933,14 +954,14 @@ export default function ChatPage() {
                 >
                   <Box
                     component="span"
-                    className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
+                    className={`absolute inline-flex h-full w-full animate-ping rounded-full ${isEpicExecution ? "bg-violet-400" : "bg-emerald-400"} opacity-75`}
                   />
                   <Box
                     component="span"
-                    className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"
+                    className={`relative inline-flex h-2 w-2 rounded-full ${isEpicExecution ? "bg-violet-500" : "bg-emerald-500"}`}
                   />
                 </Box>
-                <span>Agent is typing...</span>
+                <span>{isEpicExecution ? "Executing epic task..." : "Agent is typing..."}</span>
               </Stack>
             ) : usersTypingNames.length > 0 ? (
               <Stack

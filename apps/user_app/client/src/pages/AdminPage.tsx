@@ -22,12 +22,17 @@ import {
   HelpCircle,
   Loader2,
   CheckCircle2,
-  AlertCircle,
   KeyRound,
   Plug,
   Terminal,
   Zap,
   Sparkles,
+  GitBranch,
+  FolderGit2,
+  Download,
+  ChevronDown,
+  ChevronUp,
+  Globe,
 } from "lucide-react";
 import {
   admin,
@@ -39,6 +44,8 @@ import {
   type AdminMcpServer,
   type AdminSystemAgent,
   type AdminSkill,
+  type AdminProject,
+  type AdminRepository,
   type ConversationModelInfo,
 } from "../api";
 import { VendorIcon } from "../components/VendorModelBadge";
@@ -64,6 +71,196 @@ export function formatUserIdentityPreview(
   }
 }
 
+// ─── Vendor picker (compact custom dropdown with vendor icon) ────────────────
+
+function VendorPicker({
+  vendors,
+  value,
+  onChange,
+  placeholder = "Select vendor...",
+}: {
+  vendors: { id: string; name: string; slug: string }[];
+  value: string;
+  onChange: (id: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const selected = vendors.find((v) => v.id === value) ?? null;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-2.5 text-left text-sm transition-all duration-200 hover:border-indigo-300 hover:bg-white focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10"
+      >
+        {selected ? (
+          <>
+            <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-gray-200/80 bg-white text-gray-600">
+              <VendorIcon slug={selected.slug} />
+            </span>
+            <span className="flex-1 truncate font-medium text-gray-800">{selected.name}</span>
+          </>
+        ) : (
+          <>
+            <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-dashed border-gray-300 text-gray-300">
+              <Cpu className="h-3 w-3" />
+            </span>
+            <span className="flex-1 truncate text-gray-400">{placeholder}</span>
+          </>
+        )}
+        <ChevronDown
+          className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-2 w-full animate-scale-in rounded-2xl border border-gray-200/80 bg-white/95 p-1.5 shadow-glass-lg backdrop-blur-xl">
+          {vendors.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-gray-400">No vendors available</p>
+          ) : (
+            vendors.map((v) => {
+              const isSelected = v.id === value;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => {
+                    onChange(v.id);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition-colors ${
+                    isSelected ? "bg-indigo-50 ring-1 ring-indigo-100" : "hover:bg-gray-50"
+                  }`}
+                >
+                  <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-gray-200/80 bg-gray-50 text-gray-600">
+                    <VendorIcon slug={v.slug} />
+                  </span>
+                  <span
+                    className={`flex-1 truncate ${
+                      isSelected ? "font-semibold text-indigo-700" : "text-gray-800"
+                    }`}
+                  >
+                    {v.name}
+                  </span>
+                  {isSelected && <CheckCircle2 className="h-4 w-4 text-indigo-500" />}
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Branch picker (compact custom dropdown with git branch icon) ────────────
+
+function BranchPicker({
+  branches,
+  value,
+  onChange,
+  placeholder = "Select branch...",
+  currentBranch,
+  disabled = false,
+}: {
+  branches: string[];
+  value: string;
+  onChange: (b: string) => void;
+  placeholder?: string;
+  currentBranch?: string;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-2.5 text-left text-sm transition-all duration-200 hover:border-indigo-300 hover:bg-white focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <GitBranch className="h-4 w-4 flex-shrink-0 text-indigo-400" />
+        {value ? (
+          <span className="flex-1 truncate font-mono text-xs font-medium text-gray-800">
+            {value}
+            {value === currentBranch && (
+              <span className="ml-1.5 rounded-full bg-green-50 px-1.5 py-0.5 text-[9px] font-semibold text-green-600">
+                current
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="flex-1 truncate text-gray-400">{placeholder}</span>
+        )}
+        <ChevronDown
+          className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && branches.length > 0 && (
+        <div className="absolute left-0 top-full z-50 mt-2 max-h-64 w-full animate-scale-in overflow-y-auto rounded-2xl border border-gray-200/80 bg-white/95 p-1.5 shadow-glass-lg backdrop-blur-xl">
+          {branches.map((b) => {
+            const isSelected = b === value;
+            const isCurrent = b === currentBranch;
+            return (
+              <button
+                key={b}
+                type="button"
+                onClick={() => {
+                  onChange(b);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition-colors ${
+                  isSelected ? "bg-indigo-50 ring-1 ring-indigo-100" : "hover:bg-gray-50"
+                }`}
+              >
+                <GitBranch
+                  className={`h-3.5 w-3.5 flex-shrink-0 ${
+                    isSelected ? "text-indigo-500" : "text-gray-400"
+                  }`}
+                />
+                <span
+                  className={`flex-1 truncate font-mono text-xs ${
+                    isSelected ? "font-semibold text-indigo-700" : "text-gray-700"
+                  }`}
+                >
+                  {b}
+                </span>
+                {isCurrent && (
+                  <span className="flex-shrink-0 rounded-full bg-green-50 px-2 py-0.5 text-[10px] font-semibold text-green-600">
+                    current
+                  </span>
+                )}
+                {isSelected && !isCurrent && <CheckCircle2 className="h-4 w-4 text-indigo-500" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 
 export default function AdminPage() {
@@ -136,6 +333,66 @@ export default function AdminPage() {
   const [editSkillSystem, setEditSkillSystem] = useState(true);
   const [savingSkillId, setSavingSkillId] = useState<number | null>(null);
 
+  // ── Epic Orchestrator: Projects & Repositories ──
+  const [projects, setProjects] = useState<AdminProject[]>([]);
+  const [epicView, setEpicView] = useState<"list" | "wizard">("list");
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
+  // wizard state
+  const [wizardStep, setWizardStep] = useState<1 | 2>(1);
+  const [newProjName, setNewProjName] = useState("");
+  const [newProjDescription, setNewProjDescription] = useState("");
+  const [newProjArchitecture, setNewProjArchitecture] = useState("");
+  const [newProjTechStack, setNewProjTechStack] = useState("");
+  // wizard repos (client-side list, submitted all at once)
+  type WizardRepo = {
+    name: string;
+    branch: string;
+    generateArchitecture: boolean;
+    architectureOverview: string;
+    setupInstructions: string;
+    branches: string[]; // fetched from remote
+  };
+  const [wizardRepos, setWizardRepos] = useState<WizardRepo[]>([]);
+  // current repo being added in the wizard
+  const [wizRepoName, setWizRepoName] = useState("");
+  const [wizRepoBranches, setWizRepoBranches] = useState<string[]>([]);
+  const [wizRepoLoadingBranches, setWizRepoLoadingBranches] = useState(false);
+  const [wizRepoBranch, setWizRepoBranch] = useState("");
+  const [wizRepoGenArch, setWizRepoGenArch] = useState(false);
+  const [wizRepoArchitecture, setWizRepoArchitecture] = useState("");
+  const [wizRepoSetupInstructions, setWizRepoSetupInstructions] = useState("");
+  const [wizEditingRepoIdx, setWizEditingRepoIdx] = useState<number | null>(null);
+  const [submittingProject, setSubmittingProject] = useState(false);
+  // editing existing project
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
+  const [editProjName, setEditProjName] = useState("");
+  const [editProjDescription, setEditProjDescription] = useState("");
+  const [editProjArchitecture, setEditProjArchitecture] = useState("");
+  const [editProjTechStack, setEditProjTechStack] = useState("");
+  const [savingProjectId, setSavingProjectId] = useState<string | null>(null);
+  // editing existing repo
+  const [editingRepoId, setEditingRepoId] = useState<string | null>(null);
+  const [editRepoName, setEditRepoName] = useState("");
+  const [editRepoArchitecture, setEditRepoArchitecture] = useState("");
+  const [editRepoSetupInstructions, setEditRepoSetupInstructions] = useState("");
+  const [savingRepoId, setSavingRepoId] = useState<string | null>(null);
+  // add repo to existing project
+  const [addRepoProjectId, setAddRepoProjectId] = useState<string | null>(null);
+  const [addRepoName, setAddRepoName] = useState("");
+  const [addRepoBranches, setAddRepoBranches] = useState<string[]>([]);
+  const [addRepoBranch, setAddRepoBranch] = useState("");
+  const [addRepoLoadingBranches, setAddRepoLoadingBranches] = useState(false);
+  const [addRepoGenArch, setAddRepoGenArch] = useState(false);
+  const [addRepoArchitecture, setAddRepoArchitecture] = useState("");
+  const [addRepoSetupInstructions, setAddRepoSetupInstructions] = useState("");
+  const [addingRepo, setAddingRepo] = useState(false);
+  // clone / branch state (for existing repos in list view)
+  const [cloningRepoId, setCloningRepoId] = useState<string | null>(null);
+  const [branchesRepoId, setBranchesRepoId] = useState<string | null>(null);
+  const [availableBranches, setAvailableBranches] = useState<string[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
+  const [settingBranch, setSettingBranch] = useState(false);
+
   const [newMcpName, setNewMcpName] = useState("");
   const [newMcpTransport, setNewMcpTransport] = useState("stdio");
   const [newMcpCommand, setNewMcpCommand] = useState("");
@@ -149,8 +406,10 @@ export default function AdminPage() {
   const [editMcpEnv, setEditMcpEnv] = useState("");
   const [savingMcpId, setSavingMcpId] = useState<number | null>(null);
 
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  /** Show error toast (replaces old inline banner) */
+  function setError(msg: string) {
+    if (msg) toast(msg, "error");
+  }
 
   useEffect(() => {
     if (user && user.role !== "admin" && user.role !== "super_admin") navigate("/", { replace: true });
@@ -158,7 +417,7 @@ export default function AdminPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [u, a, g, m, v, r, mcp, sa, sk] = await Promise.all([
+      const [u, a, g, m, v, r, mcp, sa, sk, proj] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
@@ -168,6 +427,7 @@ export default function AdminPage() {
         admin.getMcpServers(),
         admin.getSystemAgents(),
         admin.getSkills().catch(() => [] as AdminSkill[]),
+        admin.getProjects().catch(() => [] as AdminProject[]),
       ]);
       setUsers(u);
       setAgents(a);
@@ -178,6 +438,7 @@ export default function AdminPage() {
       setMcpServers(mcp);
       setSystemAgents(sa);
       setSkills(sk);
+      setProjects(proj);
       if (a.length > 0 && !newGroupAgentId) setNewGroupAgentId(a[0].id);
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
     } catch {
@@ -197,7 +458,31 @@ export default function AdminPage() {
     if (!token) return;
     const socket = getChatSocket(token);
 
-    const onAdminChange = (data: { type: string; message: string; actorId?: number }) => {
+    const onAdminChange = (data: { type: string; message: string; data?: any; actorId?: number }) => {
+      // Architecture generation events should be handled for ALL users (including the actor)
+      // since it runs in the background after project creation
+      if (data.type === "repository_architecture_generated") {
+        const { repositoryId, architectureOverview } = data.data ?? {};
+        if (repositoryId) {
+          setProjects((prev) =>
+            prev.map((p) => ({
+              ...p,
+              repositories: p.repositories.map((r) =>
+                r.id === repositoryId ? { ...r, architectureOverview } : r,
+              ),
+            })),
+          );
+        }
+        toast(data.message, "success");
+        return;
+      }
+      if (data.type === "repository_architecture_failed") {
+        toast(data.message, "error");
+        if (data.actorId === user?.id) return;
+        reloadRef.current();
+        return;
+      }
+
       if (data.actorId === user?.id) return;
       toast(data.message, "info");
       reloadRef.current();
@@ -649,8 +934,302 @@ export default function AdminPage() {
   }
 
   function flash(msg: string) {
-    setSuccess(msg);
-    setTimeout(() => setSuccess(""), 3000);
+    toast(msg, "success");
+  }
+
+  // ── Epic Orchestrator handlers ───────────────────────────────────────────
+
+  function resetWizard() {
+    setWizardStep(1);
+    setNewProjName(""); setNewProjDescription(""); setNewProjArchitecture(""); setNewProjTechStack("");
+    setWizardRepos([]);
+    resetWizRepoForm();
+  }
+
+  function resetWizRepoForm() {
+    setWizRepoName(""); setWizRepoBranches([]); setWizRepoBranch("");
+    setWizRepoGenArch(false); setWizRepoArchitecture(""); setWizRepoSetupInstructions("");
+    setWizEditingRepoIdx(null);
+  }
+
+  async function handleWizFetchBranches() {
+    const name = wizRepoName.trim();
+    if (!name) return;
+    setWizRepoLoadingBranches(true);
+    setWizRepoBranches([]); setWizRepoBranch("");
+    setError("");
+    try {
+      const branches = await admin.getRemoteBranches(name);
+      setWizRepoBranches(branches);
+      if (branches.includes("main")) setWizRepoBranch("main");
+      else if (branches.length > 0) setWizRepoBranch(branches[0]);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setWizRepoLoadingBranches(false);
+    }
+  }
+
+  function handleWizAddRepo() {
+    if (!wizRepoName.trim() || !wizRepoBranch) return;
+    if (!wizRepoGenArch && !wizRepoArchitecture.trim()) return;
+    const entry: WizardRepo = {
+      name: wizRepoName.trim(),
+      branch: wizRepoBranch,
+      generateArchitecture: wizRepoGenArch,
+      architectureOverview: wizRepoArchitecture.trim(),
+      setupInstructions: wizRepoSetupInstructions.trim(),
+      branches: wizRepoBranches,
+    };
+    if (wizEditingRepoIdx !== null) {
+      setWizardRepos((prev) => prev.map((r, i) => i === wizEditingRepoIdx ? entry : r));
+    } else {
+      setWizardRepos((prev) => [...prev, entry]);
+    }
+    resetWizRepoForm();
+  }
+
+  function handleWizEditRepo(idx: number) {
+    const r = wizardRepos[idx];
+    setWizRepoName(r.name);
+    setWizRepoBranches(r.branches);
+    setWizRepoBranch(r.branch);
+    setWizRepoGenArch(r.generateArchitecture);
+    setWizRepoArchitecture(r.architectureOverview);
+    setWizRepoSetupInstructions(r.setupInstructions);
+    setWizEditingRepoIdx(idx);
+  }
+
+  function handleWizRemoveRepo(idx: number) {
+    setWizardRepos((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function handleSubmitWizard() {
+    if (!newProjName.trim() || wizardRepos.length === 0) return;
+    setSubmittingProject(true);
+    setError("");
+    try {
+      const result = await admin.setupProject({
+        project: {
+          name: newProjName.trim(),
+          description: newProjDescription.trim() || undefined,
+          architectureOverview: newProjArchitecture.trim() || undefined,
+          techStack: newProjTechStack.trim() || undefined,
+        },
+        repositories: wizardRepos.map((r) => ({
+          name: r.name,
+          branch: r.branch,
+          generateArchitecture: r.generateArchitecture,
+          architectureOverview: r.architectureOverview || undefined,
+          setupInstructions: r.setupInstructions || undefined,
+        })),
+      });
+
+      const pendingArch = result.repoResults.filter((r: any) => r.pendingArchitecture);
+      if (pendingArch.length > 0) {
+        toast(
+          `Project created. Architecture is being generated for: ${pendingArch.map((r: any) => r.name).join(", ")}. You'll be notified when it's ready.`,
+          "info",
+        );
+      } else {
+        toast("Project and all repositories set up successfully.", "success");
+      }
+
+      resetWizard();
+      setEpicView("list");
+      await reload();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSubmittingProject(false);
+    }
+  }
+
+  async function handleCloneRepo(repoId: string) {
+    setCloningRepoId(repoId);
+    setError("");
+    try {
+      await admin.cloneRepository(repoId);
+      await reload();
+      toast("Repository cloned.", "success");
+      // auto-load branches after clone
+      await handleLoadBranches(repoId);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setCloningRepoId(null);
+    }
+  }
+
+  async function handleLoadBranches(repoId: string) {
+    setLoadingBranches(true);
+    setBranchesRepoId(repoId);
+    try {
+      const branches = await admin.getRepositoryBranches(repoId);
+      setAvailableBranches(branches);
+    } catch (err: any) {
+      setError(err.message);
+      setBranchesRepoId(null);
+    } finally {
+      setLoadingBranches(false);
+    }
+  }
+
+  async function handleSetBranch(repoId: string, branch: string) {
+    setSettingBranch(true);
+    setError("");
+    try {
+      await admin.setRepositoryBranch(repoId, branch);
+      setBranchesRepoId(null);
+      setAvailableBranches([]);
+      await reload();
+      toast(`Branch set to "${branch}".`, "success");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSettingBranch(false);
+    }
+  }
+
+  function startEditProject(p: AdminProject) {
+    setEditingProjectId(p.id);
+    setEditProjName(p.name);
+    setEditProjDescription(p.description || "");
+    setEditProjArchitecture(p.architectureOverview || "");
+    setEditProjTechStack(p.techStack || "");
+  }
+
+  async function handleSaveProject(projectId: string) {
+    setSavingProjectId(projectId);
+    setError("");
+    try {
+      await admin.updateProject(projectId, {
+        name: editProjName.trim() || undefined,
+        description: editProjDescription.trim() || null,
+        architectureOverview: editProjArchitecture.trim() || null,
+        techStack: editProjTechStack.trim() || null,
+      });
+      setEditingProjectId(null);
+      await reload();
+      toast("Project updated.", "success");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSavingProjectId(null);
+    }
+  }
+
+  async function handleDeleteProject(projectId: string) {
+    if (!window.confirm("Delete this project and all its repositories?")) return;
+    try {
+      await admin.deleteProject(projectId);
+      await reload();
+      toast("Project deleted.", "success");
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  function startEditRepo(r: AdminRepository) {
+    setEditingRepoId(r.id);
+    setEditRepoName(r.name);
+    setEditRepoArchitecture(r.architectureOverview || "");
+    setEditRepoSetupInstructions(r.setupInstructions || "");
+  }
+
+  async function handleSaveRepo(repoId: string) {
+    setSavingRepoId(repoId);
+    setError("");
+    try {
+      await admin.updateRepository(repoId, {
+        name: editRepoName.trim() || undefined,
+        architectureOverview: editRepoArchitecture.trim() || null,
+        setupInstructions: editRepoSetupInstructions.trim() || null,
+      });
+      setEditingRepoId(null);
+      await reload();
+      toast("Repository updated.", "success");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSavingRepoId(null);
+    }
+  }
+
+  async function handleDeleteRepo(repoId: string) {
+    if (!window.confirm("Delete this repository?")) return;
+    try {
+      await admin.deleteRepository(repoId);
+      await reload();
+      toast("Repository deleted.", "success");
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  const [generatingArchRepoId, setGeneratingArchRepoId] = useState<string | null>(null);
+
+  async function handleGenerateArchitecture(repoId: string) {
+    setGeneratingArchRepoId(repoId);
+    setError("");
+    try {
+      await admin.generateArchitecture(repoId);
+      toast("Architecture generation started — you'll be notified when it's ready.", "info");
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setGeneratingArchRepoId(null);
+    }
+  }
+
+  function resetAddRepoForm() {
+    setAddRepoProjectId(null);
+    setAddRepoName(""); setAddRepoBranches([]); setAddRepoBranch("");
+    setAddRepoGenArch(false); setAddRepoArchitecture(""); setAddRepoSetupInstructions("");
+  }
+
+  async function handleAddRepoFetchBranches() {
+    const name = addRepoName.trim();
+    if (!name) return;
+    setAddRepoLoadingBranches(true);
+    setAddRepoBranches([]); setAddRepoBranch("");
+    setError("");
+    try {
+      const branches = await admin.getRemoteBranches(name);
+      setAddRepoBranches(branches);
+      if (branches.includes("main")) setAddRepoBranch("main");
+      else if (branches.length > 0) setAddRepoBranch(branches[0]);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setAddRepoLoadingBranches(false);
+    }
+  }
+
+  async function handleAddRepoSubmit() {
+    if (!addRepoProjectId || !addRepoName.trim() || !addRepoBranch.trim()) return;
+    setAddingRepo(true);
+    setError("");
+    try {
+      const result = await admin.addRepository(addRepoProjectId, {
+        name: addRepoName.trim(),
+        branch: addRepoBranch.trim(),
+        generateArchitecture: addRepoGenArch,
+        architectureOverview: addRepoArchitecture.trim() || undefined,
+        setupInstructions: addRepoSetupInstructions.trim() || undefined,
+      });
+      await reload();
+      if (result.pendingArchitecture) {
+        toast(`Repository added. Architecture is being generated — you'll be notified when it's ready.`, "info");
+      } else {
+        toast("Repository added.", "success");
+      }
+      resetAddRepoForm();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setAddingRepo(false);
+    }
   }
 
   function getUserName(id: number) {
@@ -707,25 +1286,6 @@ export default function AdminPage() {
         </Stack>
 
         <Stack component="section" className="w-full min-w-0 space-y-6 sm:space-y-8">
-        {error && (
-          <div className="flex items-center gap-2.5 sm:gap-3 rounded-2xl bg-red-50 px-4 py-3 sm:px-5 sm:py-4 text-sm text-red-700 ring-1 ring-red-100 animate-slide-up">
-            <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-500" />
-            <span className="flex-1 min-w-0 break-words">{error}</span>
-            <button
-              onClick={() => setError("")}
-              className="rounded-lg p-1 hover:bg-red-100 transition"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        )}
-        {success && (
-          <div className="flex items-center gap-2.5 sm:gap-3 rounded-2xl bg-emerald-50 px-4 py-3 sm:px-5 sm:py-4 text-sm text-emerald-700 ring-1 ring-emerald-100 animate-slide-up">
-            <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-emerald-500" />
-            {success}
-          </div>
-        )}
-
         <Box className="grid w-full min-w-0 grid-cols-1 gap-5 sm:gap-6 lg:gap-8 lg:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
           {/* Agents — z-10 so ModelSelector menus paint above the Groups card below (same grid column on lg) */}
           <div className="relative z-10 w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
@@ -787,7 +1347,7 @@ export default function AdminPage() {
                   Skills
                 </label>
                 <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                  {skills.filter((sk) => sk.primaryAgentAssignable !== false).map((sk) => {
+                  {skills.filter((sk) => sk.primaryAgentAssignable !== false && !sk.locked).map((sk) => {
                     const selected = newAgentSkillIds.includes(sk.id);
                     return (
                       <button
@@ -810,7 +1370,7 @@ export default function AdminPage() {
                       </button>
                     );
                   })}
-                  {skills.filter((sk) => sk.primaryAgentAssignable !== false).length === 0 && (
+                  {skills.filter((sk) => sk.primaryAgentAssignable !== false && !sk.locked).length === 0 && (
                     <p className="text-xs text-gray-400 py-1">No skills defined yet.</p>
                   )}
                 </div>
@@ -1685,6 +2245,7 @@ export default function AdminPage() {
                       )}
                     </div>
                     <div className="flex shrink-0 gap-1">
+                      {!sk.locked && (
                       <button
                         type="button"
                         onClick={() => openSkillEdit(sk)}
@@ -1693,6 +2254,8 @@ export default function AdminPage() {
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
+                      )}
+                      {!sk.locked && (
                       <button
                         type="button"
                         onClick={() => handleDeleteSkill(sk.id)}
@@ -1706,6 +2269,7 @@ export default function AdminPage() {
                           <Trash2 className="h-3.5 w-3.5" />
                         )}
                       </button>
+                      )}
                     </div>
                   </div>
                   {sk.description && (
@@ -1717,6 +2281,9 @@ export default function AdminPage() {
                     )}
                     {sk.systemAgentAssignable !== false && (
                       <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-medium text-amber-600 ring-1 ring-amber-100">System</span>
+                    )}
+                    {sk.locked && (
+                      <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-medium text-gray-500 ring-1 ring-gray-200">Locked</span>
                     )}
                   </div>
                   <p className="mt-2 max-h-20 overflow-hidden text-[10px] leading-snug text-gray-400 font-mono line-clamp-4">
@@ -2102,19 +2669,17 @@ export default function AdminPage() {
             </h2>
 
             <div className="mb-5 grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(4,minmax(0,1fr))] [&>*]:min-w-0">
-              <select
-                value={newModelVendorId}
-                onChange={(e) => setNewModelVendorId(e.target.value)}
-                className={inputClass}
-              >
-                <option value="">Select vendor...</option>
-                {vendors.filter((v) => v.slug !== "google").map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-              <div className="group">
+              <div className="flex flex-col">
+                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
+                  Vendor
+                </label>
+                <VendorPicker
+                  vendors={vendors.filter((v) => v.slug !== "google")}
+                  value={newModelVendorId}
+                  onChange={setNewModelVendorId}
+                />
+              </div>
+              <div className="group flex flex-col">
                 <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
                   Display name
                   <span className="relative cursor-help">
@@ -2133,7 +2698,7 @@ export default function AdminPage() {
                   className={inputClass}
                 />
               </div>
-              <div className="group">
+              <div className="group flex flex-col">
                 <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
                   API slug
                   <span className="relative cursor-help">
@@ -2153,18 +2718,26 @@ export default function AdminPage() {
                   className={inputClass + " font-mono text-xs"}
                 />
               </div>
-              <button
-                onClick={handleCreateModel}
-                disabled={
-                  !newModelVendorId ||
-                  !newModelName.trim() ||
-                  !newModelSlug.trim()
-                }
-                className={btnPrimary + " justify-center"}
-              >
-                <Plus className="h-4 w-4" />
-                Add Model
-              </button>
+              <div className="flex flex-col">
+                <label
+                  aria-hidden="true"
+                  className="mb-1 select-none text-[10px] font-medium text-transparent"
+                >
+                  &nbsp;
+                </label>
+                <button
+                  onClick={handleCreateModel}
+                  disabled={
+                    !newModelVendorId ||
+                    !newModelName.trim() ||
+                    !newModelSlug.trim()
+                  }
+                  className={btnPrimary + " justify-center"}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Model
+                </button>
+              </div>
             </div>
 
             <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
@@ -2198,6 +2771,379 @@ export default function AdminPage() {
               ))}
             </div>
           </div>
+
+          {/* ── Epic Orchestrator — super_admin only ── */}
+          {user?.role === "super_admin" && (
+          <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm">
+                <FolderGit2 className="h-4 w-4" />
+              </div>
+              Epic Orchestrator
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+                {projects.length} project{projects.length !== 1 ? "s" : ""}
+              </span>
+            </h2>
+
+            {/* ── List view ── */}
+            {epicView === "list" && (
+              <>
+                <button
+                  onClick={() => { resetWizard(); setEpicView("wizard"); }}
+                  className={btnPrimary + " mb-5"}
+                >
+                  <Plus className="h-4 w-4" /> New Project
+                </button>
+
+                {projects.length === 0 && (
+                  <p className="text-sm text-gray-400 italic">No projects yet. Create one to get started.</p>
+                )}
+
+                <div className="space-y-3">
+                  {projects.map((p) => (
+                    <div key={p.id} className="rounded-xl border border-gray-200/60 bg-gray-50/50">
+                      {/* Project header */}
+                      <div
+                        className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none"
+                        onClick={() => setExpandedProjectId(expandedProjectId === p.id ? null : p.id)}
+                      >
+                        {expandedProjectId === p.id ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-gray-900">{p.name}</p>
+                          {p.description && <p className="text-xs text-gray-500 truncate">{p.description}</p>}
+                        </div>
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+                          {p.repositories.length} repo{p.repositories.length !== 1 ? "s" : ""}
+                        </span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); startEditProject(p); }}
+                          className="rounded-xl p-1.5 text-gray-400 transition hover:bg-blue-50 hover:text-blue-500"
+                          title="Edit project"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleDeleteProject(p.id); }}
+                          className="rounded-xl p-1.5 text-gray-300 transition hover:bg-red-50 hover:text-red-500"
+                          title="Delete project"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+
+                      {/* Expanded project details */}
+                      {expandedProjectId === p.id && (
+                        <div className="border-t border-gray-200/60 px-4 py-3 space-y-3">
+                          {/* Edit project form */}
+                          {editingProjectId === p.id ? (
+                            <div className="space-y-2 rounded-xl border border-dashed border-blue-200 bg-blue-50/30 p-3">
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-400">Edit project</p>
+                              <input value={editProjName} onChange={(e) => setEditProjName(e.target.value)} placeholder="Name" className={inputClass} />
+                              <input value={editProjDescription} onChange={(e) => setEditProjDescription(e.target.value)} placeholder="Description" className={inputClass} />
+                              <textarea value={editProjArchitecture} onChange={(e) => setEditProjArchitecture(e.target.value)} placeholder="Architecture overview" rows={3} className={inputClass + " resize-y font-mono text-xs"} />
+                              <input value={editProjTechStack} onChange={(e) => setEditProjTechStack(e.target.value)} placeholder="Tech stack (e.g. React 18, Node 20, PostgreSQL 15)" className={inputClass} />
+                              <div className="flex gap-2">
+                                <button onClick={() => handleSaveProject(p.id)} disabled={savingProjectId === p.id} className={btnPrimary}>
+                                  {savingProjectId === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save
+                                </button>
+                                <button onClick={() => setEditingProjectId(null)} className="rounded-xl px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100">
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-1 text-xs text-gray-500">
+                              {p.techStack && <p><strong>Tech:</strong> {p.techStack}</p>}
+                              {p.architectureOverview && <p className="whitespace-pre-wrap font-mono text-[11px]">{p.architectureOverview}</p>}
+                            </div>
+                          )}
+
+                          {/* Repositories list */}
+                          {p.repositories.length === 0 && (
+                            <p className="text-xs text-gray-400 italic">No repositories yet.</p>
+                          )}
+                          {p.repositories.map((r) => (
+                            <div key={r.id} className="rounded-lg border border-gray-200/80 bg-white p-3 space-y-2">
+                              {editingRepoId === r.id ? (
+                                <div className="space-y-2">
+                                  <p className="text-[10px] font-semibold uppercase tracking-wider text-blue-400">Edit repository</p>
+                                  <input value={editRepoName} onChange={(e) => setEditRepoName(e.target.value)} placeholder="Name" className={inputClass} />
+                                  <textarea value={editRepoArchitecture} onChange={(e) => setEditRepoArchitecture(e.target.value)} placeholder="Architecture overview" rows={2} className={inputClass + " resize-y font-mono text-xs"} />
+                                  <textarea value={editRepoSetupInstructions} onChange={(e) => setEditRepoSetupInstructions(e.target.value)} placeholder="Setup instructions" rows={2} className={inputClass + " resize-y font-mono text-xs"} />
+                                  <div className="flex gap-2">
+                                    <button onClick={() => handleSaveRepo(r.id)} disabled={savingRepoId === r.id} className={btnPrimary}>
+                                      {savingRepoId === r.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save
+                                    </button>
+                                    <button onClick={() => setEditingRepoId(null)} className="rounded-xl px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100">
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="flex items-center gap-2">
+                                    <Globe className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
+                                    <span className="text-sm font-semibold text-gray-900">{r.name}</span>
+                                    <span className="font-mono text-[10px] text-gray-400 truncate">{r.url}</span>
+                                    <div className="ml-auto flex items-center gap-1">
+                                      <button onClick={() => startEditRepo(r)} className="rounded-lg p-1 text-gray-400 transition hover:bg-blue-50 hover:text-blue-500" title="Edit"><Pencil className="h-3 w-3" /></button>
+                                      <button onClick={() => handleDeleteRepo(r.id)} className="rounded-lg p-1 text-gray-300 transition hover:bg-red-50 hover:text-red-500" title="Delete"><Trash2 className="h-3 w-3" /></button>
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                                    <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700">
+                                      <GitBranch className="h-3 w-3" /> {r.defaultBranch}
+                                    </span>
+                                    {r.localPath ? (
+                                      <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-green-700">
+                                        <CheckCircle2 className="h-3 w-3" /> Cloned
+                                      </span>
+                                    ) : (
+                                      <button onClick={() => handleCloneRepo(r.id)} disabled={cloningRepoId === r.id} className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-amber-700 transition hover:bg-amber-100 disabled:opacity-50">
+                                        {cloningRepoId === r.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                                        {cloningRepoId === r.id ? "Cloning..." : "Clone"}
+                                      </button>
+                                    )}
+                                    {r.localPath && (
+                                      <>
+                                        {branchesRepoId === r.id ? (
+                                          <div className="flex min-w-[220px] items-center gap-1.5">
+                                            {loadingBranches ? <Loader2 className="h-3 w-3 animate-spin text-gray-400" /> : (
+                                              <div className="flex-1">
+                                                <BranchPicker
+                                                  branches={availableBranches}
+                                                  value=""
+                                                  currentBranch={r.defaultBranch}
+                                                  placeholder="Switch to branch..."
+                                                  disabled={settingBranch}
+                                                  onChange={(b) => { if (b) handleSetBranch(r.id, b); }}
+                                                />
+                                              </div>
+                                            )}
+                                            <button onClick={() => setBranchesRepoId(null)} className="rounded-md p-0.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"><X className="h-3 w-3" /></button>
+                                          </div>
+                                        ) : (
+                                          <button onClick={() => handleLoadBranches(r.id)} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-gray-600 transition hover:bg-gray-200">
+                                            <GitBranch className="h-3 w-3" /> Switch branch
+                                          </button>
+                                        )}
+                                      </>
+                                    )}
+                                    {r.localPath && (
+                                      <button onClick={() => handleGenerateArchitecture(r.id)} disabled={generatingArchRepoId === r.id} className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2.5 py-0.5 text-purple-700 transition hover:bg-purple-100 disabled:opacity-50">
+                                        {generatingArchRepoId === r.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                                        {generatingArchRepoId === r.id ? "Generating..." : r.architectureOverview ? "Regenerate architecture" : "Generate architecture"}
+                                      </button>
+                                    )}
+                                  </div>
+                                  {r.localPath && <p className="font-mono text-[10px] text-gray-400">{r.localPath}</p>}
+                                  {r.architectureOverview && <p className="whitespace-pre-wrap font-mono text-[11px] text-gray-500">{r.architectureOverview}</p>}
+                                  {r.setupInstructions && <p className="whitespace-pre-wrap text-[11px] text-gray-500"><strong>Setup:</strong> {r.setupInstructions}</p>}
+                                </>
+                              )}
+                            </div>
+                          ))}
+
+                          {/* Add Repository form */}
+                          {addRepoProjectId === p.id ? (
+                            <div className="rounded-lg border border-dashed border-emerald-300 bg-emerald-50/30 p-3 space-y-2">
+                              <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-500">Add repository</p>
+                              <div className="flex gap-2">
+                                <input value={addRepoName} onChange={(e) => setAddRepoName(e.target.value)} placeholder="Repository name (e.g. my-repo)" className={inputClass + " flex-1"} />
+                                <button onClick={handleAddRepoFetchBranches} disabled={!addRepoName.trim() || addRepoLoadingBranches} className="inline-flex items-center gap-1 rounded-xl bg-gray-100 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-200 disabled:opacity-50">
+                                  {addRepoLoadingBranches ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitBranch className="h-3.5 w-3.5" />} Fetch branches
+                                </button>
+                              </div>
+                              {addRepoBranches.length > 0 && (
+                                <>
+                                  <div>
+                                    <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-emerald-500/80">
+                                      Branch * <span className="ml-1 font-normal normal-case tracking-normal text-gray-400">({addRepoBranches.length} available)</span>
+                                    </label>
+                                    <BranchPicker
+                                      branches={addRepoBranches}
+                                      value={addRepoBranch}
+                                      onChange={setAddRepoBranch}
+                                    />
+                                  </div>
+                                  <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
+                                    <input type="checkbox" checked={addRepoGenArch} onChange={(e) => setAddRepoGenArch(e.target.checked)} className="rounded border-gray-300" />
+                                    <Sparkles className="h-3 w-3 text-purple-500" /> Generate architecture overview with Claude
+                                  </label>
+                                  {!addRepoGenArch && (
+                                    <textarea value={addRepoArchitecture} onChange={(e) => setAddRepoArchitecture(e.target.value)} placeholder="Architecture overview (optional)" rows={2} className={inputClass + " resize-y font-mono text-xs"} />
+                                  )}
+                                  <textarea value={addRepoSetupInstructions} onChange={(e) => setAddRepoSetupInstructions(e.target.value)} placeholder="Setup instructions (optional)" rows={2} className={inputClass + " resize-y font-mono text-xs"} />
+                                  <div className="flex gap-2">
+                                    <button onClick={handleAddRepoSubmit} disabled={!addRepoBranch || addingRepo} className={btnPrimary}>
+                                      {addingRepo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Add Repository
+                                    </button>
+                                    <button onClick={resetAddRepoForm} className="rounded-xl px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100">Cancel</button>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ) : (
+                            <button onClick={() => setAddRepoProjectId(p.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-xs font-medium text-gray-500 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-600">
+                              <Plus className="h-3.5 w-3.5" /> Add Repository
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* ── Create project wizard ── */}
+            {epicView === "wizard" && (
+              <div className="space-y-4">
+                {/* Step indicators */}
+                <div className="flex items-center gap-3 mb-2">
+                  <button onClick={() => setWizardStep(1)} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${wizardStep === 1 ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}>
+                    1. Project Details
+                  </button>
+                  <div className="h-px w-4 bg-gray-300" />
+                  <button onClick={() => { if (newProjName.trim()) setWizardStep(2); }} disabled={!newProjName.trim()} className={`rounded-full px-3 py-1 text-xs font-semibold transition ${wizardStep === 2 ? "bg-indigo-600 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"} disabled:opacity-40`}>
+                    2. Repositories
+                  </button>
+                  <button onClick={() => { resetWizard(); setEpicView("list"); }} className="ml-auto rounded-xl px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100">Cancel</button>
+                </div>
+
+                {/* Step 1: Project details */}
+                {wizardStep === 1 && (
+                  <div className="space-y-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Project details</p>
+                    <input value={newProjName} onChange={(e) => setNewProjName(e.target.value)} placeholder="Project name *" className={inputClass} />
+                    <input value={newProjDescription} onChange={(e) => setNewProjDescription(e.target.value)} placeholder="Description" className={inputClass} />
+                    <textarea value={newProjArchitecture} onChange={(e) => setNewProjArchitecture(e.target.value)} placeholder="Architecture overview (folder tree, component structure, boundaries...)" rows={4} className={inputClass + " resize-y font-mono text-xs"} />
+                    <input value={newProjTechStack} onChange={(e) => setNewProjTechStack(e.target.value)} placeholder="Tech stack (e.g. React 18, Node 20, PostgreSQL 15, Redis)" className={inputClass} />
+                    <button onClick={() => setWizardStep(2)} disabled={!newProjName.trim()} className={btnPrimary}>
+                      Next: Add Repositories
+                    </button>
+                  </div>
+                )}
+
+                {/* Step 2: Repositories */}
+                {wizardStep === 2 && (
+                  <div className="space-y-4">
+                    {/* Repos already added (client-side list) */}
+                    {wizardRepos.length > 0 && (
+                      <div className="space-y-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Repositories to create ({wizardRepos.length})</p>
+                        {wizardRepos.map((r, idx) => (
+                          <div key={idx} className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-200/80 bg-white px-3 py-2 text-xs">
+                            <Globe className="h-3.5 w-3.5 text-gray-400" />
+                            <span className="font-semibold text-gray-900">{r.name}</span>
+                            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700">
+                              <GitBranch className="h-3 w-3" /> {r.branch}
+                            </span>
+                            {r.generateArchitecture ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-purple-700">
+                                <Sparkles className="h-3 w-3" /> Auto-generate
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-green-700">
+                                <CheckCircle2 className="h-3 w-3" /> Manual arch.
+                              </span>
+                            )}
+                            <button onClick={() => handleWizEditRepo(idx)} className="ml-auto rounded-lg p-1 text-gray-300 transition hover:bg-indigo-50 hover:text-indigo-500" title="Edit">
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            <button onClick={() => handleWizRemoveRepo(idx)} className="rounded-lg p-1 text-gray-300 transition hover:bg-red-50 hover:text-red-500" title="Remove">
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Add repo form */}
+                    <div className="space-y-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Add repository</p>
+
+                      {/* Repo name + fetch branches */}
+                      <div className="flex gap-2">
+                        <input value={wizRepoName} onChange={(e) => { setWizRepoName(e.target.value); setWizRepoBranches([]); setWizRepoBranch(""); }} placeholder="Repository name (e.g. sched-assist)" className={inputClass + " flex-1"} />
+                        <button onClick={handleWizFetchBranches} disabled={!wizRepoName.trim() || wizRepoLoadingBranches} className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50">
+                          {wizRepoLoadingBranches ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+                          Fetch branches
+                        </button>
+                      </div>
+
+                      {/* Branch selector (visible after fetch) */}
+                      {wizRepoBranches.length > 0 && (
+                        <>
+                          <div>
+                            <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                              Branch * <span className="ml-1 font-normal normal-case tracking-normal text-gray-400/80">({wizRepoBranches.length} available)</span>
+                            </label>
+                            <BranchPicker
+                              branches={wizRepoBranches}
+                              value={wizRepoBranch}
+                              onChange={setWizRepoBranch}
+                            />
+                          </div>
+
+                          {/* Architecture: generate or manual */}
+                          <div>
+                            <label className="mb-2 flex items-center gap-2 text-xs font-medium text-gray-700">
+                              <input type="checkbox" checked={wizRepoGenArch} onChange={(e) => { setWizRepoGenArch(e.target.checked); if (e.target.checked) setWizRepoArchitecture(""); }} className="rounded border-gray-300" />
+                              <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+                              Let Claude generate the architecture overview
+                            </label>
+                            {!wizRepoGenArch && (
+                              <textarea value={wizRepoArchitecture} onChange={(e) => setWizRepoArchitecture(e.target.value)} placeholder="Architecture overview * (folder tree, component structure...)" rows={3} className={inputClass + " resize-y font-mono text-xs"} />
+                            )}
+                          </div>
+
+                          {/* Setup instructions */}
+                          <textarea value={wizRepoSetupInstructions} onChange={(e) => setWizRepoSetupInstructions(e.target.value)} placeholder="Setup instructions (optional — install deps, env vars, dev server...)" rows={2} className={inputClass + " resize-y font-mono text-xs"} />
+
+                          {/* Add to list button */}
+                          <div className="flex gap-2">
+                            <button
+                              onClick={handleWizAddRepo}
+                              disabled={!wizRepoName.trim() || !wizRepoBranch || (!wizRepoGenArch && !wizRepoArchitecture.trim())}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-40"
+                            >
+                              {wizEditingRepoIdx !== null ? <><CheckCircle2 className="h-4 w-4" /> Update</> : <><Plus className="h-4 w-4" /> Add to list</>}
+                            </button>
+                            {wizEditingRepoIdx !== null && (
+                              <button
+                                onClick={resetWizRepoForm}
+                                className="rounded-xl px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100"
+                              >
+                                Cancel
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Submit all */}
+                    <div className="flex gap-2">
+                      <button onClick={() => setWizardStep(1)} className="rounded-xl px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100">
+                        Back
+                      </button>
+                      <button
+                        onClick={handleSubmitWizard}
+                        disabled={submittingProject || wizardRepos.length === 0}
+                        className={btnPrimary}
+                      >
+                        {submittingProject ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                        {submittingProject ? "Setting up..." : `Create Project & ${wizardRepos.length} Repo${wizardRepos.length !== 1 ? "s" : ""}`}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          )}
+
         </Box>
       </Stack>
       </Container>

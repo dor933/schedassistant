@@ -6,7 +6,7 @@ import type { UserId } from "@scheduling-agent/types";
 export class SkillsService {
   async getAll() {
     const rows = await Skill.findAll({
-      attributes: ["id", "name", "slug", "description", "skillText", "systemAgentAssignable", "primaryAgentAssignable", "createdAt", "updatedAt"],
+      attributes: ["id", "name", "slug", "description", "skillText", "systemAgentAssignable", "primaryAgentAssignable", "locked", "createdAt", "updatedAt"],
       order: [["name", "ASC"]],
     });
     return rows.map((r) => r.toJSON());
@@ -54,6 +54,7 @@ export class SkillsService {
   ) {
     const skill = await Skill.findByPk(id);
     if (!skill) throw Object.assign(new Error("Skill not found."), { status: 404 });
+    if (skill.locked) throw Object.assign(new Error("This skill is locked and cannot be edited."), { status: 403 });
 
     const patch: Record<string, unknown> = {};
     if (data.name !== undefined) patch.name = data.name.trim();
@@ -92,6 +93,7 @@ export class SkillsService {
   async remove(id: number, actorId?: UserId) {
     const skill = await Skill.findByPk(id);
     if (!skill) throw Object.assign(new Error("Skill not found."), { status: 404 });
+    if (skill.locked) throw Object.assign(new Error("This skill is locked and cannot be deleted."), { status: 403 });
     const name = skill.name;
     await skill.destroy();
     this.broadcast("skill_deleted", `Skill "${name}" deleted`, actorId);

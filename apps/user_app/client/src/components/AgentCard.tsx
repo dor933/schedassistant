@@ -55,7 +55,17 @@ export default function AgentCard({
       setSelectedSkillIds(agent.skillIds ?? []);
     }, [agent, allModels]);
 
+    function isSkillLocked(id: number) {
+      const sk = allSkills.find((s) => s.id === id);
+      // Explicitly locked OR a non-primary-assignable skill already assigned
+      // (e.g. MCP skills assigned to the Epic Orchestrator via migration)
+      if (sk?.locked === true) return true;
+      if (sk?.primaryAgentAssignable === false && selectedSkillIds.includes(id)) return true;
+      return false;
+    }
+
     function toggleSkill(id: number) {
+      if (isSkillLocked(id)) return;
       setSelectedSkillIds((prev) =>
         prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
       );
@@ -179,37 +189,44 @@ export default function AgentCard({
                 Skills
               </label>
               <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                {allSkills.filter((sk) => sk.primaryAgentAssignable !== false).map((sk) => {
+                {allSkills.filter((sk) => (sk.primaryAgentAssignable !== false && (!sk.locked || selectedSkillIds.includes(sk.id))) || (sk.primaryAgentAssignable === false && selectedSkillIds.includes(sk.id))).map((sk) => {
                   const selected = selectedSkillIds.includes(sk.id);
+                  const locked = sk.locked && selected;
                   return (
                     <button
                       key={sk.id}
                       type="button"
                       onClick={() => toggleSkill(sk.id)}
+                      disabled={locked}
                       className={`group/chip inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
-                        selected
-                          ? "bg-gradient-to-r from-amber-50 to-yellow-50 text-amber-800 ring-1 ring-amber-200/80 shadow-sm"
-                          : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300"
+                        locked
+                          ? "bg-gray-100 text-gray-500 ring-1 ring-gray-300 cursor-not-allowed opacity-75"
+                          : selected
+                            ? "bg-gradient-to-r from-amber-50 to-yellow-50 text-amber-800 ring-1 ring-amber-200/80 shadow-sm"
+                            : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300"
                       }`}
+                      title={locked ? "This skill is locked and cannot be removed" : undefined}
                     >
                       <span
                         className={`flex h-4.5 w-4.5 items-center justify-center rounded-full text-[9px] font-bold transition-colors duration-150 ${
-                          selected
-                            ? "bg-amber-500 text-white"
-                            : "bg-gray-200 text-gray-400 group-hover/chip:bg-gray-300 group-hover/chip:text-gray-500"
+                          locked
+                            ? "bg-gray-400 text-white"
+                            : selected
+                              ? "bg-amber-500 text-white"
+                              : "bg-gray-200 text-gray-400 group-hover/chip:bg-gray-300 group-hover/chip:text-gray-500"
                         }`}
                         style={{ width: 18, height: 18 }}
                       >
                         {selected ? "\u2713" : sk.name.charAt(0).toUpperCase()}
                       </span>
                       {sk.name}
-                      {selected && (
+                      {selected && !locked && (
                         <X className="h-3 w-3 text-amber-400 transition-colors group-hover/chip:text-amber-600" />
                       )}
                     </button>
                   );
                 })}
-                {allSkills.filter((sk) => sk.primaryAgentAssignable !== false).length === 0 && (
+                {allSkills.filter((sk) => sk.primaryAgentAssignable !== false && !sk.locked).length === 0 && (
                   <p className="text-[11px] text-gray-400 py-0.5">No skills defined yet (super admin can add in Skills).</p>
                 )}
               </div>

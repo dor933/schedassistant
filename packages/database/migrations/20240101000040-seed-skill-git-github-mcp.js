@@ -11,54 +11,6 @@
 
 /** @type {{ slug: string; name: string; description: string; skillText: string; systemAgentAssignable?: boolean }[]} */
 const SKILLS = [
-  // ─── MCP: git / GitHub / bash (split so agents can take git without GitHub API, etc.) ───
-  {
-    slug: "mcp-git-cli-bash",
-    name: "Git CLI (bash MCP)",
-    description: "Run git via bash/mcp-shell: clone, pull, push, branch, merge. Uses GIT_SSH_COMMAND when set.",
-    skillText: `
-    # Git CLI — bash MCP (\`mcp-shell\`)
-
-## Server
-- **bash** (DB name) — \`npx -y mcp-shell\`
-
-## Scope
-Local **git** only: \`clone\`, \`status\`, \`diff\`, \`log\`, \`branch\`, \`commit\`, \`pull\`, \`push\`, \`merge\`, \`rebase\`, \`remote\`, \`fetch\`, \`config\`, etc.
-
-## Authentication — HTTPS + PAT (primary method)
-
-> **SSH is NOT available** in this container (\`ssh\` client is not installed).
-> Do **not** attempt \`git@github.com:…\` URLs — they will fail with \`ssh: not found\`.
-
-### Clone / Fetch / Push — use HTTPS with the GitHub PAT:
-
-\`\`\`bash
-git clone https://x-access-token:\${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/OWNER/REPO.git /tmp/REPO 2>&1
-\`\`\`
-
-### Fallback order (do NOT waste turns on methods that fail):
-1. ✅ **HTTPS + PAT** — \`https://x-access-token:\${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/OWNER/REPO.git\` — **USE THIS FIRST**
-2. ❌ **SSH** — \`git@github.com:OWNER/REPO.git\` — **BROKEN** (no \`ssh\` binary in container)
-3. ❌ **Plain HTTPS** — \`https://github.com/OWNER/REPO.git\` — **BROKEN** (no interactive credentials)
-
-### Setting credentials for an already-cloned repo:
-\`\`\`bash
-cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/OWNER/REPO.git
-\`\`\`
-
-## Rules
-1. Only claim success after **real** tool output.
-2. \`cd\` to the repo root in the same shell command when needed.
-3. Report stderr honestly.
-4. **Always start with HTTPS + PAT method** — do not try SSH or plain HTTPS.
-
-## Not in this skill
-- **GitHub REST** (API fork, issues, PRs via API) → \`mcp-github-api\` (PAT applies there too).
-- **Reading/editing files** without git → \`mcp-filesystem-repo\`.
-- **Tests/builds** → \`mcp-bash-build-test\`.
-
-    `,
-  },
   {
     slug: "mcp-github-api",
     name: "GitHub API (github MCP)",
@@ -72,15 +24,114 @@ cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSO
 **GitHub.com HTTP API** only (what this MCP exposes): issues, PRs, **fork via API**, repo metadata, search, labels, etc.
 
 ## PAT vs SSH (important)
-- **GITHUB_PERSONAL_ACCESS_TOKEN** is for **REST API** calls only. It is **not** used for \`git clone\`/\`push\` over SSH — use **\`mcp-git-cli-bash\`** with \`git@github.com:...\` and the container’s **GIT_SSH_COMMAND** / deploy key instead.
+- **GITHUB_PERSONAL_ACCESS_TOKEN** is for **REST API** calls only. It is **not** used for \`git clone\`/\`push\` over SSH — use **\`gh-cli\`** with \`git@github.com:...\` and the container’s **GIT_SSH_COMMAND** / deploy key instead.
 - **Fork** is an **API** action. If you get **Permission denied** / insufficient scope, the token lacks rights (e.g. classic PAT: \`repo\` / \`public_repo\` as appropriate; fine-grained: repository access + contents). **An SSH key cannot perform API fork** — either fix the token scopes or fork in the browser and then \`git clone\` via SSH.
 
 ## Environment
 - **GITHUB_PERSONAL_ACCESS_TOKEN** is merged into MCP env. Never print it.
 
 ## Not in this skill
-- Local \`git\` over SSH → \`mcp-git-cli-bash\`.
+- Local \`git\` over SSH → \`gh-cli\`.
 - Arbitrary non-GitHub HTTP URLs → \`dev-fetch-mcp\`.`,
+  },
+  {
+    slug: "gh-cli",
+    name: "Git & GitHub CLI (git + gh)",
+    description: "All git operations (clone, commit, push, branch, merge) and GitHub operations (PRs, issues, checks) via git and gh CLI through bash MCP.",
+    skillText: `# Git & GitHub CLI (\`git\` + \`gh\`)
+
+## What this is
+Both **\`git\`** and **\`gh\`** CLIs are installed in the container.
+Use them through the **bash MCP** (\`mcp-shell\`) — run commands like any other shell command.
+
+## Authentication
+
+### git — HTTPS + PAT
+> **SSH is NOT available** in this container. Do **not** use \`git@github.com:…\` URLs.
+
+\`\`\`bash
+# Clone with PAT
+git clone https://x-access-token:\${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/OWNER/REPO.git /path/to/repo
+
+# Fix remote for an already-cloned repo
+git remote set-url origin https://x-access-token:\${GITHUB_PERSONAL_ACCESS_TOKEN}@github.com/OWNER/REPO.git
+\`\`\`
+
+### gh — auto-authenticated
+\`gh\` uses the **GH_TOKEN** env var (pre-configured). No \`gh auth login\` needed.
+
+---
+
+## Git operations
+
+### Basics
+\`\`\`bash
+git status
+git diff
+git log --oneline -20
+git add -A
+git commit -m "feat: description"
+\`\`\`
+
+### Branching
+\`\`\`bash
+git checkout -b feature/my-branch
+git checkout main
+git merge feature/my-branch
+git rebase main
+\`\`\`
+
+### Remote
+\`\`\`bash
+git pull origin main
+git push origin feature/my-branch
+git fetch origin
+\`\`\`
+
+---
+
+## GitHub operations (gh CLI)
+
+### Pull Requests
+\`\`\`bash
+# Create a PR (push branch first!)
+gh pr create --title "feat: add feature X" --body "Description" --base main
+
+# Draft PR
+gh pr create --title "wip: feature X" --body "WIP" --base main --draft
+
+# List / view / merge
+gh pr list
+gh pr view <number>
+gh pr merge <number> --squash
+\`\`\`
+
+### Issues
+\`\`\`bash
+gh issue list
+gh issue create --title "Bug: ..." --body "..."
+gh issue view <number>
+\`\`\`
+
+### Checks & Status
+\`\`\`bash
+gh pr checks <number>
+gh run list
+\`\`\`
+
+---
+
+## Rules
+1. Always \`cd\` to the repo directory before running commands.
+2. **HTTPS + PAT only** — never use SSH URLs (\`git@github.com:…\`).
+3. Push your branch before creating a PR.
+4. Use \`--base\` to specify the target branch explicitly.
+5. Report stderr honestly — only claim success after real tool output.
+6. Never print or log tokens.
+
+## Not in this skill
+- **Reading/editing files** without git → \`mcp-filesystem-repo\`.
+- **Tests/builds** → \`mcp-bash-build-test\`.`,
   },
   {
     slug: "mcp-filesystem-repo",
@@ -93,7 +144,7 @@ cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSO
 > edit existing files, create directories, or move/rename files — use this skill.
 >
 > **This is NOT a shell.** You cannot run commands (\`npm\`, \`git\`, \`pytest\`, \`curl\`, etc.) through this skill.
-> For running commands, use the **bash** MCP skills (\`mcp-git-cli-bash\`, \`mcp-bash-build-test\`).
+> For running commands, use the **bash** MCP skills (\`gh-cli\`, \`mcp-bash-build-test\`).
 
 ## Server
 - **filesystem** (DB name) — \`npx -y @modelcontextprotocol/server-filesystem /app/data\`
@@ -110,7 +161,7 @@ cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSO
 ## When NOT to use this skill
 | Need | Use instead |
 |------|-------------|
-| Run \`git clone\`, \`git commit\`, \`git push\` | \`mcp-git-cli-bash\` (bash MCP) |
+| Run \`git clone\`, \`git commit\`, \`git push\` | \`gh-cli\` (bash MCP) |
 | Run \`npm install\`, \`pytest\`, \`make build\` | \`mcp-bash-build-test\` (bash MCP) |
 | Run any shell command | bash MCP skills |
 
@@ -158,7 +209,7 @@ cd /tmp/REPO && git remote set-url origin https://x-access-token:\${GITHUB_PERSO
 - Do not claim green tests without evidence.
 
 ## Not in this skill
-- **Git** operations → \`mcp-git-cli-bash\`.
+- **Git** operations → \`gh-cli\`.
 - **Editing source** for review without running suite → \`mcp-filesystem-repo\`.`,
   },
 

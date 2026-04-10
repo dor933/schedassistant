@@ -5,6 +5,9 @@ import { getDeepAgentQueue } from "../queues/deepAgent.bull";
 import { linkDelegationToConsultation } from "../consultationChain";
 import { logger } from "../logger";
 
+/** Slug of the web search system agent — kept in sync with migration 0044. */
+const WEB_SEARCH_SYSTEM_AGENT_SLUG = "web_search";
+
 /**
  * Async executor agent delegation tool (Tier 2).
  *
@@ -99,6 +102,105 @@ export function DelegateToDeepAgentTool(
           .string()
           .min(1)
           .describe("A detailed description of the task for the executor agent, including all relevant context."),
+      }),
+    },
+  );
+}
+
+/**
+ * Purpose-built web-search delegation tool for the Epic Orchestrator.
+ *
+ * Hardcodes the target system agent to `web_search` — the LLM cannot pick
+ * any other system agent through this tool. This is intentional: the epic
+ * orchestrator should only reach out to web search for external lookups
+ * (library docs, API refs, best practices) and nothing else.
+ *
+ * Mechanically identical to `DelegateToDeepAgentTool`:
+ *  - Asynchronous — enqueues a job and returns immediately
+ *  - Caller's turn ends; result arrives later as a delegation_result job
+ */
+export function DelegateWebSearchTool(
+  callerAgentId: string,
+  userId: number,
+  groupId: string | null,
+  singleChatId: string | null,
+) {
+  return tool(
+    async (input) => {
+      const { request } = input;
+
+      const systemAgent = await SystemAgent.findOne({
+        where: { slug: WEB_SEARCH_SYSTEM_AGENT_SLUG },
+      });
+      if (!systemAgent) {
+        return (
+          `Error: the web_search system agent is not configured in this environment. ` +
+          `Contact the administrator to seed the web_search system agent (migration 0044).`
+        );
+      }
+
+      const delegation = await DeepAgentDelegation.create({
+        callerAgentId,
+        systemAgentId: systemAgent.id,
+        userId,
+        request,
+        status: "pending",
+        groupId,
+        singleChatId,
+      });
+
+      const queue = getDeepAgentQueue();
+      await queue.add("deep_agent_run", {
+        delegationId: delegation.id,
+        systemAgentId: systemAgent.id,
+        systemAgentSlug: systemAgent.slug,
+        request,
+        callerAgentId,
+        userId,
+        groupId,
+        singleChatId,
+      });
+
+      await linkDelegationToConsultation(callerAgentId, delegation.id);
+
+      logger.info("DelegateWebSearch: job enqueued", {
+        delegationId: delegation.id,
+        callerAgentId,
+        requestLen: request.length,
+      });
+
+      return (
+        `Web search delegated successfully.\n` +
+        `- Delegation ID: ${delegation.id}\n` +
+        `- Target: Web Search Agent (${systemAgent.slug})\n` +
+        `- Status: pending\n\n` +
+        `The web search will run in the background. ` +
+        `You will be re-invoked automatically when the result is ready — your current turn ends now. ` +
+        `Inform the user that you are looking up external information.`
+      );
+    },
+    {
+      name: "delegate_web_search",
+      description:
+        "Delegate an external information lookup to the Web Search Agent — the ONLY system agent you are " +
+        "allowed to delegate to. Use this to look up library documentation, API references, current best " +
+        "practices, package versions, or any information you cannot derive from your own knowledge or the " +
+        "local codebase. " +
+        "This is an ASYNCHRONOUS call — the web search runs in the background and your current turn will " +
+        "end immediately. You will be re-invoked with the result once it completes. " +
+        "Do NOT use this tool for questions the user should answer (requirements, preferences, scope) or " +
+        "for information already available in the project's files. Prefer to gather external info during " +
+        "planning (Phase 2) when possible, but you may call this mid-execution if it genuinely improves " +
+        "task quality.",
+      schema: z.object({
+        request: z
+          .string()
+          .min(1)
+          .describe(
+            "A clear, specific search query or research question. Include enough context that the web " +
+            "search agent can find relevant information (e.g. 'What is the latest stable version of " +
+            "Sequelize that supports PostgreSQL 16?' rather than just 'Sequelize version').",
+          ),
       }),
     },
   );

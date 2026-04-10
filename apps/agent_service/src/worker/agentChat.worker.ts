@@ -14,7 +14,10 @@ import { ensureCanonicalThreadId } from "../sessionsManagment/canonicalThread";
 import { writeConversationMessage } from "../sessionsManagment/conversationMessageWriter";
 import { popConsultationOrigin } from "../consultationChain";
 import { agentChatQueue } from "../queues/agentChat.bull";
-import { Group, SingleChat, Agent } from "@scheduling-agent/database";
+import { Group, SingleChat, Agent, DeepAgentDelegation } from "@scheduling-agent/database";
+import { EPIC_ORCHESTRATOR_AGENT_ID } from "../constants/epicAgent";
+import { isEpicExecutionRequest } from "../utils/epicDetection";
+import { isEpicOrchestratorBusy } from "../utils/epicBusyCheck";
 import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
@@ -34,6 +37,7 @@ export type AgentChatWorkerHandle = {
  */
 export function startAgentChatWorker(
   graph: CompiledStateGraph<any, any, any>,
+  epicGraph: CompiledStateGraph<any, any, any>,
 ): AgentChatWorkerHandle {
   const worker = new Worker<AgentChatJobData, AgentChatJobResult, string>(
     AGENT_CHAT_QUEUE_NAME,
@@ -76,6 +80,99 @@ export function startAgentChatWorker(
         mentionsAgent,
       });
 
+      // Select the correct graph for this agent
+      const activeGraph =
+        resolvedAgentId === EPIC_ORCHESTRATOR_AGENT_ID ? epicGraph : graph;
+
+      // Is this an epic delegation callback? (epic orchestrator finished a delegated task)
+      const isEpicDelegationCallback =
+        requestId?.startsWith("epic-delegation-");
+
+      // System-internal messages that must NEVER be bounced — they drive the
+      // epic forward or are part of internal agent-to-agent chains.
+      const isSystemInternalRequest =
+        isEpicExecutionRequest(requestId) ||
+        requestId?.startsWith("delegation-") ||
+        requestId?.startsWith("consultation-chain-") ||
+        requestId?.startsWith("pr-approved-");
+
+      // ── Busy bounce ─────────────────────────────────────────────────
+      // If a fresh user message arrives at the Epic Orchestrator while ANY
+      // epic task is actively running (across all users — the orchestrator
+      // is a shared singleton), reply immediately with a busy notice instead
+      // of queueing behind the thread lock.
+      if (
+        resolvedAgentId === EPIC_ORCHESTRATOR_AGENT_ID &&
+        mentionsAgent !== false &&
+        !isSystemInternalRequest
+      ) {
+        try {
+          const busy = await isEpicOrchestratorBusy(userId);
+          if (busy.busy) {
+            const threadId = await ensureCanonicalThreadId({
+              userId,
+              groupId: groupId ?? null,
+              singleChatId: singleChatId ?? null,
+            });
+
+            const taskLabel = busy.taskTitle ? `"${busy.taskTitle}"` : "a task";
+            const epicLabel = busy.epicTitle ? ` (epic: "${busy.epicTitle}")` : "";
+            const ownerNote = busy.sameUser
+              ? ""
+              : " Another user's epic is currently running —";
+            const busyMessage =
+              `The Epic Orchestrator is currently executing ${taskLabel}${epicLabel}.${ownerNote} ` +
+              `Only one epic can run at a time system-wide, so new requests cannot be processed until the current task finishes. ` +
+              `Please try again in a few minutes.`;
+
+            logger.info("Bouncing user message — epic orchestrator busy", {
+              requestId,
+              userId,
+              epicId: busy.epicId,
+              runningTask: busy.taskTitle,
+            });
+
+            // Persist the user's message and the busy reply so the UI reflects both
+            await writeConversationMessage({
+              groupId: groupId ?? null,
+              singleChatId: singleChatId ?? null,
+              threadId,
+              role: "user",
+              content: message,
+              senderName: displayName,
+              requestId,
+            });
+            await writeConversationMessage({
+              groupId: groupId ?? null,
+              singleChatId: singleChatId ?? null,
+              threadId,
+              role: "assistant",
+              content: busyMessage,
+              requestId,
+            });
+
+            emitAgentReply({
+              requestId,
+              userId,
+              threadId,
+              groupId: groupId ?? null,
+              singleChatId: singleChatId ?? null,
+              ok: true,
+              reply: busyMessage,
+              systemPrompt: null,
+            });
+
+            return { threadId, reply: busyMessage, systemPrompt: null };
+          }
+        } catch (err: any) {
+          // Busy check is best-effort — if it fails, fall through to normal processing.
+          logger.warn("Epic busy-check failed; proceeding normally", {
+            requestId,
+            error: err?.message,
+          });
+        }
+      }
+
       // Group message without @mention → store only, no agent invocation
       if (groupId && mentionsAgent === false) {
         let storeThreadId = "";
@@ -87,7 +184,7 @@ export function startAgentChatWorker(
               singleChatId: singleChatId ?? null,
             });
             storeThreadId = threadId;
-            await storeMessageOnly(graph, {
+            await storeMessageOnly(activeGraph, {
               userId,
               threadId,
               message,
@@ -134,13 +231,19 @@ export function startAgentChatWorker(
             userId,
             groupId: groupId ?? null,
             singleChatId: singleChatId ?? null,
+            ...(isEpicExecutionRequest(requestId)
+              ? { isEpicExecution: true }
+              : {}),
           });
 
-          // Delegation/consultation-chain callbacks are internal instructions
-          // for the agent — don't persist them as visible conversation messages.
+          // Delegation/consultation-chain callbacks and epic continuations are
+          // internal instructions for the agent — don't persist them as visible
+          // conversation messages.
           const isDelegationCallback =
             requestId?.startsWith("delegation-") ||
-            requestId?.startsWith("consultation-chain-");
+            requestId?.startsWith("consultation-chain-") ||
+            requestId?.startsWith("epic-continuation-") ||
+            isEpicDelegationCallback;
 
           if (!isDelegationCallback) {
             await writeConversationMessage({
@@ -154,7 +257,7 @@ export function startAgentChatWorker(
             });
           }
 
-          const turnResult = await executeChatTurn(graph, {
+          const turnResult = await executeChatTurn(activeGraph, {
             userId,
             threadId,
             message,
@@ -203,6 +306,37 @@ export function startAgentChatWorker(
           ...(turnResult.modelName ? { modelName: turnResult.modelName } : {}),
         });
 
+        // ── Epic auto-continuation ──────────────────────────────────
+        // If the graph signalled that more epic tasks are ready, enqueue
+        // a synthetic continuation job so the orchestrator keeps going
+        // without requiring a new user message.
+        if (turnResult.epicContinuation) {
+          const cont = turnResult.epicContinuation;
+          const contRequestId = `epic-continuation-${cont.epicId}-${Date.now()}`;
+
+          logger.info("Enqueuing epic continuation turn", {
+            epicId: cont.epicId,
+            completedTask: cont.completedTaskTitle,
+            remainingTasks: cont.remainingTasks,
+            contRequestId,
+          });
+
+          await agentChatQueue.add("epic_continuation", {
+            userId,
+            message:
+              `[Automatic continuation] Task "${cont.completedTaskTitle}" completed successfully. ` +
+              `${cont.remainingTasks} task(s) remain in epic ${cont.epicId}. ` +
+              `Continue executing the next ready task using execute_epic_task with epicId "${cont.epicId}". ` +
+              `Provide a progress update after each task.`,
+            requestId: contRequestId,
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+            agentId: resolvedAgentId,
+            mentionsAgent: true,
+            displayName: "System",
+          } as any);
+        }
+
         // Consultation chain: if this was a delegation_result and Agent B was
         // consulted by Agent A, forward Agent B's processed reply to Agent A.
         if (requestId?.startsWith("delegation-") && turnResult.reply) {
@@ -227,6 +361,51 @@ export function startAgentChatWorker(
               delegationId,
               agentB: resolvedAgentId,
               originAgentId: origin.originAgentId,
+            });
+          }
+        }
+
+        // Epic delegation callback: the epic orchestrator finished processing
+        // a delegated task — update the delegation record and notify the caller.
+        if (isEpicDelegationCallback && turnResult.reply) {
+          const delegationId = requestId!.replace("epic-delegation-", "");
+          try {
+            await DeepAgentDelegation.update(
+              {
+                status: "completed",
+                result: turnResult.reply,
+                completedAt: new Date(),
+              },
+              { where: { id: delegationId } },
+            );
+
+            const delegation = await DeepAgentDelegation.findByPk(delegationId, {
+              attributes: ["callerAgentId", "userId", "groupId", "singleChatId"],
+            });
+
+            if (delegation) {
+              await agentChatQueue.add("delegation_result", {
+                userId: delegation.userId,
+                message:
+                  `[Epic Orchestrator — Delegation Result ${delegationId}]\n\n` +
+                  turnResult.reply,
+                requestId: `delegation-${delegationId}`,
+                groupId: delegation.groupId ?? null,
+                singleChatId: delegation.singleChatId ?? null,
+                agentId: delegation.callerAgentId,
+                mentionsAgent: true,
+                displayName: "Epic Orchestrator",
+              } as any);
+
+              logger.info("Epic delegation completed, notifying caller", {
+                delegationId,
+                callerAgentId: delegation.callerAgentId,
+              });
+            }
+          } catch (err: any) {
+            logger.error("Failed to complete epic delegation callback", {
+              delegationId,
+              error: err?.message,
             });
           }
         }
@@ -268,7 +447,7 @@ export function startAgentChatWorker(
       connection: redisConfig,
       concurrency: Number(process.env.AGENT_CHAT_WORKER_CONCURRENCY ?? "32"),
       lockDuration: Number(
-        process.env.AGENT_CHAT_LOCK_DURATION_MS ?? 10 * 60 * 1000,
+        process.env.AGENT_CHAT_LOCK_DURATION_MS ?? 20 * 60 * 1000,
       ),
     },
   );

@@ -79,6 +79,20 @@ export const AgentAnnotation = Annotation.Root({
     reducer: (_state, update) => update,
     default: () => null,
   }),
+
+  /**
+   * Set by callModel when an epic task was executed and more tasks remain.
+   * The worker uses this to auto-enqueue a continuation turn so the
+   * orchestrator can keep executing without exceeding the tool-loop limit.
+   */
+  epicContinuation: Annotation<{
+    epicId: string;
+    completedTaskTitle: string;
+    remainingTasks: number;
+  } | null>({
+    reducer: (_state, update) => update,
+    default: () => null,
+  }),
 });
 
 export type AgentState = typeof AgentAnnotation.State;

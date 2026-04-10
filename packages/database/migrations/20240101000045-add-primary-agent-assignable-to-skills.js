@@ -15,7 +15,7 @@ module.exports = {
       `UPDATE skills
          SET primary_agent_assignable = false,
              updated_at = NOW()
-       WHERE slug IN ('mcp-git-cli-bash', 'mcp-github-api', 'mcp-filesystem-repo', 'mcp-bash-build-test')`,
+       WHERE slug IN ('mcp-github-api', 'mcp-filesystem-repo', 'mcp-bash-build-test', 'gh-cli')`,
     );
 
     // 3. Also mark those MCP skills as system-agent-assignable (some were already,
@@ -24,7 +24,7 @@ module.exports = {
       `UPDATE skills
          SET system_agent_assignable = true,
              updated_at = NOW()
-       WHERE slug IN ('mcp-git-cli-bash', 'mcp-github-api', 'mcp-filesystem-repo', 'mcp-bash-build-test')`,
+       WHERE slug IN ('mcp-github-api', 'mcp-filesystem-repo', 'mcp-bash-build-test', 'gh-cli')`,
     );
 
     // 4. dev-in-house-* skills → primary agents only (not system)

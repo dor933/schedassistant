@@ -2,13 +2,13 @@ import { RunnableConfig } from "@langchain/core/runnables";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 
-import type { AgentState } from "../../../state";
-import { insertEpisodicMemoryChunks } from "../../../rag/episodicMemoryChunksWriter";
-import { embedText } from "../../../rag/embeddings";
-import { getLangfuseCallbackHandler, observeWithContext } from "../../../langfuse";
-import { logger } from "../../../logger";
-import { resolveEmbeddingProviderApiKey } from "../../../rag/embeddingProvider";
-import { EmbeddingProvider } from "../../../types/providers";
+import type { AgentState } from "../../state";
+import { insertEpisodicMemoryChunks } from "../../rag/episodicMemoryChunksWriter";
+import { embedText } from "../../rag/embeddings";
+import { getLangfuseCallbackHandler, observeWithContext } from "../../langfuse";
+import { logger } from "../../logger";
+import { resolveEmbeddingProviderApiKey } from "../../rag/embeddingProvider";
+import { EmbeddingProvider } from "../../types/providers";
 import { Thread } from "@scheduling-agent/database";
 import { SessionSummary } from "@scheduling-agent/types";
 

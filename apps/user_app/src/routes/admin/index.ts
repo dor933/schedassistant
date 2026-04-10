@@ -9,6 +9,7 @@ import { modelsRouter } from "./models.routes";
 import { mcpServersRouter } from "./mcpServers.routes";
 import { systemAgentsRouter } from "./systemAgents.routes";
 import { skillsRouter } from "./skills.routes";
+import { projectsRouter } from "./projects.routes";
 
 const router = Router();
 
@@ -22,6 +23,7 @@ router.use("/groups", groupsRouter);
 router.use("/mcp-servers", mcpServersRouter);
 router.use("/system-agents", systemAgentsRouter);
 router.use("/skills", skillsRouter);
+router.use("/projects", projectsRouter);
 // models router handles /models, /vendors, and /single-chats paths
 router.use("/", modelsRouter);
 

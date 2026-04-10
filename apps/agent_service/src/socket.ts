@@ -1,6 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import { Server } from "socket.io";
 import { agentChatQueue } from "./queues/agentChat.bull";
+import { isEpicExecutionRequest } from "./utils/epicDetection";
 import { logger } from "./logger";
 
 let ioInstance: Server | null = null;
@@ -47,6 +48,8 @@ export interface ActiveJobEntry {
   conversationType: "group" | "single";
   userId: number;
   groupId: string | null;
+  /** True when the epic orchestrator is executing an epic task. */
+  isEpicExecution?: boolean;
 }
 
 /** Emitted when the worker starts processing a job. */
@@ -55,6 +58,8 @@ export interface AgentTypingPayload {
   userId: number;
   groupId: string | null;
   singleChatId: string | null;
+  /** True when the epic orchestrator is executing an epic task. */
+  isEpicExecution?: boolean;
 }
 
 /**
@@ -81,6 +86,9 @@ export function attachAgentSocketIO(httpServer: HttpServer): Server {
             conversationType: j.data.groupId ? "group" as const : "single" as const,
             userId: j.data.userId,
             groupId: j.data.groupId ?? null,
+            ...(isEpicExecutionRequest(j.data.requestId)
+              ? { isEpicExecution: true }
+              : {}),
           }));
         callback(entries);
       } catch (err) {

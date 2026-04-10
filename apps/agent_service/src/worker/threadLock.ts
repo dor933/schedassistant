@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import type { RedisConfig } from "../redisClient";
 
 const LOCK_PREFIX = "agent:chat:thread-lock:";
-const LOCK_TTL_SEC = Number(process.env.AGENT_CHAT_LOCK_TTL_SEC ?? "600");
+const LOCK_TTL_SEC = Number(process.env.AGENT_CHAT_LOCK_TTL_SEC ?? "1200");
 const SPIN_MS = 25;
 
 /**

@@ -5,7 +5,7 @@ import type { AgentId, UserId } from "@scheduling-agent/types";
 export interface DeepAgentDelegationAttributes {
   id: string;
   callerAgentId: AgentId;
-  systemAgentId: number;
+  systemAgentId: number | null;
   userId: UserId;
   request: string;
   result: string | null;
@@ -28,7 +28,7 @@ class DeepAgentDelegation
 {
   declare id: string;
   declare callerAgentId: AgentId;
-  declare systemAgentId: number;
+  declare systemAgentId: number | null;
   declare userId: UserId;
   declare request: string;
   declare result: string | null;
@@ -54,7 +54,7 @@ DeepAgentDelegation.init(
     },
     systemAgentId: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       field: "system_agent_id",
     },
     userId: {

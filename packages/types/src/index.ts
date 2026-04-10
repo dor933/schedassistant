@@ -172,6 +172,10 @@ export interface EpisodicMemoryAttributes {
   threadId: string;
   /** FK to `agents.id` — primary key for memory retrieval (persists across conversations). */
   agentId: AgentId | null;
+  /** FK to `repositories.id` — scopes chunk to a specific repository (nullable). */
+  repositoryId: RepositoryId | null;
+  /** FK to `projects.id` — scopes chunk to a specific project (nullable). */
+  projectId: ProjectId | null;
   content: string;
   embedding: number[];
   metadata?: EpisodicChunkMetadata | null;
@@ -276,6 +280,128 @@ export interface ConversationMessageAttributes {
 export interface SessionSummarizationResult {
   summary: string;
   chunks: string[];
+}
+
+// ─── Validation (Zod schemas) ───────────────────────────────────────────────
+
+// ─── Code Task Workflow ─────────────────────────────────────────────────────
+
+export type ProjectId = string;
+export type RepositoryId = string;
+export type EpicTaskId = string;
+export type TaskStageId = string;
+export type AgentTaskId = string;
+export type TaskExecutionId = string;
+
+export type EpicTaskStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+export type TaskStageStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+export type AgentTaskStatus = "pending" | "ready" | "in_progress" | "completed" | "failed" | "cancelled";
+export type TaskExecutionStatus = "running" | "completed" | "failed" | "cancelled";
+export type PrStatus = "draft" | "open" | "approved" | "merged" | "closed" | "changes_requested";
+
+export interface ProjectAttributes {
+  id: ProjectId;
+  name: string;
+  description: string | null;
+  userId: UserId;
+  /** High-level project architecture: how components fit together, major boundaries. */
+  architectureOverview: string | null;
+  /** Languages, frameworks, major dependencies (e.g. "React 18, Node 20, PostgreSQL 15"). */
+  techStack: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface RepositoryAttributes {
+  id: RepositoryId;
+  projectId: ProjectId;
+  name: string;
+  url: string;
+  defaultBranch: string;
+  /** Repo-specific structure: folder tree, component layout, naming conventions, etc. */
+  architectureOverview: string | null;
+  /** Absolute path to the local clone on this machine (e.g. "/home/user/projects/my-api"). */
+  localPath: string | null;
+  /** How to install deps, run dev server, build, test, etc. */
+  setupInstructions: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface EpicTaskAttributes {
+  id: EpicTaskId;
+  title: string;
+  description: string;
+  status: EpicTaskStatus;
+  projectId: ProjectId;
+  userId: UserId;
+  agentId: AgentId;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+}
+
+export interface EpicTaskRepositoryAttributes {
+  id: string;
+  epicTaskId: EpicTaskId;
+  repositoryId: RepositoryId;
+  createdAt: Date;
+}
+
+export interface TaskStageAttributes {
+  id: TaskStageId;
+  epicTaskId: EpicTaskId;
+  title: string;
+  description: string | null;
+  status: TaskStageStatus;
+  sortOrder: number;
+  prUrl: string | null;
+  prNumber: number | null;
+  prStatus: PrStatus | null;
+  repositoryId: RepositoryId | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+}
+
+export interface AgentTaskAttributes {
+  id: AgentTaskId;
+  taskStageId: TaskStageId;
+  title: string;
+  description: string | null;
+  status: AgentTaskStatus;
+  sortOrder: number;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+  startedAt: Date | null;
+  completedAt: Date | null;
+}
+
+export interface TaskExecutionAttributes {
+  id: TaskExecutionId;
+  agentTaskId: AgentTaskId;
+  attemptNumber: number;
+  status: TaskExecutionStatus;
+  cliSessionId: string | null;
+  prompt: string | null;
+  result: string | null;
+  error: string | null;
+  feedback: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+  completedAt: Date | null;
+}
+
+export interface TaskDependencyAttributes {
+  id: string;
+  taskId: AgentTaskId;
+  dependsOnTaskId: AgentTaskId;
+  createdAt: Date;
 }
 
 // ─── Validation (Zod schemas) ───────────────────────────────────────────────

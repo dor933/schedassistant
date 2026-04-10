@@ -1,8 +1,8 @@
 import { StateGraph, START, END } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { AgentAnnotation, AgentState } from "../../state";
-import { summarizationGuardNode } from "./nodes/summarizationGuard";
-import { sessionSummarizationNode } from "./nodes/sessionSummarization";
+import { summarizationGuardNode } from "../shared_nodes/summarizationGuard";
+import { sessionSummarizationNode } from "../shared_nodes/sessionSummarization";
 import { contextBuilderNode } from "./nodes/contextBuilder";
 import { callModelNode } from "./nodes/callModel";
 

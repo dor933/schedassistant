@@ -45,7 +45,8 @@
       "Bash(find /home/office/Dev/schedassistant/apps/agent_service/node_modules -path *langgraph*checkpoint* -type f -name *.d.ts)",
       "Bash(find /c/Users/momi9/Dev/sched-assist/sched-assist-new/packages/database -type f -name *migration*)",
       "WebFetch(domain:docs.langchain.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(xargs -I {} find {} -maxdepth 2 -type d)"
     ]
   }
 }

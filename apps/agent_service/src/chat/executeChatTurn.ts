@@ -35,6 +35,12 @@ export type ChatTurnResult = {
   modelSlug?: string;
   vendorSlug?: string;
   modelName?: string;
+  /** When set, the worker should auto-continue with the next epic task. */
+  epicContinuation?: {
+    epicId: string;
+    completedTaskTitle: string;
+    remainingTasks: number;
+  } | null;
 };
 
 /**
@@ -144,6 +150,8 @@ export async function executeChatTurn(
       const replyModelName: string | undefined = ak?.modelName;
 
       const sp = result.systemPrompt;
+      const epicContinuation = (result as any).epicContinuation ?? null;
+
       return {
         threadId,
         reply: typeof reply === "string" ? reply : JSON.stringify(reply),
@@ -152,6 +160,7 @@ export async function executeChatTurn(
         ...(replyModelSlug ? { modelSlug: replyModelSlug } : {}),
         ...(replyVendorSlug ? { vendorSlug: replyVendorSlug } : {}),
         ...(replyModelName ? { modelName: replyModelName } : {}),
+        ...(epicContinuation ? { epicContinuation } : {}),
       };
     },
     observationInput,

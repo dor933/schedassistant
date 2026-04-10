@@ -7,6 +7,8 @@ import { setDeps } from "./deps";
 import { chatRouter } from "./routes/chat.routes";
 import { sessionsRouter } from "./routes/sessions.routes";
 import { historyRouter } from "./routes/history.routes";
+import { epicTaskRouter } from "./routes/epicTask.routes";
+import { repositoriesRouter } from "./routes/repositories.routes";
 
 export type CreateServerDeps = {
   agentChatQueue: Queue<AgentChatJobData, AgentChatJobResult, string>;
@@ -28,6 +30,8 @@ export function createServer(deps: CreateServerDeps) {
   app.use("/api/chat", chatRouter);
   app.use("/api/sessions", sessionsRouter);
   app.use("/api/history", historyRouter);
+  app.use("/api/epics", epicTaskRouter);
+  app.use("/api/repositories", repositoriesRouter);
 
   return app;
 }

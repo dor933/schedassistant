@@ -22,6 +22,14 @@ export class GroupsService {
       throw Object.assign(new Error("At least one user (besides yourself) must be added to the group."), { status: 400 });
     }
 
+    const EPIC_ORCHESTRATOR_AGENT_ID = "00000000-0000-4000-a000-000000000100";
+    if (agentId === EPIC_ORCHESTRATOR_AGENT_ID) {
+      throw Object.assign(
+        new Error("The Epic Orchestrator agent cannot be added to groups — it is available as a single chat only."),
+        { status: 400 },
+      );
+    }
+
     const agent = await Agent.findByPk(agentId, { attributes: ["id", "definition"] });
     if (!agent) throw Object.assign(new Error("Agent not found."), { status: 404 });
 

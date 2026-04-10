@@ -37,6 +37,7 @@ interface SessionSidebarProps {
   activeConversationId: string | null;
   unreadCounts: Record<string, number>;
   typingConversations: Set<string>;
+  epicTypingConversations: Set<string>;
   isAdmin?: boolean;
   onSelectConversation: (conv: ConversationRef) => void;
   onDeleteChat: (chatId: string, chatTitle: string) => void;
@@ -83,6 +84,7 @@ export default function SessionSidebar({
   activeConversationId,
   unreadCounts,
   typingConversations,
+  epicTypingConversations,
   isAdmin,
   onSelectConversation,
   onDeleteChat,
@@ -123,6 +125,7 @@ export default function SessionSidebar({
               const isActive = activeConversationId === sc.id;
               const unread = unreadCounts[sc.id] ?? 0;
               const isTyping = typingConversations.has(sc.id);
+              const isEpic = epicTypingConversations.has(sc.id);
               return (
                 <Stack
                   key={sc.id}
@@ -154,8 +157,8 @@ export default function SessionSidebar({
                         {sc.title || "Agent Chat"}
                       </Box>
                       {isTyping && (
-                        <Box component="span" className="block text-[10px] font-medium text-emerald-500 animate-pulse-soft">
-                          typing...
+                        <Box component="span" className={`block text-[10px] font-medium ${isEpic ? "text-violet-500" : "text-emerald-500"} animate-pulse-soft`}>
+                          {isEpic ? "executing epic..." : "typing..."}
                         </Box>
                       )}
                     </Box>
@@ -196,6 +199,7 @@ export default function SessionSidebar({
               const isActive = activeConversationId === g.id;
               const unread = unreadCounts[g.id] ?? 0;
               const isTyping = typingConversations.has(g.id);
+              const isEpic = epicTypingConversations.has(g.id);
               return (
                 <Stack
                   key={g.id}
@@ -222,8 +226,8 @@ export default function SessionSidebar({
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Box component="span" className="block truncate text-[13px]">{g.name}</Box>
                     {isTyping && (
-                      <Box component="span" className="block text-[10px] font-medium text-emerald-500 animate-pulse-soft">
-                        typing...
+                      <Box component="span" className={`block text-[10px] font-medium ${isEpic ? "text-violet-500" : "text-emerald-500"} animate-pulse-soft`}>
+                        {isEpic ? "executing epic..." : "typing..."}
                       </Box>
                     )}
                   </Box>

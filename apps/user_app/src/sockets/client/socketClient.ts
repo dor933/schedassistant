@@ -13,6 +13,7 @@ export interface ActiveJobEntry {
   conversationType: "group" | "single";
   userId: number;
   groupId: string | null;
+  isEpicExecution?: boolean;
 }
 
 /**
@@ -63,6 +64,7 @@ interface AgentTypingPayload {
   userId: number;
   groupId: string | null;
   singleChatId: string | null;
+  isEpicExecution?: boolean;
 }
 
 /** What we emit to browser clients on `chat:reply`. */
@@ -116,7 +118,7 @@ export function connectToAgentService(): void {
 }
 
 async function handleAgentTyping(payload: AgentTypingPayload): Promise<void> {
-  const { userId, groupId, singleChatId } = payload;
+  const { userId, groupId, singleChatId, isEpicExecution } = payload;
 
   if (!groupId && !singleChatId) return;
 
@@ -124,7 +126,11 @@ async function handleAgentTyping(payload: AgentTypingPayload): Promise<void> {
   const conversationType: "group" | "single" = groupId ? "group" : "single";
 
   const browserIO = getIO();
-  const typingPayload = { conversationId, conversationType };
+  const typingPayload = {
+    conversationId,
+    conversationType,
+    ...(isEpicExecution ? { isEpicExecution: true } : {}),
+  };
 
   if (groupId) {
     try {

@@ -55,6 +55,7 @@ export function attachSocketIO(httpServer: HttpServer, appUrlPrefix = ""): Serve
             socket.emit("thread:typing", {
               conversationId: entry.conversationId,
               conversationType: entry.conversationType,
+              ...(entry.isEpicExecution ? { isEpicExecution: true } : {}),
             });
           }
         })

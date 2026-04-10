@@ -10,7 +10,7 @@ export const EMBEDDING_DIMENSION = 1536;
 
 type EpisodicMemoryCreationAttributes = Optional<
   EpisodicMemoryAttributes,
-  "id" | "createdAt" | "metadata" | "agentId"
+  "id" | "createdAt" | "metadata" | "agentId" | "repositoryId" | "projectId"
 >;
 
 class EpisodicMemory
@@ -21,6 +21,8 @@ class EpisodicMemory
   declare userId: number;
   declare threadId: string;
   declare agentId: string | null;
+  declare repositoryId: string | null;
+  declare projectId: string | null;
   declare content: string;
   declare embedding: number[];
   declare metadata: EpisodicChunkMetadata | null;
@@ -53,6 +55,18 @@ EpisodicMemory.init(
       allowNull: true,
       field: "agent_id",
       references: { model: "agents", key: "id" },
+    },
+    repositoryId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: "repository_id",
+      references: { model: "repositories", key: "id" },
+    },
+    projectId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: "project_id",
+      references: { model: "projects", key: "id" },
     },
     content: {
       type: DataTypes.TEXT,
@@ -98,6 +112,8 @@ EpisodicMemory.init(
       { fields: ["user_id"] },
       { fields: ["thread_id"] },
       { fields: ["agent_id"] },
+      { fields: ["repository_id"] },
+      { fields: ["project_id"] },
     ],
   },
 );

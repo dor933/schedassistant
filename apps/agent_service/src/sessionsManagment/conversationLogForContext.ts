@@ -16,6 +16,7 @@ export type ConversationLogForContext = {
 export async function loadRecentConversationMessagesForContext(
   singleChatId: string | null,
   groupId: string | null,
+  options?: { limit?: number },
 ): Promise<ConversationLogForContext> {
   if (!singleChatId && !groupId) {
     return { body: "", messageCount: 0 };
@@ -28,7 +29,7 @@ export async function loadRecentConversationMessagesForContext(
   const rows = await ConversationMessage.findAll({
     where,
     order: [["createdAt", "DESC"]],
-    limit: RECENT_MESSAGE_LIMIT,
+    limit: options?.limit ?? RECENT_MESSAGE_LIMIT,
   });
 
   const chronological = [...rows].reverse();

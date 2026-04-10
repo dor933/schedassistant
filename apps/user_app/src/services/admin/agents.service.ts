@@ -115,7 +115,7 @@ export class AgentsService {
     }
 
     if (skillIds && skillIds.length > 0) {
-      await this.rejectNonPrimarySkills(skillIds);
+      await this.rejectNonPrimarySkills(skillIds, agent.id);
       await AgentSkill.bulkCreate(
         skillIds.map((skillId) => ({
           agentId: agent.id,
@@ -231,12 +231,25 @@ export class AgentsService {
 
     if (data.skillIds !== undefined) {
       if (data.skillIds.length > 0) {
-        await this.rejectNonPrimarySkills(data.skillIds);
+        await this.rejectNonPrimarySkills(data.skillIds, agent.id);
       }
+
+      // Preserve locked skills that are currently assigned
+      const currentLinks = await AgentSkill.findAll({ where: { agentId: agent.id }, attributes: ["skillId"] });
+      const currentIds = currentLinks.map((l) => l.skillId);
+      const lockedSkills = await Skill.findAll({
+        where: { id: { [Op.in]: currentIds }, locked: true },
+        attributes: ["id"],
+      });
+      const lockedIds = new Set(lockedSkills.map((s) => s.id));
+
+      // Merge: keep locked IDs + whatever the client sent (deduped)
+      const finalIds = Array.from(new Set([...data.skillIds, ...lockedIds]));
+
       await AgentSkill.destroy({ where: { agentId: agent.id } });
-      if (data.skillIds.length > 0) {
+      if (finalIds.length > 0) {
         await AgentSkill.bulkCreate(
-          data.skillIds.map((skillId) => ({
+          finalIds.map((skillId) => ({
             agentId: agent.id,
             skillId,
           })),
@@ -312,8 +325,12 @@ export class AgentsService {
     }
   }
 
-  /** Reject skills not assignable to primary agents. */
-  private async rejectNonPrimarySkills(skillIds: number[]) {
+  private static readonly EPIC_ORCHESTRATOR_AGENT_ID = "00000000-0000-4000-a000-000000000100";
+
+  /** Reject skills not assignable to primary agents (Epic Orchestrator is exempt). */
+  private async rejectNonPrimarySkills(skillIds: number[], agentId?: string) {
+    if (agentId === AgentsService.EPIC_ORCHESTRATOR_AGENT_ID) return;
+
     const blocked = await Skill.findAll({
       where: { id: { [Op.in]: skillIds }, primaryAgentAssignable: false },
       attributes: ["id", "name"],

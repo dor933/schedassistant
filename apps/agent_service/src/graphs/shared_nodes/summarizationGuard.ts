@@ -1,7 +1,7 @@
 import { Thread } from "@scheduling-agent/database";
 import type { BaseMessage } from "@langchain/core/messages";
-import type { AgentState } from "../../../state";
-import { logger } from "../../../logger";
+import type { AgentState } from "../../state";
+import { logger } from "../../logger";
 
 /**
  * Default thresholds — override via environment variables.

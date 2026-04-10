@@ -46,7 +46,7 @@ function clip(s: string): string {
  */
 export function formatCheckpointMessagesForSystemPrompt(
   messages: BaseMessage[] | undefined,
-  opts: { singleChatId: string | null; groupId: string | null },
+  opts: { singleChatId: string | null; groupId: string | null; maxMessages?: number },
 ): CheckpointMessagesForContext {
   const list = messages ?? [];
   if (list.length === 0) {
@@ -57,7 +57,8 @@ export function formatCheckpointMessagesForSystemPrompt(
     return { body: emptyBody, messageCount: 0 };
   }
 
-  const slice = list.length > MAX_MESSAGES ? list.slice(-MAX_MESSAGES) : list;
+  const maxMsgs = opts.maxMessages ?? MAX_MESSAGES;
+  const slice = list.length > maxMsgs ? list.slice(-maxMsgs) : list;
 
   const sharedPoolNote =
     opts.singleChatId && !opts.groupId
