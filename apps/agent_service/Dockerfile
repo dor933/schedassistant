@@ -36,6 +36,13 @@
         git config --global user.name "Sched Assist Agent" && \
         git config --global safe.directory '*'
     RUN mkdir -p /app/data
+    # Pre-create the Claude CLI home directory with agent ownership so that when
+    # Docker initializes the `agent_claude_home` named volume on first mount, it
+    # inherits agent:agent ownership from the image. Without this, the fresh
+    # volume would come up root-owned and the CLI (which runs as `agent`) would
+    # fail to write session files. This works because Docker copies ownership
+    # from the image directory into a fresh named volume on first creation.
+    RUN mkdir -p /home/agent/.claude && chown -R agent:agent /home/agent
     VOLUME ["/app/data"]
 
     ENV NODE_ENV=production

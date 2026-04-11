@@ -39,11 +39,21 @@ import {
   ReviewTaskDiffTool,
   UpdateStagePrTool,
   ForceApproveStagePrTool,
+  ApproveStageTool,
+  RequestStageChangesTool,
   parseContinuationMarker,
 } from "../../../tools/epicTaskTools";
 import getMcpTools from "../../../mcpClient";
 
-const MAX_TOOL_ROUNDS = 10;
+// Cap the orchestrator's tool-call chain per chat turn. This is the EPIC
+// orchestrator, which legitimately chains many tool calls: setup checks
+// (list_agent_skills, get_agent_skill, get_epic_status), then 2+ rounds
+// per task in the stage (execute_epic_task + review_task_diff), then
+// reporting calls. A 10-cap was tripping even on normal retry flows —
+// a stage with 4 tasks already costs ~3 setup + 8 execution = 11 rounds.
+// 30 gives headroom for ~10-task stages with room to spare, while still
+// acting as a safety net against a runaway self-loop.
+const MAX_TOOL_ROUNDS = 30;
 
 function sanitizeName(raw: string): string {
   return raw.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user";
@@ -173,6 +183,8 @@ export async function epicCallModelNode(
     ReviewTaskDiffTool(),
     UpdateStagePrTool(),
     ForceApproveStagePrTool(),
+    ApproveStageTool(),
+    RequestStageChangesTool(),
     ...mcpTools,
   ];
 

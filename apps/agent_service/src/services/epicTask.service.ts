@@ -1,7 +1,7 @@
 import { TaskStage, AgentTask, EpicTask, TaskExecution, SingleChat, sequelize } from "@scheduling-agent/database";
 import { QueryTypes } from "sequelize";
 import type { AgentTaskStatus, PrStatus, EpicTaskId } from "@scheduling-agent/types";
-import { getReadyTasks } from "../tools/epicTaskTools";
+import { getReadyTasks } from "../utils/epicTaskUtils";
 import { agentChatQueue } from "../queues/agentChat.bull";
 import { logger } from "../logger";
 
@@ -18,7 +18,11 @@ export class EpicTaskService {
       throw new Error(`No stage found for repository ${repositoryId} PR #${prNumber}`);
     }
 
-    await stage.update({ prStatus: "approved" as PrStatus });
+    await stage.update({
+      prStatus: "approved" as PrStatus,
+      status: "completed",
+      completedAt: new Date(),
+    });
 
     // Find pending tasks in the next stage(s) that are now unblocked by this PR approval
     const newlyReady = await sequelize.query<AgentTask>(
@@ -168,15 +172,14 @@ export class EpicTaskService {
         userId: epic.userId,
         message:
           `[PR Changes Requested — retry needed]\n\n` +
-          `The pull request for epic "${epic.title}" (${epicTaskId}) received review feedback. ` +
-          `${taskIds.length} task(s) need to be re-executed with the reviewer's feedback.\n\n` +
-          `Task IDs to retry: ${taskIds.join(", ")}\n\n` +
+          `The pull request for epic "${epic.title}" received review feedback. ` +
+          `${taskIds.length} task(s) have been reset to 'ready' and need to be re-executed.\n\n` +
           `**Review Feedback:**\n${feedbackPreview}\n\n` +
-          `For each task, use execute_epic_task in retry mode:\n` +
-          `execute_epic_task({ mode: "retry", taskId: "<id>", feedback: "<the review feedback>" })\n\n` +
-          `The feedback is already stored on each task's latest execution. ` +
-          `After fixing, the orchestrator should update the PR. ` +
-          `Remember to write any lessons learned to your notes or memory for future reference.`,
+          `Call execute_epic_task with mode="retry" — it auto-resolves the active epic and loads ` +
+          `the stored feedback from each task, resuming the previous CLI session for full context. ` +
+          `No IDs needed.\n\n` +
+          `After fixing, the orchestrator will push updates to the existing PR automatically. ` +
+          `Remember to write any lessons learned to your notes for future reference.`,
         requestId,
         groupId: null,
         singleChatId: singleChat?.id ?? null,
@@ -221,10 +224,10 @@ export class EpicTaskService {
       await agentChatQueue.add("epic_pr_continuation", {
         userId: epic.userId,
         message:
-          `[PR Approved — automatic continuation] The pull request for the previous stage has been approved. ` +
-          `${readyTaskCount} task(s) in epic "${epic.title}" (${epicTaskId}) are now ready. ` +
-          `Continue executing the next ready task using execute_epic_task with epicId "${epicTaskId}". ` +
-          `Provide a progress update to the user.`,
+          `[PR Approved — automatic continuation] The pull request for the previous stage of epic ` +
+          `"${epic.title}" has been approved. ${readyTaskCount} task(s) are now ready. ` +
+          `Call execute_epic_task (no arguments needed) to continue with the next ready task, ` +
+          `and provide a progress update to the user.`,
         requestId: contRequestId,
         groupId: null,
         singleChatId: singleChat?.id ?? null,

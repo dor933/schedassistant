@@ -325,9 +325,9 @@ export function startAgentChatWorker(
             userId,
             message:
               `[Automatic continuation] Task "${cont.completedTaskTitle}" completed successfully. ` +
-              `${cont.remainingTasks} task(s) remain in epic ${cont.epicId}. ` +
-              `Continue executing the next ready task using execute_epic_task with epicId "${cont.epicId}". ` +
-              `Provide a progress update after each task.`,
+              `${cont.remainingTasks} task(s) remain in the active epic. ` +
+              `Call execute_epic_task (no arguments — it auto-resolves the active epic) ` +
+              `to continue with the next ready task. Provide a progress update after each task.`,
             requestId: contRequestId,
             groupId: groupId ?? null,
             singleChatId: singleChatId ?? null,

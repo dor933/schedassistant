@@ -4,7 +4,7 @@ import type { TaskStageAttributes, TaskStageStatus, PrStatus, EpicTaskId, Reposi
 
 type TaskStageCreationAttributes = Optional<
   TaskStageAttributes,
-  "id" | "createdAt" | "updatedAt" | "status" | "description" | "sortOrder" | "prUrl" | "prNumber" | "prStatus" | "repositoryId" | "metadata" | "completedAt"
+  "id" | "createdAt" | "updatedAt" | "status" | "description" | "sortOrder" | "prUrl" | "prNumber" | "prStatus" | "repositoryId" | "branchName" | "baseCommitSha" | "metadata" | "completedAt"
 >;
 
 class TaskStage extends Model<TaskStageAttributes, TaskStageCreationAttributes> implements TaskStageAttributes {
@@ -18,6 +18,8 @@ class TaskStage extends Model<TaskStageAttributes, TaskStageCreationAttributes> 
   declare prNumber: number | null;
   declare prStatus: PrStatus | null;
   declare repositoryId: RepositoryId | null;
+  declare branchName: string | null;
+  declare baseCommitSha: string | null;
   declare metadata: Record<string, unknown> | null;
   declare createdAt: Date;
   declare updatedAt: Date;
@@ -76,6 +78,16 @@ TaskStage.init(
       allowNull: true,
       field: "repository_id",
       references: { model: "repositories", key: "id" },
+    },
+    branchName: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "branch_name",
+    },
+    baseCommitSha: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "base_commit_sha",
     },
     metadata: {
       type: DataTypes.JSONB,

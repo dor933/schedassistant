@@ -1,905 +1,45 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { spawn, execSync, spawnSync } from "child_process";
+import { execSync } from "child_process";
 import { QueryTypes } from "sequelize";
 import {
   sequelize,
-  Project,
   Repository,
   EpicTask,
-  EpicTaskRepository,
   TaskStage,
   AgentTask,
   TaskExecution,
 } from "@scheduling-agent/database";
 import type {
-  UserId,
-  AgentId,
-  ProjectId,
-  RepositoryId,
-  EpicTaskId,
-  AgentTaskId,
-  TaskExecutionId,
-  EpicTaskStatus,
-  TaskStageStatus,
   AgentTaskStatus,
-  TaskExecutionStatus,
+  TaskStageStatus,
   PrStatus,
 } from "@scheduling-agent/types";
 import { logger } from "../logger";
-
-// ─── Project CRUD ────────────────────────────────────────────────────────────
-
-export async function createProject(data: {
-  name: string;
-  description?: string;
-  userId: UserId;
-  metadata?: Record<string, unknown>;
-}): Promise<Project> {
-  return Project.create(data);
-}
-
-export async function getProject(projectId: ProjectId): Promise<Project | null> {
-  return Project.findByPk(projectId, {
-    include: [{ model: Repository, as: "repositories" }],
-  });
-}
-
-export async function listProjects(filters: { userId?: UserId } = {}): Promise<Project[]> {
-  const where: Record<string, unknown> = {};
-  if (filters.userId) where.userId = filters.userId;
-  return Project.findAll({ where, order: [["created_at", "DESC"]] });
-}
-
-// ─── Repository CRUD ─────────────────────────────────────────────────────────
-
-export async function createRepository(
-  projectId: ProjectId,
-  data: {
-    name: string;
-    url: string;
-    defaultBranch?: string;
-    metadata?: Record<string, unknown>;
-  },
-): Promise<Repository> {
-  return Repository.create({ ...data, projectId });
-}
-
-// ─── Epic CRUD ───────────────────────────────────────────────────────────────
-
-export async function getEpic(
-  epicId: EpicTaskId,
-  options: { includeStages?: boolean; includeTasks?: boolean } = {},
-): Promise<EpicTask | null> {
-  const include: any[] = [
-    { model: Repository, as: "repositories" },
-  ];
-
-  if (options.includeStages || options.includeTasks) {
-    const stageInclude: any[] = [];
-    if (options.includeTasks) {
-      stageInclude.push({
-        model: AgentTask,
-        as: "tasks",
-        include: [
-          { model: AgentTask, as: "dependencies" },
-          { model: TaskExecution, as: "executions" },
-        ],
-      });
-    }
-    include.push({
-      model: TaskStage,
-      as: "stages",
-      include: stageInclude,
-      order: [["sort_order", "ASC"]],
-    });
-  }
-
-  return EpicTask.findByPk(epicId, { include });
-}
-
-// ─── Task Executions ─────────────────────────────────────────────────────────
-
-async function startExecution(
-  taskId: AgentTaskId,
-  data: {
-    cliSessionId?: string;
-    prompt?: string;
-    metadata?: Record<string, unknown>;
-  } = {},
-): Promise<TaskExecution> {
-  const lastExec = await TaskExecution.findOne({
-    where: { agentTaskId: taskId },
-    order: [["attempt_number", "DESC"]],
-  });
-  const attemptNumber = (lastExec?.attemptNumber ?? 0) + 1;
-
-  return TaskExecution.create({
-    agentTaskId: taskId,
-    attemptNumber,
-    cliSessionId: data.cliSessionId ?? null,
-    prompt: data.prompt ?? null,
-    metadata: data.metadata ?? null,
-  });
-}
-
-async function completeExecution(
-  executionId: TaskExecutionId,
-  data: { result: string; metadata?: Record<string, unknown> },
-): Promise<TaskExecution> {
-  const execution = await TaskExecution.findByPk(executionId);
-  if (!execution) throw new Error(`Task execution ${executionId} not found`);
-
-  const updates: Record<string, unknown> = {
-    status: "completed" as TaskExecutionStatus,
-    result: data.result,
-    completedAt: new Date(),
-  };
-  if (data.metadata) {
-    updates.metadata = { ...(execution.metadata ?? {}), ...data.metadata };
-  }
-
-  await execution.update(updates);
-  return execution;
-}
-
-async function failExecution(
-  executionId: TaskExecutionId,
-  data: { error: string; metadata?: Record<string, unknown> },
-): Promise<TaskExecution> {
-  const execution = await TaskExecution.findByPk(executionId);
-  if (!execution) throw new Error(`Task execution ${executionId} not found`);
-
-  const updates: Record<string, unknown> = {
-    status: "failed" as TaskExecutionStatus,
-    error: data.error,
-    completedAt: new Date(),
-  };
-  if (data.metadata) {
-    updates.metadata = { ...(execution.metadata ?? {}), ...data.metadata };
-  }
-
-  await execution.update(updates);
-  return execution;
-}
-
-async function prepareRetry(
-  taskId: AgentTaskId,
-  feedback: string,
-): Promise<{ previousSessionId: string | null; enrichedFeedback: string }> {
-  const lastExec = await TaskExecution.findOne({
-    where: { agentTaskId: taskId },
-    order: [["attempt_number", "DESC"]],
-  });
-  const previousSessionId = lastExec?.cliSessionId ?? null;
-
-  if (lastExec) {
-    await lastExec.update({ feedback });
-  }
-
-  // Enrich feedback with diff context from the previous execution
-  let enrichedFeedback = feedback;
-  if (lastExec?.metadata) {
-    const meta = lastExec.metadata as Record<string, unknown>;
-    const diffStat = meta.git_diff_stat as string | undefined;
-    const fullDiff = meta.git_diff as string | undefined;
-
-    if (diffStat || fullDiff) {
-      enrichedFeedback = `## Feedback from Orchestrator\n\n${feedback}\n`;
-
-      if (diffStat) {
-        enrichedFeedback += `\n## Files You Changed (from previous attempt)\n\`\`\`\n${diffStat}\n\`\`\`\n`;
-      }
-
-      if (fullDiff) {
-        // Truncate diff for retry prompt to keep it focused
-        const truncatedDiff = fullDiff.length > 20000
-          ? fullDiff.slice(0, 20000) + "\n\n... (diff truncated)"
-          : fullDiff;
-        enrichedFeedback += `\n## Your Previous Diff\n\`\`\`diff\n${truncatedDiff}\n\`\`\`\n`;
-      }
-
-      enrichedFeedback += `\nFix the issues described in the feedback above. Reference the diff to understand what you previously changed.`;
-    }
-  }
-
-  await AgentTask.update(
-    { status: "in_progress" as AgentTaskStatus, completedAt: null },
-    { where: { id: taskId } },
-  );
-
-  return { previousSessionId, enrichedFeedback };
-}
-
-// ─── Dependency Resolution ───────────────────────────────────────────────────
-
-export async function getReadyTasks(epicId: EpicTaskId): Promise<AgentTask[]> {
-  const results = await sequelize.query<AgentTask>(
-    `SELECT at.*
-     FROM agent_tasks at
-     JOIN task_stages ts ON at.task_stage_id = ts.id
-     WHERE ts.epic_task_id = :epicId
-       AND at.status = 'ready'
-       -- Block if ANY earlier stage is not completed OR its PR is not approved/merged
-       AND NOT EXISTS (
-         SELECT 1
-         FROM task_stages prev_stage
-         WHERE prev_stage.epic_task_id = ts.epic_task_id
-           AND prev_stage.sort_order < ts.sort_order
-           AND (
-             prev_stage.status <> 'completed'
-             OR COALESCE(prev_stage.pr_status, 'none') NOT IN ('approved', 'merged')
-           )
-       )
-     ORDER BY ts.sort_order, at.sort_order`,
-    {
-      replacements: { epicId },
-      type: QueryTypes.SELECT,
-    },
-  );
-  return results;
-}
-
-// ─── Status Propagation ─────────────────────────────────────────────────────
-
-async function propagateStatus(taskId: AgentTaskId): Promise<void> {
-  const task = await AgentTask.findByPk(taskId);
-  if (!task) return;
-
-  // Propagate to stage
-  const stageTasks = await AgentTask.findAll({
-    where: { taskStageId: task.taskStageId },
-  });
-
-  const stageStatuses = stageTasks.map((t) => t.status);
-  let newStageStatus: TaskStageStatus;
-
-  if (stageStatuses.every((s) => s === "completed")) {
-    newStageStatus = "completed";
-  } else if (stageStatuses.some((s) => s === "failed")) {
-    newStageStatus = "failed";
-  } else if (stageStatuses.some((s) => s === "in_progress" || s === "ready")) {
-    newStageStatus = "in_progress";
-  } else {
-    newStageStatus = "pending";
-  }
-
-  const stageUpdates: Record<string, unknown> = { status: newStageStatus };
-  if (newStageStatus === "completed") {
-    stageUpdates.completedAt = new Date();
-  }
-  await TaskStage.update(stageUpdates, { where: { id: task.taskStageId } });
-
-  // Propagate to epic
-  const stage = await TaskStage.findByPk(task.taskStageId);
-  if (!stage) return;
-
-  const epicStages = await TaskStage.findAll({
-    where: { epicTaskId: stage.epicTaskId },
-  });
-
-  // A stage is fully done only when tasks are completed AND its PR is approved/merged (or no PR exists)
-  const allStagesFullyDone = epicStages.every(
-    (s) =>
-      s.status === "completed" &&
-      (!s.prNumber || ["approved", "merged"].includes(s.prStatus ?? "")),
-  );
-  const epicStatuses = epicStages.map((s) => s.status);
-  let newEpicStatus: EpicTaskStatus;
-
-  if (allStagesFullyDone) {
-    newEpicStatus = "completed";
-  } else if (epicStatuses.some((s) => s === "failed")) {
-    newEpicStatus = "failed";
-  } else if (epicStatuses.some((s) => s === "in_progress")) {
-    newEpicStatus = "in_progress";
-  } else {
-    newEpicStatus = "pending";
-  }
-
-  const epicUpdates: Record<string, unknown> = { status: newEpicStatus };
-  if (newEpicStatus === "completed") {
-    epicUpdates.completedAt = new Date();
-  }
-  await EpicTask.update(epicUpdates, { where: { id: stage.epicTaskId } });
-
-}
-
-// ─── Update Task Status ──────────────────────────────────────────────────────
-
-async function updateTaskStatus(taskId: AgentTaskId, status: AgentTaskStatus): Promise<AgentTask> {
-  const task = await AgentTask.findByPk(taskId);
-  if (!task) throw new Error(`Agent task ${taskId} not found`);
-
-  const updates: Partial<{ status: AgentTaskStatus; startedAt: Date | null; completedAt: Date | null }> = { status };
-
-  if (status === "in_progress" && !task.startedAt) {
-    updates.startedAt = new Date();
-  }
-  if (status === "completed" || status === "failed") {
-    updates.completedAt = new Date();
-  }
-
-  await task.update(updates);
-  await propagateStatus(taskId);
-  return task;
-}
-
-// ─── Git Diff Capture ───────────────────────────────────────────────────────
-
-interface GitDiffResult {
-  diffStat: string;
-  fullDiff: string;
-  recentCommits: string;
-}
-
-function captureGitDiff(cwd: string): GitDiffResult {
-  const execOpts = { cwd, encoding: "utf-8" as const, maxBuffer: 2 * 1024 * 1024 };
-
-  let diffStat = "";
-  let fullDiff = "";
-  let recentCommits = "";
-
-  try {
-    // Capture staged + unstaged changes stat summary
-    diffStat = execSync("git diff --stat HEAD", execOpts).trim();
-    // If nothing against HEAD, try working tree changes
-    if (!diffStat) {
-      diffStat = execSync("git diff --stat", execOpts).trim();
-    }
-  } catch {
-    try {
-      diffStat = execSync("git diff --stat", execOpts).trim();
-    } catch {
-      diffStat = "(unable to capture diff stat)";
-    }
-  }
-
-  try {
-    // Full diff — cap at 50k chars to avoid blowing up context
-    const raw = execSync("git diff HEAD", execOpts).trim();
-    fullDiff = raw.length > 50000
-      ? raw.slice(0, 50000) + "\n\n... (diff truncated at 50,000 chars)"
-      : raw;
-    if (!fullDiff) {
-      const rawWt = execSync("git diff", execOpts).trim();
-      fullDiff = rawWt.length > 50000
-        ? rawWt.slice(0, 50000) + "\n\n... (diff truncated at 50,000 chars)"
-        : rawWt;
-    }
-  } catch {
-    try {
-      const rawWt = execSync("git diff", execOpts).trim();
-      fullDiff = rawWt.length > 50000
-        ? rawWt.slice(0, 50000) + "\n\n... (diff truncated at 50,000 chars)"
-        : rawWt;
-    } catch {
-      fullDiff = "(unable to capture full diff)";
-    }
-  }
-
-  try {
-    recentCommits = execSync("git log --oneline -5", execOpts).trim();
-  } catch {
-    recentCommits = "(unable to capture recent commits)";
-  }
-
-  return { diffStat, fullDiff, recentCommits };
-}
-
-// ─── Pre-Execution Sync ─────────────────────────────────────────────────────
-
-/**
- * Runs before each task execution to ensure repos are up-to-date and
- * architecture descriptions still match reality.
- *
- * For each repository in the epic:
- * 1. `git pull origin <branch>` — get latest changes from remote
- * 2. Detect structural changes since the last known state (new/deleted files)
- * 3. If the repo structure diverged from the stored `architectureOverview`,
- *    spawn a quick Claude CLI call to produce an updated overview and persist it.
- */
-async function preExecutionSync(epicId: EpicTaskId): Promise<void> {
-  const epic = await EpicTask.findByPk(epicId, {
-    include: [{ model: Repository, as: "repositories" }],
-  });
-  if (!epic) return;
-
-  const repos = ((epic as any).repositories ?? []) as Repository[];
-  if (repos.length === 0) return;
-
-  for (const repo of repos) {
-    if (!repo.localPath) continue;
-
-    const cwd = repo.localPath;
-    const branch = repo.defaultBranch || "main";
-    const execOpts = { cwd, encoding: "utf-8" as const, timeout: 60_000, maxBuffer: 2 * 1024 * 1024 };
-
-    // ── 1. Pull latest ──
-    try {
-      execSync(`git pull origin ${branch}`, { ...execOpts, stdio: "pipe" });
-      logger.info("preExecutionSync: pulled latest", { repoId: repo.id, branch });
-    } catch (err) {
-      // Non-fatal — repo may have no upstream or network issues
-      logger.warn("preExecutionSync: git pull failed", {
-        repoId: repo.id,
-        branch,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    // ── 2. Detect structural changes ──
-    try {
-      const hasArchitecture = !!repo.architectureOverview?.trim();
-
-      // Get files changed in recent commits (since last 7 days or last 20 commits)
-      let diffNameOnly = "";
-      try {
-        diffNameOnly = execSync(
-          "git log --name-status --diff-filter=ADRT --pretty=format: -20",
-          execOpts,
-        ).trim();
-      } catch {
-        // Fallback: compare against HEAD~10
-        try {
-          diffNameOnly = execSync("git diff --name-status HEAD~10 HEAD", execOpts).trim();
-        } catch {
-          // Repo may have <10 commits; skip
-          continue;
-        }
-      }
-
-      if (!diffNameOnly) {
-        // No changes — if there's no architecture overview yet, generate one
-        if (!hasArchitecture) {
-          await generateArchitectureOverview(repo, cwd);
-        }
-        continue;
-      }
-
-      // Check for structural changes: new/deleted files, new directories, config files
-      const structuralPatterns = /^[ADR]\t/m;
-      const hasStructuralChanges = structuralPatterns.test(diffNameOnly);
-
-      if (!hasStructuralChanges && hasArchitecture) {
-        // Only content modifications — architecture hasn't changed
-        continue;
-      }
-
-      // ── 3. Analyze and update architecture ──
-      await generateArchitectureOverview(repo, cwd);
-    } catch (err) {
-      // Non-fatal — don't block task execution
-      logger.warn("preExecutionSync: architecture check failed", {
-        repoId: repo.id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-}
-
-/**
- * Spawns a quick Claude CLI call to analyze the repo and produce an
- * architecture overview, then persists it to the repository record.
- */
-async function generateArchitectureOverview(
-  repo: Repository,
-  cwd: string,
-): Promise<void> {
-  const currentOverview = repo.architectureOverview?.trim() || "(none)";
-
-  const prompt =
-    "Analyze this repository's current structure and produce a concise architecture overview. " +
-    "Include: top-level folder tree (depth 2), major components and their responsibilities, " +
-    "key patterns (e.g. MVC, monorepo, microservices), and entry points. " +
-    "Be factual — only describe what exists now.\n\n" +
-    "Current stored overview (may be outdated):\n" +
-    currentOverview + "\n\n" +
-    "Output ONLY the updated architecture overview text — no preamble, no markdown fences, " +
-    "no explanation. Keep it under 2000 characters.";
-
-  try {
-    const cliResult = spawnSync("su-exec", [
-      "agent", "claude",
-      "-p", prompt,
-      "--dangerously-skip-permissions",
-      "--max-turns", "10",
-    ], {
-      cwd,
-      encoding: "utf-8",
-      timeout: 120_000,
-      maxBuffer: 2 * 1024 * 1024,
-    });
-    if (cliResult.error) throw cliResult.error;
-    if (cliResult.status !== 0) throw new Error(cliResult.stderr?.trim() || `claude exited with code ${cliResult.status}`);
-    const result = (cliResult.stdout ?? "").trim();
-
-    if (result && result.length > 20 && result.length < 5000) {
-      const previous = repo.architectureOverview;
-      await repo.update({ architectureOverview: result });
-      logger.info("preExecutionSync: updated architecture overview", {
-        repoId: repo.id,
-        repoName: repo.name,
-        previousLength: previous?.length ?? 0,
-        newLength: result.length,
-      });
-    }
-  } catch (err) {
-    logger.warn("preExecutionSync: Claude CLI architecture analysis failed", {
-      repoId: repo.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-// ─── Architecture Context Builder ───────────────────────────────────────────
-
-/**
- * Builds a context string from the project + repo architecture fields.
- * Injected as system prompt context for the CLI executor so it understands
- * the codebase structure before making changes.
- */
-async function buildArchitectureContext(epicId: EpicTaskId): Promise<string> {
-  const epic = await EpicTask.findByPk(epicId, {
-    include: [
-      { model: Project, as: "project" },
-      { model: Repository, as: "repositories" },
-    ],
-  });
-  if (!epic) return "";
-
-  const project = (epic as any).project as Project | null;
-  const repos = ((epic as any).repositories ?? []) as Repository[];
-
-  const sections: string[] = [];
-
-  sections.push("# Project & Repository Context");
-  sections.push(
-    "You are working on LOCAL repository clones on this machine. " +
-    "All file operations, git commands, and builds happen locally. " +
-    "Do NOT attempt to use GitHub APIs, MCP servers, or any remote repository access."
-  );
-
-  if (project) {
-    sections.push(`\n## Project: ${project.name}`);
-    if (project.description) sections.push(project.description);
-    if (project.techStack) sections.push(`\n### Tech Stack\n${project.techStack}`);
-    if (project.architectureOverview) {
-      sections.push(`\n### Project Architecture\n${project.architectureOverview}`);
-    }
-  }
-
-  for (const repo of repos) {
-    sections.push(`\n## Repository: ${repo.name}`);
-    if (repo.url) sections.push(`Remote: ${repo.url}`);
-    if (repo.localPath) sections.push(`Local path: ${repo.localPath}`);
-    if (repo.defaultBranch) sections.push(`Default branch: ${repo.defaultBranch}`);
-    if (repo.architectureOverview) {
-      sections.push(`\n### Architecture\n${repo.architectureOverview}`);
-    }
-    if (repo.setupInstructions) {
-      sections.push(`\n### Setup & Build\n${repo.setupInstructions}`);
-    }
-  }
-
-  return sections.join("\n");
-}
-
-// ─── Task Execution via Claude CLI ───────────────────────────────────────────
-
-async function executeTask(
-  taskId: AgentTaskId,
-  options: {
-    cwd: string;
-    allowedTools?: string;
-    maxTurns?: number;
-    systemPrompt?: string;
-    promptOverride?: string;
-    resumeSessionId?: string;
-  },
-): Promise<TaskExecution> {
-  const task = await AgentTask.findByPk(taskId, {
-    include: [{ model: TaskStage, as: "stage" }],
-  });
-  if (!task) throw new Error(`Agent task ${taskId} not found`);
-
-  // Update task status to in_progress
-  await task.update({
-    status: "in_progress" as AgentTaskStatus,
-    startedAt: task.startedAt ?? new Date(),
-    completedAt: null,
-  });
-
-  // Build the prompt first so it's persisted even if the CLI spawn fails
-  const prompt = options.promptOverride ?? task.description ?? task.title;
-
-  // Create execution record (stores the exact prompt sent to the CLI)
-  const execution = await startExecution(taskId, { prompt });
-
-  const args = [
-    "-p",
-    prompt,
-    "--dangerously-skip-permissions",
-    "--output-format",
-    "json",
-  ];
-
-  if (options.resumeSessionId) {
-    args.push("--resume", options.resumeSessionId);
-  }
-
-  // Default to effectively unlimited turns — the CLI's built-in default (~21) is too low for complex tasks
-  args.push("--max-turns", String(options.maxTurns ?? 200));
-
-  if (options.systemPrompt) {
-    args.push("--append-system-prompt", options.systemPrompt);
-  }
-
-  logger.info("Executing agent task via Claude CLI", {
-    taskId,
-    executionId: execution.id,
-    cwd: options.cwd,
-  });
-
-  return new Promise<TaskExecution>((resolve, reject) => {
-    const child = spawn("su-exec", ["agent", "claude", ...args], {
-      cwd: options.cwd,
-      env: { ...process.env },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (data: Buffer) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on("data", (data: Buffer) => {
-      stderr += data.toString();
-    });
-
-    child.on("close", async (code) => {
-      try {
-        if (code === 0) {
-          let resultText: string;
-          let sessionId: string | null = null;
-          let metadata: Record<string, unknown> = {};
-
-          try {
-            const parsed = JSON.parse(stdout);
-            resultText = parsed.result ?? stdout;
-            sessionId = parsed.session_id ?? null;
-            metadata = {
-              session_id: parsed.session_id,
-              cost_usd: parsed.cost_usd,
-              duration_ms: parsed.duration_ms,
-              num_turns: parsed.num_turns,
-              is_error: parsed.is_error,
-            };
-          } catch {
-            resultText = stdout;
-          }
-
-          // Capture git diff after successful execution
-          try {
-            const gitDiff = captureGitDiff(options.cwd);
-            metadata.git_diff_stat = gitDiff.diffStat;
-            metadata.git_diff = gitDiff.fullDiff;
-            metadata.git_recent_commits = gitDiff.recentCommits;
-          } catch (diffErr: any) {
-            logger.warn("Failed to capture git diff after task execution", {
-              taskId,
-              error: diffErr.message,
-            });
-          }
-
-          await completeExecution(execution.id, {
-            result: resultText,
-            metadata,
-          });
-
-          if (sessionId) {
-            await execution.update({ cliSessionId: sessionId });
-          }
-
-          await updateTaskStatus(taskId, "completed");
-
-          const updated = await TaskExecution.findByPk(execution.id);
-          resolve(updated!);
-        } else {
-          logger.warn("Claude CLI exited with non-zero code", {
-            taskId,
-            executionId: execution.id,
-            code,
-            stderrPreview: stderr.slice(0, 1000),
-            stdoutPreview: stdout.slice(0, 1000),
-          });
-
-          // "Reached max turns" or similar — CLI may still have produced useful output
-          if (stdout.trim()) {
-            let resultText: string;
-            let sessionId: string | null = null;
-            let metadata: Record<string, unknown> = { exitCode: code, warning: stderr || `exit code ${code}` };
-
-            try {
-              const parsed = JSON.parse(stdout);
-              resultText = parsed.result ?? stdout;
-              sessionId = parsed.session_id ?? null;
-              metadata = {
-                ...metadata,
-                session_id: parsed.session_id,
-                cost_usd: parsed.cost_usd,
-                duration_ms: parsed.duration_ms,
-                num_turns: parsed.num_turns,
-                is_error: parsed.is_error,
-              };
-            } catch {
-              resultText = stdout;
-            }
-
-            try {
-              const gitDiff = captureGitDiff(options.cwd);
-              metadata.git_diff_stat = gitDiff.diffStat;
-              metadata.git_diff = gitDiff.fullDiff;
-              metadata.git_recent_commits = gitDiff.recentCommits;
-            } catch (diffErr: any) {
-              logger.warn("Failed to capture git diff after task execution", { taskId, error: diffErr.message });
-            }
-
-            await completeExecution(execution.id, { result: resultText, metadata });
-            if (sessionId) await execution.update({ cliSessionId: sessionId });
-            await updateTaskStatus(taskId, "completed");
-
-            const updated = await TaskExecution.findByPk(execution.id);
-            resolve(updated!);
-          } else {
-            const errorMsg = stderr || `Claude CLI exited with code ${code}`;
-
-            // If --resume failed because the session no longer exists, retry without it
-            if (
-              options.resumeSessionId &&
-              (errorMsg.includes("No conversation found") || stdout.includes("No conversation found"))
-            ) {
-              logger.warn("Session not found — retrying without --resume", {
-                taskId,
-                sessionId: options.resumeSessionId,
-              });
-              // Clean up the failed execution before retrying
-              await failExecution(execution.id, { error: "Session expired — retrying fresh" });
-
-              try {
-                const retryResult = await executeTask(taskId, {
-                  ...options,
-                  resumeSessionId: undefined,
-                });
-                resolve(retryResult);
-              } catch (retryErr) {
-                reject(retryErr);
-              }
-              return;
-            }
-
-            await failExecution(execution.id, { error: errorMsg });
-            await updateTaskStatus(taskId, "failed");
-
-            const updated = await TaskExecution.findByPk(execution.id);
-            resolve(updated!);
-          }
-        }
-      } catch (err) {
-        reject(err);
-      }
-    });
-
-    child.on("error", async (err) => {
-      logger.error("Claude CLI spawn error", { taskId, error: err.message });
-      await failExecution(execution.id, { error: err.message });
-      await updateTaskStatus(taskId, "failed");
-      reject(err);
-    });
-  });
-}
-
-
-
-// ─── Bulk Epic Creation ──────────────────────────────────────────────────────
-
-async function createEpicWithPlan(data: {
-  title: string;
-  description: string;
-  projectId: ProjectId;
-  userId: UserId;
-  agentId: AgentId;
-  repositoryIds?: RepositoryId[];
-  stages: Array<{
-    title: string;
-    description?: string;
-    tasks: Array<{
-      title: string;
-      description?: string;
-    }>;
-  }>;
-}): Promise<EpicTask> {
-  const transaction = await sequelize.transaction();
-  try {
-    const epic = await EpicTask.create(
-      {
-        title: data.title,
-        description: data.description,
-        projectId: data.projectId,
-        userId: data.userId,
-        agentId: data.agentId,
-      },
-      { transaction },
-    );
-
-    if (data.repositoryIds?.length) {
-      await EpicTaskRepository.bulkCreate(
-        data.repositoryIds.map((repositoryId) => ({
-          epicTaskId: epic.id,
-          repositoryId,
-        })),
-        { transaction },
-      );
-    }
-
-    const allTasks: AgentTask[] = [];
-
-    for (let si = 0; si < data.stages.length; si++) {
-      const stageData = data.stages[si];
-      const stage = await TaskStage.create(
-        {
-          epicTaskId: epic.id,
-          title: stageData.title,
-          description: stageData.description,
-          sortOrder: si,
-        },
-        { transaction },
-      );
-
-      for (let ti = 0; ti < stageData.tasks.length; ti++) {
-        const taskData = stageData.tasks[ti];
-        const task = await AgentTask.create(
-          {
-            taskStageId: stage.id,
-            title: taskData.title,
-            description: taskData.description,
-            sortOrder: ti,
-          },
-          { transaction },
-        );
-        allTasks.push(task);
-      }
-    }
-
-    await transaction.commit();
-
-    // Mark all tasks in stage 1 (first stage) as 'ready'
-    const firstStageId = allTasks.length > 0
-      ? (await TaskStage.findOne({
-          where: { epicTaskId: epic.id },
-          order: [["sort_order", "ASC"]],
-          attributes: ["id"],
-        }))?.id
-      : null;
-
-    if (firstStageId) {
-      await AgentTask.update(
-        { status: "ready" as AgentTaskStatus },
-        { where: { taskStageId: firstStageId } },
-      );
-    }
-
-    return getEpic(epic.id, { includeStages: true, includeTasks: true }) as Promise<EpicTask>;
-  } catch (err) {
-    await transaction.rollback();
-    throw err;
-  }
-}
-
-// ─── PR Approval (used by webhook route) ─────────────────────────────────────
-
+import {
+  listProjects,
+  getProject,
+  getEpic,
+  getReadyTasks,
+  createEpicWithPlan,
+  executeTask,
+  prepareRetry,
+  preExecutionSync,
+  buildArchitectureContext,
+  captureGitDiff,
+  captureStageDiff,
+  continueRemainingTasks,
+  appendContinuationMarker,
+  formatExecutionResult,
+  resolveActiveEpic,
+  resolveActivePrPendingStage,
+  resolveNextRetryableTask,
+  EPIC_CONTINUATION_MARKER,
+  parseContinuationMarker,
+} from "../utils/epicTaskUtils";
+
+// Re-export utils that are imported by other modules
+export { getReadyTasks, parseContinuationMarker, EPIC_CONTINUATION_MARKER };
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LangGraph Tools (bound to orchestrator agent)
@@ -1033,7 +173,7 @@ export function CreateEpicPlanTool(userId: number, agentId: string) {
             `Only ONE epic can be active at a time across the entire system. ` +
             `The existing epic must finish or be cancelled before a new one can be created. ` +
             (sameUser
-              ? `Use execute_epic_task with epicId "${activeEpic.id}" to continue it, or ask the user whether to cancel it before proceeding.`
+              ? `Use execute_epic_task to continue it (no IDs needed — it auto-resolves the active epic), or ask the user whether to cancel it before proceeding.`
               : `Inform the user that another user's epic is currently running and they must wait until it completes.`)
           );
         }
@@ -1146,247 +286,225 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
           emitAgentTyping({ ...conversationCtx, isEpicExecution: true });
         }
 
-        // Helper: resolve epic ID from a task ID (for architecture context)
-        async function resolveEpicId(taskId: string): Promise<string | null> {
-          const t = await AgentTask.findByPk(taskId, {
-            include: [{ model: TaskStage, as: "stage" }],
-          });
-          return (t as any)?.stage?.epicTaskId ?? null;
-        }
+        // Auto-resolve the active epic — the orchestrator is a system-wide
+        // singleton so this is unambiguous. We never accept an epicId/taskId
+        // as input because the model would have to carry those across turns
+        // and tends to hallucinate them.
+        const epic = await resolveActiveEpic();
+        const epicId = epic.id;
 
-        // Helper: pull repos, refresh architecture if needed, then build system prompt
-        async function buildSystemPrompt(epicId: string | null, userSystemPrompt?: string): Promise<string | undefined> {
-          if (epicId) {
-            // Pull latest + detect architecture drift before reading context
-            await preExecutionSync(epicId);
-          }
-          const parts: string[] = [];
-          if (epicId) {
-            const archCtx = await buildArchitectureContext(epicId);
-            if (archCtx) parts.push(archCtx);
-          }
-          if (userSystemPrompt) parts.push(userSystemPrompt);
-          return parts.length > 0 ? parts.join("\n\n") : undefined;
-        }
-
-        // Helper: resolve cwd — prefer repo.localPath, fall back to input.cwd
-        async function resolveCwd(epicId: string | null, inputCwd?: string): Promise<string> {
+        // Resolve the working directory from the epic's primary repo.
+        async function resolveCwd(inputCwd?: string): Promise<string> {
           if (inputCwd) return inputCwd;
-          if (!epicId) throw new Error("cwd is required when epicId is not provided.");
-
-          // Use the first repo's localPath as the working directory
-          const epic = await EpicTask.findByPk(epicId, {
+          const withRepos = await EpicTask.findByPk(epicId, {
             include: [{ model: Repository, as: "repositories" }],
           });
-          const repos = ((epic as any)?.repositories ?? []) as Repository[];
+          const repos = ((withRepos as any)?.repositories ?? []) as Repository[];
           const repoWithPath = repos.find((r) => r.localPath);
           if (repoWithPath?.localPath) return repoWithPath.localPath;
-
           throw new Error(
             "cwd is required — no repository has a localPath configured. " +
             "Either pass cwd explicitly or set localPath on the repository.",
           );
         }
 
-        if (input.mode === "retry") {
-          if (!input.taskId) {
-            return "Error: taskId is required for retry mode.";
-          }
-          if (!input.feedback) {
-            return "Error: feedback is required for retry mode — explain what needs to be fixed.";
-          }
-
-          const epicId = await resolveEpicId(input.taskId);
-          const cwd = await resolveCwd(epicId, input.cwd);
-          const systemPrompt = await buildSystemPrompt(epicId, input.systemPrompt);
-
-          const { previousSessionId, enrichedFeedback } = await prepareRetry(input.taskId, input.feedback);
-
-          logger.info("ExecuteEpicTask: retrying task", {
-            taskId: input.taskId,
-            previousSessionId,
-          });
-
-          const execution = await executeTask(input.taskId, {
-            cwd,
-            promptOverride: enrichedFeedback,
-            resumeSessionId: previousSessionId ?? undefined,
-            allowedTools: input.allowedTools,
-            maxTurns: input.maxTurns,
-            systemPrompt,
-          });
-
-          let result = await formatExecutionResult(execution, input.taskId);
-
-          // After successful retry, continue with remaining stage tasks
-          if (execution.status !== "failed") {
-            const contResult = await continueRemainingTasks(input.taskId, {
-              cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt,
-            });
-            if (contResult) result += "\n\n---\n\n" + contResult;
-          }
-
-          result += await appendContinuationMarker(input.taskId);
-          return result;
+        // Build the executor's system prompt. `preExecutionSync` resolves
+        // the stage and syncs onto its feature branch, so it needs a taskId
+        // to know which stage to use.
+        async function buildSystemPrompt(
+          taskId: string,
+          userSystemPrompt: string | undefined,
+        ): Promise<string | undefined> {
+          await preExecutionSync(epicId, taskId);
+          const parts: string[] = [];
+          const archCtx = await buildArchitectureContext(epicId);
+          if (archCtx) parts.push(archCtx);
+          if (userSystemPrompt) parts.push(userSystemPrompt);
+          return parts.length > 0 ? parts.join("\n\n") : undefined;
         }
 
-        // Normal execution mode — single task
-        if (input.taskId) {
-          const epicId = await resolveEpicId(input.taskId);
-          const cwd = await resolveCwd(epicId, input.cwd);
-          const systemPrompt = await buildSystemPrompt(epicId, input.systemPrompt);
-
-          const execution = await executeTask(input.taskId, {
-            cwd,
-            allowedTools: input.allowedTools,
-            maxTurns: input.maxTurns,
-            systemPrompt,
-          });
-
-          let result = await formatExecutionResult(execution, input.taskId);
-
-          // After successful execution, continue with remaining stage tasks
-          if (execution.status !== "failed") {
-            const contResult = await continueRemainingTasks(input.taskId, {
-              cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt,
-            });
-            if (contResult) result += "\n\n---\n\n" + contResult;
-          }
-
-          result += await appendContinuationMarker(input.taskId);
-          return result;
-        }
-
-        if (input.epicId) {
-          const readyTasks = await getReadyTasks(input.epicId);
-          if (readyTasks.length === 0) {
-            const epic = await getEpic(input.epicId, { includeStages: true, includeTasks: true });
-            if (!epic) return "Error: Epic not found.";
-
-            const stages = (epic as any).stages ?? [];
-            const waitingForPr = stages.filter(
-              (s: any) => s.prStatus === "open" || s.prStatus === "draft",
+        // Resolve the next task to operate on. Prefers a 'ready' task
+        // (normal execution or post-request_stage_changes retry), then
+        // falls back to a 'failed' task in an in_progress stage (mid-stage
+        // CLI failure). Returns null only if there's genuinely nothing
+        // left to do.
+        const firstTask = await resolveNextRetryableTask(epicId);
+        if (!firstTask) {
+          const fullEpic = await getEpic(epicId, { includeStages: true, includeTasks: true });
+          const stages = ((fullEpic as any)?.stages ?? []) as any[];
+          const waitingForPr = stages.filter((s) => s.status === "pr_pending");
+          if (waitingForPr.length > 0) {
+            const stageNames = waitingForPr
+              .map((s) => `"${s.title}" (PR #${s.prNumber ?? "not opened"})`)
+              .join(", ");
+            return (
+              `No tasks are ready to execute. Waiting for PR approval on: ${stageNames}.\n` +
+              `Inform the user that the next tasks are blocked until these PRs are approved.`
             );
+          }
+          if (epic.status === "completed") {
+            return `All tasks in epic "${epic.title}" have been completed successfully!`;
+          }
+          return `No actionable tasks found for epic "${epic.title}". Status: ${epic.status}.`;
+        }
 
-            if (waitingForPr.length > 0) {
-              const stageNames = waitingForPr.map((s: any) => `"${s.title}" (PR #${s.prNumber ?? "not opened"})`).join(", ");
-              return (
-                `No tasks are ready to execute. Waiting for PR approval on stages: ${stageNames}.\n` +
-                `Inform the user that the next tasks are blocked until these PRs are approved.`
-              );
-            }
+        // If the picked task is a failed one (mid-stage failure recovery),
+        // force retry mode regardless of what the caller passed — a fresh
+        // re-run of a failed task without feedback-carrying session resume
+        // would lose the context of why it failed.
+        const isFailedRecovery = firstTask.status === ("failed" as AgentTaskStatus);
+        const effectiveMode = isFailedRecovery ? "retry" : input.mode;
 
-            if (epic.status === "completed") {
-              return `All tasks in epic "${epic.title}" have been completed successfully!`;
-            }
+        const cwd = await resolveCwd(input.cwd);
+        const systemPrompt = await buildSystemPrompt(firstTask.id, input.systemPrompt);
 
-            return `No ready tasks found for epic "${epic.title}". Status: ${epic.status}.`;
+        if (effectiveMode === "retry") {
+          // Pull feedback from input, or fall back to what request_stage_changes
+          // already stored on the task's latest execution row.
+          let feedback = input.feedback;
+          if (!feedback) {
+            const lastExec = await TaskExecution.findOne({
+              where: { agentTaskId: firstTask.id },
+              order: [["attempt_number", "DESC"]],
+            });
+            feedback = lastExec?.feedback ?? undefined;
+          }
+          // For a mid-stage failed-task recovery, feedback is optional: the
+          // model may be retrying a transient CLI crash where there's nothing
+          // useful to tell Claude beyond "try again." Synthesize a neutral
+          // stub so prepareRetry can still build a resume prompt.
+          if (!feedback && isFailedRecovery) {
+            feedback =
+              "The previous attempt failed before it could finish. " +
+              "Resume and complete the original task.";
+          }
+          if (!feedback) {
+            return (
+              "Error: retry mode requires feedback — either pass it as an argument " +
+              "or call request_stage_changes first (which stores the feedback on the task)."
+            );
           }
 
-          const cwd = await resolveCwd(input.epicId, input.cwd);
-          const systemPrompt = await buildSystemPrompt(input.epicId, input.systemPrompt);
-
-          // Determine the stage of the first ready task, then get ALL tasks
-          // in that stage sorted by sort_order — run them sequentially
-          const firstReady = readyTasks[0];
-          const stageTasks = await AgentTask.findAll({
-            where: { taskStageId: (firstReady as any).task_stage_id ?? (firstReady as any).taskStageId },
-            order: [["sort_order", "ASC"]],
-          });
-
-          // Filter to tasks that still need to run (pending or ready)
-          const tasksToRun = stageTasks.filter(
-            (t) => t.status === "pending" || t.status === "ready",
+          const { previousSessionId, resumePrompt, freshPrompt } = await prepareRetry(
+            firstTask.id,
+            feedback,
           );
 
-          const results: string[] = [];
-          let lastTaskId = firstReady.id;
+          logger.info("ExecuteEpicTask: retrying task", {
+            taskId: firstTask.id,
+            taskTitle: firstTask.title,
+            previousSessionId,
+            willResume: !!previousSessionId,
+            failedRecovery: isFailedRecovery,
+          });
 
-          for (const task of tasksToRun) {
-            logger.info("ExecuteEpicTask: executing stage task", {
-              epicId: input.epicId,
-              taskId: task.id,
-              taskTitle: task.title,
-              position: `${tasksToRun.indexOf(task) + 1}/${tasksToRun.length}`,
+          // If we have a session to resume, also pass the fresh prompt as
+          // fallback — if --resume fails at runtime (session expired, file
+          // missing), executeTask swaps in a coherent standalone prompt
+          // instead of re-sending continuation-style text to an empty session.
+          const execution = await executeTask(firstTask.id, {
+            cwd,
+            promptOverride: previousSessionId ? resumePrompt : freshPrompt,
+            resumeSessionId: previousSessionId ?? undefined,
+            freshPromptFallback: previousSessionId ? freshPrompt : undefined,
+            allowedTools: input.allowedTools,
+            maxTurns: input.maxTurns,
+            systemPrompt,
+          });
+
+          let result = await formatExecutionResult(execution, firstTask.id);
+          if (execution.status !== "failed") {
+            const contResult = await continueRemainingTasks(firstTask.id, {
+              cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt,
             });
-
-            const execution = await executeTask(task.id, {
-              cwd,
-              allowedTools: input.allowedTools,
-              maxTurns: input.maxTurns,
-              systemPrompt,
-            });
-
-            const report = await formatExecutionResult(execution, task.id);
-            results.push(report);
-            lastTaskId = task.id;
-
-            // If the task failed, stop — don't continue to the next task
-            if (execution.status === "failed") {
-              results.push(`\n⚠ Task "${task.title}" failed. Stopping sequential execution.`);
-              break;
-            }
+            if (contResult) result += "\n\n---\n\n" + contResult;
           }
-
-          let result = results.join("\n\n---\n\n");
-
-          // After all stage tasks ran, check if stage needs a PR
-          result += await appendContinuationMarker(lastTaskId);
-
+          result += await appendContinuationMarker(firstTask.id);
           return result;
         }
 
-        return "Error: either taskId or epicId is required.";
+        // Normal execution mode — first ready task, fresh run.
+        logger.info("ExecuteEpicTask: starting first ready task", {
+          epicId,
+          taskId: firstTask.id,
+          taskTitle: firstTask.title,
+        });
+
+        const execution = await executeTask(firstTask.id, {
+          cwd,
+          allowedTools: input.allowedTools,
+          maxTurns: input.maxTurns,
+          systemPrompt,
+        });
+
+        let result = await formatExecutionResult(execution, firstTask.id);
+        if (execution.status !== "failed") {
+          const contResult = await continueRemainingTasks(firstTask.id, {
+            cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt,
+          });
+          if (contResult) result += "\n\n---\n\n" + contResult;
+        }
+        result += await appendContinuationMarker(firstTask.id);
+        return result;
       } catch (err: any) {
-        logger.error("ExecuteEpicTask: failed", { error: err.message });
-        return `Error executing task: ${err.message}`;
+        logger.error("ExecuteEpicTask: failed", {
+          error: err.message,
+          stack: err.stack,
+          mode: input.mode ?? "execute",
+          hasCwd: !!input.cwd,
+        });
+        return `Error executing epic task: ${err.message}`;
       }
     },
     {
       name: "execute_epic_task",
       description:
-        "Execute coding task(s) via Claude CLI. You can either:\n" +
-        "1. Specify a taskId to execute a specific task\n" +
-        "2. Specify an epicId to automatically execute ALL ready tasks in the current stage sequentially\n" +
-        "3. Use mode='retry' with taskId and feedback to re-execute a task that produced unsatisfactory results\n\n" +
-        "When using epicId, all ready tasks are executed one after another automatically. " +
-        "If a task fails, execution stops. After all tasks in a stage complete, " +
-        "you will be instructed to open a PR for the stage.\n\n" +
-        "After execution, you will receive a structured report with the git diff and a review checklist.\n" +
-        "Review the diff carefully — if fixes are needed, call this tool with mode='retry'.\n\n" +
-        "The working directory is resolved automatically from the repository's localPath. " +
-        "You can override it with cwd if needed. Architecture context from the project and repos " +
-        "is automatically injected into the CLI executor's system prompt.",
+        "Execute the next actionable task in the active epic. No IDs required — the tool auto-resolves the " +
+        "active epic (the orchestrator is a system-wide singleton) and picks the next task to run.\n\n" +
+        "Task resolution order:\n" +
+        "1. The first 'ready' task (normal execution, or post-request_stage_changes retry).\n" +
+        "2. Fallback: the first 'failed' task in an in_progress stage (mid-stage CLI failure recovery) — " +
+        "in this case the tool auto-switches to retry mode and resumes the previous session.\n\n" +
+        "Modes:\n" +
+        "- 'execute' (default): start the next ready task fresh.\n" +
+        "- 'retry': re-run the next task, resuming its previous Claude CLI session. " +
+        "Use this after calling request_stage_changes to reset a pr_pending stage's tasks with feedback. " +
+        "Feedback is auto-loaded from the task's execution row if not passed as an argument.\n\n" +
+        "After execution you'll receive a detailed report including the git diff. Review it — if fixes are " +
+        "needed, call request_stage_changes with your feedback and then retry.\n\n" +
+        "The tool automatically continues with the remaining tasks in the same stage after each successful " +
+        "execution. When all stage tasks complete, a PR is created automatically.",
       schema: z.object({
         mode: z.enum(["execute", "retry"]).default("execute")
-          .describe("'execute' for normal execution, 'retry' to re-run a task with feedback"),
-        epicId: z.string().uuid().optional()
-          .describe("Epic ID — when provided without taskId, executes the next ready task automatically"),
-        taskId: z.string().uuid().optional()
-          .describe("Specific task ID to execute or retry"),
-        cwd: z.string().optional()
-          .describe("Working directory override. If omitted, resolved from the repository's localPath."),
+          .describe("'execute' for a normal run, 'retry' to resume the previous CLI session with feedback"),
         feedback: z.string().optional()
-          .describe("Required for retry mode — detailed feedback on what needs to be fixed"),
+          .describe(
+            "Optional feedback text for retry mode. If omitted in retry mode, the tool " +
+            "loads the feedback that request_stage_changes stored on the task.",
+          ),
+        cwd: z.string().optional()
+          .describe("Working directory override (defaults to the epic's repository localPath)"),
         allowedTools: z.string().optional()
-          .describe("Comma-separated list of allowed Claude CLI tools (default: 'Bash,Read,Edit,Write,Glob,Grep')"),
+          .describe("Comma-separated list of allowed tools for Claude CLI"),
         maxTurns: z.number().int().positive().optional()
-          .describe("Max number of Claude CLI turns (default: unlimited)"),
+          .describe("Max turns for Claude CLI (defaults to 200)"),
         systemPrompt: z.string().optional()
-          .describe("Additional system prompt to append for the Claude CLI executor"),
+          .describe("Additional system prompt to append to the executor's context"),
       }),
     },
   );
 }
 
 /**
- * Tool for the orchestrator to check the current status of an epic and its tasks.
+ * Tool to view the current status of an epic and all its stages/tasks.
  */
 export function GetEpicStatusTool() {
   return tool(
-    async (input) => {
+    async () => {
       try {
-        const epic = await getEpic(input.epicId, {
+        // Auto-resolve the active epic — singleton invariant makes this unambiguous.
+        const active = await resolveActiveEpic();
+        const epic = await getEpic(active.id, {
           includeStages: true,
           includeTasks: true,
         });
@@ -1410,6 +528,26 @@ export function GetEpicStatusTool() {
               : "";
             summary += `  ${task.status === "completed" ? "+" : task.status === "failed" ? "x" : "o"} "${task.title}" — ${task.status}${execInfo}\n`;
           }
+
+          // Stage-level diff stat — treats the whole stage as one unit of
+          // work from the user's perspective. Anchored at the stage's
+          // captured base SHA, so it stays accurate even as the default
+          // branch moves on. We only include the stat (not the full diff)
+          // so this tool's output stays compact; use review_task_diff or
+          // the PR itself for the full diff.
+          if (stage.baseCommitSha) {
+            try {
+              const stageDiff = await captureStageDiff(stage);
+              if (stageDiff && stageDiff.diffStat) {
+                const statLines = stageDiff.diffStat.split("\n").slice(-1)[0] || "";
+                summary += `  Stage diff: ${statLines}\n`;
+              } else if (stageDiff) {
+                summary += `  Stage diff: (no changes yet)\n`;
+              }
+            } catch {
+              // Non-fatal — stage diff is a convenience.
+            }
+          }
           summary += "\n";
         }
 
@@ -1418,14 +556,18 @@ export function GetEpicStatusTool() {
           summary += `Ready to execute: ${readyTasks.map((t) => `"${t.title}"`).join(", ")}\n`;
         }
 
-        // Flag completed stages that are missing a PR — this blocks the next stage
+        // Flag stages that need attention
         for (const stage of stages) {
-          if (stage.status === "completed" && !stage.prNumber) {
+          if (stage.status === "pr_pending" && !stage.prNumber) {
             summary +=
-              `\n⚠ Stage "${stage.title}" is completed but has no PR. ` +
+              `\n⚠ Stage "${stage.title}" tasks are done but no PR was created yet. ` +
               `PR creation should have happened automatically. If it failed, run: ` +
               `\`git push origin HEAD\` then \`gh pr create\`, then call update_stage_pr.\n`;
-          } else if (stage.status === "completed" && stage.prStatus === "changes_requested") {
+          } else if (stage.status === "pr_pending" && stage.prNumber) {
+            summary +=
+              `\n⏳ Stage "${stage.title}" is waiting for PR #${stage.prNumber} to be approved. ` +
+              `The next stage will start automatically once the PR is approved.\n`;
+          } else if ((stage.status === "pr_pending" || stage.status === "in_progress") && stage.prStatus === "changes_requested") {
             summary +=
               `\n⚠ ACTION REQUIRED: Stage "${stage.title}" has changes requested on PR #${stage.prNumber}. ` +
               `Push the fixes and notify the reviewer. The next stage is blocked until the PR is approved.\n`;
@@ -1440,11 +582,10 @@ export function GetEpicStatusTool() {
     {
       name: "get_epic_status",
       description:
-        "Get the current status of an epic and all its stages/tasks. " +
-        "Use this to check progress, see which tasks are completed, failed, or ready to execute.",
-      schema: z.object({
-        epicId: z.string().uuid().describe("The epic ID to check status for"),
-      }),
+        "Get the current status of the active epic and all its stages/tasks. " +
+        "Use this to check progress, see which tasks are completed, failed, or ready to execute. " +
+        "No arguments — the orchestrator is a system-wide singleton so the active epic is unambiguous.",
+      schema: z.object({}),
     },
   );
 }
@@ -1591,15 +732,16 @@ export function ReviewTaskDiffTool() {
 
 /**
  * Tool for the orchestrator to record the PR URL/number on a stage after
- * creating the pull request. This is required so the webhook-based approval
- * flow can match incoming PR events back to the correct stage.
+ * creating the pull request.
  */
 export function UpdateStagePrTool() {
   return tool(
     async (input) => {
       try {
-        const stage = await TaskStage.findByPk(input.stageId);
-        if (!stage) return `Error: Stage ${input.stageId} not found.`;
+        // Auto-resolve the unique pr_pending stage — this tool is called
+        // immediately after `gh pr create` on the stage whose tasks just
+        // finished, which by invariant is the only pr_pending stage.
+        const { stage } = await resolveActivePrPendingStage();
 
         await stage.update({
           prUrl: input.prUrl,
@@ -1609,7 +751,7 @@ export function UpdateStagePrTool() {
         });
 
         logger.info("Stage PR info updated", {
-          stageId: input.stageId,
+          stageId: stage.id,
           prNumber: input.prNumber,
           prUrl: input.prUrl,
         });
@@ -1628,11 +770,12 @@ export function UpdateStagePrTool() {
     {
       name: "update_stage_pr",
       description:
-        "Record the pull request URL and number on a stage after creating the PR. " +
+        "Record the pull request URL and number on the stage currently awaiting review. " +
+        "Targets the unique pr_pending stage of the active epic (auto-resolved). " +
         "This links the stage to the GitHub PR so that the approval webhook can automatically " +
-        "unblock the next stage. Call this immediately after creating a PR with `gh pr create`.",
+        "unblock the next stage. Call this immediately after manually creating a PR with `gh pr create` " +
+        "(only needed when automatic PR creation failed).",
       schema: z.object({
-        stageId: z.string().uuid().describe("The stage ID to update"),
         prUrl: z.string().url().describe("Full URL of the pull request (e.g. https://github.com/owner/repo/pull/42)"),
         prNumber: z.number().int().positive().describe("PR number (e.g. 42)"),
         prStatus: z.enum(["open", "draft"]).optional()
@@ -1646,17 +789,6 @@ export function UpdateStagePrTool() {
 
 // ─── Force-Approve Stage PR (bypass webhook) ────────────────────────────────
 
-/**
- * DESTRUCTIVE tool — marks a stage's PR as approved without waiting for the
- * real GitHub webhook. Reuses the same service method the webhook uses, so
- * side effects (ready-task unblocking, auto-continuation, epic finalization)
- * are identical to a real approval.
- *
- * Intended usage: the user has manually reviewed and approved the PR outside
- * the system (e.g. on GitHub directly) and explicitly instructs the agent to
- * proceed. The tool REQUIRES the agent to pass a verbatim quote of the user's
- * authorization message to force explicit consent and create an audit trail.
- */
 export function ForceApproveStagePrTool() {
   return tool(
     async (input) => {
@@ -1670,8 +802,10 @@ export function ForceApproveStagePrTool() {
           );
         }
 
-        const stage = await TaskStage.findByPk(input.stageId);
-        if (!stage) return `Error: Stage ${input.stageId} not found.`;
+        // Auto-resolve the unique pr_pending stage — the invariant guarantees
+        // that the stage currently awaiting approval is the last one whose
+        // tasks were executed.
+        const { stage } = await resolveActivePrPendingStage();
 
         if (!stage.repositoryId || !stage.prNumber) {
           return (
@@ -1726,8 +860,8 @@ export function ForceApproveStagePrTool() {
     {
       name: "force_approve_stage_pr",
       description:
-        "DESTRUCTIVE — bypasses the PR review webhook and marks a stage's PR as approved, " +
-        "triggering the next stage to start executing. " +
+        "DESTRUCTIVE — bypasses the PR review webhook and marks the currently-pending stage's PR as approved, " +
+        "triggering the next stage to start executing. Targets the unique stage awaiting review (auto-resolved). " +
         "USE ONLY when ALL of the following are true: " +
         "(1) the user has stated in THIS conversation that they manually reviewed and approved the PR, " +
         "(2) the user has explicitly instructed you to proceed without waiting for the automatic approval webhook, " +
@@ -1736,7 +870,6 @@ export function ForceApproveStagePrTool() {
         "If the user has not given explicit, unambiguous consent, refuse and ask them to confirm first. " +
         "The 'userConfirmationQuote' field is mandatory and must contain the verbatim user authorization.",
       schema: z.object({
-        stageId: z.string().uuid().describe("The stage ID whose PR should be force-approved"),
         userConfirmationQuote: z.string().min(10).describe(
           "Verbatim quote of the user's message authorizing the bypass. " +
           "Must be the actual text the user wrote in this conversation — not a paraphrase. " +
@@ -1747,390 +880,206 @@ export function ForceApproveStagePrTool() {
   );
 }
 
-// ─── Continue Remaining Stage Tasks ─────────────────────────────────────────
+// ─── Approve Stage (manual, no PR required) ─────────────────────────────────
 
-/**
- * After a single task or retry completes, run any remaining pending/ready
- * tasks in the same stage sequentially by sort_order.
- */
-async function continueRemainingTasks(
-  completedTaskId: string,
-  options: { cwd: string; allowedTools?: string; maxTurns?: number; systemPrompt?: string },
-): Promise<string | null> {
-  const task = await AgentTask.findByPk(completedTaskId, {
-    include: [{ model: TaskStage, as: "stage" }],
-  });
-  if (!task) return null;
-
-  const stageId = task.taskStageId;
-  const remaining = await AgentTask.findAll({
-    where: { taskStageId: stageId, status: ["pending", "ready"] },
-    order: [["sort_order", "ASC"]],
-  });
-
-  if (remaining.length === 0) return null;
-
-  const results: string[] = [];
-  for (const next of remaining) {
-    logger.info("continueRemainingTasks: executing", {
-      taskId: next.id,
-      taskTitle: next.title,
-    });
-
-    const execution = await executeTask(next.id, {
-      cwd: options.cwd,
-      allowedTools: options.allowedTools,
-      maxTurns: options.maxTurns,
-      systemPrompt: options.systemPrompt,
-    });
-
-    results.push(await formatExecutionResult(execution, next.id));
-
-    if (execution.status === "failed") {
-      results.push(`\n⚠ Task "${next.title}" failed. Stopping sequential execution.`);
-      break;
-    }
-  }
-
-  return results.join("\n\n---\n\n");
-}
-
-// ─── Automatic PR Creation ──────────────────────────────────────────────────
-
-interface AutoPrResult {
-  ok: boolean;
-  prUrl?: string;
-  prNumber?: number;
-  error?: string;
-}
-
-/**
- * Deterministically creates a PR for a completed stage. No LLM involved.
- * 1. git push origin HEAD
- * 2. gh pr create
- * 3. Update the stage DB record with the PR info
- */
-async function autoCreateStagePr(
-  stage: TaskStage,
-  repo: Repository,
-  epicTitle: string,
-): Promise<AutoPrResult> {
-  const cwd = repo.localPath;
-  if (!cwd) return { ok: false, error: "Repository has no localPath" };
-
-  const baseBranch = repo.defaultBranch || "main";
-  const execOpts = { cwd, encoding: "utf-8" as const, timeout: 60_000, maxBuffer: 2 * 1024 * 1024 };
-
-  // 1. Push commits to remote
-  try {
-    execSync("git push origin HEAD", { ...execOpts, stdio: "pipe" });
-    logger.info("autoCreateStagePr: pushed to remote", { stageId: stage.id, cwd });
-  } catch (err: any) {
-    logger.error("autoCreateStagePr: git push failed", { stageId: stage.id, error: err?.message });
-    return { ok: false, error: `git push failed: ${err?.message}` };
-  }
-
-  // 2. Build PR title and body from stage/task metadata
-  const tasks = await AgentTask.findAll({
-    where: { taskStageId: stage.id },
-    order: [["sort_order", "ASC"]],
-  });
-
-  const prTitle = `${epicTitle} — ${stage.title}`;
-  const bodyParts = [
-    `## ${stage.title}`,
-    "",
-    stage.description || "",
-    "",
-    "### Tasks completed",
-    ...tasks.map((t) => `- **${t.title}** (${t.status})`),
-  ];
-
-  // Add diff stat if available
-  try {
-    const diffStat = execSync(`git diff --stat ${baseBranch}...HEAD`, execOpts).trim();
-    if (diffStat) {
-      bodyParts.push("", "### Changes", "```", diffStat, "```");
-    }
-  } catch {
-    // Non-fatal — diff stat is nice-to-have
-  }
-
-  const prBody = bodyParts.join("\n");
-
-  // 3. Create the PR via gh CLI
-  try {
-    const ghResult = spawnSync(
-      "su-exec",
-      ["agent", "gh", "pr", "create",
-        "--title", prTitle,
-        "--body", prBody,
-        "--base", baseBranch,
-      ],
-      { cwd, encoding: "utf-8", timeout: 60_000 },
-    );
-
-    if (ghResult.error) {
-      throw ghResult.error;
-    }
-
-    const ghOutput = (ghResult.stdout ?? "").trim();
-    const ghStderr = (ghResult.stderr ?? "").trim();
-
-    if (ghResult.status !== 0) {
-      throw new Error(ghStderr || `gh exited with code ${ghResult.status}`);
-    }
-
-    // gh pr create outputs the PR URL on stdout
-    const prUrl = ghOutput;
-    const prNumberMatch = prUrl.match(/\/pull\/(\d+)/);
-    const prNumber = prNumberMatch ? parseInt(prNumberMatch[1], 10) : null;
-
-    if (!prNumber) {
-      logger.warn("autoCreateStagePr: could not parse PR number from gh output", { ghOutput });
-      return { ok: false, error: `Created PR but could not parse number from: ${ghOutput}` };
-    }
-
-    // 4. Update the stage record
-    await stage.update({
-      prUrl,
-      prNumber,
-      prStatus: "open" as PrStatus,
-      repositoryId: repo.id,
-    });
-
-    logger.info("autoCreateStagePr: PR created and stage updated", {
-      stageId: stage.id,
-      prUrl,
-      prNumber,
-    });
-
-    return { ok: true, prUrl, prNumber };
-  } catch (err: any) {
-    logger.error("autoCreateStagePr: gh pr create failed", { stageId: stage.id, error: err?.message });
-    return { ok: false, error: `gh pr create failed: ${err?.message}` };
-  }
-}
-
-/**
- * Pushes fixes to an existing PR after a retry.
- */
-async function autoPushToExistingPr(
-  stage: TaskStage,
-  repo: Repository,
-): Promise<AutoPrResult> {
-  const cwd = repo.localPath;
-  if (!cwd) return { ok: false, error: "Repository has no localPath" };
-
-  try {
-    execSync("git push origin HEAD", {
-      cwd,
-      encoding: "utf-8",
-      timeout: 60_000,
-      stdio: "pipe",
-    });
-
-    logger.info("autoPushToExistingPr: pushed fixes", {
-      stageId: stage.id,
-      prNumber: stage.prNumber,
-    });
-
-    return { ok: true, prUrl: stage.prUrl ?? undefined, prNumber: stage.prNumber ?? undefined };
-  } catch (err: any) {
-    logger.error("autoPushToExistingPr: git push failed", { stageId: stage.id, error: err?.message });
-    return { ok: false, error: `git push failed: ${err?.message}` };
-  }
-}
-
-// ─── Continuation Marker ────────────────────────────────────────────────────
-
-/** Marker prefix used to signal that the worker should auto-continue the epic. */
-export const EPIC_CONTINUATION_MARKER = "<!--EPIC_CONTINUATION:";
-
-interface EpicContinuationPayload {
-  epicId: string;
-  completedTaskTitle: string;
-  remainingTasks: number;
-}
-
-function buildContinuationTag(payload: EpicContinuationPayload): string {
-  return `\n${EPIC_CONTINUATION_MARKER}${JSON.stringify(payload)}-->`;
-}
-
-/**
- * Given a taskId, resolves its epic and checks if more tasks remain.
- * Returns the continuation tag string (or empty string if no continuation needed).
- */
-async function appendContinuationMarker(taskId: string): Promise<string> {
-  try {
-    const task = await AgentTask.findByPk(taskId, {
-      include: [{ model: TaskStage, as: "stage" }],
-    });
-    if (!task) return "";
-
-    const stage = (task as any).stage as TaskStage | undefined;
-    if (!stage?.epicTaskId) return "";
-
-    const readyTasks = await getReadyTasks(stage.epicTaskId);
-
-    if (readyTasks.length > 0) {
-      return buildContinuationTag({
-        epicId: stage.epicTaskId,
-        completedTaskTitle: task.title,
-        remainingTasks: readyTasks.length,
-      });
-    }
-
-    // No more ready tasks — check if this stage just completed and needs PR action
-    const freshStage = await TaskStage.findByPk(stage.id);
-    if (freshStage && freshStage.status === "completed") {
-      const epic = await EpicTask.findByPk(stage.epicTaskId, {
-        include: [{ model: Repository, as: "repositories" }],
-      });
-      const repos = ((epic as any)?.repositories ?? []) as Repository[];
-      const repo = repos[0];
-
-      if (!repo) {
-        return "\n\n⚠ Stage completed but no repository found — cannot create PR automatically.";
-      }
-
-      // Case 1: Stage completed after retry (PR has changes_requested) — push fixes
-      if (freshStage.prNumber && freshStage.prStatus === "changes_requested") {
-        const pushResult = await autoPushToExistingPr(freshStage, repo);
-        if (pushResult.ok) {
+export function ApproveStageTool() {
+  return tool(
+    async (input) => {
+      try {
+        const quote = input.userConfirmationQuote?.trim();
+        if (!quote || quote.length < 5) {
           return (
-            `\n\n## Fixes Pushed to PR #${freshStage.prNumber}\n\n` +
-            `All retry tasks completed and fixes have been pushed automatically.\n` +
-            `PR: ${freshStage.prUrl ?? `#${freshStage.prNumber}`}\n` +
-            `The next stage is blocked until this PR is approved.`
+            `Error: approve_stage requires 'userConfirmationQuote' — a verbatim ` +
+            `quote of the user's explicit authorization to mark this stage as completed. ` +
+            `This tool must NEVER be called without clear user consent in the conversation.`
           );
         }
-        return (
-          `\n\n## ⚠ Auto-push Failed\n\n` +
-          `Error: ${pushResult.error}\n` +
-          `You need to manually push the fixes: \`git push origin HEAD\` from ${repo.localPath}`
-        );
-      }
 
-      // Case 2: Stage completed for the first time — create a new PR
-      if (!freshStage.prNumber) {
-        const prResult = await autoCreateStagePr(freshStage, repo, epic?.title ?? "Epic");
-        if (prResult.ok) {
-          return (
-            `\n\n## Pull Request Created Automatically\n\n` +
-            `**PR #${prResult.prNumber}:** ${prResult.prUrl}\n` +
-            `Stage "${freshStage.title}" is now waiting for PR approval.\n` +
-            `The next stage will begin automatically once the PR is approved.`
+        // Auto-resolve the unique pr_pending stage of the active epic.
+        const { stage } = await resolveActivePrPendingStage();
+
+        // If the stage has a PR, route through handlePrApproval for consistency
+        if (stage.repositoryId && stage.prNumber) {
+          const { EpicTaskService } = await import("../services/epicTask.service");
+          const service = new EpicTaskService();
+          const result = await service.handlePrApproval(stage.repositoryId, stage.prNumber);
+
+          logger.info("Stage approved manually via chat (has PR)", {
+            stageId: stage.id,
+            prNumber: stage.prNumber,
+            userQuote: quote,
+          });
+
+          let summary =
+            `Stage "${stage.title}" has been approved and marked as completed.\n` +
+            `Authorization: "${quote}"\n\n`;
+
+          if (result.epicCompleted) {
+            summary += `All stages are now complete — the epic is finished!`;
+          } else if (result.readyTasks.length > 0) {
+            summary += `${result.readyTasks.length} task(s) in the next stage are now ready and will be executed automatically.`;
+          } else {
+            summary += `No new tasks were unblocked.`;
+          }
+          return summary;
+        }
+
+        // No PR — directly complete the stage
+        await stage.update({
+          status: "completed" as TaskStageStatus,
+          completedAt: new Date(),
+        });
+
+        // Check if there are next-stage tasks to unblock
+        const nextStageTasks = await sequelize.query<AgentTask>(
+          `SELECT at.*
+           FROM agent_tasks at
+           JOIN task_stages ts ON at.task_stage_id = ts.id
+           WHERE ts.epic_task_id = :epicId
+             AND at.status = 'pending'
+             AND NOT EXISTS (
+               SELECT 1
+               FROM task_stages prev
+               WHERE prev.epic_task_id = ts.epic_task_id
+                 AND prev.sort_order < ts.sort_order
+                 AND prev.status <> 'completed'
+             )
+           ORDER BY ts.sort_order, at.sort_order`,
+          { replacements: { epicId: stage.epicTaskId }, type: QueryTypes.SELECT },
+        );
+
+        if (nextStageTasks.length > 0) {
+          await AgentTask.update(
+            { status: "ready" as AgentTaskStatus },
+            { where: { id: nextStageTasks.map((t) => t.id) } },
           );
         }
-        return (
-          `\n\n## ⚠ Auto PR Creation Failed\n\n` +
-          `Error: ${prResult.error}\n` +
-          `You need to manually create the PR:\n` +
-          `1. \`cd ${repo.localPath} && git push origin HEAD\`\n` +
-          `2. \`gh pr create --title "Stage: ${freshStage.title}" --base ${repo.defaultBranch ?? "main"}\`\n` +
-          `3. Then call \`update_stage_pr\` with the PR details.`
-        );
+
+        // Check if epic is fully done
+        const { EpicTaskService } = await import("../services/epicTask.service");
+        const service = new EpicTaskService();
+        const epicCompleted = await (service as any).checkAndFinalizeEpic(stage.epicTaskId);
+
+        logger.info("Stage approved manually via chat (no PR)", {
+          stageId: stage.id,
+          userQuote: quote,
+        });
+
+        let summary =
+          `Stage "${stage.title}" has been approved and marked as completed.\n` +
+          `Authorization: "${quote}"\n\n`;
+
+        if (epicCompleted) {
+          summary += `All stages are now complete — the epic is finished!`;
+        } else if (nextStageTasks.length > 0) {
+          summary += `${nextStageTasks.length} task(s) in the next stage are now ready and will be executed automatically.`;
+        } else {
+          summary += `No new tasks were unblocked.`;
+        }
+        return summary;
+      } catch (err: any) {
+        logger.error("ApproveStageTool: failed", { error: err.message });
+        return `Error approving stage: ${err.message}`;
       }
-    }
-
-    return "";
-  } catch {
-    return "";
-  }
+    },
+    {
+      name: "approve_stage",
+      description:
+        "Marks the stage currently awaiting review as completed after the user explicitly approves it. " +
+        "Targets the unique pr_pending stage of the active epic (auto-resolved). " +
+        "Use this when the user says they've reviewed the changes or the PR and want to proceed to the next stage. " +
+        "This transitions the stage from 'pr_pending' to 'completed', unblocking the next stage's tasks. " +
+        "REQUIRES explicit user consent — never call without the user clearly stating approval. " +
+        "The 'userConfirmationQuote' must contain the verbatim user message.",
+      schema: z.object({
+        userConfirmationQuote: z.string().min(5).describe(
+          "Verbatim quote of the user's message authorizing the stage completion. " +
+          "Must be the actual text the user wrote — not a paraphrase.",
+        ),
+      }),
+    },
+  );
 }
 
-/**
- * Parses the continuation marker from a tool result string.
- * Returns the payload if found, null otherwise.
- */
-export function parseContinuationMarker(text: string): EpicContinuationPayload | null {
-  const idx = text.indexOf(EPIC_CONTINUATION_MARKER);
-  if (idx === -1) return null;
+// ─── Request Changes on a Stage (chat-based, no webhook needed) ─────────────
 
-  const start = idx + EPIC_CONTINUATION_MARKER.length;
-  const end = text.indexOf("-->", start);
-  if (end === -1) return null;
+export function RequestStageChangesTool() {
+  return tool(
+    async (input) => {
+      try {
+        // Auto-resolve: the unique pr_pending stage of the active epic.
+        // Throws loudly if there's no active epic, or no stage in pr_pending,
+        // or more than one (invariant violation) — so the model gets an
+        // actionable error instead of hallucinating a stageId.
+        const { stage } = await resolveActivePrPendingStage();
 
-  try {
-    return JSON.parse(text.slice(start, end));
-  } catch {
-    return null;
-  }
-}
+        const tasks = (stage as any).tasks as AgentTask[];
+        const completedTasks = tasks.filter((t) => t.status === "completed");
+        if (completedTasks.length === 0) {
+          return `Error: No completed tasks found in stage "${stage.title}" to retry.`;
+        }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+        const feedback = input.feedback;
 
-async function formatExecutionResult(execution: any, taskId: string): Promise<string> {
-  const status = execution.status;
-  const meta = execution.metadata ?? {};
+        // Store feedback on each task's latest execution and reset task to "ready"
+        const retryTaskIds: string[] = [];
+        for (const task of completedTasks) {
+          const lastExec = await TaskExecution.findOne({
+            where: { agentTaskId: task.id },
+            order: [["attempt_number", "DESC"]],
+          });
+          if (lastExec) {
+            await lastExec.update({ feedback });
+          }
 
-  // Fetch task context for the review
-  const task = await AgentTask.findByPk(taskId);
-  const taskTitle = task?.title ?? "(unknown)";
-  const taskDescription = task?.description ?? "(no description)";
+          await task.update({
+            status: "ready" as AgentTaskStatus,
+            completedAt: null,
+          });
+          retryTaskIds.push(task.id);
+        }
 
-  let result = `# Task Execution Report\n\n`;
-  result += `**Task:** ${taskTitle}\n`;
-  result += `**Task ID:** ${taskId}\n`;
-  result += `**Status:** ${status}\n`;
-  result += `**Execution ID:** ${execution.id}\n`;
-  result += `**Attempt:** #${execution.attemptNumber}\n`;
+        // Reset stage back to in_progress
+        await stage.update({
+          status: "in_progress" as TaskStageStatus,
+          completedAt: null,
+          prStatus: stage.prNumber ? "changes_requested" as PrStatus : stage.prStatus,
+        });
 
-  if (execution.cliSessionId) {
-    result += `**CLI Session:** ${execution.cliSessionId}\n`;
-  }
-  if (meta.cost_usd) result += `**Cost:** $${meta.cost_usd}\n`;
-  if (meta.num_turns) result += `**Turns:** ${meta.num_turns}\n`;
+        logger.info("Stage changes requested via chat", {
+          stageId: stage.id,
+          epicTaskId: stage.epicTaskId,
+          retryTaskIds,
+        });
 
-  if (status === "completed") {
-    // Section 1: Instructions that were given
-    result += `\n## Instructions Given\n`;
-    result += `${taskDescription}\n`;
-
-    // Section 2: Files changed (git diff --stat)
-    if (meta.git_diff_stat) {
-      result += `\n## Files Changed\n`;
-      result += `\`\`\`\n${meta.git_diff_stat}\n\`\`\`\n`;
-    }
-
-    // Section 3: Full diff
-    if (meta.git_diff) {
-      result += `\n## Full Diff\n`;
-      result += `\`\`\`diff\n${meta.git_diff}\n\`\`\`\n`;
-    } else {
-      result += `\n## Full Diff\n`;
-      result += `_No git diff captured. The CLI may have committed changes or no files were modified._\n`;
-    }
-
-    // Section 4: CLI output summary
-    if (execution.result) {
-      result += `\n## CLI Output Summary\n`;
-      result += `${execution.result}\n`;
-    }
-
-    // Section 5: Recent commits
-    if (meta.git_recent_commits) {
-      result += `\n## Recent Commits\n`;
-      result += `\`\`\`\n${meta.git_recent_commits}\n\`\`\`\n`;
-    }
-
-    // Section 6: Review checklist
-    result += `\n## Review Checklist\n`;
-    result += `Before proceeding, verify:\n`;
-    result += `- [ ] The changed files match what was requested in the instructions\n`;
-    result += `- [ ] There are no unexpected file changes outside the task scope\n`;
-    result += `- [ ] The diff implements the logic described in the task description\n`;
-    result += `- [ ] No obvious issues: hardcoded values, removed important code, missing imports\n`;
-    result += `- [ ] Naming conventions and code style are consistent with the codebase\n`;
-
-    result += `\n**Action:** If the changes are correct, proceed to the next task. `;
-    result += `If fixes are needed, call \`execute_epic_task\` with \`mode='retry'\` and provide **specific feedback** referencing the diff lines that need to change.`;
-  } else if (status === "failed") {
-    result += `\n## Error\n`;
-    result += `\`\`\`\n${execution.error ?? "Unknown error"}\n\`\`\`\n`;
-    result += `\nThe task failed. You can retry with \`mode='retry'\` and feedback, or investigate the error.`;
-  }
-
-  return result;
+        return (
+          `Stage "${stage.title}" has been reset to in_progress. ` +
+          `${retryTaskIds.length} task(s) are now ready for retry.\n\n` +
+          `Call execute_epic_task with mode="retry" to continue. ` +
+          `Feedback has been stored on each task's latest execution and will be loaded automatically; ` +
+          `the previous CLI session will be resumed so full context is preserved.\n\n` +
+          `Feedback: "${feedback}"`
+        );
+      } catch (err: any) {
+        logger.error("RequestStageChangesTool: failed", { error: err.message });
+        return `Error requesting stage changes: ${err.message}`;
+      }
+    },
+    {
+      name: "request_stage_changes",
+      description:
+        "Resets the stage currently awaiting review (pr_pending) back to in_progress so its tasks can be retried " +
+        "with feedback. Use this when the user reviews the stage's output or PR and wants changes — instead of " +
+        "approving.\n\n" +
+        "No stageId needed — the tool auto-resolves the unique pr_pending stage of the active epic. " +
+        "After calling this, call execute_epic_task with mode='retry' (no args needed — feedback is loaded from the " +
+        "stored execution, and the retry resumes the previous CLI session for full context).",
+      schema: z.object({
+        feedback: z.string().min(5).describe(
+          "Detailed feedback explaining what needs to be fixed. " +
+          "Stored on each task's execution row and passed to the CLI on retry.",
+        ),
+      }),
+    },
+  );
 }

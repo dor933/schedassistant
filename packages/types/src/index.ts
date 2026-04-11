@@ -294,7 +294,7 @@ export type AgentTaskId = string;
 export type TaskExecutionId = string;
 
 export type EpicTaskStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
-export type TaskStageStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
+export type TaskStageStatus = "pending" | "in_progress" | "pr_pending" | "completed" | "failed" | "cancelled";
 export type AgentTaskStatus = "pending" | "ready" | "in_progress" | "completed" | "failed" | "cancelled";
 export type TaskExecutionStatus = "running" | "completed" | "failed" | "cancelled";
 export type PrStatus = "draft" | "open" | "approved" | "merged" | "closed" | "changes_requested";
@@ -362,6 +362,8 @@ export interface TaskStageAttributes {
   prNumber: number | null;
   prStatus: PrStatus | null;
   repositoryId: RepositoryId | null;
+  branchName: string | null;
+  baseCommitSha: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;

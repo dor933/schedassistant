@@ -99,6 +99,10 @@ function runClaudeArchitecture(cwd: string, prompt: string): string {
     "--max-turns", "10",
   ], {
     cwd,
+    // HOME must be pinned to the `agent` user's home so claude writes its
+    // session file under /home/agent/.claude (writable by agent) rather than
+    // inheriting HOME=/root from the root-owned agent_service process.
+    env: { ...process.env, HOME: "/home/agent" },
     encoding: "utf-8",
     timeout: 300_000,
     maxBuffer: 4 * 1024 * 1024,

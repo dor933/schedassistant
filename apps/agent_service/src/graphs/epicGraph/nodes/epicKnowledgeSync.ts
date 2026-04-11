@@ -1,5 +1,5 @@
 import { RunnableConfig } from "@langchain/core/runnables";
-import { isAIMessage, isToolMessage } from "@langchain/core/messages";
+import { isToolMessage } from "@langchain/core/messages";
 import { QueryTypes } from "sequelize";
 import {
   sequelize,
@@ -12,6 +12,7 @@ import type { AgentId, ProjectId, RepositoryId } from "@scheduling-agent/types";
 import { embedText } from "../../../rag/embeddings";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
+import { resolveActiveEpic } from "../../../utils/epicTaskUtils";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -122,30 +123,22 @@ async function extractRepoChangesFromTurn(state: AgentState): Promise<RepoChange
 
   if (executionReports.length === 0) return [];
 
-  // Find which epic/repos were involved by checking the epicContinuation state
-  // or parsing the execution reports
+  // Find which epic/repos were involved. Preferred source is the
+  // epicContinuation state from the graph. Fallback: since the epic
+  // orchestrator is a system-wide singleton, resolve the active epic
+  // from the DB — tool calls no longer carry epicId in their args.
   const epicCont = state.epicContinuation;
   if (!epicCont?.epicId) {
-    // Try to find epicId from tool call args in AI messages
-    const epicId = findEpicIdFromMessages(messages);
-    if (!epicId) return [];
-    return await buildRepoChanges(epicId, executionReports);
+    try {
+      const active = await resolveActiveEpic();
+      return await buildRepoChanges(active.id, executionReports);
+    } catch {
+      // No active epic — nothing to sync against.
+      return [];
+    }
   }
 
   return await buildRepoChanges(epicCont.epicId, executionReports);
-}
-
-function findEpicIdFromMessages(messages: any[]): string | null {
-  for (const msg of messages) {
-    if (isAIMessage(msg) && msg.tool_calls?.length) {
-      for (const tc of msg.tool_calls) {
-        if (tc.name === "execute_epic_task" && tc.args?.epicId) {
-          return tc.args.epicId;
-        }
-      }
-    }
-  }
-  return null;
 }
 
 async function buildRepoChanges(

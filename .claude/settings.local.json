@@ -46,7 +46,10 @@
       "Bash(find /c/Users/momi9/Dev/sched-assist/sched-assist-new/packages/database -type f -name *migration*)",
       "WebFetch(domain:docs.langchain.com)",
       "WebFetch(domain:github.com)",
-      "Bash(xargs -I {} find {} -maxdepth 2 -type d)"
+      "Bash(xargs -I {} find {} -maxdepth 2 -type d)",
+      "Bash(npx sequelize-cli:*)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"EXIT=$?\")"
     ]
   }
 }
