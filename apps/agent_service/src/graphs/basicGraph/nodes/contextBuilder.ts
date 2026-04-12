@@ -324,9 +324,13 @@ function formatSystemPrompt(
     "- Simple, single-step tool calls (e.g. fetching a stock quote, looking up a calendar event)\n" +
     "- Looking up information you already have in context\n" +
     "- Answering questions from your own knowledge and memory\n\n" +
-    "**Delegate to an executor agent** when the task is complex or heavy:\n" +
+    "**Delegate to the Epic Orchestrator** for actual code changes:\n" +
+    "- Writing new features, fixing bugs, refactoring code, creating PRs\n" +
+    "- Any task that results in **code being written or modified** in a repository\n" +
+    "- Use `delegate_to_epic_orchestrator` — it plans epics, executes tasks via Claude CLI, reviews diffs, and manages PRs\n\n" +
+    "**Delegate to an executor agent** (`delegate_to_deep_agent`) for complex non-code-change tasks:\n" +
     "- Multi-step research or deep analysis that requires chaining many tool calls\n" +
-    "- Writing, reviewing, or refactoring code\n" +
+    "- Code inspection, review, or auditing (reading and analyzing code without changing it)\n" +
     "- Large data processing or aggregation across multiple sources\n" +
     "- Any task that benefits from a specialist's focused, long-running execution\n\n" +
     "Use your judgment: if you can answer quickly and accurately with a simple tool call or two, do it yourself. " +
@@ -441,20 +445,29 @@ function formatSystemPrompt(
 
   sections.push("## Interacting with other agents");
   sections.push(
-    "There are **two types** of agents in this system — make sure you use the right tool for each:\n\n" +
+    "There are **three types** of agents in this system — make sure you use the right tool for each:\n\n" +
     "### Peer agents (fellow orchestrators)\n" +
     "These are agents like you — each with their own role, memory, and conversation history. " +
     "You can **talk to them directly** and get an immediate response.\n" +
     "- Use `list_agents` to discover available peer agents and get their IDs.\n" +
     "- Use `consult_agent` with the agent's ID to send them a message and receive their answer.\n" +
     "- Example: asking the Data Engineer agent about a pipeline, or the Project Manager about priorities.\n\n" +
+    "### Epic Orchestrator (code changes)\n" +
+    "A specialized **Project Manager** agent that plans and executes **actual code changes** across repositories. " +
+    "It creates epic plans with stages and tasks, executes them via Claude CLI, reviews git diffs, and manages PRs.\n" +
+    "- Use `delegate_to_epic_orchestrator` to send it a coding task.\n" +
+    "- **Use this for any task that results in code being written, modified, or refactored** — " +
+    "new features, bug fixes, refactors, migrations, config changes in repos, etc.\n" +
+    "- Do NOT use executor agents (`delegate_to_deep_agent`) for code changes — always use the Epic Orchestrator.\n\n" +
     "### Executor agents (specialists)\n" +
-    "These are **background specialists** built for complex, long-running tasks. " +
+    "These are **background specialists** built for complex, long-running **non-code-change** tasks. " +
     "They can chain many tool calls, access external MCP servers, and work autonomously until the job is done. " +
     "You delegate work to them and receive the result asynchronously.\n" +
     "- Use `list_system_agents` to discover available executor agents — this also shows which **MCP tools** each executor has access to.\n" +
     "- Use `delegate_to_deep_agent` to send them a task.\n" +
-    "- Example: delegating a multi-step research analysis, code generation, or large data aggregation.\n\n" +
+    "- **Use this for:** code inspection/review/auditing (reading code without changing it), " +
+    "multi-step research, deep analysis, data aggregation, external API lookups.\n" +
+    "- Do NOT use this for actual code changes — use the Epic Orchestrator instead.\n\n" +
     "**Executor agents have access to powerful MCP tools that you do NOT have.** " +
     "These include tools like `fetch` (HTTP requests), `github` (GitHub API), `bash` (shell commands), " +
     "`filesystem` (file I/O), `docker` (container management), and specialized data sources. " +
@@ -463,8 +476,9 @@ function formatSystemPrompt(
     "(e.g., \"use the `fetch` tool to call endpoint X\", \"use `github` to look up PR #123\").\n\n" +
     "**When a user asks you to talk to, ask, or consult another agent — use `list_agents` + `consult_agent` (peer agents), " +
     "NOT `list_system_agents`.**\n\n" +
-    "**When a task requires sustained multi-step work** (deep research, code writing, complex analysis) — " +
-    "delegate to an executor agent via `list_system_agents` + `delegate_to_deep_agent` rather than attempting it yourself.",
+    "**Summary:** Code changes → `delegate_to_epic_orchestrator`. " +
+    "Code inspection / research / analysis → `delegate_to_deep_agent`. " +
+    "Quick questions to peers → `consult_agent`.",
   );
   sections.push("");
 
