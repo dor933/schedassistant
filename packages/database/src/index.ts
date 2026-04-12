@@ -26,3 +26,6 @@ export { TaskStage } from "./models/TaskStage";
 export { AgentTask } from "./models/AgentTask";
 export { TaskExecution } from "./models/TaskExecution";
 export { TaskDependency } from "./models/TaskDependency";
+export { Roundtable } from "./models/Roundtable";
+export { RoundtableAgent } from "./models/RoundtableAgent";
+export { RoundtableMessage } from "./models/RoundtableMessage";

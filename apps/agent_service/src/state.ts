@@ -93,6 +93,23 @@ export const AgentAnnotation = Annotation.Root({
     reducer: (_state, update) => update,
     default: () => null,
   }),
+
+  /** Roundtable ID when this turn is part of a multi-agent roundtable. */
+  roundtableId: Annotation<string | null>({
+    reducer: (_state, update) => (update !== undefined ? update : _state),
+    default: () => null,
+  }),
+
+  /** Roundtable metadata injected by the worker for the context builder. */
+  roundtableConfig: Annotation<{
+    topic: string;
+    roundNumber: number;
+    maxTurnsPerAgent: number;
+    agentOrder: { agentId: string; definition: string }[];
+  } | null>({
+    reducer: (_state, update) => (update !== undefined ? update : _state),
+    default: () => null,
+  }),
 });
 
 export type AgentState = typeof AgentAnnotation.State;

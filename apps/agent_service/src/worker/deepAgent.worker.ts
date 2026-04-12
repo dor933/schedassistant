@@ -354,26 +354,30 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           threadId,
         });
 
-        // Enqueue delegation_result callback to re-invoke the calling agent
-        await agentChatQueue.add("delegation_result", {
-          userId,
-          message:
-            `[Executor Agent Result — Delegation ${delegationId}]\n` +
-            `Executor: ${executorAgent.agentName} (${executorAgentSlug})\n` +
-            `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
-            `## Result\n${resultText}`,
-          requestId: `delegation-${delegationId}`,
-          groupId: groupId ?? null,
-          singleChatId: singleChatId ?? null,
-          agentId: callerAgentId,
-          mentionsAgent: true,
-          displayName: `system:${executorAgentSlug}`,
-        } as any);
+        // In syncMode the caller is blocking via waitUntilFinished — skip the callback.
+        if (!job.data.syncMode) {
+          await agentChatQueue.add("delegation_result", {
+            userId,
+            message:
+              `[Executor Agent Result — Delegation ${delegationId}]\n` +
+              `Executor: ${executorAgent.agentName} (${executorAgentSlug})\n` +
+              `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
+              `## Result\n${resultText}`,
+            requestId: `delegation-${delegationId}`,
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+            agentId: callerAgentId,
+            mentionsAgent: true,
+            displayName: `system:${executorAgentSlug}`,
+          } as any);
 
-        logger.info("DeepAgent: enqueued delegation_result callback", {
-          delegationId,
-          callerAgentId,
-        });
+          logger.info("DeepAgent: enqueued delegation_result callback", {
+            delegationId,
+            callerAgentId,
+          });
+        }
+
+        return resultText;
       } catch (err: any) {
         const isTimeout = err instanceof DeepAgentTimeoutError;
         const isRecursionLimit =
@@ -411,23 +415,27 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           { where: { id: delegationId } },
         );
 
-        // Enqueue callback so the caller knows about the failure
-        await agentChatQueue.add("delegation_result", {
-          userId,
-          message:
-            `[Executor Agent Failed — Delegation ${delegationId}]\n` +
-            `Executor: ${executorAgentSlug}\n` +
-            `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
-            `## Failure\n${failureReason}\n\n` +
-            `Please inform the user about this failure and suggest alternatives ` +
-            `(e.g. breaking the task into smaller parts, trying a different approach, or retrying later).`,
-          requestId: `delegation-${delegationId}`,
-          groupId: groupId ?? null,
-          singleChatId: singleChatId ?? null,
-          agentId: callerAgentId,
-          mentionsAgent: true,
-          displayName: `system:${executorAgentSlug}`,
-        } as any);
+        if (!job.data.syncMode) {
+          await agentChatQueue.add("delegation_result", {
+            userId,
+            message:
+              `[Executor Agent Failed — Delegation ${delegationId}]\n` +
+              `Executor: ${executorAgentSlug}\n` +
+              `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
+              `## Failure\n${failureReason}\n\n` +
+              `Please inform the user about this failure and suggest alternatives ` +
+              `(e.g. breaking the task into smaller parts, trying a different approach, or retrying later).`,
+            requestId: `delegation-${delegationId}`,
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+            agentId: callerAgentId,
+            mentionsAgent: true,
+            displayName: `system:${executorAgentSlug}`,
+          } as any);
+        }
+
+        // Re-throw so syncMode callers (waitUntilFinished) see the failure.
+        throw new Error(failureReason);
       }
         }, // end observeWithContext fn
         { delegationId, executorAgentSlug, callerAgentId, userId },

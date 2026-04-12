@@ -11,6 +11,7 @@ import { createServer as createHttpServer } from "node:http";
 import { sequelize, Agent } from "@scheduling-agent/database";
 import { createSchedulerGraph } from "./graphs/basicGraph/index";
 import { createEpicGraph } from "./graphs/epicGraph/index";
+import { createRoundtableGraph } from "./graphs/roundtableGraph/index";
 import { createServer } from "./server";
 import { initializeLangfuse, isLangfuseConfigured, shutdownLangfuse } from "./langfuse";
 import {
@@ -22,6 +23,8 @@ import {
 } from "./queues/deepAgent.bull";
 import { startAgentChatWorker } from "./worker/agentChat.worker";
 import { startDeepAgentWorker } from "./worker/deepAgent.worker";
+import { startRoundtableWorker } from "./worker/roundtable.worker";
+import { roundtableQueueEvents } from "./queues/roundtable.bull";
 import { attachAgentSocketIO } from "./socket";
 import { logger } from "./logger";
 
@@ -63,13 +66,16 @@ async function main(): Promise<void> {
   // loads `agents.core_instructions` from the DB and merges them into the system prompt.
   const graph = await createSchedulerGraph();
   const epicGraph = await createEpicGraph();
-  logger.info("Agent graphs compiled with PostgresSaver checkpointer (basic + epic)");
+  const roundtableGraph = await createRoundtableGraph();
+  logger.info("Agent graphs compiled with PostgresSaver checkpointer (basic + epic + roundtable)");
 
   // 3. BullMQ: queue events + workers.
   await agentChatQueueEvents.waitUntilReady();
   await deepAgentQueueEvents.waitUntilReady();
+  await roundtableQueueEvents.waitUntilReady();
   const agentChatWorker = startAgentChatWorker(graph, epicGraph);
   const deepAgentWorker = startDeepAgentWorker();
+  const roundtableWorker = startRoundtableWorker(roundtableGraph);
 
   // 4. HTTP + Socket.IO server (chat enqueues jobs; results emitted via socket).
   const app = createServer({ agentChatQueue, graph });
@@ -89,9 +95,11 @@ async function main(): Promise<void> {
     try {
       await agentChatWorker.close();
       await deepAgentWorker.close();
+      await roundtableWorker.close();
       await agentChatQueue.close();
       await agentChatQueueEvents.close();
       await deepAgentQueueEvents.close();
+      await roundtableQueueEvents.close();
       await shutdownLangfuse();
       await sequelize.close();
     } catch (e) {

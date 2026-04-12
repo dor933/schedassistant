@@ -10,3 +10,6 @@ export { Thread } from "./Thread";
 export { EpisodicMemory, EMBEDDING_DIMENSION } from "./EpisodicMemory";
 export { MessageNotification } from "./MessageNotification";
 export { ConversationMessage } from "./ConversationMessage";
+export { Roundtable } from "./Roundtable";
+export { RoundtableAgent } from "./RoundtableAgent";
+export { RoundtableMessage } from "./RoundtableMessage";

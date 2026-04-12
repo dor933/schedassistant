@@ -603,4 +603,59 @@ export const admin = {
     request<AdminRepository>(`/admin/projects/repositories/${repoId}/generate-architecture`, {
       method: "POST",
     }),
+
+  // ── Roundtables ─────────────────────────────────────────────────────────
+  getRoundtables: () =>
+    request<RoundtableSummary[]>("/admin/roundtables"),
+  getRoundtable: (id: string) =>
+    request<RoundtableDetail>(`/admin/roundtables/${id}`),
+  createRoundtable: (data: {
+    topic: string;
+    agentIds: string[];
+    maxTurnsPerAgent?: number;
+    groupId?: string | null;
+    singleChatId?: string | null;
+  }) =>
+    request<{ id: string; threadId: string; status: string }>("/admin/roundtables", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  stopRoundtable: (id: string) =>
+    request<{ ok: boolean }>(`/admin/roundtables/${id}/stop`, {
+      method: "POST",
+    }),
 };
+
+// ── Roundtable types ──────────────────────────────────────────────────────
+
+export interface RoundtableSummary {
+  id: string;
+  topic: string;
+  status: "pending" | "running" | "completed" | "failed";
+  maxTurnsPerAgent: number;
+  currentRound: number;
+  createdAt: string;
+}
+
+export interface RoundtableAgentInfo {
+  id: string;
+  agentId: string;
+  turnOrder: number;
+  turnsCompleted: number;
+  agentName: string;
+}
+
+export interface RoundtableMessageInfo {
+  id: string;
+  agentId: string;
+  agentName: string;
+  roundNumber: number;
+  content: string;
+  createdAt: string;
+}
+
+export interface RoundtableDetail extends RoundtableSummary {
+  threadId: string;
+  agents: RoundtableAgentInfo[];
+  messages: RoundtableMessageInfo[];
+}

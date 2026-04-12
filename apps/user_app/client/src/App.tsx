@@ -3,6 +3,7 @@ import { useAuth } from "./context/AuthContext";
 import LoginPage from "./pages/LoginPage";
 import ChatPage from "./pages/ChatPage";
 import AdminPage from "./pages/AdminPage";
+import RoundtablePage from "./pages/RoundtablePage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -41,6 +42,22 @@ export default function App() {
         element={
           <ProtectedRoute>
             <AdminPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/roundtable"
+        element={
+          <ProtectedRoute>
+            <RoundtablePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/roundtable/:id"
+        element={
+          <ProtectedRoute>
+            <RoundtablePage />
           </ProtectedRoute>
         }
       />

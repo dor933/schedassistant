@@ -27,6 +27,8 @@ export type DeepAgentJobData = {
   userId: number;
   groupId: string | null;
   singleChatId: string | null;
+  /** When true, the caller blocks via waitUntilFinished — skip the delegation_result callback. */
+  syncMode?: boolean;
 };
 
 // Global accessor for the queue (used by the DelegateToDeepAgent tool)

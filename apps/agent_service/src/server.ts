@@ -9,6 +9,7 @@ import { sessionsRouter } from "./routes/sessions.routes";
 import { historyRouter } from "./routes/history.routes";
 import { epicTaskRouter } from "./routes/epicTask.routes";
 import { repositoriesRouter } from "./routes/repositories.routes";
+import { roundtableRouter } from "./routes/roundtable.routes";
 
 export type CreateServerDeps = {
   agentChatQueue: Queue<AgentChatJobData, AgentChatJobResult, string>;
@@ -32,6 +33,7 @@ export function createServer(deps: CreateServerDeps) {
   app.use("/api/history", historyRouter);
   app.use("/api/epics", epicTaskRouter);
   app.use("/api/repositories", repositoriesRouter);
+  app.use("/api/roundtable", roundtableRouter);
 
   return app;
 }

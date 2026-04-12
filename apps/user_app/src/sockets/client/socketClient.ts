@@ -115,6 +115,18 @@ export function connectToAgentService(): void {
   agentSocket.on("agent:reply", (payload: AgentReplyPayload) => {
     void handleAgentReply(payload);
   });
+
+  // Roundtable events — broadcast to all connected browser clients
+  // (client-side filters by roundtableId)
+  agentSocket.on("roundtable:message", (payload: unknown) => {
+    getIO().emit("roundtable:message", payload);
+  });
+  agentSocket.on("roundtable:completed", (payload: unknown) => {
+    getIO().emit("roundtable:completed", payload);
+  });
+  agentSocket.on("roundtable:error", (payload: unknown) => {
+    getIO().emit("roundtable:error", payload);
+  });
 }
 
 async function handleAgentTyping(payload: AgentTypingPayload): Promise<void> {
