@@ -288,6 +288,7 @@ export default function AdminPage() {
   const [newAgentInstructions, setNewAgentInstructions] = useState("");
   const [newAgentCharacteristics, setNewAgentCharacteristics] = useState("");
   const [newAgentSkillIds, setNewAgentSkillIds] = useState<number[]>([]);
+  const [newAgentMcpServerIds, setNewAgentMcpServerIds] = useState<number[]>([]);
   const [newAgentModelId, setNewAgentModelId] = useState<string | null>(null);
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupAgentId, setNewGroupAgentId] = useState("");
@@ -535,12 +536,14 @@ export default function AdminPage() {
         characteristics,
         modelId: newAgentModelId,
         skillIds: newAgentSkillIds.length > 0 ? newAgentSkillIds : undefined,
+        mcpServerIds: newAgentMcpServerIds.length > 0 ? newAgentMcpServerIds : undefined,
       });
       setNewAgentDefinition("");
       setNewAgentDisplayName("");
       setNewAgentInstructions("");
       setNewAgentCharacteristics("");
       setNewAgentSkillIds([]);
+      setNewAgentMcpServerIds([]);
       setNewAgentModelId(null);
       flash("Agent created.");
       await reload();
@@ -1339,7 +1342,40 @@ export default function AdminPage() {
                 rows={3}
                 className={inputClass + " font-mono text-xs"}
               />
-              {/* MCP Servers — managed via system agents only */}
+              {/* MCP Servers */}
+              {mcpServers.filter((s) => s.primaryAgentAssignable !== false).length > 0 && (
+              <div>
+                <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  <Plug className="h-3 w-3" />
+                  MCP Servers
+                </label>
+                <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                  {mcpServers.filter((s) => s.primaryAgentAssignable !== false).map((s) => {
+                    const selected = newAgentMcpServerIds.includes(s.id);
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() =>
+                          setNewAgentMcpServerIds((prev) =>
+                            selected ? prev.filter((id) => id !== s.id) : [...prev, s.id],
+                          )
+                        }
+                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                          selected
+                            ? "bg-violet-100 text-violet-700 ring-1 ring-violet-200 shadow-sm"
+                            : "bg-white text-gray-500 ring-1 ring-gray-200 hover:bg-gray-100 hover:text-gray-700"
+                        }`}
+                      >
+                        <Plug className="h-3 w-3" />
+                        {s.name}
+                        {selected && <X className="h-3 w-3" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              )}
               {/* Skills */}
               <div>
                 <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -1403,7 +1439,7 @@ export default function AdminPage() {
 
             <div className="space-y-2.5">
               {agents.map((a) => (
-                <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} onSaved={reload} />
+                <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allMcpServers={mcpServers} onSaved={reload} />
               ))}
             </div>
           </div>
@@ -2405,7 +2441,7 @@ export default function AdminPage() {
                 <div>
                   <label className="mb-1 block text-[10px] font-medium text-gray-500">MCP Servers</label>
                   <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2 min-h-[38px]">
-                    {mcpServers.map((s) => {
+                    {mcpServers.filter((s) => s.systemAgentAssignable !== false).map((s) => {
                       const selected = newSaMcpServerIds.includes(s.id);
                       return (
                         <button
@@ -2426,7 +2462,7 @@ export default function AdminPage() {
                         </button>
                       );
                     })}
-                    {mcpServers.length === 0 && (
+                    {mcpServers.filter((s) => s.systemAgentAssignable !== false).length === 0 && (
                       <p className="text-[10px] text-gray-400 py-0.5">No MCP servers available.</p>
                     )}
                   </div>
@@ -2532,7 +2568,7 @@ export default function AdminPage() {
                           {/* MCP server chips — display or edit mode */}
                           {isEditing ? (
                             <>
-                              {mcpServers.map((s) => {
+                              {mcpServers.filter((s) => s.systemAgentAssignable !== false).map((s) => {
                                 const sel = editingSaMcpServerIds.includes(s.id);
                                 return (
                                   <button

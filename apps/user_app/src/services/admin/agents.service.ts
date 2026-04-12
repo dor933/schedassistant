@@ -106,6 +106,7 @@ export class AgentsService {
 
     // Link MCP servers to the agent
     if (mcpServerIds && mcpServerIds.length > 0) {
+      await this.rejectNonPrimaryMcpServers(mcpServerIds, agent.id);
       await AgentMcpServer.bulkCreate(
         mcpServerIds.map((mcpServerId) => ({
           agentId: agent.id,
@@ -218,6 +219,9 @@ export class AgentsService {
 
     // Sync MCP server assignments if provided
     if (data.mcpServerIds !== undefined) {
+      if (data.mcpServerIds.length > 0) {
+        await this.rejectNonPrimaryMcpServers(data.mcpServerIds, agent.id);
+      }
       await AgentMcpServer.destroy({ where: { agentId: agent.id } });
       if (data.mcpServerIds.length > 0) {
         await AgentMcpServer.bulkCreate(
@@ -339,6 +343,23 @@ export class AgentsService {
       const names = blocked.map((s) => s.name).join(", ");
       throw Object.assign(
         new Error(`These skills cannot be assigned to primary agents: ${names}`),
+        { status: 400 },
+      );
+    }
+  }
+
+  /** Reject MCP servers not assignable to primary agents (Epic Orchestrator is exempt). */
+  private async rejectNonPrimaryMcpServers(mcpServerIds: number[], agentId?: string) {
+    if (agentId === AgentsService.EPIC_ORCHESTRATOR_AGENT_ID) return;
+
+    const blocked = await McpServer.findAll({
+      where: { id: { [Op.in]: mcpServerIds }, primaryAgentAssignable: false },
+      attributes: ["id", "name"],
+    });
+    if (blocked.length > 0) {
+      const names = blocked.map((s) => s.name).join(", ");
+      throw Object.assign(
+        new Error(`These MCP servers cannot be assigned to primary agents: ${names}`),
         { status: 400 },
       );
     }

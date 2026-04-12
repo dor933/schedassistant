@@ -5,7 +5,6 @@ import { summarizationGuardNode } from "../shared_nodes/summarizationGuard";
 import { sessionSummarizationNode } from "../shared_nodes/sessionSummarization";
 import { epicContextBuilderNode } from "./nodes/epicContextBuilder";
 import { epicCallModelNode } from "./nodes/callModel";
-import { epicKnowledgeSyncNode } from "./nodes/epicKnowledgeSync";
 
 // ─── Routing helpers ─────────────────────────────────────────────────────────
 
@@ -17,8 +16,11 @@ function routeAfterGuard(state: AgentState): string {
 // ─── Graph definition ────────────────────────────────────────────────────────
 //
 //  START → summarizationGuard
-//            ├── (thresholds exceeded) → sessionSummarization → assembleEpicContext → epicCallModel → epicKnowledgeSync → END
-//            └── (normal)              → assembleEpicContext → epicCallModel → epicKnowledgeSync → END
+//            ├── (thresholds exceeded) → sessionSummarization → assembleEpicContext → epicCallModel → END
+//            └── (normal)              → assembleEpicContext → epicCallModel → END
+//
+// Knowledge capture is now agent-curated via the `save_episodic_memory` tool
+// invoked from inside `epicCallModel` — no dedicated post-turn sync node.
 //
 
 const workflow = new StateGraph(AgentAnnotation)
@@ -26,7 +28,6 @@ const workflow = new StateGraph(AgentAnnotation)
   .addNode("sessionSummarization", sessionSummarizationNode)
   .addNode("assembleEpicContext", epicContextBuilderNode)
   .addNode("epicCallModel", epicCallModelNode)
-  .addNode("epicKnowledgeSync", epicKnowledgeSyncNode)
 
   .addEdge(START, "summarizationGuard")
 
@@ -37,8 +38,7 @@ const workflow = new StateGraph(AgentAnnotation)
 
   .addEdge("sessionSummarization", "assembleEpicContext")
   .addEdge("assembleEpicContext", "epicCallModel")
-  .addEdge("epicCallModel", "epicKnowledgeSync")
-  .addEdge("epicKnowledgeSync", END);
+  .addEdge("epicCallModel", END);
 
 /**
  * Creates the Epic Orchestrator graph with Postgres checkpointer.

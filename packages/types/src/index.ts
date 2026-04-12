@@ -66,6 +66,10 @@ export interface McpServerAttributes {
   args: string[];
   /** Optional environment variables. Placeholders like `{{VAR}}` are resolved at runtime. */
   env: Record<string, string> | null;
+  /** Whether this MCP server can be assigned to primary (user-facing) agents. */
+  primaryAgentAssignable: boolean;
+  /** Whether this MCP server can be assigned to system (deep/specialist) agents. */
+  systemAgentAssignable: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

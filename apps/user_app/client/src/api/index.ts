@@ -317,6 +317,8 @@ export interface AdminMcpServer {
   command: string;
   args: string[];
   env?: Record<string, string> | null;
+  primaryAgentAssignable: boolean;
+  systemAgentAssignable: boolean;
 }
 
 export interface AdminMcpServerLaunchSummary {

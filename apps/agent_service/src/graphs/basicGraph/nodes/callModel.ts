@@ -31,6 +31,8 @@ import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "..
 import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
+import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
+import getMcpTools from "../../../mcpClient";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 10;
@@ -243,7 +245,11 @@ export async function callModelNode(
   logger.info("Calling LLM", { modelSlug, vendorSlug: vendor.slug, messageCount: stateMessages.length });
 
   const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
-    const tools: StructuredToolInterface[] = [
+
+  // Load MCP tools assigned to this agent via AgentMcpServer join table.
+  const mcpTools = agentId ? await getMcpTools(agentId) : [];
+
+  const tools: StructuredToolInterface[] = [
     EditUserIdentityTool(state.userId),
     EditAgentNameTool(agentId),
     ConsultAgentTool(agentId, state.userId, state.groupId, state.singleChatId),
@@ -253,9 +259,12 @@ export async function callModelNode(
     ReadAgentNotesTool(agentId),
     AppendAgentNotesTool(agentId),
     EditAgentNotesTool(agentId),
+    SaveEpisodicMemoryTool(agentId, state.userId, threadId),
+    RecallEpisodicMemoryTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
     DelegateToEpicOrchestratorTool(agentId, state.userId, state.groupId, state.singleChatId),
+    ...mcpTools,
   ];
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

@@ -5,10 +5,8 @@ import { z } from "zod";
 import type { AgentState } from "../../state";
 import { insertEpisodicMemoryChunks } from "../../rag/episodicMemoryChunksWriter";
 import { embedText } from "../../rag/embeddings";
-import { getLangfuseCallbackHandler, observeWithContext } from "../../langfuse";
+import { observeWithContext } from "../../langfuse";
 import { logger } from "../../logger";
-import { resolveEmbeddingProviderApiKey } from "../../rag/embeddingProvider";
-import { EmbeddingProvider } from "../../types/providers";
 import { Thread } from "@scheduling-agent/database";
 import { SessionSummary } from "@scheduling-agent/types";
 
@@ -38,11 +36,10 @@ let cachedLlm: ChatOpenAI | null = null;
 
 async function getSummarizationLlm(): Promise<ChatOpenAI> {
   if (cachedLlm) return cachedLlm;
-  const apiKey = await resolveEmbeddingProviderApiKey(process.env.EMBEDDING_PROVIDER as EmbeddingProvider);
   cachedLlm = new ChatOpenAI({
     modelName: "gpt-4o",
     temperature: 0,
-    apiKey,
+    apiKey: process.env.OPENAI_API_KEY,
   });
   return cachedLlm;
 }
@@ -58,7 +55,7 @@ async function getSummarizationLlm(): Promise<ChatOpenAI> {
  */
 export async function sessionSummarizationNode(
   state: AgentState,
-  _config: RunnableConfig,
+  config: RunnableConfig,
 ): Promise<Partial<AgentState>> {
   if (state.error) return {};
 
@@ -99,15 +96,6 @@ export async function sessionSummarizationNode(
           { name: "session_summarization" },
         );
 
-        const handler = getLangfuseCallbackHandler(userId, {
-          threadId,
-          node: "session_summarization",
-        });
-
-        const invokeConfig: RunnableConfig = {
-          callbacks: handler ? ([handler] as RunnableConfig["callbacks"]) : undefined,
-        };
-
         const result = await structuredLlm.invoke(
           [
             {
@@ -139,7 +127,7 @@ export async function sessionSummarizationNode(
               content: `Summarize and chunk the following conversation:\n\n${conversationText}`,
             },
           ],
-          invokeConfig,
+          config,
         );
 
         logger.info("Summarization LLM done, persisting results", {
@@ -152,10 +140,10 @@ export async function sessionSummarizationNode(
         const summaryPayload: SessionSummary = {
           text: result.summary,
           createdAt: now.toISOString(),
-          messageCount: undefined,
+          messageCount: messages.length,
         };
-         // Write summary JSONB to the threads row.
-         Thread.update(
+        // Write summary JSONB to the threads row.
+        await Thread.update(
           {
             summary: summaryPayload,
             summarizedAt: now,

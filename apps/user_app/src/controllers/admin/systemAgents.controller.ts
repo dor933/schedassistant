@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { SystemAgent, SystemAgentMcpServer, SystemAgentSkill, Skill } from "@scheduling-agent/database";
+import { SystemAgent, SystemAgentMcpServer, SystemAgentSkill, Skill, McpServer } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 import { logger } from "../../logger";
 
@@ -72,6 +72,17 @@ export class SystemAgentsController {
       });
 
       if (Array.isArray(mcpServerIds) && mcpServerIds.length > 0) {
+        const blockedMcp = await McpServer.findAll({
+          where: { id: { [Op.in]: mcpServerIds }, systemAgentAssignable: false },
+          attributes: ["id", "name"],
+        });
+        if (blockedMcp.length > 0) {
+          await agent.destroy();
+          const names = blockedMcp.map((s) => s.name).join(", ");
+          return res.status(400).json({
+            error: `These MCP servers cannot be assigned to system agents: ${names}`,
+          });
+        }
         await SystemAgentMcpServer.bulkCreate(
           mcpServerIds.map((mcpServerId: number) => ({
             systemAgentId: agent.id,
@@ -149,6 +160,18 @@ export class SystemAgentsController {
       await agent.update(patch);
 
       if (mcpServerIds !== undefined) {
+        if (Array.isArray(mcpServerIds) && mcpServerIds.length > 0) {
+          const blockedMcp = await McpServer.findAll({
+            where: { id: { [Op.in]: mcpServerIds }, systemAgentAssignable: false },
+            attributes: ["id", "name"],
+          });
+          if (blockedMcp.length > 0) {
+            const names = blockedMcp.map((s) => s.name).join(", ");
+            return res.status(400).json({
+              error: `These MCP servers cannot be assigned to system agents: ${names}`,
+            });
+          }
+        }
         await SystemAgentMcpServer.destroy({ where: { systemAgentId: agent.id } });
         if (Array.isArray(mcpServerIds) && mcpServerIds.length > 0) {
           await SystemAgentMcpServer.bulkCreate(

@@ -84,7 +84,7 @@ export async function buildContext(
 ): Promise<AssembledContext> {
   const { userId, userInput, threadId, groupId, singleChatId, agentId, messages } = state;
 
-  // ── 0. Agent definition + core instructions + characteristics + ongoing requests (DB) ──
+  // ── 0. Agent definition + core instructions + characteristics (DB) ──
   let agentDefinition: string | null = null;
   let agentCoreInstructions: string | null = null;
   let agentCharacteristics: Record<string, unknown> | null = null;
@@ -612,9 +612,21 @@ function formatSystemPrompt(
   // Episodic snippets
   if (episodicSnippets.length > 0) {
     sections.push("## Relevant past context");
+    sections.push(
+      "Auto-retrieved from your long-term memory based on the user's latest message. " +
+      "If you need more context on a specific topic, use `recall_episodic_memory` with a targeted query.",
+    );
     for (const snippet of episodicSnippets) {
       sections.push(`- ${snippet}`);
     }
+    sections.push("");
+  } else {
+    sections.push("## Long-term memory");
+    sections.push(
+      "No auto-retrieved memories matched this turn. If you feel you're missing context " +
+      "(e.g. past decisions, repo-specific patterns, user preferences), use `recall_episodic_memory` " +
+      "with a descriptive query to search your long-term memory.",
+    );
     sections.push("");
   }
 

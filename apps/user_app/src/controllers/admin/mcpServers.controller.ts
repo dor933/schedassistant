@@ -29,7 +29,7 @@ export class McpServersController {
   getAll = async (_req: Request, res: Response) => {
     try {
       const servers = await McpServer.findAll({
-        attributes: ["id", "name", "transport", "command", "args", "env"],
+        attributes: ["id", "name", "transport", "command", "args", "env", "primaryAgentAssignable", "systemAgentAssignable"],
         order: [["name", "ASC"]],
       });
       return res.json(servers);

@@ -2,7 +2,7 @@ import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
 import type { McpServerAttributes } from "@scheduling-agent/types";
 
-type McpServerCreationAttributes = Optional<McpServerAttributes, "id" | "createdAt" | "updatedAt" | "env">;
+type McpServerCreationAttributes = Optional<McpServerAttributes, "id" | "createdAt" | "updatedAt" | "env" | "primaryAgentAssignable" | "systemAgentAssignable">;
 
 class McpServer extends Model<McpServerAttributes, McpServerCreationAttributes> implements McpServerAttributes {
   declare id: number;
@@ -11,6 +11,8 @@ class McpServer extends Model<McpServerAttributes, McpServerCreationAttributes> 
   declare command: string;
   declare args: string[];
   declare env: Record<string, string> | null;
+  declare primaryAgentAssignable: boolean;
+  declare systemAgentAssignable: boolean;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -44,6 +46,18 @@ McpServer.init(
     env: {
       type: DataTypes.JSONB,
       allowNull: true,
+    },
+    primaryAgentAssignable: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      field: "primary_agent_assignable",
+    },
+    systemAgentAssignable: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      field: "system_agent_assignable",
     },
     createdAt: {
       type: DataTypes.DATE,

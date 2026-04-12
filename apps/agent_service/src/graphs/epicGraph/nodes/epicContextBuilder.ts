@@ -372,13 +372,20 @@ function formatEpicSystemPrompt(opts: {
   if (opts.episodicSnippets.length > 0) {
     sections.push("## Relevant past context (from vector store)");
     sections.push(
-      "These are knowledge chunks from previous epic executions, scoped to relevant repositories and projects. " +
-      "They include: files that were modified, what was built, architectural patterns discovered. " +
-      "New learnings from this turn will be automatically synced to the vector store after your response.",
+      "Auto-retrieved knowledge chunks from previous executions, scoped to relevant repositories and projects. " +
+      "If you need more context on a specific repo, pattern, or past decision, use `recall_episodic_memory` with a targeted query.",
     );
     for (const snippet of opts.episodicSnippets) {
       sections.push(`- ${snippet}`);
     }
+    sections.push("");
+  } else {
+    sections.push("## Long-term memory");
+    sections.push(
+      "No auto-retrieved memories matched this turn. If you need context from past executions " +
+      "(e.g. repo patterns, architectural decisions, task outcomes), use `recall_episodic_memory` " +
+      "with a descriptive query to search your long-term memory.",
+    );
     sections.push("");
   }
 

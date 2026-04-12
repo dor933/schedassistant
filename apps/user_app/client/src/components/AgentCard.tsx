@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { AdminAgent, AdminSkill, ConversationModelInfo } from "../api";
+import { AdminAgent, AdminMcpServer, AdminSkill, ConversationModelInfo } from "../api";
 import { Box } from "@mui/material";
-import { Loader2, Save, X, Pencil, Sparkles } from "lucide-react";
+import { Loader2, Save, X, Pencil, Sparkles, Plug } from "lucide-react";
 import { admin } from "../api";
 import { stringifyAgentCharacteristics } from "../pages/AdminPage";
 import { useToast } from "./Toast";
@@ -14,6 +14,7 @@ export default function AgentCard({
     currentUserRole,
     allModels,
     allSkills,
+    allMcpServers,
     onSaved,
   }: {
     agent: AdminAgent;
@@ -21,6 +22,7 @@ export default function AgentCard({
     currentUserRole: string;
     allModels: ConversationModelInfo[];
     allSkills: AdminSkill[];
+    allMcpServers: AdminMcpServer[];
     onSaved: () => void;
   }) {
     const { toast } = useToast();
@@ -44,6 +46,9 @@ export default function AgentCard({
     const [selectedSkillIds, setSelectedSkillIds] = useState<number[]>(
       agent.skillIds ?? [],
     );
+    const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<number[]>(
+      agent.mcpServerIds ?? [],
+    );
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
@@ -53,6 +58,7 @@ export default function AgentCard({
       setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
       setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
       setSelectedSkillIds(agent.skillIds ?? []);
+      setSelectedMcpServerIds(agent.mcpServerIds ?? []);
     }, [agent, allModels]);
 
     function isSkillLocked(id: number) {
@@ -97,6 +103,7 @@ export default function AgentCard({
           characteristics,
           modelId: selectedModel?.id ?? null,
           skillIds: selectedSkillIds,
+          mcpServerIds: selectedMcpServerIds,
         });
         setEditing(false);
         onSaved();
@@ -112,6 +119,9 @@ export default function AgentCard({
 
     const assignedSkills = allSkills.filter((sk) =>
       (agent.skillIds ?? []).includes(sk.id),
+    );
+    const assignedMcpServers = allMcpServers.filter((s) =>
+      (agent.mcpServerIds ?? []).includes(s.id),
     );
 
     return (
@@ -182,6 +192,48 @@ export default function AgentCard({
               />
             </div>
 
+            {/* MCP Servers */}
+            {allMcpServers.filter((s) => s.primaryAgentAssignable !== false).length > 0 && (
+            <div>
+              <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                <Plug className="h-3 w-3" />
+                MCP Servers
+              </label>
+              <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                {allMcpServers.filter((s) => s.primaryAgentAssignable !== false).map((s) => {
+                  const selected = selectedMcpServerIds.includes(s.id);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() =>
+                        setSelectedMcpServerIds((prev) =>
+                          selected ? prev.filter((x) => x !== s.id) : [...prev, s.id],
+                        )
+                      }
+                      className={`group/chip inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
+                        selected
+                          ? "bg-gradient-to-r from-violet-50 to-purple-50 text-violet-800 ring-1 ring-violet-200/80 shadow-sm"
+                          : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300"
+                      }`}
+                    >
+                      <Plug className={`h-3 w-3 ${selected ? "text-violet-500" : ""}`} />
+                      {s.name}
+                      {selected && (
+                        <X className="h-3 w-3 text-violet-400 transition-colors group-hover/chip:text-violet-600" />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedMcpServerIds.length > 0 && (
+                <p className="mt-1 text-[10px] text-gray-400">
+                  {selectedMcpServerIds.length} server{selectedMcpServerIds.length === 1 ? "" : "s"} linked
+                </p>
+              )}
+            </div>
+            )}
+
             {/* Skills */}
             <div>
               <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -191,7 +243,7 @@ export default function AgentCard({
               <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
                 {allSkills.filter((sk) => (sk.primaryAgentAssignable !== false && (!sk.locked || selectedSkillIds.includes(sk.id))) || (sk.primaryAgentAssignable === false && selectedSkillIds.includes(sk.id))).map((sk) => {
                   const selected = selectedSkillIds.includes(sk.id);
-                  const locked = sk.locked && selected;
+                  const locked = isSkillLocked(sk.id);
                   return (
                     <button
                       key={sk.id}
@@ -272,6 +324,7 @@ export default function AgentCard({
                   setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
                   setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
                   setSelectedSkillIds(agent.skillIds ?? []);
+                  setSelectedMcpServerIds(agent.mcpServerIds ?? []);
                 }}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-200"
               >
@@ -326,6 +379,20 @@ export default function AgentCard({
                   >
                     <Sparkles className="h-2.5 w-2.5" />
                     {sk.name}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {assignedMcpServers.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {assignedMcpServers.map((s) => (
+                  <span
+                    key={s.id}
+                    className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600 ring-1 ring-violet-100"
+                  >
+                    <Plug className="h-2.5 w-2.5" />
+                    {s.name}
                   </span>
                 ))}
               </div>
