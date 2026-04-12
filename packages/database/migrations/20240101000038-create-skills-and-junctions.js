@@ -27,10 +27,10 @@ module.exports = {
         type: Sequelize.TEXT,
         allowNull: false,
       },
-      system_agent_assignable: {
+      locked: {
         type: Sequelize.BOOLEAN,
         allowNull: false,
-        defaultValue: true,
+        defaultValue: false,
       },
       created_at: {
         type: Sequelize.DATE,
@@ -44,7 +44,46 @@ module.exports = {
       },
     });
 
-    await queryInterface.createTable("agents_skills", {
+    // Tools table — registry of code-defined tools
+    await queryInterface.createTable("tools", {
+      id: {
+        type: Sequelize.INTEGER,
+        autoIncrement: true,
+        primaryKey: true,
+        allowNull: false,
+      },
+      name: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        unique: true,
+      },
+      slug: {
+        type: Sequelize.STRING,
+        allowNull: false,
+        unique: true,
+      },
+      description: {
+        type: Sequelize.TEXT,
+        allowNull: true,
+      },
+      category: {
+        type: Sequelize.STRING,
+        allowNull: true,
+      },
+      created_at: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: Sequelize.fn("NOW"),
+      },
+      updated_at: {
+        type: Sequelize.DATE,
+        allowNull: false,
+        defaultValue: Sequelize.fn("NOW"),
+      },
+    });
+
+    // agent_available_skills junction
+    await queryInterface.createTable("agent_available_skills", {
       id: {
         type: Sequelize.INTEGER,
         autoIncrement: true,
@@ -65,6 +104,11 @@ module.exports = {
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
+      active: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: true,
+      },
       created_at: {
         type: Sequelize.DATE,
         allowNull: false,
@@ -72,37 +116,43 @@ module.exports = {
       },
     });
 
-    await queryInterface.addIndex("agents_skills", ["agent_id", "skill_id"], {
-      name: "agents_skills_agent_id_skill_id_unique",
+    await queryInterface.addIndex("agent_available_skills", ["agent_id", "skill_id"], {
+      name: "agent_available_skills_unique",
       unique: true,
     });
-    await queryInterface.addIndex("agents_skills", ["agent_id"], {
-      name: "agents_skills_agent_id",
+    await queryInterface.addIndex("agent_available_skills", ["agent_id"], {
+      name: "agent_available_skills_agent_id",
     });
-    await queryInterface.addIndex("agents_skills", ["skill_id"], {
-      name: "agents_skills_skill_id",
+    await queryInterface.addIndex("agent_available_skills", ["skill_id"], {
+      name: "agent_available_skills_skill_id",
     });
 
-    await queryInterface.createTable("system_agents_skills", {
+    // agent_available_tools junction
+    await queryInterface.createTable("agent_available_tools", {
       id: {
         type: Sequelize.INTEGER,
         autoIncrement: true,
         primaryKey: true,
         allowNull: false,
       },
-      system_agent_id: {
-        type: Sequelize.INTEGER,
+      agent_id: {
+        type: Sequelize.UUID,
         allowNull: false,
-        references: { model: "system_agents", key: "id" },
+        references: { model: "agents", key: "id" },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      skill_id: {
+      tool_id: {
         type: Sequelize.INTEGER,
         allowNull: false,
-        references: { model: "skills", key: "id" },
+        references: { model: "tools", key: "id" },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
+      },
+      active: {
+        type: Sequelize.BOOLEAN,
+        allowNull: false,
+        defaultValue: true,
       },
       created_at: {
         type: Sequelize.DATE,
@@ -111,32 +161,30 @@ module.exports = {
       },
     });
 
-    await queryInterface.addIndex("system_agents_skills", ["system_agent_id", "skill_id"], {
-      name: "system_agents_skills_system_agent_id_skill_id_unique",
+    await queryInterface.addIndex("agent_available_tools", ["agent_id", "tool_id"], {
+      name: "agent_available_tools_unique",
       unique: true,
     });
-    await queryInterface.addIndex("system_agents_skills", ["system_agent_id"], {
-      name: "system_agents_skills_system_agent_id",
+    await queryInterface.addIndex("agent_available_tools", ["agent_id"], {
+      name: "agent_available_tools_agent_id",
     });
-    await queryInterface.addIndex("system_agents_skills", ["skill_id"], {
-      name: "system_agents_skills_skill_id",
+    await queryInterface.addIndex("agent_available_tools", ["tool_id"], {
+      name: "agent_available_tools_tool_id",
     });
   },
 
   async down(queryInterface, _Sequelize) {
-    await queryInterface.removeIndex("system_agents_skills", "system_agents_skills_skill_id");
-    await queryInterface.removeIndex("system_agents_skills", "system_agents_skills_system_agent_id");
-    await queryInterface.removeIndex(
-      "system_agents_skills",
-      "system_agents_skills_system_agent_id_skill_id_unique",
-    );
-    await queryInterface.dropTable("system_agents_skills");
+    await queryInterface.removeIndex("agent_available_tools", "agent_available_tools_tool_id");
+    await queryInterface.removeIndex("agent_available_tools", "agent_available_tools_agent_id");
+    await queryInterface.removeIndex("agent_available_tools", "agent_available_tools_unique");
+    await queryInterface.dropTable("agent_available_tools");
 
-    await queryInterface.removeIndex("agents_skills", "agents_skills_skill_id");
-    await queryInterface.removeIndex("agents_skills", "agents_skills_agent_id");
-    await queryInterface.removeIndex("agents_skills", "agents_skills_agent_id_skill_id_unique");
-    await queryInterface.dropTable("agents_skills");
+    await queryInterface.removeIndex("agent_available_skills", "agent_available_skills_skill_id");
+    await queryInterface.removeIndex("agent_available_skills", "agent_available_skills_agent_id");
+    await queryInterface.removeIndex("agent_available_skills", "agent_available_skills_unique");
+    await queryInterface.dropTable("agent_available_skills");
 
+    await queryInterface.dropTable("tools");
     await queryInterface.dropTable("skills");
   },
 };

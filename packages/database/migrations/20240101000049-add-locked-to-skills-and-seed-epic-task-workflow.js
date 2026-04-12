@@ -148,19 +148,12 @@ After the epic is created, tasks within the first stage will begin executing aut
 `.trim();
 
 module.exports = {
-  async up(queryInterface, Sequelize) {
-    // 1. Add `locked` column
-    await queryInterface.addColumn("skills", "locked", {
-      type: Sequelize.BOOLEAN,
-      allowNull: false,
-      defaultValue: false,
-    });
-
-    // 2. Seed the epic-task-workflow skill
+  async up(queryInterface, _Sequelize) {
+    // Seed the epic-task-workflow skill (locked column already exists from 0038)
     const now = new Date();
     await queryInterface.sequelize.query(
-      `INSERT INTO skills (name, slug, description, skill_text, system_agent_assignable, primary_agent_assignable, locked, created_at, updated_at)
-       SELECT :name, :slug, :description, :skillText, false, true, true, :now, :now
+      `INSERT INTO skills (name, slug, description, skill_text, locked, created_at, updated_at)
+       SELECT :name, :slug, :description, :skillText, true, :now, :now
        WHERE NOT EXISTS (SELECT 1 FROM skills WHERE slug = :slug)`,
       {
         replacements: {
@@ -180,6 +173,5 @@ module.exports = {
       `DELETE FROM skills WHERE slug = :slug`,
       { replacements: { slug: SKILL_SLUG } },
     );
-    await queryInterface.removeColumn("skills", "locked");
   },
 };

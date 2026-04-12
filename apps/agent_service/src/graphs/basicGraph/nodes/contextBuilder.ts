@@ -1,6 +1,6 @@
 import { RunnableConfig } from "@langchain/core/runnables";
 import { Op } from "sequelize";
-import { Agent, AgentSkill, GroupMember, User } from "@scheduling-agent/database";
+import { Agent, AgentAvailableSkill, GroupMember, User } from "@scheduling-agent/database";
 import type {
   AssembledContext,
   GroupMemberContextProfile,
@@ -109,7 +109,7 @@ export async function buildContext(
       agentNotes = notes && notes.length > 0 ? notes : null;
       agentWorkspacePath = agent?.workspacePath ?? null;
 
-      const skillLinkCount = await AgentSkill.count({ where: { agentId } });
+      const skillLinkCount = await AgentAvailableSkill.count({ where: { agentId, active: true } });
       agentHasLinkedSkills = skillLinkCount > 0;
     } catch {
       throw new Error(`Failed to load agent from database: ${agentId}`);

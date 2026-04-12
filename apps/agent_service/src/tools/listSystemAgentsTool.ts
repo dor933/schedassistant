@@ -1,6 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { SystemAgent, SystemAgentMcpServer, McpServer } from "@scheduling-agent/database";
+import { Agent, AgentAvailableMcpServer, McpServer } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 
 /**
@@ -14,20 +14,25 @@ export function ListSystemAgentsTool() {
     async (input) => {
       const { query } = input;
 
-      const where: any = {};
+      const where: any = { type: "system" };
       if (query) {
-        // Search across name, slug, and description
-        where[Op.or] = [
-          { name: { [Op.iLike]: `%${query}%` } },
-          { slug: { [Op.iLike]: `%${query}%` } },
-          { description: { [Op.iLike]: `%${query}%` } },
+        where[Op.and] = [
+          { type: "system" },
+          {
+            [Op.or]: [
+              { agentName: { [Op.iLike]: `%${query}%` } },
+              { slug: { [Op.iLike]: `%${query}%` } },
+              { description: { [Op.iLike]: `%${query}%` } },
+            ],
+          },
         ];
+        delete where.type;
       }
 
-      const agents = await SystemAgent.findAll({
+      const agents = await Agent.findAll({
         where,
-        attributes: ["id", "slug", "name", "description", "modelSlug"],
-        order: [["name", "ASC"]],
+        attributes: ["id", "slug", "agentName", "description", "modelSlug"],
+        order: [["agentName", "ASC"]],
       });
 
       if (agents.length === 0) {
@@ -43,26 +48,26 @@ export function ListSystemAgentsTool() {
 
       // Batch-load MCP server names for all returned system agents
       const agentIds = agents.map((a) => a.id);
-      const mcpLinks = await SystemAgentMcpServer.findAll({
-        where: { systemAgentId: { [Op.in]: agentIds } },
-        attributes: ["systemAgentId", "mcpServerId"],
+      const mcpLinks = await AgentAvailableMcpServer.findAll({
+        where: { agentId: { [Op.in]: agentIds }, active: true },
+        attributes: ["agentId", "mcpServerId"],
       });
       const serverIds = [...new Set(mcpLinks.map((l) => l.mcpServerId))];
       const mcpServers = serverIds.length > 0
         ? await McpServer.findAll({ where: { id: { [Op.in]: serverIds } }, attributes: ["id", "name"] })
         : [];
       const serverNameById = new Map(mcpServers.map((s) => [s.id, s.name]));
-      const serversByAgent = new Map<number, string[]>();
+      const serversByAgent = new Map<string, string[]>();
       for (const link of mcpLinks) {
         const name = serverNameById.get(link.mcpServerId);
         if (!name) continue;
-        const list = serversByAgent.get(link.systemAgentId) ?? [];
+        const list = serversByAgent.get(link.agentId) ?? [];
         list.push(name);
-        serversByAgent.set(link.systemAgentId, list);
+        serversByAgent.set(link.agentId, list);
       }
 
       for (const a of agents) {
-        lines.push(`**${a.name}**`);
+        lines.push(`**${a.agentName}**`);
         lines.push(`  - Slug: \`${a.slug}\``);
         lines.push(`  - Model: ${a.modelSlug}`);
         if (a.description) {

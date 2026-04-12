@@ -6,9 +6,8 @@ import {
   GroupMember,
   Group,
   User,
-  McpServer,
-  AgentMcpServer,
-  AgentSkill,
+  AgentAvailableMcpServer,
+  AgentAvailableSkill,
   Skill,
   LLMModel,
   Vendor,
@@ -48,14 +47,20 @@ export class AgentsService {
 
     const editableIds = await this.getEditableAgentIds(callerId, callerRole);
 
-    // Fetch MCP server assignments for all agents in one query
-    const mcpLinks = await AgentMcpServer.findAll({ attributes: ["agentId", "mcpServerId"] });
+    // Fetch active MCP server assignments for all agents in one query
+    const mcpLinks = await AgentAvailableMcpServer.findAll({
+      where: { active: true },
+      attributes: ["agentId", "mcpServerId"],
+    });
     const mcpServerIdsByAgent: Record<string, number[]> = {};
     for (const link of mcpLinks) {
       (mcpServerIdsByAgent[link.agentId] ??= []).push(link.mcpServerId);
     }
 
-    const skillLinks = await AgentSkill.findAll({ attributes: ["agentId", "skillId"] });
+    const skillLinks = await AgentAvailableSkill.findAll({
+      where: { active: true },
+      attributes: ["agentId", "skillId"],
+    });
     const skillIdsByAgent: Record<string, number[]> = {};
     for (const link of skillLinks) {
       (skillIdsByAgent[link.agentId] ??= []).push(link.skillId);
@@ -87,6 +92,7 @@ export class AgentsService {
     if (modelId) await this.rejectGoogleModel(modelId);
 
     const agent = await Agent.create({
+      type: "primary",
       definition,
       agentName: normalizedAgentName,
       coreInstructions: coreInstructions ?? null,
@@ -96,7 +102,7 @@ export class AgentsService {
     });
 
     // Create persistent workspace folder for this agent (using definition as folder name)
-    const workspacePath = path.join(WORKSPACES_ROOT, agent.definition);
+    const workspacePath = path.join(WORKSPACES_ROOT, agent.definition || agent.id);
     try {
       fs.mkdirSync(workspacePath, { recursive: true });
       await agent.update({ workspacePath });
@@ -106,21 +112,21 @@ export class AgentsService {
 
     // Link MCP servers to the agent
     if (mcpServerIds && mcpServerIds.length > 0) {
-      await this.rejectNonPrimaryMcpServers(mcpServerIds, agent.id);
-      await AgentMcpServer.bulkCreate(
+      await AgentAvailableMcpServer.bulkCreate(
         mcpServerIds.map((mcpServerId) => ({
           agentId: agent.id,
           mcpServerId,
+          active: true,
         })),
       );
     }
 
     if (skillIds && skillIds.length > 0) {
-      await this.rejectNonPrimarySkills(skillIds, agent.id);
-      await AgentSkill.bulkCreate(
+      await AgentAvailableSkill.bulkCreate(
         skillIds.map((skillId) => ({
           agentId: agent.id,
           skillId,
+          active: true,
         })),
       );
     }
@@ -219,30 +225,27 @@ export class AgentsService {
 
     // Sync MCP server assignments if provided
     if (data.mcpServerIds !== undefined) {
+      await AgentAvailableMcpServer.destroy({ where: { agentId: agent.id } });
       if (data.mcpServerIds.length > 0) {
-        await this.rejectNonPrimaryMcpServers(data.mcpServerIds, agent.id);
-      }
-      await AgentMcpServer.destroy({ where: { agentId: agent.id } });
-      if (data.mcpServerIds.length > 0) {
-        await AgentMcpServer.bulkCreate(
+        await AgentAvailableMcpServer.bulkCreate(
           data.mcpServerIds.map((mcpServerId) => ({
             agentId: agent.id,
             mcpServerId,
+            active: true,
           })),
         );
       }
     }
 
     if (data.skillIds !== undefined) {
-      if (data.skillIds.length > 0) {
-        await this.rejectNonPrimarySkills(data.skillIds, agent.id);
-      }
-
       // Preserve locked skills that are currently assigned
-      const currentLinks = await AgentSkill.findAll({ where: { agentId: agent.id }, attributes: ["skillId"] });
+      const currentLinks = await AgentAvailableSkill.findAll({
+        where: { agentId: agent.id, active: true },
+        attributes: ["skillId"],
+      });
       const currentIds = currentLinks.map((l) => l.skillId);
       const lockedSkills = await Skill.findAll({
-        where: { id: { [Op.in]: currentIds }, locked: true },
+        where: { id: currentIds, locked: true },
         attributes: ["id"],
       });
       const lockedIds = new Set(lockedSkills.map((s) => s.id));
@@ -250,12 +253,13 @@ export class AgentsService {
       // Merge: keep locked IDs + whatever the client sent (deduped)
       const finalIds = Array.from(new Set([...data.skillIds, ...lockedIds]));
 
-      await AgentSkill.destroy({ where: { agentId: agent.id } });
+      await AgentAvailableSkill.destroy({ where: { agentId: agent.id } });
       if (finalIds.length > 0) {
-        await AgentSkill.bulkCreate(
+        await AgentAvailableSkill.bulkCreate(
           finalIds.map((skillId) => ({
             agentId: agent.id,
             skillId,
+            active: true,
           })),
         );
       }
@@ -326,42 +330,6 @@ export class AgentsService {
     const vendor = await Vendor.findByPk(model.vendorId, { attributes: ["slug"] });
     if (vendor?.slug === "google") {
       throw Object.assign(new Error("Google (Gemini) models are not supported."), { status: 400 });
-    }
-  }
-
-  private static readonly EPIC_ORCHESTRATOR_AGENT_ID = "00000000-0000-4000-a000-000000000100";
-
-  /** Reject skills not assignable to primary agents (Epic Orchestrator is exempt). */
-  private async rejectNonPrimarySkills(skillIds: number[], agentId?: string) {
-    if (agentId === AgentsService.EPIC_ORCHESTRATOR_AGENT_ID) return;
-
-    const blocked = await Skill.findAll({
-      where: { id: { [Op.in]: skillIds }, primaryAgentAssignable: false },
-      attributes: ["id", "name"],
-    });
-    if (blocked.length > 0) {
-      const names = blocked.map((s) => s.name).join(", ");
-      throw Object.assign(
-        new Error(`These skills cannot be assigned to primary agents: ${names}`),
-        { status: 400 },
-      );
-    }
-  }
-
-  /** Reject MCP servers not assignable to primary agents (Epic Orchestrator is exempt). */
-  private async rejectNonPrimaryMcpServers(mcpServerIds: number[], agentId?: string) {
-    if (agentId === AgentsService.EPIC_ORCHESTRATOR_AGENT_ID) return;
-
-    const blocked = await McpServer.findAll({
-      where: { id: { [Op.in]: mcpServerIds }, primaryAgentAssignable: false },
-      attributes: ["id", "name"],
-    });
-    if (blocked.length > 0) {
-      const names = blocked.map((s) => s.name).join(", ");
-      throw Object.assign(
-        new Error(`These MCP servers cannot be assigned to primary agents: ${names}`),
-        { status: 400 },
-      );
     }
   }
 

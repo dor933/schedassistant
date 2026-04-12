@@ -33,6 +33,7 @@ import { agentSkillTools } from "../../../tools/skillsTools";
 import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
+import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import getMcpTools from "../../../mcpClient";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
@@ -247,7 +248,7 @@ export async function callModelNode(
 
   const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
 
-  // Load MCP tools assigned to this agent via AgentMcpServer join table.
+  // Load MCP tools assigned to this agent via agent_available_mcp_servers.
   const mcpTools = agentId ? await getMcpTools(agentId) : [];
 
   const tools: StructuredToolInterface[] = [
@@ -267,6 +268,7 @@ export async function callModelNode(
     DelegateToEpicOrchestratorTool(agentId, state.userId, state.groupId, state.singleChatId),
     ListProjectsTool(state.userId),
     ListRepositoriesTool(),
+    QueryDatabaseTool(),
     ...mcpTools,
   ];
   const toolByName = new Map<string, StructuredToolInterface>(

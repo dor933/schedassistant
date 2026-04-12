@@ -1,13 +1,7 @@
 "use strict";
 
 /**
- * 1. Assigns the gh-cli skill to the Epic Orchestrator and removes the old
- *    mcp-git-cli-bash skill (now redundant — git + gh are both in gh-cli).
- * 2. Updates the epic-task-workflow skill text:
- *    - PR creation is now automatic (done in code, not by the LLM)
- *    - References to mcp-git-cli-bash removed
- *
- * Idempotent — safe to re-run.
+ * Assigns gh-cli skill to the Epic Orchestrator and updates epic-task-workflow.
  *
  * @type {import('sequelize-cli').Migration}
  */
@@ -38,12 +32,12 @@ module.exports = {
 
     // 1. Add the consolidated gh-cli skill
     await queryInterface.sequelize.query(
-      `INSERT INTO agents_skills (agent_id, skill_id, created_at)
-       SELECT :agentId, s.id, :now
+      `INSERT INTO agent_available_skills (agent_id, skill_id, active, created_at)
+       SELECT :agentId, s.id, true, :now
        FROM skills s
        WHERE s.slug = 'gh-cli'
          AND NOT EXISTS (
-           SELECT 1 FROM agents_skills
+           SELECT 1 FROM agent_available_skills
            WHERE agent_id = :agentId AND skill_id = s.id
          )`,
       { replacements: { agentId: AGENT_ID, now } },
@@ -51,7 +45,7 @@ module.exports = {
 
     // 2. Remove the old mcp-git-cli-bash skill (superseded by gh-cli)
     await queryInterface.sequelize.query(
-      `DELETE FROM agents_skills
+      `DELETE FROM agent_available_skills
        WHERE agent_id = :agentId
          AND skill_id IN (SELECT id FROM skills WHERE slug = 'mcp-git-cli-bash')`,
       { replacements: { agentId: AGENT_ID } },
@@ -71,19 +65,19 @@ module.exports = {
     const now = new Date();
 
     await queryInterface.sequelize.query(
-      `DELETE FROM agents_skills
+      `DELETE FROM agent_available_skills
        WHERE agent_id = :agentId
          AND skill_id IN (SELECT id FROM skills WHERE slug = 'gh-cli')`,
       { replacements: { agentId: AGENT_ID } },
     ).catch(() => {});
 
     await queryInterface.sequelize.query(
-      `INSERT INTO agents_skills (agent_id, skill_id, created_at)
-       SELECT :agentId, s.id, :now
+      `INSERT INTO agent_available_skills (agent_id, skill_id, active, created_at)
+       SELECT :agentId, s.id, true, :now
        FROM skills s
        WHERE s.slug = 'mcp-git-cli-bash'
          AND NOT EXISTS (
-           SELECT 1 FROM agents_skills
+           SELECT 1 FROM agent_available_skills
            WHERE agent_id = :agentId AND skill_id = s.id
          )`,
       { replacements: { agentId: AGENT_ID, now } },

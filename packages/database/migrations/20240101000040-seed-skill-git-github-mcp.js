@@ -9,7 +9,7 @@
  * @type {import('sequelize-cli').Migration}
  */
 
-/** @type {{ slug: string; name: string; description: string; skillText: string; systemAgentAssignable?: boolean }[]} */
+/** @type {{ slug: string; name: string; description: string; skillText: string }[]} */
 const SKILLS = [
   {
     slug: "mcp-github-api",
@@ -136,7 +136,6 @@ gh run list
   {
     slug: "mcp-filesystem-repo",
     name: "File editing & management (filesystem MCP)",
-    systemAgentAssignable: false,
     description: "Read, write, edit, create, delete, move, and search project files under /app/data. This is required inter alia for coding — writing and modifying source code.",
     skillText: `# File editing & management — filesystem MCP
 
@@ -218,7 +217,6 @@ gh run list
   // ─── In-house: collaboration (split peer vs deep) — chat agents only ───
   {
     slug: "dev-in-house-peer-agents",
-    systemAgentAssignable: false,
     name: "Peer agents (consult_agent)",
     description: "list_agents + consult_agent — synchronous help from another chat agent.",
     skillText: `# Peer agents (fellow orchestrators)
@@ -235,7 +233,6 @@ Sync answer in-thread. Do not use \`list_system_agents\` for peers.
   },
   {
     slug: "dev-in-house-deep-agents",
-    systemAgentAssignable: false,
     name: "Executor agents (delegate_to_deep_agent)",
     description: "list_system_agents + delegate_to_deep_agent — async executor specialists for delegated tasks.",
     skillText: `# Executor agents
@@ -256,7 +253,6 @@ As an orchestrator, you delegate execution to executor agents. They have access 
   // ─── In-house: tracking & notes (split) — chat agents only ───
   {
     slug: "dev-in-house-ongoing-requests",
-    systemAgentAssignable: false,
     name: "Ongoing requests",
     description: "add_ongoing_request / remove_ongoing_request.",
     skillText: `# Ongoing requests
@@ -269,7 +265,6 @@ As an orchestrator, you delegate execution to executor agents. They have access 
   },
   {
     slug: "dev-in-house-agent-notes",
-    systemAgentAssignable: false,
     name: "Agent notes",
     description: "append_agent_notes / edit_agent_notes — persistent notes for this agent.",
     skillText: `# Agent notes
@@ -283,7 +278,6 @@ Not a substitute for repo files — see \`mcp-filesystem-repo\` / \`dev-in-house
   // ─── In-house: workspace vs skill library (split) — chat agents only ───
   {
     slug: "dev-in-house-workspace",
-    systemAgentAssignable: false,
     name: "Agent workspace (.md / .txt)",
     description: "workspace_list_files, workspace_read_file, workspace_write_file, workspace_edit_file, workspace_delete_file.",
     skillText: `# Workspace tools
@@ -298,7 +292,6 @@ Private **.md** and **.txt** for this agent (not the product repo):
   },
   {
     slug: "dev-in-house-skill-library",
-    systemAgentAssignable: false,
     name: "Skill library (list / get / add)",
     description: "list_agent_skills, get_agent_skill, add_agent_skill.",
     skillText: `# Skill library
@@ -314,7 +307,6 @@ Private **.md** and **.txt** for this agent (not the product repo):
   // ─── In-house: profile (split user vs agent name) — chat agents only ───
   {
     slug: "dev-in-house-user-identity",
-    systemAgentAssignable: false,
     name: "User identity (edit_user_identity)",
     description: "Merge JSON into users.user_identity for the current thread user.",
     skillText: `# User identity
@@ -328,7 +320,6 @@ Use for structured preferences (timezone, stack, style). Do not store secrets as
   },
   {
     slug: "dev-in-house-agent-name",
-    systemAgentAssignable: false,
     name: "Agent display name (edit_agent_name)",
     description: "Rename this agent via edit_agent_name.",
     skillText: `# Agent name
@@ -356,13 +347,13 @@ Severity groups, file paths, actionable fixes.`,
   },
 ];
 
-async function insertSkill(queryInterface, { slug, name, description, skillText, systemAgentAssignable }) {
+async function insertSkill(queryInterface, { slug, name, description, skillText }) {
   await queryInterface.sequelize.query(
-    `INSERT INTO skills (name, slug, description, skill_text, system_agent_assignable, created_at, updated_at)
-     SELECT :name, :slug, :description, :skillText, :systemAgentAssignable, NOW(), NOW()
+    `INSERT INTO skills (name, slug, description, skill_text, created_at, updated_at)
+     SELECT :name, :slug, :description, :skillText, NOW(), NOW()
      WHERE NOT EXISTS (SELECT 1 FROM skills WHERE slug = :slug)`,
     {
-      replacements: { name, slug, description, skillText, systemAgentAssignable: systemAgentAssignable !== false },
+      replacements: { name, slug, description, skillText },
     },
   );
 }

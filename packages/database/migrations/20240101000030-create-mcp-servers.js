@@ -45,7 +45,7 @@ module.exports = {
       },
     });
 
-    // Seed the existing hardcoded MCP servers
+    // Seed MCP servers (without docker — removed in old migration 0069)
     await queryInterface.bulkInsert("mcp_servers", [
       {
         name: "bash",
@@ -70,15 +70,6 @@ module.exports = {
         transport: "stdio",
         command: "npx",
         args: JSON.stringify(["-y", "@modelcontextprotocol/server-github"]),
-        env: null,
-        created_at: new Date(),
-        updated_at: new Date(),
-      },
-      {
-        name: "docker",
-        transport: "stdio",
-        command: "npx",
-        args: JSON.stringify(["-y", "@alisaitteke/docker-mcp"]),
         env: null,
         created_at: new Date(),
         updated_at: new Date(),

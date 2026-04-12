@@ -3,8 +3,8 @@ import { Worker } from "bullmq";
 import { createDeepAgent } from "deepagents";
 import { MemorySaver } from "@langchain/langgraph";
 import {
-  SystemAgent,
-  SystemAgentMcpServer,
+  Agent,
+  AgentAvailableMcpServer,
   DeepAgentDelegation,
   Vendor,
   LLMModel,
@@ -95,10 +95,10 @@ export type DeepAgentWorkerHandle = {
  *
  * Each delegation gets:
  * - A RANDOM thread_id (fresh context per task)
- * - A CONSTANT user_id from system_agents.user_id (persistent memory per agent type)
+ * - A CONSTANT user_id from agents.user_id (persistent memory per agent type)
  *
  * Flow:
- * 1. Load SystemAgent config from DB
+ * 1. Load executor agent config from DB
  * 2. Create a deep agent via createDeepAgent() with the system agent's instructions/model
  * 3. Invoke with the delegation request
  * 4. Update delegation record with result
@@ -110,8 +110,8 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
     async (job) => {
       const {
         delegationId,
-        systemAgentId,
-        systemAgentSlug,
+        executorAgentId,
+        executorAgentSlug,
         request,
         callerAgentId,
         userId,
@@ -121,7 +121,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
       logger.info("DeepAgent: processing job", {
         delegationId,
-        systemAgentSlug,
+        executorAgentSlug,
         callerAgentId,
         requestLen: request.length,
       });
@@ -136,26 +136,26 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         "deep_agent_run",
         async () => {
       try {
-        // Load system agent config
-        const systemAgent = await SystemAgent.findByPk(systemAgentId);
-        if (!systemAgent) {
-          throw new Error(`System agent ${systemAgentId} not found`);
+        // Load executor agent config
+        const executorAgent = await Agent.findByPk(executorAgentId);
+        if (!executorAgent) {
+          throw new Error(`Executor agent ${executorAgentId} not found`);
         }
 
         // Resolve a fully configured LangChain model instance (with API key + proxy)
-        let chatModel = await resolveModel(systemAgent.modelSlug);
+        let chatModel = await resolveModel(executorAgent.modelSlug!);
         if (!chatModel) {
           throw new Error(
-            `Cannot resolve model "${systemAgent.modelSlug}" for system agent "${systemAgentSlug}"`,
+            `Cannot resolve model "${executorAgent.modelSlug}" for executor agent "${executorAgentSlug}"`,
           );
         }
 
         // Check if this agent uses Google Search grounding
-        const tc = systemAgent.toolConfig as Record<string, unknown> | null;
+        const tc = executorAgent.toolConfig as Record<string, unknown> | null;
         const useGoogleSearch = !!tc?.googleSearch;
 
-        // Use the system agent's constant userId for memory scoping.
-        const deepAgentUserId = systemAgent.userId ?? userId;
+        // Use the executor agent's constant userId for memory scoping.
+        const deepAgentUserId = executorAgent.userId ?? userId;
         const threadId = crypto.randomUUID();
 
         let resultText: string;
@@ -168,21 +168,21 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
           logger.info("DeepAgent: invoking Google Search agent directly", {
             delegationId,
-            modelSlug: systemAgent.modelSlug,
+            modelSlug: executorAgent.modelSlug,
             threadId,
           });
 
           const langfuseHandler = getLangfuseCallbackHandler(userId, {
             threadId,
             delegationId,
-            systemAgentSlug,
+            executorAgentSlug,
             service: "deep_agent",
           });
 
           const response = await withTimeout(
             googleModel.invoke(
               [
-                new SystemMessage(systemAgent.instructions),
+                new SystemMessage(executorAgent.instructions!),
                 new HumanMessage(request),
               ],
               langfuseHandler ? { callbacks: [langfuseHandler] } : undefined,
@@ -200,14 +200,14 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                 : "The web search agent did not produce a response.";
         } else {
           // ── Standard deep agent path ──
-          // Load MCP tools assigned to this system agent (via junction table)
-          const mcpLinks = await SystemAgentMcpServer.findAll({
-            where: { systemAgentId: systemAgent.id },
+          // Load active MCP tools available to this executor agent
+          const mcpLinks = await AgentAvailableMcpServer.findAll({
+            where: { agentId: executorAgent.id, active: true },
             attributes: ["mcpServerId"],
           });
           const mcpServerIds = mcpLinks.map((l) => l.mcpServerId);
           const rawMcpTools = mcpServerIds.length > 0
-            ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${systemAgentSlug}`)
+            ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${executorAgentSlug}`)
             : [];
 
           // deepagents has built-in tools: read_file, write_file, edit_file.
@@ -226,14 +226,14 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             return true;
           });
 
-          const skillTools = systemAgentSkillTools(systemAgent.id);
+          const skillTools = systemAgentSkillTools(executorAgent.id);
           const wsTools = workspaceTools(callerAgentId);
           const allTools = [...mcpTools, ...skillTools, ...wsTools];
 
           logger.info("DeepAgent: creating agent", {
             delegationId,
-            modelSlug: systemAgent.modelSlug,
-            systemAgentUserId: deepAgentUserId,
+            modelSlug: executorAgent.modelSlug,
+            executorAgentUserId: deepAgentUserId,
             threadId,
             toolCount: allTools.length,
           });
@@ -244,9 +244,9 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             model: chatModel as any,
             tools: allTools as any[],
             systemPrompt:
-              `You are ${systemAgent.name}, an executor agent — a specialist responsible for carrying out tasks ` +
+              `You are ${executorAgent.agentName}, an executor agent — a specialist responsible for carrying out tasks ` +
               `delegated to you by orchestrator agents.\n\n` +
-              `${systemAgent.instructions}\n\n` +
+              `${executorAgent.instructions}\n\n` +
               `## Task Guidelines\n` +
               `- Break complex tasks into steps using your todo list\n` +
               `- Be thorough and detailed in your execution\n` +
@@ -289,7 +289,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           const langfuseHandler = getLangfuseCallbackHandler(userId, {
             threadId,
             delegationId,
-            systemAgentSlug,
+            executorAgentSlug,
             service: "deep_agent",
           });
 
@@ -359,7 +359,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           userId,
           message:
             `[Executor Agent Result — Delegation ${delegationId}]\n` +
-            `Executor: ${systemAgent.name} (${systemAgentSlug})\n` +
+            `Executor: ${executorAgent.agentName} (${executorAgentSlug})\n` +
             `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
             `## Result\n${resultText}`,
           requestId: `delegation-${delegationId}`,
@@ -367,7 +367,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           singleChatId: singleChatId ?? null,
           agentId: callerAgentId,
           mentionsAgent: true,
-          displayName: `system:${systemAgentSlug}`,
+          displayName: `system:${executorAgentSlug}`,
         } as any);
 
         logger.info("DeepAgent: enqueued delegation_result callback", {
@@ -395,7 +395,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
         logger.error("DeepAgent: job failed", {
           delegationId,
-          systemAgentSlug,
+          executorAgentSlug,
           error: failureReason,
           isTimeout,
           isRecursionLimit,
@@ -416,7 +416,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           userId,
           message:
             `[Executor Agent Failed — Delegation ${delegationId}]\n` +
-            `Executor: ${systemAgentSlug}\n` +
+            `Executor: ${executorAgentSlug}\n` +
             `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
             `## Failure\n${failureReason}\n\n` +
             `Please inform the user about this failure and suggest alternatives ` +
@@ -426,11 +426,11 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           singleChatId: singleChatId ?? null,
           agentId: callerAgentId,
           mentionsAgent: true,
-          displayName: `system:${systemAgentSlug}`,
+          displayName: `system:${executorAgentSlug}`,
         } as any);
       }
         }, // end observeWithContext fn
-        { delegationId, systemAgentSlug, callerAgentId, userId },
+        { delegationId, executorAgentSlug, callerAgentId, userId },
       ); // end observeWithContext
     },
     {

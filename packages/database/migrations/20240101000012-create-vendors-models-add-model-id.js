@@ -92,6 +92,13 @@ module.exports = {
       },
     );
 
+    // 5. Add FK from agents.model_id -> models.id (deferred from 0008)
+    await queryInterface.sequelize.query(
+      `ALTER TABLE agents ADD CONSTRAINT agents_model_id_fkey
+       FOREIGN KEY (model_id) REFERENCES models(id)
+       ON UPDATE CASCADE ON DELETE SET NULL`,
+    );
+
   },
 
   async down(queryInterface, _Sequelize) {

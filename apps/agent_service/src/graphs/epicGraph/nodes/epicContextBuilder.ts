@@ -1,6 +1,6 @@
 import { RunnableConfig } from "@langchain/core/runnables";
 import { Op } from "sequelize";
-import { Agent, AgentSkill, User } from "@scheduling-agent/database";
+import { Agent, AgentAvailableSkill, User } from "@scheduling-agent/database";
 import type {
   AssembledContext,
   UserIdentity,
@@ -91,7 +91,7 @@ export async function buildEpicContext(
       agentNotes = agent?.agentNotes?.trim() || null;
       agentWorkspacePath = agent?.workspacePath ?? null;
 
-      const skillLinkCount = await AgentSkill.count({ where: { agentId } });
+      const skillLinkCount = await AgentAvailableSkill.count({ where: { agentId, active: true } });
       agentHasLinkedSkills = skillLinkCount > 0;
     } catch {
       throw new Error(`Failed to load agent from database: ${agentId}`);

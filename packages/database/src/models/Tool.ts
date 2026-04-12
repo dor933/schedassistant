@@ -1,21 +1,20 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
-import type { McpServerAttributes } from "@scheduling-agent/types";
+import type { ToolAttributes } from "@scheduling-agent/types";
 
-type McpServerCreationAttributes = Optional<McpServerAttributes, "id" | "createdAt" | "updatedAt" | "env">;
+type ToolCreationAttributes = Optional<ToolAttributes, "id" | "description" | "category" | "createdAt" | "updatedAt">;
 
-class McpServer extends Model<McpServerAttributes, McpServerCreationAttributes> implements McpServerAttributes {
+class Tool extends Model<ToolAttributes, ToolCreationAttributes> implements ToolAttributes {
   declare id: number;
   declare name: string;
-  declare transport: string;
-  declare command: string;
-  declare args: string[];
-  declare env: Record<string, string> | null;
+  declare slug: string;
+  declare description: string | null;
+  declare category: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
 
-McpServer.init(
+Tool.init(
   {
     id: {
       type: DataTypes.INTEGER,
@@ -27,22 +26,17 @@ McpServer.init(
       allowNull: false,
       unique: true,
     },
-    transport: {
+    slug: {
       type: DataTypes.STRING,
       allowNull: false,
-      defaultValue: "stdio",
+      unique: true,
     },
-    command: {
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    category: {
       type: DataTypes.STRING,
-      allowNull: false,
-    },
-    args: {
-      type: DataTypes.JSONB,
-      allowNull: false,
-      defaultValue: [],
-    },
-    env: {
-      type: DataTypes.JSONB,
       allowNull: true,
     },
     createdAt: {
@@ -58,10 +52,10 @@ McpServer.init(
   },
   {
     sequelize,
-    tableName: "mcp_servers",
+    tableName: "tools",
     underscored: true,
     timestamps: true,
   },
 );
 
-export { McpServer };
+export { Tool };

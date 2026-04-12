@@ -26,10 +26,10 @@ export function DelegateToEpicOrchestratorTool(
     async (input) => {
       const { request } = input;
 
-      // Create delegation record (systemAgentId = null for epic delegations)
+      // Create delegation record (executorAgentId = null for epic delegations)
       const delegation = await DeepAgentDelegation.create({
         callerAgentId,
-        systemAgentId: null,
+        executorAgentId: null,
         userId,
         request,
         status: "pending",

@@ -1,5 +1,5 @@
 import { MultiServerMCPClient } from "@langchain/mcp-adapters";
-import { McpServer, AgentMcpServer } from "@scheduling-agent/database";
+import { McpServer, AgentAvailableMcpServer } from "@scheduling-agent/database";
 
 const clientsCache = new Map<string, MultiServerMCPClient>();
 
@@ -55,9 +55,9 @@ export default async function getMcpTools(agentId: string) {
     return clientsCache.get(agentId)!.getTools();
   }
 
-  // Fetch the MCP servers assigned to this agent
-  const links = await AgentMcpServer.findAll({
-    where: { agentId },
+  // Fetch the active MCP servers available to this agent
+  const links = await AgentAvailableMcpServer.findAll({
+    where: { agentId, active: true },
     attributes: ["mcpServerId"],
   });
 

@@ -3,13 +3,6 @@
 /**
  * Seeds the singleton Epic Orchestrator agent.
  *
- * - Identified by fixed UUID (no agent_type column needed)
- * - Cannot be added to groups (enforced in app layer)
- * - Appears as a SingleChat for every user (via ensureAgentSingleChats on login)
- * - Has the "epic-task-workflow" skill auto-linked
- *
- * All operations are idempotent (safe to re-run).
- *
  * @type {import('sequelize-cli').Migration}
  */
 
@@ -19,20 +12,10 @@ module.exports = {
   async up(queryInterface) {
     const now = new Date();
 
-    // 0. Ensure agents_skills junction table exists (IF NOT EXISTS — no-op if already there)
-    await queryInterface.sequelize.query(`
-      CREATE TABLE IF NOT EXISTS agents_skills (
-        id SERIAL PRIMARY KEY,
-        agent_id UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-        skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      )
-    `);
-
     // 1. Create the agent (only if it doesn't already exist)
     await queryInterface.sequelize.query(
-      `INSERT INTO agents (id, definition, agent_name, core_instructions, created_at, updated_at)
-       SELECT :id, :definition, :agentName, :coreInstructions, :now, :now
+      `INSERT INTO agents (id, type, definition, agent_name, core_instructions, created_at, updated_at)
+       SELECT :id, 'primary', :definition, :agentName, :coreInstructions, :now, :now
        WHERE NOT EXISTS (SELECT 1 FROM agents WHERE id = :id)`,
       {
         replacements: {
@@ -50,14 +33,14 @@ module.exports = {
       },
     );
 
-    // 2. Link the epic-task-workflow skill to this agent (only if not already linked)
+    // 2. Link the epic-task-workflow skill to this agent
     await queryInterface.sequelize.query(
-      `INSERT INTO agents_skills (agent_id, skill_id, created_at)
-       SELECT :agentId, s.id, :now
+      `INSERT INTO agent_available_skills (agent_id, skill_id, active, created_at)
+       SELECT :agentId, s.id, true, :now
        FROM skills s
        WHERE s.slug = 'epic-task-workflow'
          AND NOT EXISTS (
-           SELECT 1 FROM agents_skills
+           SELECT 1 FROM agent_available_skills
            WHERE agent_id = :agentId AND skill_id = s.id
          )`,
       {
@@ -71,7 +54,7 @@ module.exports = {
 
   async down(queryInterface) {
     await queryInterface.sequelize.query(
-      `DELETE FROM agents_skills WHERE agent_id = :id`,
+      `DELETE FROM agent_available_skills WHERE agent_id = :id`,
       { replacements: { id: AGENT_ID } },
     ).catch(() => {});
 

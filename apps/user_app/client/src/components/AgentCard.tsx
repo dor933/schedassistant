@@ -63,11 +63,7 @@ export default function AgentCard({
 
     function isSkillLocked(id: number) {
       const sk = allSkills.find((s) => s.id === id);
-      // Explicitly locked OR a non-primary-assignable skill already assigned
-      // (e.g. MCP skills assigned to the Epic Orchestrator via migration)
-      if (sk?.locked === true) return true;
-      if (sk?.primaryAgentAssignable === false && selectedSkillIds.includes(id)) return true;
-      return false;
+      return sk?.locked === true;
     }
 
     function toggleSkill(id: number) {
@@ -193,14 +189,14 @@ export default function AgentCard({
             </div>
 
             {/* MCP Servers */}
-            {allMcpServers.filter((s) => s.primaryAgentAssignable !== false).length > 0 && (
+            {allMcpServers.length > 0 && (
             <div>
               <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                 <Plug className="h-3 w-3" />
                 MCP Servers
               </label>
               <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                {allMcpServers.filter((s) => s.primaryAgentAssignable !== false).map((s) => {
+                {allMcpServers.map((s) => {
                   const selected = selectedMcpServerIds.includes(s.id);
                   return (
                     <button
@@ -241,7 +237,7 @@ export default function AgentCard({
                 Skills
               </label>
               <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                {allSkills.filter((sk) => (sk.primaryAgentAssignable !== false && (!sk.locked || selectedSkillIds.includes(sk.id))) || (sk.primaryAgentAssignable === false && selectedSkillIds.includes(sk.id))).map((sk) => {
+                {allSkills.filter((sk) => !sk.locked || selectedSkillIds.includes(sk.id)).map((sk) => {
                   const selected = selectedSkillIds.includes(sk.id);
                   const locked = isSkillLocked(sk.id);
                   return (
@@ -278,7 +274,7 @@ export default function AgentCard({
                     </button>
                   );
                 })}
-                {allSkills.filter((sk) => sk.primaryAgentAssignable !== false && !sk.locked).length === 0 && (
+                {allSkills.filter((sk) => !sk.locked).length === 0 && (
                   <p className="text-[11px] text-gray-400 py-0.5">No skills defined yet (super admin can add in Skills).</p>
                 )}
               </div>

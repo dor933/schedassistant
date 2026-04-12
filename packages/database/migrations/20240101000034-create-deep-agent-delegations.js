@@ -17,10 +17,10 @@ module.exports = {
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },
-      system_agent_id: {
-        type: Sequelize.INTEGER,
-        allowNull: false,
-        references: { model: "system_agents", key: "id" },
+      executor_agent_id: {
+        type: Sequelize.UUID,
+        allowNull: true,
+        references: { model: "agents", key: "id" },
         onUpdate: "CASCADE",
         onDelete: "CASCADE",
       },

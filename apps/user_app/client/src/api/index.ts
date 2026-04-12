@@ -317,8 +317,6 @@ export interface AdminMcpServer {
   command: string;
   args: string[];
   env?: Record<string, string> | null;
-  primaryAgentAssignable: boolean;
-  systemAgentAssignable: boolean;
 }
 
 export interface AdminMcpServerLaunchSummary {
@@ -335,27 +333,12 @@ export interface AdminMcpServerUpdateResponse {
   launchSummary: AdminMcpServerLaunchSummary;
 }
 
-export interface AdminSystemAgent {
-  id: number;
-  slug: string;
-  name: string;
-  description: string | null;
-  instructions: string;
-  modelSlug: string;
-  userId: number | null;
-  locked?: boolean;
-  mcpServerIds: number[];
-  skillIds?: number[];
-}
-
 export interface AdminSkill {
   id: number;
   name: string;
   slug: string | null;
   description: string | null;
   skillText: string;
-  systemAgentAssignable: boolean;
-  primaryAgentAssignable: boolean;
   locked: boolean;
   createdAt: string;
   updatedAt: string;
@@ -434,8 +417,6 @@ export const admin = {
     skillText: string;
     slug?: string;
     description?: string;
-    primaryAgentAssignable?: boolean;
-    systemAgentAssignable?: boolean;
   }) =>
     request<AdminSkill>("/admin/skills", {
       method: "POST",
@@ -448,8 +429,6 @@ export const admin = {
       skillText?: string;
       slug?: string | null;
       description?: string | null;
-      primaryAgentAssignable?: boolean;
-      systemAgentAssignable?: boolean;
     },
   ) =>
     request<AdminSkill>(`/admin/skills/${id}`, {
@@ -458,37 +437,6 @@ export const admin = {
     }),
   deleteSkill: (id: number) =>
     request<{ deleted: boolean }>(`/admin/skills/${id}`, { method: "DELETE" }),
-  getSystemAgents: () => request<AdminSystemAgent[]>("/admin/system-agents"),
-  createSystemAgent: (data: {
-    slug: string;
-    name: string;
-    description?: string;
-    instructions: string;
-    modelSlug?: string;
-    userId?: number | null;
-    mcpServerIds?: number[];
-    skillIds?: number[];
-  }) =>
-    request<AdminSystemAgent>("/admin/system-agents", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  updateSystemAgent: (
-    id: number,
-    data: {
-      name?: string;
-      description?: string;
-      instructions?: string;
-      modelSlug?: string;
-      userId?: number | null;
-      mcpServerIds?: number[];
-      skillIds?: number[];
-    },
-  ) =>
-    request<AdminSystemAgent>(`/admin/system-agents/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
   createAgent: (data: {
     definition?: string;
     agentName?: string | null;

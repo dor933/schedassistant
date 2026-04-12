@@ -1,5 +1,5 @@
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
-import { sequelize, Skill, AgentSkill, SystemAgentSkill } from "@scheduling-agent/database";
+import { sequelize, Skill, AgentAvailableSkill } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 import { z } from "zod";
 
@@ -105,7 +105,7 @@ export function AddAgentSkillTool(agentId: string) {
             },
             { transaction },
           );
-          await AgentSkill.create(
+          await AgentAvailableSkill.create(
             { agentId, skillId: skill.id },
             { transaction },
           );
@@ -131,8 +131,8 @@ export function AddAgentSkillTool(agentId: string) {
 export function ListAgentSkillsTool(agentId: string) {
   return tool(
     async () => {
-      const rows = await AgentSkill.findAll({
-        where: { agentId },
+      const rows = await AgentAvailableSkill.findAll({
+        where: { agentId, active: true },
         include: [{ model: Skill, as: "skill", attributes: ["id", "name", "slug", "description"] }],
         order: [["createdAt", "DESC"]],
       });
@@ -164,7 +164,7 @@ export function GetAgentSkillTool(agentId: string) {
   return tool(
     async (input) => {
       const { skill_id } = getSkillSchema.parse(input);
-      const row = await AgentSkill.findOne({
+      const row = await AgentAvailableSkill.findOne({
         where: { agentId, skillId: skill_id },
         include: [{ model: Skill, as: "skill", attributes: ["id", "name", "slug", "description", "skillText"] }],
       });
@@ -199,7 +199,7 @@ export function EditAgentSkillTool(agentId: string) {
     async (input) => {
       const parsed = editSkillBodySchema.parse(input);
       try {
-        const row = await AgentSkill.findOne({
+        const row = await AgentAvailableSkill.findOne({
           where: { agentId, skillId: parsed.skill_id },
           include: [{ model: Skill, as: "skill" }],
         });
@@ -228,158 +228,7 @@ export function EditAgentSkillTool(agentId: string) {
   );
 }
 
-const systemGetSkillSchema = z.object({
-  skill_id: z.number().int().min(1).describe("The numeric id of the skill (from list_system_agent_skills)"),
-});
-
-export function AddSystemAgentSkillTool(systemAgentId: number) {
-  return tool(
-    async (input) => {
-      const parsed = addSkillSchema.parse(input);
-      try {
-        const result = await sequelize.transaction(async (transaction) => {
-          if (parsed.slug) {
-            const taken = await Skill.findOne({
-              where: { slug: parsed.slug },
-              attributes: ["id"],
-              transaction,
-            });
-            if (taken) {
-              return { error: `Slug "${parsed.slug}" is already in use. Choose another or omit slug.` };
-            }
-          }
-          const skill = await Skill.create(
-            {
-              name: parsed.name,
-              slug: parsed.slug ?? null,
-              description: parsed.description?.trim() || null,
-              skillText: parsed.skill_text,
-            },
-            { transaction },
-          );
-          await SystemAgentSkill.create(
-            { systemAgentId, skillId: skill.id },
-            { transaction },
-          );
-          return { skillId: skill.id };
-        });
-        if ("error" in result && result.error) return result.error;
-        return `Skill added and linked to this system agent. skill_id=${(result as { skillId: number }).skillId}.`;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return `Error: ${msg}`;
-      }
-    },
-    {
-      name: "add_system_agent_skill",
-      description:
-        "Creates a new skill and attaches it to this system (deep) agent. Use list_system_agent_skills / get_system_agent_skill to read skills later.",
-      schema: addSkillSchema,
-    },
-  );
-}
-
-export function ListSystemAgentSkillsTool(systemAgentId: number) {
-  return tool(
-    async () => {
-      const rows = await SystemAgentSkill.findAll({
-        where: { systemAgentId },
-        include: [{ model: Skill, as: "skill", attributes: ["id", "name", "slug", "description"] }],
-        order: [["createdAt", "DESC"]],
-      });
-      const list = rows.map((r) => {
-        const s = r.get("skill") as Skill | null;
-        if (!s) return null;
-        return {
-          id: s.id,
-          name: s.name,
-          slug: s.slug,
-          description: s.description,
-        };
-      }).filter(Boolean);
-      if (list.length === 0) {
-        return "No skills are linked to this system agent yet. Use add_system_agent_skill to create one.";
-      }
-      return JSON.stringify(list, null, 2);
-    },
-    {
-      name: "list_system_agent_skills",
-      description:
-        "Lists skills for this system agent (metadata only). Use get_system_agent_skill for full skill text.",
-      schema: z.object({}),
-    },
-  );
-}
-
-export function GetSystemAgentSkillTool(systemAgentId: number) {
-  return tool(
-    async (input) => {
-      const { skill_id } = systemGetSkillSchema.parse(input);
-      const row = await SystemAgentSkill.findOne({
-        where: { systemAgentId, skillId: skill_id },
-        include: [{ model: Skill, as: "skill", attributes: ["id", "name", "slug", "description", "skillText"] }],
-      });
-      if (!row) {
-        return `No skill with id ${skill_id} is linked to this system agent. Use list_system_agent_skills.`;
-      }
-      const s = row.get("skill") as Skill | null;
-      if (!s) return "Skill record missing.";
-      return [
-        `id: ${s.id}`,
-        `name: ${s.name}`,
-        s.slug ? `slug: ${s.slug}` : null,
-        s.description ? `description: ${s.description}` : null,
-        "",
-        "## skill_text",
-        s.skillText,
-      ]
-        .filter((line) => line != null)
-        .join("\n");
-    },
-    {
-      name: "get_system_agent_skill",
-      description:
-        "Loads the full skill body for a skill id linked to this system agent.",
-      schema: systemGetSkillSchema,
-    },
-  );
-}
-
-export function EditSystemAgentSkillTool(systemAgentId: number) {
-  return tool(
-    async (input) => {
-      const parsed = editSkillBodySchema.parse(input);
-      try {
-        const row = await SystemAgentSkill.findOne({
-          where: { systemAgentId, skillId: parsed.skill_id },
-          include: [{ model: Skill, as: "skill" }],
-        });
-        if (!row) {
-          return `No skill with id ${parsed.skill_id} is linked to this system agent. Use list_system_agent_skills.`;
-        }
-        const s = row.get("skill") as Skill | null;
-        if (!s) return "Skill record missing.";
-        const err = await applySkillUpdates(s, parsed);
-        if (err) return err;
-        return `Updated skill id=${parsed.skill_id}. Use get_system_agent_skill to read the latest text.`;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return `Error: ${msg}`;
-      }
-    },
-    {
-      name: "edit_system_agent_skill",
-      description:
-        "Updates metadata and/or the full body of a skill linked to this system (deep) agent. " +
-        "At least one of name, slug, description, skill_text must be provided. " +
-        "Use list_system_agent_skills / get_system_agent_skill first. " +
-        "Warning: skills are shared rows — other agents using the same skill id are affected too.",
-      schema: editSkillBodySchema,
-    },
-  );
-}
-
-/** Tools bound to a chat agent (UUID). */
+/** Tools bound to any agent (primary or system) by UUID. */
 export function agentSkillTools(agentId: string): StructuredToolInterface[] {
   return [
     AddAgentSkillTool(agentId),
@@ -389,10 +238,10 @@ export function agentSkillTools(agentId: string): StructuredToolInterface[] {
   ];
 }
 
-/** Read-only skill tools for system agents (deep agents). */
-export function systemAgentSkillTools(systemAgentId: number): StructuredToolInterface[] {
+/** Read-only skill tools for system agents (deep agents). Same table, same UUID key. */
+export function systemAgentSkillTools(agentId: string): StructuredToolInterface[] {
   return [
-    ListSystemAgentSkillsTool(systemAgentId),
-    GetSystemAgentSkillTool(systemAgentId),
+    ListAgentSkillsTool(agentId),
+    GetAgentSkillTool(agentId),
   ];
 }

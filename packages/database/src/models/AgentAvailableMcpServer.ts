@@ -2,26 +2,28 @@ import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
 import type { AgentId } from "@scheduling-agent/types";
 
-interface AgentMcpServerAttributes {
+interface AgentAvailableMcpServerAttributes {
   id: number;
   agentId: AgentId;
   mcpServerId: number;
+  active: boolean;
   createdAt: Date;
 }
 
-type AgentMcpServerCreationAttributes = Optional<AgentMcpServerAttributes, "id" | "createdAt">;
+type CreationAttributes = Optional<AgentAvailableMcpServerAttributes, "id" | "active" | "createdAt">;
 
-class AgentMcpServer
-  extends Model<AgentMcpServerAttributes, AgentMcpServerCreationAttributes>
-  implements AgentMcpServerAttributes
+class AgentAvailableMcpServer
+  extends Model<AgentAvailableMcpServerAttributes, CreationAttributes>
+  implements AgentAvailableMcpServerAttributes
 {
   declare id: number;
   declare agentId: AgentId;
   declare mcpServerId: number;
+  declare active: boolean;
   declare createdAt: Date;
 }
 
-AgentMcpServer.init(
+AgentAvailableMcpServer.init(
   {
     id: {
       type: DataTypes.INTEGER,
@@ -40,6 +42,11 @@ AgentMcpServer.init(
       field: "mcp_server_id",
       references: { model: "mcp_servers", key: "id" },
     },
+    active: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
     createdAt: {
       type: DataTypes.DATE,
       allowNull: false,
@@ -48,11 +55,11 @@ AgentMcpServer.init(
   },
   {
     sequelize,
-    tableName: "agents_mcp_servers",
+    tableName: "agent_available_mcp_servers",
     underscored: true,
     timestamps: true,
     updatedAt: false,
   },
 );
 
-export { AgentMcpServer };
+export { AgentAvailableMcpServer };

@@ -1,4 +1,4 @@
-import { LLMModel, Vendor, Agent, SystemAgent } from "@scheduling-agent/database";
+import { LLMModel, Vendor, Agent } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
@@ -61,7 +61,7 @@ export class ModelsService {
       );
     }
 
-    const sysAgentCount = await SystemAgent.count({ where: { modelSlug: model.slug } });
+    const sysAgentCount = await Agent.count({ where: { modelSlug: model.slug, type: "system" } });
     if (sysAgentCount > 0) {
       throw Object.assign(
         new Error(`Cannot delete — this model is in use by ${sysAgentCount} system agent(s).`),

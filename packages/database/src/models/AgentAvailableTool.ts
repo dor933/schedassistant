@@ -1,28 +1,29 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
 import type { AgentId } from "@scheduling-agent/types";
-import { Skill } from "./Skill";
 
-interface AgentSkillAttributes {
+interface AgentAvailableToolAttributes {
   id: number;
   agentId: AgentId;
-  skillId: number;
+  toolId: number;
+  active: boolean;
   createdAt: Date;
 }
 
-type AgentSkillCreationAttributes = Optional<AgentSkillAttributes, "id" | "createdAt">;
+type CreationAttributes = Optional<AgentAvailableToolAttributes, "id" | "active" | "createdAt">;
 
-class AgentSkill
-  extends Model<AgentSkillAttributes, AgentSkillCreationAttributes>
-  implements AgentSkillAttributes
+class AgentAvailableTool
+  extends Model<AgentAvailableToolAttributes, CreationAttributes>
+  implements AgentAvailableToolAttributes
 {
   declare id: number;
   declare agentId: AgentId;
-  declare skillId: number;
+  declare toolId: number;
+  declare active: boolean;
   declare createdAt: Date;
 }
 
-AgentSkill.init(
+AgentAvailableTool.init(
   {
     id: {
       type: DataTypes.INTEGER,
@@ -35,11 +36,16 @@ AgentSkill.init(
       field: "agent_id",
       references: { model: "agents", key: "id" },
     },
-    skillId: {
+    toolId: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      field: "skill_id",
-      references: { model: "skills", key: "id" },
+      field: "tool_id",
+      references: { model: "tools", key: "id" },
+    },
+    active: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
     },
     createdAt: {
       type: DataTypes.DATE,
@@ -49,13 +55,11 @@ AgentSkill.init(
   },
   {
     sequelize,
-    tableName: "agents_skills",
+    tableName: "agent_available_tools",
     underscored: true,
     timestamps: true,
     updatedAt: false,
   },
 );
 
-AgentSkill.belongsTo(Skill, { foreignKey: "skillId", as: "skill" });
-
-export { AgentSkill };
+export { AgentAvailableTool };

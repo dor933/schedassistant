@@ -20,34 +20,54 @@ export interface UserIdentity {
   [key: string]: unknown;
 }
 
-// ─── Agents (distinct personas / specializations / product lines) ─────────────
+// ─── Agents (unified: primary + system) ─────────────────────────────────────
 
 /** Canonical agent identifier (`agents.id`). */
 export type AgentId = string;
 
+/** Discriminator for the unified agents table. */
+export type AgentType = "primary" | "system";
+
 export interface AgentAttributes {
   id: AgentId;
-  /** Short role label: "AI Default Agent", "Senior backend developer", etc. Must be unique. */
-  definition: string;
-  /** Name of the agent */
-  agentName: string | null;
-  /** Detailed instructions merged into the system prompt each turn. */
+  /** Discriminator: 'primary' for user-facing agents, 'system' for specialist/executor agents. */
+  type: AgentType;
+
+  // ── Primary agent fields ──
+  /** Short role label: "AI Default Agent", "Senior backend developer", etc. Partial unique (primary only). */
+  definition: string | null;
+  /** Detailed instructions merged into the system prompt each turn (primary agents). */
   coreInstructions: string | null;
   /** Structured persona traits (tone, style, etc.) — rendered as "Your Characteristics" in context. */
   characteristics: Record<string, unknown> | null;
-  /**
-   * Canonical LangGraph checkpoint `thread_id` for this agent.
-   * All groups and single chats that reference this agent share this thread / history.
-   */
+  /** Canonical LangGraph checkpoint thread_id for this agent (primary agents). */
   activeThreadId: string | null;
   /** The user who created this agent (null for legacy/seeded agents). */
   createdByUserId: UserId | null;
-  /** The default LLM model for this agent (references models.id). */
+  /** The default LLM model for this agent — references models.id (primary agents). */
   modelId: string | null;
   /** Free-form notes the agent maintains about important information it should always remember. */
   agentNotes: string | null;
   /** Absolute path to this agent's persistent workspace folder for .md files. */
   workspacePath: string | null;
+
+  // ── System agent fields ──
+  /** Unique slug identifier for system agents. Partial unique (system only). */
+  slug: string | null;
+  /** System agent instructions sent to the executor. */
+  instructions: string | null;
+  /** LLM model slug string for system agents (resolved by slug, not FK). */
+  modelSlug: string | null;
+  /** Arbitrary tool configuration for system agents (e.g. googleSearch flag). */
+  toolConfig: Record<string, unknown> | null;
+  /** Constant user identity for system agents — scopes memory and context. */
+  userId: UserId | null;
+
+  // ── Shared fields ──
+  /** Display name of the agent. */
+  agentName: string | null;
+  /** Free-form description (primarily used by system agents). */
+  description: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -66,10 +86,22 @@ export interface McpServerAttributes {
   args: string[];
   /** Optional environment variables. Placeholders like `{{VAR}}` are resolved at runtime. */
   env: Record<string, string> | null;
-  /** Whether this MCP server can be assigned to primary (user-facing) agents. */
-  primaryAgentAssignable: boolean;
-  /** Whether this MCP server can be assigned to system (deep/specialist) agents. */
-  systemAgentAssignable: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// ─── Tools (code-defined tool registry) ────────────────────────────────────
+
+export interface ToolAttributes {
+  id: number;
+  /** Unique tool name matching the code-defined function (e.g. "delegateToDeepAgent"). */
+  name: string;
+  /** Kebab-case slug for lookups. */
+  slug: string;
+  /** What this tool does. */
+  description: string | null;
+  /** Grouping category: "delegation", "memory", "workspace", etc. */
+  category: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
