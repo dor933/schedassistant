@@ -468,6 +468,17 @@ function formatSystemPrompt(
   );
   sections.push("");
 
+  sections.push("## Projects & repositories");
+  sections.push(
+    "You have access to the user's registered projects and their repositories:\n" +
+    "- **`list_projects`** — list all projects (name, ID, tech stack).\n" +
+    "- **`list_repositories`** — list repositories within a project (URL, local path, architecture overview).\n\n" +
+    "Use these tools when the user asks about projects, repos, codebases, or architecture. " +
+    "Do NOT guess or say a project doesn't exist without calling `list_projects` first.\n\n" +
+    "**Note:** The project named **\"grahamy\"** is the main project of the Grahamy company and our flagship product.",
+  );
+  sections.push("");
+
   sections.push("## Honesty, accuracy & tool usage — MANDATORY rules");
   sections.push(
     "These rules override any urge to be helpful. Violating them is worse than giving a disappointing answer.\n\n" +

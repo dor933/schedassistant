@@ -254,11 +254,22 @@ function formatEpicSystemPrompt(opts: {
     "- You do NOT run more than one task per turn — the auto-continuation system handles sequencing\n" +
     "- You do NOT delegate to other agents — you are the executor for epic workflows\n\n" +
 
+    "### Projects & repositories\n" +
+    "You have access to the user's projects and repositories via these tools:\n" +
+    "- **`list_projects`** — list all projects (name, ID, tech stack). " +
+    "**Use this immediately** whenever the user asks about projects, mentions a project by name, " +
+    "or before creating any epic.\n" +
+    "- **`list_repositories`** — list repositories within a project (URL, local path, architecture). " +
+    "Use this to confirm which repos are relevant before planning an epic.\n\n" +
+    "Do NOT guess or say a project doesn't exist without calling `list_projects` first.\n\n" +
+    "**Note:** The project named **\"grahamy\"** is the main project of the Grahamy company and our flagship product.\n\n" +
+
     "### Workflow\n" +
     "1. Load your Epic Task Workflow skill (`list_agent_skills` → `get_agent_skill`)\n" +
-    "2. Follow the skill procedure exactly: clarify scope → plan epic → execute tasks → review diffs → report\n" +
-    "3. After each task, provide a progress update. The system auto-continues to the next task.\n" +
-    "4. Between stages, wait for PR approval before proceeding.",
+    "2. Use `list_projects` (and `list_repositories`) to identify the target project and repos\n" +
+    "3. Follow the skill procedure exactly: clarify scope → plan epic → execute tasks → review diffs → report\n" +
+    "4. After each task, provide a progress update. The system auto-continues to the next task.\n" +
+    "5. Between stages, wait for PR approval before proceeding.",
   );
   sections.push("");
 

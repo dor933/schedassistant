@@ -32,6 +32,7 @@ import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
+import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import getMcpTools from "../../../mcpClient";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
@@ -264,6 +265,8 @@ export async function callModelNode(
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
     DelegateToEpicOrchestratorTool(agentId, state.userId, state.groupId, state.singleChatId),
+    ListProjectsTool(state.userId),
+    ListRepositoriesTool(),
     ...mcpTools,
   ];
   const toolByName = new Map<string, StructuredToolInterface>(
