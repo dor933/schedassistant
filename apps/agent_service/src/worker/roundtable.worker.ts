@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { Worker } from "bullmq";
 import type { CompiledStateGraph } from "@langchain/langgraph";
 import { HumanMessage } from "@langchain/core/messages";
@@ -17,7 +16,7 @@ import { getRedisConfig } from "../redisClient";
 import { createThreadLockRedis, withThreadLock } from "./threadLock";
 import { ensureSession } from "../sessionsManagment/sessionRegistry";
 import { resolveModelSlug } from "../chat/modelResolution";
-import { emitAgentTyping, emitAgentReply } from "../socket";
+import { emitAgentTyping, getAgentIO } from "../socket";
 import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
@@ -152,7 +151,7 @@ export function startRoundtableWorker(
           );
 
           if (graphResult.error) {
-            throw new Error(graphResult.error);
+            throw new Error(typeof graphResult.error === 'string' ? graphResult.error : JSON.stringify(graphResult.error));
           }
 
           // Extract the last AI message as the agent's reply
@@ -199,13 +198,9 @@ export function startRoundtableWorker(
         );
 
         // Emit the message via Socket.IO
-        const io = (() => {
-          try {
-            return require("../socket").getAgentIO();
-          } catch {
-            return null;
-          }
-        })();
+        let io: ReturnType<typeof getAgentIO> | null = null;
+        try { io = getAgentIO(); } catch { /* socket not yet initialized */ }
+
         if (io) {
           io.emit("roundtable:message", {
             roundtableId,
@@ -316,18 +311,13 @@ export function startRoundtableWorker(
           { where: { id: roundtableId } },
         );
 
-        const io = (() => {
-          try {
-            return require("../socket").getAgentIO();
-          } catch {
-            return null;
-          }
-        })();
-        if (io) {
-          io.emit("roundtable:error", {
+        try {
+          getAgentIO().emit("roundtable:error", {
             roundtableId,
             error: errorText,
           });
+        } catch {
+          // Socket not yet initialized
         }
       }
     },

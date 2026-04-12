@@ -167,6 +167,8 @@ export async function roundtableCallModelNode(
   state: AgentState,
   config: RunnableConfig,
 ): Promise<Partial<AgentState>> {
+  if (state.error) return {};
+
   const {
     systemPrompt,
     messages: stateMessages,

@@ -288,8 +288,21 @@ export interface AdminRole {
   name: string;
 }
 
+export interface AgentMcpServerLink {
+  mcpServerId: number;
+  active: boolean;
+}
+
+export interface AgentSkillLink {
+  skillId: number;
+  active: boolean;
+}
+
+export type AgentType = "primary" | "system";
+
 export interface AdminAgent {
   id: string;
+  type: AgentType;
   definition: string;
   /** Optional display name (system prompt, @mention label in groups, list_agents). */
   agentName: string | null;
@@ -301,12 +314,16 @@ export interface AdminAgent {
   editable: boolean;
   /** The user who created this agent (null for legacy/seeded agents). */
   createdByUserId: number | null;
-  /** MCP servers assigned to this agent. */
+  /** Active MCP server IDs (backward compat). */
   mcpServerIds: number[];
+  /** All MCP server assignments with active status. */
+  mcpServerLinks: AgentMcpServerLink[];
   /** The LLM model assigned to this agent (references models.id). */
   modelId: string | null;
-  /** Linked skill ids (junction `agents_skills`). */
+  /** Active skill IDs (backward compat). */
   skillIds?: number[];
+  /** All skill assignments with active status. */
+  skillLinks: AgentSkillLink[];
   createdAt: string;
 }
 
@@ -445,6 +462,7 @@ export const admin = {
     mcpServerIds?: number[];
     modelId?: string | null;
     skillIds?: number[];
+    type?: AgentType;
   }) =>
     request<AdminAgent>("/admin/agents", {
       method: "POST",
@@ -458,8 +476,10 @@ export const admin = {
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
       mcpServerIds?: number[];
+      mcpServerLinks?: AgentMcpServerLink[];
       modelId?: string | null;
       skillIds?: number[];
+      skillLinks?: AgentSkillLink[];
     },
   ) =>
     request<AdminAgent>(`/admin/agents/${id}`, {

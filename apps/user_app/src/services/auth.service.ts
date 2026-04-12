@@ -80,6 +80,7 @@ export class AuthService {
    */
   private async ensureAgentSingleChats(userId: UserId): Promise<void> {
     const agents = await Agent.findAll({
+      where: { type: "primary" },
       attributes: ["id", "definition"],
     });
     for (const agent of agents) {
@@ -124,8 +125,13 @@ export class AuthService {
       );
     }
 
+    // Only return SingleChats for primary agents (system agents are internal-only)
+    const primaryAgentIds = (
+      await Agent.findAll({ where: { type: "primary" }, attributes: ["id"] })
+    ).map((a) => a.id);
+
     const singleChatRows = await SingleChat.findAll({
-      where: { userId },
+      where: { userId, agentId: primaryAgentIds },
       attributes: ["id", "agentId", "title"],
       order: [["created_at", "DESC"]],
     });

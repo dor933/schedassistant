@@ -17,7 +17,7 @@ export class RoundtableController {
 
   getById = async (req: Request, res: Response) => {
     try {
-      const data = await this.service.getById(req.params.id);
+      const data = await this.service.getById(req.params.id as string);
       if (!data) {
         return res.status(404).json({ error: "Roundtable not found" });
       }
@@ -48,7 +48,7 @@ export class RoundtableController {
 
   stop = async (req: Request, res: Response) => {
     try {
-      const result = await this.service.stop(req.params.id, req.user!.userId);
+      const result = await this.service.stop(req.params.id as string, req.user!.userId);
       return res.json(result);
     } catch (err: any) {
       if (err.status) return res.status(err.status).json({ error: err.message });

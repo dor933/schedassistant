@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
-import { AdminAgent, AdminMcpServer, AdminSkill, ConversationModelInfo } from "../api";
+import { AdminAgent, AdminMcpServer, AdminSkill, ConversationModelInfo, type AgentMcpServerLink, type AgentSkillLink } from "../api";
 import { Box } from "@mui/material";
-import { Loader2, Save, X, Pencil, Sparkles, Plug } from "lucide-react";
+import { Loader2, Save, X, Pencil, Sparkles, Plug, Power, PowerOff } from "lucide-react";
 import { admin } from "../api";
 import { stringifyAgentCharacteristics } from "../pages/AdminPage";
 import { useToast } from "./Toast";
@@ -43,11 +43,11 @@ export default function AgentCard({
     const [selectedModel, setSelectedModel] = useState<ConversationModelInfo | null>(
       agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null,
     );
-    const [selectedSkillIds, setSelectedSkillIds] = useState<number[]>(
-      agent.skillIds ?? [],
+    const [mcpLinks, setMcpLinks] = useState<AgentMcpServerLink[]>(
+      agent.mcpServerLinks ?? [],
     );
-    const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<number[]>(
-      agent.mcpServerIds ?? [],
+    const [skLinks, setSkLinks] = useState<AgentSkillLink[]>(
+      agent.skillLinks ?? [],
     );
     const [saving, setSaving] = useState(false);
 
@@ -57,8 +57,8 @@ export default function AgentCard({
       setInstructions(agent.coreInstructions ?? "");
       setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
       setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
-      setSelectedSkillIds(agent.skillIds ?? []);
-      setSelectedMcpServerIds(agent.mcpServerIds ?? []);
+      setMcpLinks(agent.mcpServerLinks ?? []);
+      setSkLinks(agent.skillLinks ?? []);
     }, [agent, allModels]);
 
     function isSkillLocked(id: number) {
@@ -66,11 +66,48 @@ export default function AgentCard({
       return sk?.locked === true;
     }
 
-    function toggleSkill(id: number) {
+    // ── MCP server link helpers ───────────────────────────────────────
+    function getMcpLinkState(id: number): "unassigned" | "active" | "inactive" {
+      const link = mcpLinks.find((l) => l.mcpServerId === id);
+      if (!link) return "unassigned";
+      return link.active ? "active" : "inactive";
+    }
+
+    function cycleMcpServer(id: number) {
+      setMcpLinks((prev) => {
+        const existing = prev.find((l) => l.mcpServerId === id);
+        if (!existing) return [...prev, { mcpServerId: id, active: true }];
+        // active → inactive
+        if (existing.active) return prev.map((l) => l.mcpServerId === id ? { ...l, active: false } : l);
+        // inactive → unassigned (remove)
+        return prev.filter((l) => l.mcpServerId !== id);
+      });
+    }
+
+    function removeMcpServer(id: number) {
+      setMcpLinks((prev) => prev.filter((l) => l.mcpServerId !== id));
+    }
+
+    // ── Skill link helpers ────────────────────────────────────────────
+    function getSkillLinkState(id: number): "unassigned" | "active" | "inactive" {
+      const link = skLinks.find((l) => l.skillId === id);
+      if (!link) return "unassigned";
+      return link.active ? "active" : "inactive";
+    }
+
+    function cycleSkill(id: number) {
       if (isSkillLocked(id)) return;
-      setSelectedSkillIds((prev) =>
-        prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-      );
+      setSkLinks((prev) => {
+        const existing = prev.find((l) => l.skillId === id);
+        if (!existing) return [...prev, { skillId: id, active: true }];
+        if (existing.active) return prev.map((l) => l.skillId === id ? { ...l, active: false } : l);
+        return prev.filter((l) => l.skillId !== id);
+      });
+    }
+
+    function removeSkill(id: number) {
+      if (isSkillLocked(id)) return;
+      setSkLinks((prev) => prev.filter((l) => l.skillId !== id));
     }
 
     async function save() {
@@ -98,8 +135,8 @@ export default function AgentCard({
           ...(canViewCoreInstructions ? { coreInstructions: instructions || undefined } : {}),
           characteristics,
           modelId: selectedModel?.id ?? null,
-          skillIds: selectedSkillIds,
-          mcpServerIds: selectedMcpServerIds,
+          mcpServerLinks: mcpLinks,
+          skillLinks: skLinks,
         });
         setEditing(false);
         onSaved();
@@ -113,12 +150,14 @@ export default function AgentCard({
     const smallInput =
       "w-full rounded-xl border border-gray-200 bg-gray-50/80 px-3 py-2 text-xs transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10";
 
-    const assignedSkills = allSkills.filter((sk) =>
-      (agent.skillIds ?? []).includes(sk.id),
-    );
-    const assignedMcpServers = allMcpServers.filter((s) =>
-      (agent.mcpServerIds ?? []).includes(s.id),
-    );
+    const assignedSkillLinks = (agent.skillLinks ?? []).map((link) => ({
+      ...link,
+      skill: allSkills.find((sk) => sk.id === link.skillId),
+    })).filter((l) => l.skill);
+    const assignedMcpLinks = (agent.mcpServerLinks ?? []).map((link) => ({
+      ...link,
+      server: allMcpServers.find((s) => s.id === link.mcpServerId),
+    })).filter((l) => l.server);
 
     return (
       <Box
@@ -197,34 +236,43 @@ export default function AgentCard({
               </label>
               <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
                 {allMcpServers.map((s) => {
-                  const selected = selectedMcpServerIds.includes(s.id);
+                  const state = getMcpLinkState(s.id);
                   return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() =>
-                        setSelectedMcpServerIds((prev) =>
-                          selected ? prev.filter((x) => x !== s.id) : [...prev, s.id],
-                        )
-                      }
-                      className={`group/chip inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
-                        selected
-                          ? "bg-gradient-to-r from-violet-50 to-purple-50 text-violet-800 ring-1 ring-violet-200/80 shadow-sm"
-                          : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300"
-                      }`}
-                    >
-                      <Plug className={`h-3 w-3 ${selected ? "text-violet-500" : ""}`} />
-                      {s.name}
-                      {selected && (
-                        <X className="h-3 w-3 text-violet-400 transition-colors group-hover/chip:text-violet-600" />
+                    <span key={s.id} className="group/chip inline-flex items-center gap-0">
+                      <button
+                        type="button"
+                        onClick={() => cycleMcpServer(s.id)}
+                        title={state === "unassigned" ? "Click to assign" : state === "active" ? "Click to deactivate" : "Click to remove"}
+                        className={`inline-flex items-center gap-1.5 py-1 text-[11px] font-medium transition-all duration-150 ${
+                          state === "active"
+                            ? "rounded-full bg-gradient-to-r from-violet-50 to-purple-50 text-violet-800 ring-1 ring-violet-200/80 shadow-sm px-2.5"
+                            : state === "inactive"
+                              ? "rounded-full bg-gray-50 text-gray-400 ring-1 ring-gray-300 ring-dashed px-2.5 line-through decoration-gray-400/50"
+                              : "rounded-full bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300 px-2.5"
+                        }`}
+                      >
+                        {state === "active" && <Power className="h-3 w-3 text-violet-500" />}
+                        {state === "inactive" && <PowerOff className="h-3 w-3 text-gray-400" />}
+                        {state === "unassigned" && <Plug className="h-3 w-3" />}
+                        {s.name}
+                      </button>
+                      {state !== "unassigned" && (
+                        <button
+                          type="button"
+                          onClick={() => removeMcpServer(s.id)}
+                          title="Remove from agent"
+                          className="ml-0.5 rounded-full p-0.5 text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
                       )}
-                    </button>
+                    </span>
                   );
                 })}
               </div>
-              {selectedMcpServerIds.length > 0 && (
+              {mcpLinks.length > 0 && (
                 <p className="mt-1 text-[10px] text-gray-400">
-                  {selectedMcpServerIds.length} server{selectedMcpServerIds.length === 1 ? "" : "s"} linked
+                  {mcpLinks.filter((l) => l.active).length} active, {mcpLinks.filter((l) => !l.active).length} inactive
                 </p>
               )}
             </div>
@@ -237,50 +285,62 @@ export default function AgentCard({
                 Skills
               </label>
               <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                {allSkills.filter((sk) => !sk.locked || selectedSkillIds.includes(sk.id)).map((sk) => {
-                  const selected = selectedSkillIds.includes(sk.id);
+                {allSkills.filter((sk) => !sk.locked || skLinks.some((l) => l.skillId === sk.id)).map((sk) => {
+                  const state = getSkillLinkState(sk.id);
                   const locked = isSkillLocked(sk.id);
                   return (
-                    <button
-                      key={sk.id}
-                      type="button"
-                      onClick={() => toggleSkill(sk.id)}
-                      disabled={locked}
-                      className={`group/chip inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
-                        locked
-                          ? "bg-gray-100 text-gray-500 ring-1 ring-gray-300 cursor-not-allowed opacity-75"
-                          : selected
-                            ? "bg-gradient-to-r from-amber-50 to-yellow-50 text-amber-800 ring-1 ring-amber-200/80 shadow-sm"
-                            : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300"
-                      }`}
-                      title={locked ? "This skill is locked and cannot be removed" : undefined}
-                    >
-                      <span
-                        className={`flex h-4.5 w-4.5 items-center justify-center rounded-full text-[9px] font-bold transition-colors duration-150 ${
+                    <span key={sk.id} className="group/chip inline-flex items-center gap-0">
+                      <button
+                        type="button"
+                        onClick={() => cycleSkill(sk.id)}
+                        disabled={locked}
+                        title={locked ? "This skill is locked and cannot be changed" : state === "unassigned" ? "Click to assign" : state === "active" ? "Click to deactivate" : "Click to remove"}
+                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
                           locked
-                            ? "bg-gray-400 text-white"
-                            : selected
-                              ? "bg-amber-500 text-white"
-                              : "bg-gray-200 text-gray-400 group-hover/chip:bg-gray-300 group-hover/chip:text-gray-500"
+                            ? "bg-gray-100 text-gray-500 ring-1 ring-gray-300 cursor-not-allowed opacity-75"
+                            : state === "active"
+                              ? "bg-gradient-to-r from-amber-50 to-yellow-50 text-amber-800 ring-1 ring-amber-200/80 shadow-sm"
+                              : state === "inactive"
+                                ? "bg-gray-50 text-gray-400 ring-1 ring-gray-300 ring-dashed line-through decoration-gray-400/50"
+                                : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300"
                         }`}
-                        style={{ width: 18, height: 18 }}
                       >
-                        {selected ? "\u2713" : sk.name.charAt(0).toUpperCase()}
-                      </span>
-                      {sk.name}
-                      {selected && !locked && (
-                        <X className="h-3 w-3 text-amber-400 transition-colors group-hover/chip:text-amber-600" />
+                        {locked ? (
+                          <span
+                            className="flex items-center justify-center rounded-full bg-gray-400 text-white text-[9px] font-bold"
+                            style={{ width: 18, height: 18 }}
+                          >
+                            {"\u2713"}
+                          </span>
+                        ) : state === "active" ? (
+                          <Power className="h-3 w-3 text-amber-600" />
+                        ) : state === "inactive" ? (
+                          <PowerOff className="h-3 w-3 text-gray-400" />
+                        ) : (
+                          <Sparkles className="h-3 w-3" />
+                        )}
+                        {sk.name}
+                      </button>
+                      {state !== "unassigned" && !locked && (
+                        <button
+                          type="button"
+                          onClick={() => removeSkill(sk.id)}
+                          title="Remove from agent"
+                          className="ml-0.5 rounded-full p-0.5 text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
                       )}
-                    </button>
+                    </span>
                   );
                 })}
                 {allSkills.filter((sk) => !sk.locked).length === 0 && (
                   <p className="text-[11px] text-gray-400 py-0.5">No skills defined yet (super admin can add in Skills).</p>
                 )}
               </div>
-              {selectedSkillIds.length > 0 && (
+              {skLinks.length > 0 && (
                 <p className="mt-1 text-[10px] text-gray-400">
-                  {selectedSkillIds.length} skill{selectedSkillIds.length === 1 ? "" : "s"} linked
+                  {skLinks.filter((l) => l.active).length} active, {skLinks.filter((l) => !l.active).length} inactive
                 </p>
               )}
             </div>
@@ -319,8 +379,8 @@ export default function AgentCard({
                   setInstructions(agent.coreInstructions ?? "");
                   setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
                   setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
-                  setSelectedSkillIds(agent.skillIds ?? []);
-                  setSelectedMcpServerIds(agent.mcpServerIds ?? []);
+                  setMcpLinks(agent.mcpServerLinks ?? []);
+                  setSkLinks(agent.skillLinks ?? []);
                 }}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-200"
               >
@@ -366,29 +426,37 @@ export default function AgentCard({
                 </pre>
               )}
 
-            {assignedSkills.length > 0 && (
+            {assignedSkillLinks.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
-                {assignedSkills.map((sk) => (
+                {assignedSkillLinks.map((l) => (
                   <span
-                    key={sk.id}
-                    className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 ring-1 ring-amber-100"
+                    key={l.skillId}
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${
+                      l.active
+                        ? "bg-amber-50 text-amber-700 ring-amber-100"
+                        : "bg-gray-50 text-gray-400 ring-gray-200 line-through decoration-gray-400/50"
+                    }`}
                   >
-                    <Sparkles className="h-2.5 w-2.5" />
-                    {sk.name}
+                    {l.active ? <Power className="h-2.5 w-2.5" /> : <PowerOff className="h-2.5 w-2.5" />}
+                    {l.skill!.name}
                   </span>
                 ))}
               </div>
             )}
 
-            {assignedMcpServers.length > 0 && (
+            {assignedMcpLinks.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
-                {assignedMcpServers.map((s) => (
+                {assignedMcpLinks.map((l) => (
                   <span
-                    key={s.id}
-                    className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-medium text-violet-600 ring-1 ring-violet-100"
+                    key={l.mcpServerId}
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${
+                      l.active
+                        ? "bg-violet-50 text-violet-600 ring-violet-100"
+                        : "bg-gray-50 text-gray-400 ring-gray-200 line-through decoration-gray-400/50"
+                    }`}
                   >
-                    <Plug className="h-2.5 w-2.5" />
-                    {s.name}
+                    {l.active ? <Power className="h-2.5 w-2.5" /> : <PowerOff className="h-2.5 w-2.5" />}
+                    {l.server!.name}
                   </span>
                 ))}
               </div>

@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
 import { getChatSocket } from "../sockets/chatSocket";
-import api, {
+import {
+  admin as api,
   type AdminAgent,
   type RoundtableSummary,
   type RoundtableDetail,
@@ -175,7 +175,6 @@ function RoundtableListView() {
 // ─── Roundtable detail view (chat-like display) ─────────────────────────────
 
 function RoundtableDetailView({ id }: { id: string }) {
-  const { user } = useAuth();
   const navigate = useNavigate();
   const [data, setData] = useState<RoundtableDetail | null>(null);
   const [messages, setMessages] = useState<RoundtableMessageInfo[]>([]);

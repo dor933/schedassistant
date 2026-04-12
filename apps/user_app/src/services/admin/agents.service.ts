@@ -25,6 +25,7 @@ export class AgentsService {
     const agents = await Agent.findAll({
       attributes: [
         "id",
+        "type",
         "definition",
         "agentName",
         "coreInstructions",
@@ -47,23 +48,30 @@ export class AgentsService {
 
     const editableIds = await this.getEditableAgentIds(callerId, callerRole);
 
-    // Fetch active MCP server assignments for all agents in one query
+    // Fetch ALL MCP server assignments (including inactive) for all agents
     const mcpLinks = await AgentAvailableMcpServer.findAll({
-      where: { active: true },
-      attributes: ["agentId", "mcpServerId"],
+      attributes: ["agentId", "mcpServerId", "active"],
     });
     const mcpServerIdsByAgent: Record<string, number[]> = {};
+    const mcpLinksByAgent: Record<string, { mcpServerId: number; active: boolean }[]> = {};
     for (const link of mcpLinks) {
-      (mcpServerIdsByAgent[link.agentId] ??= []).push(link.mcpServerId);
+      (mcpLinksByAgent[link.agentId] ??= []).push({ mcpServerId: link.mcpServerId, active: link.active });
+      if (link.active) {
+        (mcpServerIdsByAgent[link.agentId] ??= []).push(link.mcpServerId);
+      }
     }
 
+    // Fetch ALL skill assignments (including inactive) for all agents
     const skillLinks = await AgentAvailableSkill.findAll({
-      where: { active: true },
-      attributes: ["agentId", "skillId"],
+      attributes: ["agentId", "skillId", "active"],
     });
     const skillIdsByAgent: Record<string, number[]> = {};
+    const skillLinksByAgent: Record<string, { skillId: number; active: boolean }[]> = {};
     for (const link of skillLinks) {
-      (skillIdsByAgent[link.agentId] ??= []).push(link.skillId);
+      (skillLinksByAgent[link.agentId] ??= []).push({ skillId: link.skillId, active: link.active });
+      if (link.active) {
+        (skillIdsByAgent[link.agentId] ??= []).push(link.skillId);
+      }
     }
 
     return agents.map((a) => ({
@@ -72,6 +80,8 @@ export class AgentsService {
       editable: editableIds.has(a.id),
       mcpServerIds: mcpServerIdsByAgent[a.id] ?? [],
       skillIds: skillIdsByAgent[a.id] ?? [],
+      mcpServerLinks: mcpLinksByAgent[a.id] ?? [],
+      skillLinks: skillLinksByAgent[a.id] ?? [],
     }));
   }
 
@@ -84,6 +94,7 @@ export class AgentsService {
     modelId?: string | null,
     skillIds?: number[],
     agentName?: string | null,
+    agentType?: "primary" | "system",
   ) {
     const normalizedAgentName =
       agentName !== undefined && agentName !== null && String(agentName).trim() !== ""
@@ -92,7 +103,7 @@ export class AgentsService {
     if (modelId) await this.rejectGoogleModel(modelId);
 
     const agent = await Agent.create({
-      type: "primary",
+      type: agentType ?? "primary",
       definition,
       agentName: normalizedAgentName,
       coreInstructions: coreInstructions ?? null,
@@ -131,8 +142,9 @@ export class AgentsService {
       );
     }
 
-    // Eagerly create a SingleChat for every user and notify them in real time
-    try {
+    // Eagerly create a SingleChat for every user — primary agents only
+    // (system agents are invoked by other agents, not directly by users)
+    if ((agentType ?? "primary") === "primary") try {
       let modelInfo: { id: string; name: string; slug: string; vendor: { id: string; name: string; slug: string } | null } | null = null;
       if (agent.modelId) {
         const m = await LLMModel.findByPk(agent.modelId, { attributes: ["id", "name", "slug", "vendorId"] });
@@ -185,8 +197,10 @@ export class AgentsService {
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
       mcpServerIds?: number[];
+      mcpServerLinks?: { mcpServerId: number; active: boolean }[];
       modelId?: string | null;
       skillIds?: number[];
+      skillLinks?: { skillId: number; active: boolean }[];
     },
   ) {
     const agent = await Agent.findByPk(agentId);
@@ -223,8 +237,19 @@ export class AgentsService {
     }
     await agent.update(patch);
 
-    // Sync MCP server assignments if provided
-    if (data.mcpServerIds !== undefined) {
+    // Sync MCP server assignments if provided (new format takes precedence)
+    if (data.mcpServerLinks !== undefined) {
+      await AgentAvailableMcpServer.destroy({ where: { agentId: agent.id } });
+      if (data.mcpServerLinks.length > 0) {
+        await AgentAvailableMcpServer.bulkCreate(
+          data.mcpServerLinks.map((link) => ({
+            agentId: agent.id,
+            mcpServerId: link.mcpServerId,
+            active: link.active,
+          })),
+        );
+      }
+    } else if (data.mcpServerIds !== undefined) {
       await AgentAvailableMcpServer.destroy({ where: { agentId: agent.id } });
       if (data.mcpServerIds.length > 0) {
         await AgentAvailableMcpServer.bulkCreate(
@@ -237,8 +262,45 @@ export class AgentsService {
       }
     }
 
-    if (data.skillIds !== undefined) {
-      // Preserve locked skills that are currently assigned
+    // Sync skill assignments if provided (new format takes precedence)
+    if (data.skillLinks !== undefined) {
+      // Preserve locked skills — they must remain assigned and active
+      const currentLinks = await AgentAvailableSkill.findAll({
+        where: { agentId: agent.id },
+        attributes: ["skillId"],
+      });
+      const lockedSkills = currentLinks.length > 0
+        ? await Skill.findAll({ where: { id: currentLinks.map((l) => l.skillId), locked: true }, attributes: ["id"] })
+        : [];
+      const lockedIds = new Set(lockedSkills.map((s) => s.id));
+
+      // Non-locked: use what the client sent; locked: force active=true
+      const finalLinks: { skillId: number; active: boolean }[] = [];
+      const seen = new Set<number>();
+      for (const link of data.skillLinks) {
+        if (seen.has(link.skillId)) continue;
+        seen.add(link.skillId);
+        finalLinks.push(lockedIds.has(link.skillId) ? { skillId: link.skillId, active: true } : link);
+      }
+      // Add any locked skills that the client omitted
+      for (const lockedId of lockedIds) {
+        if (!seen.has(lockedId)) {
+          finalLinks.push({ skillId: lockedId, active: true });
+        }
+      }
+
+      await AgentAvailableSkill.destroy({ where: { agentId: agent.id } });
+      if (finalLinks.length > 0) {
+        await AgentAvailableSkill.bulkCreate(
+          finalLinks.map((link) => ({
+            agentId: agent.id,
+            skillId: link.skillId,
+            active: link.active,
+          })),
+        );
+      }
+    } else if (data.skillIds !== undefined) {
+      // Legacy format — all active
       const currentLinks = await AgentAvailableSkill.findAll({
         where: { agentId: agent.id, active: true },
         attributes: ["skillId"],
@@ -249,8 +311,6 @@ export class AgentsService {
         attributes: ["id"],
       });
       const lockedIds = new Set(lockedSkills.map((s) => s.id));
-
-      // Merge: keep locked IDs + whatever the client sent (deduped)
       const finalIds = Array.from(new Set([...data.skillIds, ...lockedIds]));
 
       await AgentAvailableSkill.destroy({ where: { agentId: agent.id } });

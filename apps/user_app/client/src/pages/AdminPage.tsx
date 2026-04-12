@@ -32,11 +32,13 @@ import {
   ChevronDown,
   ChevronUp,
   Globe,
+  MessagesSquare,
 } from "lucide-react";
 import {
   admin,
   type AdminUser,
   type AdminAgent,
+  type AgentType,
   type AdminGroup,
   type AdminGroupMember,
   type AdminRole,
@@ -288,6 +290,7 @@ export default function AdminPage() {
   const [newAgentSkillIds, setNewAgentSkillIds] = useState<number[]>([]);
   const [newAgentMcpServerIds, setNewAgentMcpServerIds] = useState<number[]>([]);
   const [newAgentModelId, setNewAgentModelId] = useState<string | null>(null);
+  const [newAgentType, setNewAgentType] = useState<AgentType>("primary");
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupAgentId, setNewGroupAgentId] = useState("");
   const [newGroupMembers, setNewGroupMembers] = useState<number[]>([]);
@@ -514,6 +517,7 @@ export default function AdminPage() {
         modelId: newAgentModelId,
         skillIds: newAgentSkillIds.length > 0 ? newAgentSkillIds : undefined,
         mcpServerIds: newAgentMcpServerIds.length > 0 ? newAgentMcpServerIds : undefined,
+        type: newAgentType,
       });
       setNewAgentDefinition("");
       setNewAgentDisplayName("");
@@ -522,6 +526,7 @@ export default function AdminPage() {
       setNewAgentSkillIds([]);
       setNewAgentMcpServerIds([]);
       setNewAgentModelId(null);
+      setNewAgentType("primary");
       flash("Agent created.");
       await reload();
     } catch (err: any) {
@@ -1212,6 +1217,38 @@ export default function AdminPage() {
             </h2>
 
             <div className="mb-5 space-y-2.5">
+              {/* Agent type selector */}
+              <div>
+                <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  Agent Type
+                </label>
+                <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50/80 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setNewAgentType("primary")}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                      newAgentType === "primary"
+                        ? "bg-white text-indigo-700 shadow-sm ring-1 ring-indigo-200"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    <Bot className="h-3 w-3" />
+                    Primary
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewAgentType("system")}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                      newAgentType === "system"
+                        ? "bg-white text-emerald-700 shadow-sm ring-1 ring-emerald-200"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    <Cpu className="h-3 w-3" />
+                    System
+                  </button>
+                </div>
+              </div>
               <div>
                 <input
                   type="text"
@@ -1346,10 +1383,42 @@ export default function AdminPage() {
               </button>
             </div>
 
-            <div className="space-y-2.5">
-              {agents.map((a) => (
-                <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allMcpServers={mcpServers} onSaved={reload} />
-              ))}
+            {/* Primary Agents */}
+            <div className="mb-4">
+              <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <Bot className="h-3.5 w-3.5 text-indigo-500" />
+                Primary Agents
+                <span className="rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-500">
+                  {agents.filter((a) => a.type === "primary").length}
+                </span>
+              </h3>
+              <div className="space-y-2.5">
+                {agents.filter((a) => a.type === "primary").map((a) => (
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allMcpServers={mcpServers} onSaved={reload} />
+                ))}
+                {agents.filter((a) => a.type === "primary").length === 0 && (
+                  <p className="py-2 text-xs text-gray-400">No primary agents yet.</p>
+                )}
+              </div>
+            </div>
+
+            {/* System Agents */}
+            <div>
+              <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <Cpu className="h-3.5 w-3.5 text-emerald-500" />
+                System Agents
+                <span className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-500">
+                  {agents.filter((a) => a.type === "system").length}
+                </span>
+              </h3>
+              <div className="space-y-2.5">
+                {agents.filter((a) => a.type === "system").map((a) => (
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allMcpServers={mcpServers} onSaved={reload} />
+                ))}
+                {agents.filter((a) => a.type === "system").length === 0 && (
+                  <p className="py-2 text-xs text-gray-400">No system agents yet.</p>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1381,6 +1450,13 @@ export default function AdminPage() {
               <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
                 {groups.length}
               </span>
+              <button
+                onClick={() => navigate("/roundtable")}
+                className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all duration-150 hover:shadow-md hover:brightness-110"
+              >
+                <MessagesSquare className="h-3.5 w-3.5" />
+                Roundtable
+              </button>
             </h2>
             <div className="mb-5 space-y-2.5">
               <input
@@ -1452,6 +1528,9 @@ export default function AdminPage() {
                               <div className="min-w-0 flex-1">
                                 <p className={`text-sm truncate ${isSelected ? "font-semibold text-indigo-700" : "font-medium text-gray-900"}`}>
                                   {a.definition || "Unnamed Agent"}
+                                  {a.type === "system" && (
+                                    <span className="ml-1.5 rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-600 uppercase">sys</span>
+                                  )}
                                 </p>
                                 <p className="font-mono text-[10px] text-gray-400 truncate">
                                   {a.id}

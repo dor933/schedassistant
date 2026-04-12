@@ -29,6 +29,7 @@ export class AgentsController {
         req.body.modelId,
         req.body.skillIds,
         req.body.agentName,
+        req.body.type,
       );
       return res.status(201).json(agent);
     } catch (err: any) {
@@ -49,8 +50,10 @@ export class AgentsController {
           coreInstructions: req.body.coreInstructions,
           characteristics: req.body.characteristics,
           mcpServerIds: req.body.mcpServerIds,
+          mcpServerLinks: req.body.mcpServerLinks,
           modelId: req.body.modelId,
           skillIds: req.body.skillIds,
+          skillLinks: req.body.skillLinks,
         },
       );
       return res.json(agent);
