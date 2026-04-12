@@ -32,6 +32,7 @@ export class AgentsService {
         "characteristics",
         "createdByUserId",
         "modelId",
+        "isLocked",
         "createdAt",
       ],
       order: [["created_at", "DESC"]],
@@ -77,7 +78,8 @@ export class AgentsService {
     return agents.map((a) => ({
       ...a.toJSON(),
       groupCount: groupCountByAgent[a.id] ?? 0,
-      editable: editableIds.has(a.id),
+      editable: editableIds.has(a.id) && !a.isLocked,
+      isLocked: a.isLocked,
       mcpServerIds: mcpServerIdsByAgent[a.id] ?? [],
       skillIds: skillIdsByAgent[a.id] ?? [],
       mcpServerLinks: mcpLinksByAgent[a.id] ?? [],
@@ -206,6 +208,13 @@ export class AgentsService {
     const agent = await Agent.findByPk(agentId);
     if (!agent)
       throw Object.assign(new Error("Agent not found."), { status: 404 });
+
+    if (agent.isLocked) {
+      throw Object.assign(
+        new Error("This agent is locked and cannot be modified."),
+        { status: 403 },
+      );
+    }
 
     const editableIds = await this.getEditableAgentIds(callerId, callerRole);
     if (!editableIds.has(agent.id)) {

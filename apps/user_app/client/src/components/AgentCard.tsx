@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { AdminAgent, AdminMcpServer, AdminSkill, ConversationModelInfo, type AgentMcpServerLink, type AgentSkillLink } from "../api";
 import { Box } from "@mui/material";
-import { Loader2, Save, X, Pencil, Sparkles, Plug, Power, PowerOff } from "lucide-react";
+import { Loader2, Save, X, Pencil, Sparkles, Plug, Power, PowerOff, Lock } from "lucide-react";
 import { admin } from "../api";
 import { stringifyAgentCharacteristics } from "../pages/AdminPage";
 import { useToast } from "./Toast";
@@ -161,11 +161,22 @@ export default function AgentCard({
 
     return (
       <Box
-        className={`rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0 ${
-          editing ? "relative z-20" : ""
-        }`}
+        className={`rounded-xl border bg-white p-4 shadow-glass transition-all duration-200 hover:shadow-md min-w-0 ${
+          agent.isLocked ? "border-amber-200/70 bg-gradient-to-br from-amber-50/40 via-white to-white" : "border-gray-200/60"
+        } ${editing ? "relative z-20" : ""}`}
       >
-        <p className="mb-2 break-all font-mono text-[10px] text-gray-400">{agent.id}</p>
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="break-all font-mono text-[10px] text-gray-400">{agent.id}</p>
+          {agent.isLocked && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700 ring-1 ring-amber-200/70"
+              title="This agent is locked and cannot be configured"
+            >
+              <Lock className="h-2.5 w-2.5" />
+              Locked
+            </span>
+          )}
+        </div>
         {editing ? (
           <div className="space-y-3">
             {/* Definition */}
@@ -393,7 +404,13 @@ export default function AgentCard({
           <div
             onClick={agent.editable ? () => setEditing(true) : undefined}
             className={agent.editable ? "cursor-pointer text-gray-700 hover:text-indigo-600 transition-colors duration-200" : "text-gray-700 opacity-75"}
-            title={!agent.editable ? "You don't have permission to edit this agent" : "Click to edit"}
+            title={
+              agent.isLocked
+                ? "This agent is locked and cannot be configured"
+                : !agent.editable
+                  ? "You don't have permission to edit this agent"
+                  : "Click to edit"
+            }
           >
             {agent.definition && (
               <p className="mb-1 text-sm font-semibold text-gray-900">

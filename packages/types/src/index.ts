@@ -68,6 +68,8 @@ export interface AgentAttributes {
   agentName: string | null;
   /** Free-form description (primarily used by system agents). */
   description: string | null;
+  /** When true, this agent cannot be reconfigured via the admin UI. */
+  isLocked: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

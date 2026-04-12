@@ -312,6 +312,8 @@ export interface AdminAgent {
   /** Number of groups using this agent (an agent may back multiple groups). */
   groupCount: number;
   editable: boolean;
+  /** When true, this agent is locked and cannot be configured from the admin UI. */
+  isLocked: boolean;
   /** The user who created this agent (null for legacy/seeded agents). */
   createdByUserId: number | null;
   /** Active MCP server IDs (backward compat). */
