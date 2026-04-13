@@ -12,6 +12,11 @@ import { loadRecentConversationMessagesForContext } from "../../../sessionsManag
 import { formatCheckpointMessagesForSystemPrompt } from "../../../sessionsManagment/checkpointMessagesForContext";
 import { retrieveEpisodicMemory } from "../../../rag/episodicRetrieval";
 import { loadRecentSessionSummaries } from "../../../sessionsManagment/sessionSummaryLoader";
+import {
+  loadRecentRoundtableSummaries,
+  formatRoundtableSummariesSection,
+  type RecentRoundtableSummary,
+} from "../../../sessionsManagment/roundtableSummaryLoader";
 import { embedText } from "../../../rag/embeddings";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
@@ -142,6 +147,9 @@ export async function buildEpicContext(
     excludeThreadId: threadId,
   });
 
+  // ── 6b. Recent roundtable summaries ──
+  const roundtableSummaries = await loadRecentRoundtableSummaries(agentId, { limit: 1 });
+
   // ── 7. Executives (minimal) ──
   const executivesSection = await loadMinimalExecutivesSection();
 
@@ -160,6 +168,7 @@ export async function buildEpicContext(
     conversationLogBody: conversationLog.body,
     episodicSnippets,
     recentSummaries: recentSessionSummaries,
+    roundtableSummaries,
   });
 
   return {
@@ -225,6 +234,7 @@ function formatEpicSystemPrompt(opts: {
   conversationLogBody: string;
   episodicSnippets: string[];
   recentSummaries: SessionSummary[];
+  roundtableSummaries: RecentRoundtableSummary[];
 }): string {
   const sections: string[] = [];
 
@@ -376,6 +386,13 @@ function formatEpicSystemPrompt(opts: {
     for (const s of opts.recentSummaries) {
       sections.push(`- [${s.createdAt}] ${s.text}`);
     }
+    sections.push("");
+  }
+
+  // ── Roundtable discussion summaries ──
+  const rtSection = formatRoundtableSummariesSection(opts.roundtableSummaries);
+  if (rtSection) {
+    sections.push(rtSection);
     sections.push("");
   }
 

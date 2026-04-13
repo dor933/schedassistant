@@ -13,6 +13,11 @@ import { loadRecentConversationMessagesForContext } from "../../../sessionsManag
 import { formatCheckpointMessagesForSystemPrompt } from "../../../sessionsManagment/checkpointMessagesForContext";
 import { retrieveEpisodicMemory } from "../../../rag/episodicRetrieval";
 import { loadRecentSessionSummaries } from "../../../sessionsManagment/sessionSummaryLoader";
+import {
+  loadRecentRoundtableSummaries,
+  formatRoundtableSummariesSection,
+  type RecentRoundtableSummary,
+} from "../../../sessionsManagment/roundtableSummaryLoader";
 import { embedText } from "../../../rag/embeddings";
 import { formatUserIdentityForPrompt } from "../../../utils/formatUserIdentityForPrompt";
 import { AgentState } from "../../../state";
@@ -197,6 +202,9 @@ export async function buildContext(
 
   const agentNameSection = await loadAgentNameSection(agentId);
 
+  // ── 4b. Recent roundtable summaries this agent participated in ──
+  const roundtableSummaries = await loadRecentRoundtableSummaries(agentId, { limit: 2 });
+
   // ── 5. Assemble system prompt ──────────────────────────────────────
   const systemPrompt = formatSystemPrompt(
     agentDefinition,
@@ -213,6 +221,7 @@ export async function buildContext(
     episodicSnippets,
     recentSessionSummaries,
     groupMemberIdentities,
+    roundtableSummaries,
   );
 
   return {
@@ -300,6 +309,7 @@ function formatSystemPrompt(
   episodicSnippets: string[],
   recentSummaries: SessionSummary[],
   groupMembers: GroupMemberContextProfile[] | null,
+  roundtableSummaries: RecentRoundtableSummary[] = [],
 ): string {
   const sections: string[] = [];
 
@@ -631,6 +641,13 @@ function formatSystemPrompt(
     for (const s of recentSummaries) {
       sections.push(`- [${s.createdAt}] ${s.text}`);
     }
+    sections.push("");
+  }
+
+  // Roundtable discussion summaries
+  const rtSection = formatRoundtableSummariesSection(roundtableSummaries);
+  if (rtSection) {
+    sections.push(rtSection);
     sections.push("");
   }
 
