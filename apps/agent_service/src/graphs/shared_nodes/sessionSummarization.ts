@@ -1,5 +1,8 @@
 import { RunnableConfig } from "@langchain/core/runnables";
 import { ChatOpenAI } from "@langchain/openai";
+import { ChatGoogle } from "@langchain/google";
+import { ChatAnthropic } from "@langchain/anthropic";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { z } from "zod";
 
 import type { AgentState } from "../../state";
@@ -7,8 +10,9 @@ import { insertEpisodicMemoryChunks } from "../../rag/episodicMemoryChunksWriter
 import { embedText } from "../../rag/embeddings";
 import { observeWithContext } from "../../langfuse";
 import { logger } from "../../logger";
-import { Thread } from "@scheduling-agent/database";
+import { Thread, Vendor, LLMModel } from "@scheduling-agent/database";
 import { SessionSummary } from "@scheduling-agent/types";
+import { resolveModelSlug } from "../../chat/modelResolution";
 
 /**
  * Zod schema for the structured output returned by the LLM during
@@ -32,16 +36,55 @@ const sessionSummarizationSchema = z.object({
     ),
 });
 
-let cachedLlm: ChatOpenAI | null = null;
+let cachedLlm: BaseChatModel | null = null;
+let cachedForSlug: string | null = null;
 
-async function getSummarizationLlm(): Promise<ChatOpenAI> {
-  if (cachedLlm) return cachedLlm;
-  cachedLlm = new ChatOpenAI({
-    modelName: "gpt-4o",
-    temperature: 0,
-    apiKey: process.env.OPENAI_API_KEY,
+/**
+ * Resolves a summarization LLM using the agent's configured model,
+ * fetching the API key from the Vendors table (not env vars).
+ * Falls back to gpt-4o via resolveModelSlug when agentId has no model set.
+ */
+async function getSummarizationLlm(agentId?: string | null): Promise<BaseChatModel> {
+  const modelSlug = await resolveModelSlug(agentId);
+
+  if (cachedLlm && cachedForSlug === modelSlug) return cachedLlm;
+
+  const model = await LLMModel.findOne({
+    where: { slug: modelSlug },
+    attributes: ["id", "vendorId"],
   });
-  return cachedLlm;
+  if (!model) throw new Error(`LLMModel "${modelSlug}" not found for session summarization`);
+
+  const vendor = await Vendor.findByPk(model.vendorId, {
+    attributes: ["slug", "apiKey"],
+  });
+  if (!vendor?.apiKey) {
+    throw new Error(`Vendor for model "${modelSlug}" has no API key configured`);
+  }
+
+  let llm: BaseChatModel;
+  switch (vendor.slug) {
+    case "openai":
+      llm = new ChatOpenAI({ modelName: modelSlug, temperature: 0, apiKey: vendor.apiKey });
+      break;
+    case "anthropic":
+      llm = new ChatAnthropic({
+        modelName: modelSlug,
+        temperature: 0,
+        apiKey: vendor.apiKey,
+        ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
+      });
+      break;
+    case "google":
+      llm = new ChatGoogle({ model: modelSlug, temperature: 0, apiKey: vendor.apiKey });
+      break;
+    default:
+      throw new Error(`Unsupported vendor "${vendor.slug}" for session summarization`);
+  }
+
+  cachedLlm = llm;
+  cachedForSlug = modelSlug;
+  return llm;
 }
 
 /**
@@ -90,8 +133,8 @@ export async function sessionSummarizationNode(
           });
         }
 
-        const llm = await getSummarizationLlm();
-        const structuredLlm = llm.withStructuredOutput(
+        const llm = await getSummarizationLlm(agentId);
+        const structuredLlm = (llm as any).withStructuredOutput(
           sessionSummarizationSchema,
           { name: "session_summarization" },
         );
