@@ -8,7 +8,7 @@ import { z } from "zod";
 import type { AgentState } from "../../state";
 import { insertEpisodicMemoryChunks } from "../../rag/episodicMemoryChunksWriter";
 import { embedText } from "../../rag/embeddings";
-import { observeWithContext } from "../../langfuse";
+import { observeWithContext, getLangfuseCallbackHandler, flushLangfuse } from "../../langfuse";
 import { logger } from "../../logger";
 import { Thread, Vendor, LLMModel } from "@scheduling-agent/database";
 import { SessionSummary } from "@scheduling-agent/types";
@@ -139,6 +139,12 @@ export async function sessionSummarizationNode(
           { name: "session_summarization" },
         );
 
+        const langfuseHandler = getLangfuseCallbackHandler(userId, {
+          threadId,
+          agentId,
+          service: "session_summarization",
+        });
+
         const result = await structuredLlm.invoke(
           [
             {
@@ -146,6 +152,7 @@ export async function sessionSummarizationNode(
               content:
                 "You are summarizing a conversation for long-term memory (domain-agnostic: the agent may specialize in any topic). " +
                 "Produce a concise summary AND an array of high-value, semantically self-contained chunks.\n\n" +
+                "LANGUAGE RULE: Always write the summary and all chunks in English, regardless of what language the conversation was conducted in.\n\n" +
                 "IMPORTANT — chunk quality gate:\n" +
                 "Only create chunks for information that is genuinely valuable to store long-term " +
                 "and would be useful when retrieved weeks or months later. Good candidates:\n" +
@@ -170,8 +177,10 @@ export async function sessionSummarizationNode(
               content: `Summarize and chunk the following conversation:\n\n${conversationText}`,
             },
           ],
-          config,
+          langfuseHandler ? { callbacks: [langfuseHandler] } : undefined,
         );
+
+        await flushLangfuse();
 
         logger.info("Summarization LLM done, persisting results", {
           threadId,
@@ -185,7 +194,6 @@ export async function sessionSummarizationNode(
           createdAt: now.toISOString(),
           messageCount: messages.length,
         };
-        // Write summary JSONB to the threads row.
         await Thread.update(
           {
             summary: summaryPayload,
@@ -204,7 +212,11 @@ export async function sessionSummarizationNode(
 
         logger.info("Session summarization complete — summary and chunks persisted", { threadId });
 
-        return {};
+        return {
+          summaryLen: result.summary.length,
+          chunkCount: result.chunks.length,
+          summary: result.summary.substring(0, 500),
+        } as any;
       },
       { threadId, userId, messageCount: messages.length },
     );
