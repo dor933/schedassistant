@@ -17,7 +17,7 @@
     FROM node:22-alpine AS runner
     WORKDIR /app
     
-    RUN apk add --no-cache python3 py3-pip git bash curl wget libsodium-dev gcc musl-dev python3-dev su-exec github-cli
+    RUN apk add --no-cache python3 py3-pip git bash curl wget libsodium-dev gcc musl-dev python3-dev su-exec github-cli docker-cli
     RUN pip3 install --break-system-packages uv pynacl
 
     RUN npm install -g --unsafe-perm @modelcontextprotocol/server-filesystem mcp-shell @modelcontextprotocol/server-github @alisaitteke/docker-mcp @anthropic-ai/claude-code
