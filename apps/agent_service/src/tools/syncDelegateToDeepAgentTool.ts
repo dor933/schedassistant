@@ -24,13 +24,13 @@ export function SyncDelegateToDeepAgentTool(
 ) {
   return tool(
     async (input) => {
-      const { systemAgentSlug, request } = input;
+      const { systemAgentId, request } = input;
 
       const executorAgent = await Agent.findOne({
-        where: { slug: systemAgentSlug, type: "system" },
+        where: { id: systemAgentId, type: "system" },
       });
       if (!executorAgent) {
-        return `Error: system agent "${systemAgentSlug}" not found. Use list_system_agents to see available executor agents.`;
+        return `Error: system agent with id "${systemAgentId}" not found. Use list_system_agents to see available executor agents.`;
       }
 
       const delegation = await DeepAgentDelegation.create({
@@ -47,7 +47,6 @@ export function SyncDelegateToDeepAgentTool(
       const job = await queue.add("deep_agent_run", {
         delegationId: delegation.id,
         executorAgentId: executorAgent.id,
-        executorAgentSlug: executorAgent.slug!,
         request,
         callerAgentId,
         userId,
@@ -56,10 +55,12 @@ export function SyncDelegateToDeepAgentTool(
         syncMode: true,
       });
 
+      const label = executorAgent.agentName || executorAgent.definition || executorAgent.id;
+
       logger.info("SyncDelegateToDeepAgent: blocking until executor finishes", {
         delegationId: delegation.id,
         callerAgentId,
-        systemAgentSlug,
+        executorAgentId: executorAgent.id,
         bullJobId: job.id,
       });
 
@@ -84,7 +85,7 @@ export function SyncDelegateToDeepAgentTool(
         });
 
         return (
-          `Executor agent "${executorAgent.agentName ?? systemAgentSlug}" failed: ${err?.message ?? "unknown error"}. ` +
+          `Executor agent "${label}" failed: ${err?.message ?? "unknown error"}. ` +
           `Consider breaking the task into smaller parts or trying a different approach.`
         );
       }
@@ -98,12 +99,11 @@ export function SyncDelegateToDeepAgentTool(
         "execution: deep research, code generation, large data aggregation, or complex analysis. " +
         "For simple single-step lookups, use your own tools directly.",
       schema: z.object({
-        systemAgentSlug: z
+        systemAgentId: z
           .string()
-          .min(1)
+          .uuid()
           .describe(
-            "The slug identifier of the system agent to delegate to " +
-            '(e.g. "stock_researcher_agent", "patterns_discoverer").',
+            "The UUID of the system agent to delegate to. Use list_system_agents first to discover available agents and their IDs.",
           ),
         request: z
           .string()

@@ -111,7 +111,6 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
       const {
         delegationId,
         executorAgentId,
-        executorAgentSlug,
         request,
         callerAgentId,
         userId,
@@ -121,7 +120,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
       logger.info("DeepAgent: processing job", {
         delegationId,
-        executorAgentSlug,
+        executorAgentId,
         callerAgentId,
         requestLen: request.length,
       });
@@ -146,7 +145,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         let chatModel = await resolveModel(executorAgent.modelSlug!);
         if (!chatModel) {
           throw new Error(
-            `Cannot resolve model "${executorAgent.modelSlug}" for executor agent "${executorAgentSlug}"`,
+            `Cannot resolve model "${executorAgent.modelSlug}" for executor agent "${executorAgentId}"`,
           );
         }
 
@@ -175,7 +174,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           const langfuseHandler = getLangfuseCallbackHandler(userId, {
             threadId,
             delegationId,
-            executorAgentSlug,
+            executorAgentId,
             service: "deep_agent",
           });
 
@@ -207,7 +206,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           });
           const mcpServerIds = mcpLinks.map((l) => l.mcpServerId);
           const rawMcpTools = mcpServerIds.length > 0
-            ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${executorAgentSlug}`)
+            ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${executorAgentId}`)
             : [];
 
           // deepagents has built-in tools: read_file, write_file, edit_file.
@@ -289,7 +288,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           const langfuseHandler = getLangfuseCallbackHandler(userId, {
             threadId,
             delegationId,
-            executorAgentSlug,
+            executorAgentId,
             service: "deep_agent",
           });
 
@@ -356,11 +355,12 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
         // In syncMode the caller is blocking via waitUntilFinished — skip the callback.
         if (!job.data.syncMode) {
+          const label = executorAgent.agentName || executorAgent.definition || executorAgentId;
           await agentChatQueue.add("delegation_result", {
             userId,
             message:
               `[Executor Agent Result — Delegation ${delegationId}]\n` +
-              `Executor: ${executorAgent.agentName} (${executorAgentSlug})\n` +
+              `Executor: ${label} (${executorAgentId})\n` +
               `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
               `## Result\n${resultText}`,
             requestId: `delegation-${delegationId}`,
@@ -368,7 +368,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             singleChatId: singleChatId ?? null,
             agentId: callerAgentId,
             mentionsAgent: true,
-            displayName: `system:${executorAgentSlug}`,
+            displayName: `system:${executorAgentId}`,
           } as any);
 
           logger.info("DeepAgent: enqueued delegation_result callback", {
@@ -399,7 +399,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
         logger.error("DeepAgent: job failed", {
           delegationId,
-          executorAgentSlug,
+          executorAgentId,
           error: failureReason,
           isTimeout,
           isRecursionLimit,
@@ -420,7 +420,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             userId,
             message:
               `[Executor Agent Failed — Delegation ${delegationId}]\n` +
-              `Executor: ${executorAgentSlug}\n` +
+              `Executor: ${executorAgentId}\n` +
               `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
               `## Failure\n${failureReason}\n\n` +
               `Please inform the user about this failure and suggest alternatives ` +
@@ -430,7 +430,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             singleChatId: singleChatId ?? null,
             agentId: callerAgentId,
             mentionsAgent: true,
-            displayName: `system:${executorAgentSlug}`,
+            displayName: `system:${executorAgentId}`,
           } as any);
         }
 
@@ -438,7 +438,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         throw new Error(failureReason);
       }
         }, // end observeWithContext fn
-        { delegationId, executorAgentSlug, callerAgentId, userId },
+        { delegationId, executorAgentId, callerAgentId, userId },
       ); // end observeWithContext
     },
     {

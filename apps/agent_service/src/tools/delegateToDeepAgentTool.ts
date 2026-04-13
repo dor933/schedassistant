@@ -5,8 +5,7 @@ import { getDeepAgentQueue } from "../queues/deepAgent.bull";
 import { linkDelegationToConsultation } from "../consultationChain";
 import { logger } from "../logger";
 
-/** Slug of the web search system agent — kept in sync with migration 0044. */
-const WEB_SEARCH_SYSTEM_AGENT_SLUG = "web_search";
+const WEB_SEARCH_SYSTEM_AGENT_ID = "00000000-0000-4000-a000-000000000200";
 
 /**
  * Async executor agent delegation tool (Tier 2).
@@ -14,11 +13,6 @@ const WEB_SEARCH_SYSTEM_AGENT_SLUG = "web_search";
  * Enqueues a long-running executor agent job and returns immediately.
  * The calling agent's turn ends — the executor agent runs in the background.
  * When the executor agent finishes, a delegation_result job re-invokes the caller.
- *
- * @param callerAgentId  The agent delegating the task
- * @param userId         The user who initiated the conversation
- * @param groupId        Conversation scope (for result delivery)
- * @param singleChatId   Conversation scope (for result delivery)
  */
 export function DelegateToDeepAgentTool(
   callerAgentId: string,
@@ -28,16 +22,15 @@ export function DelegateToDeepAgentTool(
 ) {
   return tool(
     async (input) => {
-      const { systemAgentSlug, request } = input;
+      const { systemAgentId, request } = input;
 
       const executorAgent = await Agent.findOne({
-        where: { slug: systemAgentSlug, type: "system" },
+        where: { id: systemAgentId, type: "system" },
       });
       if (!executorAgent) {
-        return `Error: system agent "${systemAgentSlug}" not found. Use list_system_agents to see available executor agents.`;
+        return `Error: system agent with id "${systemAgentId}" not found. Use list_system_agents to see available executor agents.`;
       }
 
-      // Create the delegation record
       const delegation = await DeepAgentDelegation.create({
         callerAgentId,
         executorAgentId: executorAgent.id,
@@ -48,12 +41,10 @@ export function DelegateToDeepAgentTool(
         singleChatId,
       });
 
-      // Enqueue the deep agent job
       const queue = getDeepAgentQueue();
       await queue.add("deep_agent_run", {
         delegationId: delegation.id,
         executorAgentId: executorAgent.id,
-        executorAgentSlug: executorAgent.slug!,
         request,
         callerAgentId,
         userId,
@@ -61,21 +52,21 @@ export function DelegateToDeepAgentTool(
         singleChatId,
       });
 
-      // If this agent is currently being consulted by another agent,
-      // link the delegation so the result propagates back up the chain.
       await linkDelegationToConsultation(callerAgentId, delegation.id);
+
+      const label = executorAgent.agentName || executorAgent.definition || executorAgent.id;
 
       logger.info("DelegateToDeepAgent: job enqueued", {
         delegationId: delegation.id,
         callerAgentId,
-        systemAgentSlug,
+        executorAgentId: executorAgent.id,
         requestLen: request.length,
       });
 
       return (
         `Executor agent task delegated successfully.\n` +
         `- Delegation ID: ${delegation.id}\n` +
-        `- Executor Agent: ${executorAgent.agentName} (${executorAgent.slug})\n` +
+        `- Executor Agent: ${label} (${executorAgent.id})\n` +
         `- Status: pending\n\n` +
         `The executor agent will process this in the background. ` +
         `You will be notified automatically when the result is ready. ` +
@@ -91,12 +82,11 @@ export function DelegateToDeepAgentTool(
         "Use this when a task requires sustained multi-step execution: deep research, code generation, " +
         "large data aggregation, or complex analysis. For simple single-step lookups, use your own tools directly.",
       schema: z.object({
-        systemAgentSlug: z
+        systemAgentId: z
           .string()
-          .min(1)
+          .uuid()
           .describe(
-            "The slug identifier of the system agent to delegate to " +
-            '(e.g. "stock_researcher_agent", "patterns_discoverer").',
+            "The UUID of the system agent to delegate to. Use list_system_agents first to discover available agents and their IDs.",
           ),
         request: z
           .string()
@@ -110,8 +100,7 @@ export function DelegateToDeepAgentTool(
 /**
  * Purpose-built web-search delegation tool for the Epic Orchestrator.
  *
- * Hardcodes the target system agent to `web_search` — the LLM cannot pick
- * any other system agent through this tool.
+ * Hardcodes the target system agent to the seeded web_search agent by ID.
  */
 export function DelegateWebSearchTool(
   callerAgentId: string,
@@ -124,7 +113,7 @@ export function DelegateWebSearchTool(
       const { request } = input;
 
       const executorAgent = await Agent.findOne({
-        where: { slug: WEB_SEARCH_SYSTEM_AGENT_SLUG, type: "system" },
+        where: { id: WEB_SEARCH_SYSTEM_AGENT_ID, type: "system" },
       });
       if (!executorAgent) {
         return (
@@ -147,7 +136,6 @@ export function DelegateWebSearchTool(
       await queue.add("deep_agent_run", {
         delegationId: delegation.id,
         executorAgentId: executorAgent.id,
-        executorAgentSlug: executorAgent.slug!,
         request,
         callerAgentId,
         userId,
@@ -166,7 +154,7 @@ export function DelegateWebSearchTool(
       return (
         `Web search delegated successfully.\n` +
         `- Delegation ID: ${delegation.id}\n` +
-        `- Target: Web Search Agent (${executorAgent.slug})\n` +
+        `- Target: Web Search Agent (${executorAgent.id})\n` +
         `- Status: pending\n\n` +
         `The web search will run in the background. ` +
         `You will be re-invoked automatically when the result is ready — your current turn ends now. ` +

@@ -242,7 +242,7 @@ As an orchestrator, you delegate execution to executor agents. They have access 
 | Step | Tool |
 |------|------|
 | List | \`list_system_agents\` |
-| Delegate | \`delegate_to_deep_agent\` (\`systemAgentSlug\`, \`request\`) |
+| Delegate | \`delegate_to_deep_agent\` (\`systemAgentId\`, \`request\`) |
 
 **Async** — you do not get the result immediately. Craft your request with maximum clarity and context.
 

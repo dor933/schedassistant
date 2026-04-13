@@ -21,7 +21,6 @@ export const deepAgentQueueEvents = new QueueEvents(DEEP_AGENT_QUEUE_NAME, {
 export type DeepAgentJobData = {
   delegationId: string;
   executorAgentId: string;
-  executorAgentSlug: string;
   request: string;
   callerAgentId: string;
   userId: number;

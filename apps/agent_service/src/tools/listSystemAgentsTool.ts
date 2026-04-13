@@ -68,7 +68,7 @@ export function ListSystemAgentsTool() {
 
       for (const a of agents) {
         lines.push(`**${a.agentName}**`);
-        lines.push(`  - Slug: \`${a.slug}\``);
+        lines.push(`  - ID: \`${a.id}\``);
         lines.push(`  - Model: ${a.modelSlug}`);
         if (a.description) {
           lines.push(`  - Description: ${a.description}`);
@@ -81,7 +81,7 @@ export function ListSystemAgentsTool() {
       }
 
       lines.push(
-        "Use the `delegate_to_deep_agent` tool with the slug of the executor agent you want to delegate to.",
+        "Use the `delegate_to_deep_agent` tool with the **ID** (UUID) of the executor agent you want to delegate to.",
       );
 
       return lines.join("\n");
