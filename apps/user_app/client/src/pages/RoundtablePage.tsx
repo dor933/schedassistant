@@ -17,7 +17,10 @@ import {
   AlertTriangle,
   Clock,
   Radio,
+  ScrollText,
 } from "lucide-react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useToast } from "../components/Toast";
 import { getChatSocket } from "../sockets/chatSocket";
 import {
@@ -378,9 +381,23 @@ function RoundtableDetailView({ id }: { id: string }) {
       ]);
     };
 
-    const handleCompleted = (payload: { roundtableId: string }) => {
+    const handleCompleted = (payload: {
+      roundtableId: string;
+      summary?: string | null;
+      summaryGeneratedAt?: string | null;
+    }) => {
       if (payload.roundtableId !== id) return;
-      setData((prev) => (prev ? { ...prev, status: "completed" } : prev));
+      setData((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "completed",
+              summary: payload.summary ?? prev.summary,
+              summaryGeneratedAt:
+                payload.summaryGeneratedAt ?? prev.summaryGeneratedAt,
+            }
+          : prev,
+      );
     };
 
     const handleError = (payload: {
@@ -515,6 +532,39 @@ function RoundtableDetailView({ id }: { id: string }) {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
+          {data.summary && (
+            <div className="animate-slide-up overflow-hidden rounded-2xl border border-indigo-200/60 bg-gradient-to-br from-indigo-50/80 via-white to-violet-50/60 shadow-glass backdrop-blur-sm">
+              <div className="flex items-center justify-between gap-3 border-b border-indigo-100/80 bg-white/40 px-5 py-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm">
+                    <ScrollText className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <h2 className="text-sm font-bold text-gray-900">
+                      Discussion Summary
+                    </h2>
+                    <p className="text-[11px] text-gray-500">
+                      Auto-generated when the roundtable ended
+                      {data.summaryGeneratedAt && (
+                        <>
+                          <span className="text-gray-300"> · </span>
+                          {new Date(data.summaryGeneratedAt).toLocaleString()}
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200/70">
+                  <Sparkles className="h-3 w-3" />
+                  AI
+                </span>
+              </div>
+              <div className="chat-prose px-5 py-4 text-sm text-gray-700">
+                <Markdown remarkPlugins={[remarkGfm]}>{data.summary}</Markdown>
+              </div>
+            </div>
+          )}
+
           {messages.length === 0 && data.status !== "completed" && (
             <div className="flex items-center justify-center py-16">
               <div className="text-center">

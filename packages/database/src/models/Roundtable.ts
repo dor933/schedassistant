@@ -15,13 +15,24 @@ export interface RoundtableAttributes {
   singleChatId: string | null;
   threadId: string;
   createdBy: UserId;
+  /** Final roundtable summary — written once when status transitions to "completed". */
+  summary: string | null;
+  summaryGeneratedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
 type CreationAttrs = Optional<
   RoundtableAttributes,
-  "id" | "status" | "maxTurnsPerAgent" | "currentRound" | "currentAgentOrderIndex" | "createdAt" | "updatedAt"
+  | "id"
+  | "status"
+  | "maxTurnsPerAgent"
+  | "currentRound"
+  | "currentAgentOrderIndex"
+  | "summary"
+  | "summaryGeneratedAt"
+  | "createdAt"
+  | "updatedAt"
 >;
 
 class Roundtable
@@ -38,6 +49,8 @@ class Roundtable
   declare singleChatId: string | null;
   declare threadId: string;
   declare createdBy: UserId;
+  declare summary: string | null;
+  declare summaryGeneratedAt: Date | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -96,6 +109,15 @@ Roundtable.init(
       allowNull: false,
       field: "created_by",
       references: { model: "users", key: "id" },
+    },
+    summary: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    summaryGeneratedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "summary_generated_at",
     },
     createdAt: {
       type: DataTypes.DATE,

@@ -680,4 +680,7 @@ export interface RoundtableDetail extends RoundtableSummary {
   threadId: string;
   agents: RoundtableAgentInfo[];
   messages: RoundtableMessageInfo[];
+  /** Final summary — populated once the roundtable transitions to "completed". */
+  summary: string | null;
+  summaryGeneratedAt: string | null;
 }

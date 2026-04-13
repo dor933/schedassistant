@@ -17,6 +17,9 @@ import { createThreadLockRedis, withThreadLock } from "./threadLock";
 import { ensureSession } from "../sessionsManagment/sessionRegistry";
 import { resolveModelSlug } from "../chat/modelResolution";
 import { emitAgentTyping, getAgentIO } from "../socket";
+import { summarizeRoundtable } from "../graphs/roundtableGraph/summarizer";
+import { insertEpisodicMemoryChunks } from "../rag/episodicMemoryChunksWriter";
+import { embedText } from "../rag/embeddings";
 import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
@@ -251,7 +254,16 @@ export function startRoundtableWorker(
           const nextRound = roundNumber + 1;
 
           if (nextRound >= roundtable.maxTurnsPerAgent) {
-            // All rounds complete
+            // All rounds complete — generate a final summary, persist it, push
+            // it into every participant's episodic memory, then mark completed.
+            const summary = await generateAndPersistSummary({
+              roundtableId,
+              threadId,
+              userId,
+              participantAgentIds: roundtableAgents.map((ra) => ra.agentId),
+              topic: roundtable.topic,
+            });
+
             await Roundtable.update(
               {
                 status: "completed",
@@ -262,12 +274,17 @@ export function startRoundtableWorker(
             );
 
             if (io) {
-              io.emit("roundtable:completed", { roundtableId });
+              io.emit("roundtable:completed", {
+                roundtableId,
+                summary,
+                summaryGeneratedAt: new Date().toISOString(),
+              });
             }
 
             logger.info("Roundtable: completed all rounds", {
               roundtableId,
               totalRounds: roundtable.maxTurnsPerAgent,
+              summaryLen: summary?.length ?? 0,
             });
           } else {
             // Start next round with first agent
@@ -350,4 +367,75 @@ export function startRoundtableWorker(
       await lockRedis.quit();
     },
   };
+}
+
+// ─── End-of-roundtable summary pipeline ──────────────────────────────────────
+
+/**
+ * Generates the final summary via a one-off LLM call, persists it on the
+ * `roundtables` row, and pushes one episodic-memory chunk per participating
+ * agent so each participant retains cross-thread recall of the discussion.
+ *
+ * All downstream failures are logged but never escalated — a failed summary
+ * must not prevent the roundtable from transitioning to "completed".
+ * Returns the summary text (or null if generation failed).
+ */
+async function generateAndPersistSummary(params: {
+  roundtableId: string;
+  threadId: string;
+  userId: number;
+  participantAgentIds: string[];
+  topic: string;
+}): Promise<string | null> {
+  const { roundtableId, threadId, userId, participantAgentIds, topic } = params;
+
+  let summary: string;
+  try {
+    summary = await summarizeRoundtable(roundtableId);
+  } catch (err: any) {
+    logger.error("Roundtable: summary generation failed", {
+      roundtableId,
+      error: err?.message ?? String(err),
+    });
+    return null;
+  }
+
+  try {
+    await Roundtable.update(
+      { summary, summaryGeneratedAt: new Date() },
+      { where: { id: roundtableId } },
+    );
+  } catch (err: any) {
+    logger.error("Roundtable: failed to persist summary on roundtable row", {
+      roundtableId,
+      error: err?.message ?? String(err),
+    });
+  }
+
+  // One episodic-memory row per participating agent so each can recall the
+  // discussion in any future thread. Uses the roundtable's thread_id as the
+  // provenance pointer.
+  await Promise.all(
+    participantAgentIds.map((agentId) =>
+      insertEpisodicMemoryChunks(
+        threadId,
+        userId,
+        agentId,
+        [summary],
+        embedText,
+        {
+          source: "roundtable_summary",
+          extraMetadata: { roundtableId, topic },
+        },
+      ).catch((err: any) => {
+        logger.error("Roundtable: failed to push summary into episodic memory", {
+          roundtableId,
+          agentId,
+          error: err?.message ?? String(err),
+        });
+      }),
+    ),
+  );
+
+  return summary;
 }
