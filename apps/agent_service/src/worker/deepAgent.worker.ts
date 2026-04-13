@@ -52,33 +52,62 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+const DEFAULT_MODEL_SLUG = "gpt-4o";
+
 /**
  * Resolves a fully configured LangChain chat model instance for createDeepAgent.
- * Uses the same vendor/apiKey/proxy config as regular agents (callModel.ts).
+ *
+ * Resolution order (mirrors the rest of the codebase):
+ *  1. agent.modelId  → lookup LLMModel by PK
+ *  2. agent.modelSlug → lookup LLMModel by slug
+ *  3. DEFAULT_MODEL_SLUG ("gpt-4o") fallback
  */
-async function resolveModel(modelSlug: string) {
-  const model = await LLMModel.findOne({
-    where: { slug: modelSlug },
-    attributes: ["id", "vendorId"],
-  });
+async function resolveModelForAgent(executorAgent: Agent) {
+  let model: LLMModel | null = null;
+
+  if (executorAgent.modelId) {
+    model = await LLMModel.findByPk(executorAgent.modelId, {
+      attributes: ["id", "slug", "vendorId"],
+    });
+  }
+  if (!model && executorAgent.modelSlug) {
+    model = await LLMModel.findOne({
+      where: { slug: executorAgent.modelSlug },
+      attributes: ["id", "slug", "vendorId"],
+    });
+  }
+  if (!model) {
+    model = await LLMModel.findOne({
+      where: { slug: DEFAULT_MODEL_SLUG },
+      attributes: ["id", "slug", "vendorId"],
+    });
+  }
   if (!model) return null;
+
+  const slug = model.slug;
   const vendor = await Vendor.findByPk(model.vendorId, {
     attributes: ["slug", "apiKey"],
   });
   if (!vendor?.apiKey) return null;
 
+  logger.info("DeepAgent: model resolved", {
+    agentId: executorAgent.id,
+    resolvedSlug: slug,
+    vendorSlug: vendor.slug,
+  });
+
   switch (vendor.slug) {
     case "anthropic":
       return new ChatAnthropic({
-        modelName: modelSlug,
+        modelName: slug,
         temperature: 0.4,
         apiKey: vendor.apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
       });
     case "openai":
-      return new ChatOpenAI({ modelName: modelSlug, temperature: 0.4, apiKey: vendor.apiKey });
+      return new ChatOpenAI({ modelName: slug, temperature: 0.4, apiKey: vendor.apiKey });
     case "google":
-      return new ChatGoogle({ model: modelSlug, temperature: 0.4, apiKey: vendor.apiKey });
+      return new ChatGoogle({ model: slug, temperature: 0.4, apiKey: vendor.apiKey });
     default:
       return null;
   }
@@ -142,10 +171,11 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         }
 
         // Resolve a fully configured LangChain model instance (with API key + proxy)
-        let chatModel = await resolveModel(executorAgent.modelSlug!);
+        let chatModel = await resolveModelForAgent(executorAgent);
         if (!chatModel) {
           throw new Error(
-            `Cannot resolve model "${executorAgent.modelSlug}" for executor agent "${executorAgentId}"`,
+            `Cannot resolve any model for executor agent "${executorAgentId}" ` +
+            `(modelId=${executorAgent.modelId}, modelSlug=${executorAgent.modelSlug})`,
           );
         }
 
