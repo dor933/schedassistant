@@ -60,6 +60,7 @@ export class ProjectsController {
           architectureOverview: req.body.architectureOverview,
           localPath: req.body.localPath,
           setupInstructions: req.body.setupInstructions,
+          agentName: req.body.agentName,
         },
         req.user!.userId,
       );

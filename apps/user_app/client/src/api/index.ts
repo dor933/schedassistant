@@ -402,6 +402,7 @@ export interface AdminRepository {
   architectureOverview: string | null;
   localPath: string | null;
   setupInstructions: string | null;
+  agentName: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -622,6 +623,7 @@ export const admin = {
       architectureOverview?: string | null;
       localPath?: string | null;
       setupInstructions?: string | null;
+      agentName?: string | null;
     },
   ) =>
     request<AdminRepository>(`/admin/projects/repositories/${repoId}`, {

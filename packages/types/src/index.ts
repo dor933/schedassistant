@@ -363,6 +363,8 @@ export interface RepositoryAttributes {
   localPath: string | null;
   /** How to install deps, run dev server, build, test, etc. */
   setupInstructions: string | null;
+  /** CLI agent name (--agent-name) to use for this repo's tasks. */
+  agentName: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;

@@ -1190,6 +1190,8 @@ export async function executeTask(
     systemPrompt?: string;
     promptOverride?: string;
     resumeSessionId?: string;
+    /** CLI agent name to pass via --agent-name (e.g. "Dag"). */
+    agentName?: string;
     /**
      * Replacement prompt to use if --resume fails and we fall back to a
      * fresh Claude CLI session. The `promptOverride` is typically written
@@ -1240,10 +1242,15 @@ export async function executeTask(
     args.push("--append-system-prompt", options.systemPrompt);
   }
 
+  if (options.agentName) {
+    args.push("--agent-name", options.agentName);
+  }
+
   logger.info("Executing agent task via Claude CLI", {
     taskId,
     executionId: execution.id,
     cwd: options.cwd,
+    agentName: options.agentName ?? null,
   });
 
   // Snapshot HEAD before running the CLI so captureGitDiff can diff against
@@ -1581,7 +1588,7 @@ export async function createEpicWithPlan(data: {
  */
 export async function continueRemainingTasks(
   completedTaskId: string,
-  options: { cwd: string; allowedTools?: string; maxTurns?: number; systemPrompt?: string },
+  options: { cwd: string; allowedTools?: string; maxTurns?: number; systemPrompt?: string; agentName?: string },
 ): Promise<string | null> {
   const task = await AgentTask.findByPk(completedTaskId, {
     include: [{ model: TaskStage, as: "stage" }],
@@ -1608,6 +1615,7 @@ export async function continueRemainingTasks(
       allowedTools: options.allowedTools,
       maxTurns: options.maxTurns,
       systemPrompt: options.systemPrompt,
+      agentName: options.agentName,
     });
 
     results.push(await formatExecutionResult(execution, next.id));

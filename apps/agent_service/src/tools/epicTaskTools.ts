@@ -293,19 +293,21 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
         const epic = await resolveActiveEpic();
         const epicId = epic.id;
 
-        // Resolve the working directory from the epic's primary repo.
-        async function resolveCwd(inputCwd?: string): Promise<string> {
-          if (inputCwd) return inputCwd;
+        // Resolve the working directory and optional agent name from the epic's primary repo.
+        async function resolveRepoContext(inputCwd?: string): Promise<{ cwd: string; agentName?: string }> {
           const withRepos = await EpicTask.findByPk(epicId, {
             include: [{ model: Repository, as: "repositories" }],
           });
           const repos = ((withRepos as any)?.repositories ?? []) as Repository[];
           const repoWithPath = repos.find((r) => r.localPath);
-          if (repoWithPath?.localPath) return repoWithPath.localPath;
-          throw new Error(
-            "cwd is required — no repository has a localPath configured. " +
-            "Either pass cwd explicitly or set localPath on the repository.",
-          );
+          const cwd = inputCwd || repoWithPath?.localPath;
+          if (!cwd) {
+            throw new Error(
+              "cwd is required — no repository has a localPath configured. " +
+              "Either pass cwd explicitly or set localPath on the repository.",
+            );
+          }
+          return { cwd, agentName: repoWithPath?.agentName ?? undefined };
         }
 
         // Build the executor's system prompt. `preExecutionSync` resolves
@@ -355,7 +357,7 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
         const isFailedRecovery = firstTask.status === ("failed" as AgentTaskStatus);
         const effectiveMode = isFailedRecovery ? "retry" : input.mode;
 
-        const cwd = await resolveCwd(input.cwd);
+        const { cwd, agentName } = await resolveRepoContext(input.cwd);
         const systemPrompt = await buildSystemPrompt(firstTask.id, input.systemPrompt);
 
         if (effectiveMode === "retry") {
@@ -410,12 +412,13 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
             allowedTools: input.allowedTools,
             maxTurns: input.maxTurns,
             systemPrompt,
+            agentName,
           });
 
           let result = await formatExecutionResult(execution, firstTask.id);
           if (execution.status !== "failed") {
             const contResult = await continueRemainingTasks(firstTask.id, {
-              cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt,
+              cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt, agentName,
             });
             if (contResult) result += "\n\n---\n\n" + contResult;
           }
@@ -435,12 +438,13 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
           allowedTools: input.allowedTools,
           maxTurns: input.maxTurns,
           systemPrompt,
+          agentName,
         });
 
         let result = await formatExecutionResult(execution, firstTask.id);
         if (execution.status !== "failed") {
           const contResult = await continueRemainingTasks(firstTask.id, {
-            cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt,
+            cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt, agentName,
           });
           if (contResult) result += "\n\n---\n\n" + contResult;
         }

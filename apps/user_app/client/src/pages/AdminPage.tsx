@@ -361,6 +361,7 @@ export default function AdminPage() {
   const [editRepoName, setEditRepoName] = useState("");
   const [editRepoArchitecture, setEditRepoArchitecture] = useState("");
   const [editRepoSetupInstructions, setEditRepoSetupInstructions] = useState("");
+  const [editRepoAgentName, setEditRepoAgentName] = useState("");
   const [savingRepoId, setSavingRepoId] = useState<string | null>(null);
   // add repo to existing project
   const [addRepoProjectId, setAddRepoProjectId] = useState<string | null>(null);
@@ -1059,6 +1060,7 @@ export default function AdminPage() {
     setEditRepoName(r.name);
     setEditRepoArchitecture(r.architectureOverview || "");
     setEditRepoSetupInstructions(r.setupInstructions || "");
+    setEditRepoAgentName(r.agentName || "");
   }
 
   async function handleSaveRepo(repoId: string) {
@@ -1069,6 +1071,7 @@ export default function AdminPage() {
         name: editRepoName.trim() || undefined,
         architectureOverview: editRepoArchitecture.trim() || null,
         setupInstructions: editRepoSetupInstructions.trim() || null,
+        agentName: editRepoAgentName.trim() || null,
       });
       setEditingRepoId(null);
       await reload();
@@ -2561,6 +2564,7 @@ export default function AdminPage() {
                                   <input value={editRepoName} onChange={(e) => setEditRepoName(e.target.value)} placeholder="Name" className={inputClass} />
                                   <textarea value={editRepoArchitecture} onChange={(e) => setEditRepoArchitecture(e.target.value)} placeholder="Architecture overview" rows={2} className={inputClass + " resize-y font-mono text-xs"} />
                                   <textarea value={editRepoSetupInstructions} onChange={(e) => setEditRepoSetupInstructions(e.target.value)} placeholder="Setup instructions" rows={2} className={inputClass + " resize-y font-mono text-xs"} />
+                                  <input value={editRepoAgentName} onChange={(e) => setEditRepoAgentName(e.target.value)} placeholder="CLI agent name (e.g. Dag)" className={inputClass} />
                                   <div className="flex gap-2">
                                     <button onClick={() => handleSaveRepo(r.id)} disabled={savingRepoId === r.id} className={btnPrimary}>
                                       {savingRepoId === r.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Save
@@ -2585,6 +2589,11 @@ export default function AdminPage() {
                                     <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700">
                                       <GitBranch className="h-3 w-3" /> {r.defaultBranch}
                                     </span>
+                                    {r.agentName && (
+                                      <span className="inline-flex items-center gap-1 rounded-full bg-purple-50 px-2 py-0.5 text-purple-700">
+                                        Agent: {r.agentName}
+                                      </span>
+                                    )}
                                     {r.localPath ? (
                                       <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-green-700">
                                         <CheckCircle2 className="h-3 w-3" /> Cloned

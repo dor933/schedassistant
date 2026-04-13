@@ -71,6 +71,7 @@ export class ProjectsService {
       architectureOverview?: string | null;
       localPath?: string | null;
       setupInstructions?: string | null;
+      agentName?: string | null;
     },
     userId: UserId,
   ) {
@@ -84,6 +85,7 @@ export class ProjectsService {
     if (data.architectureOverview !== undefined) patch.architectureOverview = data.architectureOverview?.trim() || null;
     if (data.localPath !== undefined) patch.localPath = data.localPath?.trim() || null;
     if (data.setupInstructions !== undefined) patch.setupInstructions = data.setupInstructions?.trim() || null;
+    if (data.agentName !== undefined) patch.agentName = data.agentName?.trim() || null;
 
     await repo.update(patch);
     this.broadcast("repository_updated", `Repository "${repo.name}" updated`, { repositoryId: repo.id, projectId: repo.projectId }, userId);

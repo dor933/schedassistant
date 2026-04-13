@@ -4,7 +4,7 @@ import type { RepositoryAttributes, ProjectId } from "@scheduling-agent/types";
 
 type RepositoryCreationAttributes = Optional<
   RepositoryAttributes,
-  "id" | "createdAt" | "updatedAt" | "defaultBranch" | "metadata" | "architectureOverview" | "localPath" | "setupInstructions"
+  "id" | "createdAt" | "updatedAt" | "defaultBranch" | "metadata" | "architectureOverview" | "localPath" | "setupInstructions" | "agentName"
 >;
 
 class Repository extends Model<RepositoryAttributes, RepositoryCreationAttributes> implements RepositoryAttributes {
@@ -16,6 +16,7 @@ class Repository extends Model<RepositoryAttributes, RepositoryCreationAttribute
   declare architectureOverview: string | null;
   declare localPath: string | null;
   declare setupInstructions: string | null;
+  declare agentName: string | null;
   declare metadata: Record<string, unknown> | null;
   declare createdAt: Date;
   declare updatedAt: Date;
@@ -62,6 +63,11 @@ Repository.init(
       type: DataTypes.TEXT,
       allowNull: true,
       field: "setup_instructions",
+    },
+    agentName: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: "agent_name",
     },
     metadata: {
       type: DataTypes.JSONB,
