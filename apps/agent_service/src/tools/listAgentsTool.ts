@@ -16,12 +16,14 @@ export function ListAgentsTool(callerAgentId: string) {
       const { query } = input;
 
       const where: any = {
-        // Exclude the calling agent from results
+        // Exclude the calling agent and external (roundtable-only) agents from results
         id: { [Op.ne]: callerAgentId },
+        type: { [Op.ne]: "external" },
       };
       if (query) {
         where[Op.and] = [
-          where.id ? { id: where.id } : {},
+          { id: { [Op.ne]: callerAgentId } },
+          { type: { [Op.ne]: "external" } },
           {
             [Op.or]: [
               { agentName: { [Op.iLike]: `%${query}%` } },
@@ -29,9 +31,8 @@ export function ListAgentsTool(callerAgentId: string) {
             ],
           },
         ];
-        // Remove the top-level id so it doesn't conflict with [Op.and]
         delete where.id;
-        (where[Op.and] as any[])[0] = { id: { [Op.ne]: callerAgentId } };
+        delete where.type;
       }
 
       const agents = await Agent.findAll({

@@ -96,7 +96,7 @@ export class AgentsService {
     modelId?: string | null,
     skillIds?: number[],
     agentName?: string | null,
-    agentType?: "primary" | "system",
+    agentType?: "primary" | "system" | "external",
   ) {
     const normalizedAgentName =
       agentName !== undefined && agentName !== null && String(agentName).trim() !== ""

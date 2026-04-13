@@ -298,7 +298,7 @@ export interface AgentSkillLink {
   active: boolean;
 }
 
-export type AgentType = "primary" | "system";
+export type AgentType = "primary" | "system" | "external";
 
 export interface AdminAgent {
   id: string;

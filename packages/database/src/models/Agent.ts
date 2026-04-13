@@ -56,7 +56,7 @@ Agent.init(
       primaryKey: true,
     },
     type: {
-      type: DataTypes.ENUM("primary", "system"),
+      type: DataTypes.ENUM("primary", "system", "external"),
       allowNull: false,
       defaultValue: "primary",
     },

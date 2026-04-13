@@ -103,7 +103,7 @@ function RoundtableListView() {
 
   useEffect(() => {
     api.getRoundtables().then(setRoundtables).catch(console.error);
-    api.getAgents().then((all) => setAgents(all.filter((a) => a.type === "primary"))).catch(console.error);
+    api.getAgents().then((all) => setAgents(all.filter((a) => a.type === "primary" || a.type === "external"))).catch(console.error);
   }, []);
 
   const toggleAgent = (id: string) => {
@@ -219,6 +219,9 @@ function RoundtableListView() {
                         >
                           <Bot className="h-3 w-3" />
                           {a.agentName || a.definition}
+                          {a.type === "external" && (
+                            <span className="ml-1 rounded bg-amber-50 px-1 py-0.5 text-[8px] font-semibold text-amber-600 uppercase">ext</span>
+                          )}
                         </button>
                       );
                     })}

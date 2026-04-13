@@ -83,9 +83,9 @@ export class RoundtableService {
         { status: 400 },
       );
     }
-    const systemAgents = agents.filter((a) => (a as any).type === "system");
-    if (systemAgents.length > 0) {
-      const names = systemAgents.map((a) => a.definition || a.id).join(", ");
+    const disallowed = agents.filter((a) => (a as any).type === "system");
+    if (disallowed.length > 0) {
+      const names = disallowed.map((a) => a.definition || a.id).join(", ");
       throw Object.assign(
         new Error(`System agents cannot participate in roundtables: ${names}`),
         { status: 400 },

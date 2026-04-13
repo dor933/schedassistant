@@ -1247,6 +1247,18 @@ export default function AdminPage() {
                     <Cpu className="h-3 w-3" />
                     System
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewAgentType("external")}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                      newAgentType === "external"
+                        ? "bg-white text-amber-700 shadow-sm ring-1 ring-amber-200"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    <Globe className="h-3 w-3" />
+                    External
+                  </button>
                 </div>
               </div>
               <div>
@@ -1420,6 +1432,26 @@ export default function AdminPage() {
                 )}
               </div>
             </div>
+
+            {/* External Agents (roundtable-only) */}
+            <div>
+              <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <Globe className="h-3.5 w-3.5 text-amber-500" />
+                External Agents
+                <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-500">
+                  {agents.filter((a) => a.type === "external").length}
+                </span>
+                <span className="ml-1 text-[9px] font-normal normal-case text-gray-400">roundtable only</span>
+              </h3>
+              <div className="space-y-2.5">
+                {agents.filter((a) => a.type === "external").map((a) => (
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allMcpServers={mcpServers} onSaved={reload} />
+                ))}
+                {agents.filter((a) => a.type === "external").length === 0 && (
+                  <p className="py-2 text-xs text-gray-400">No external agents yet.</p>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Users */}
@@ -1500,7 +1532,7 @@ export default function AdminPage() {
                       onClick={() => setAgentDropdownOpen(false)}
                     />
                     <div className="absolute left-0 right-0 z-20 mt-1.5 max-h-52 overflow-y-auto rounded-xl border border-gray-200/80 bg-white/95 p-1 shadow-glass-lg backdrop-blur-xl">
-                      {agents.map((a) => {
+                      {agents.filter((a) => a.type !== "external").map((a) => {
                           const isSelected = a.id === newGroupAgentId;
                           return (
                             <button

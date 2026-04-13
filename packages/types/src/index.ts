@@ -26,11 +26,11 @@ export interface UserIdentity {
 export type AgentId = string;
 
 /** Discriminator for the unified agents table. */
-export type AgentType = "primary" | "system";
+export type AgentType = "primary" | "system" | "external";
 
 export interface AgentAttributes {
   id: AgentId;
-  /** Discriminator: 'primary' for user-facing agents, 'system' for specialist/executor agents. */
+  /** Discriminator: 'primary' for user-facing agents, 'system' for specialist/executor agents, 'external' for roundtable-only agents. */
   type: AgentType;
 
   // ── Primary agent fields ──
