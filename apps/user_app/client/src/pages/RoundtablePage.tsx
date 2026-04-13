@@ -103,7 +103,7 @@ function RoundtableListView() {
 
   useEffect(() => {
     api.getRoundtables().then(setRoundtables).catch(console.error);
-    api.getAgents().then(setAgents).catch(console.error);
+    api.getAgents().then((all) => setAgents(all.filter((a) => a.type === "primary"))).catch(console.error);
   }, []);
 
   const toggleAgent = (id: string) => {

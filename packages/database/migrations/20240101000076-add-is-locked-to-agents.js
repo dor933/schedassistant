@@ -19,14 +19,19 @@ module.exports = {
       defaultValue: false,
     });
 
+    const [models] = await queryInterface.sequelize.query(
+      `SELECT id FROM models WHERE slug = 'gemini-3.1-pro-preview' LIMIT 1`,
+    );
+    const modelId = models.length > 0 ? models[0].id : null;
+
     await queryInterface.sequelize.query(
       `UPDATE agents
          SET is_locked = true,
              model_slug = 'gemini-3.1-pro-preview',
-             model_id = NULL,
+             model_id = CAST(:modelId AS uuid),
              updated_at = NOW()
        WHERE id = CAST(:id AS uuid) OR slug = 'web_search'`,
-      { replacements: { id: WEB_SEARCH_AGENT_ID } },
+      { replacements: { id: WEB_SEARCH_AGENT_ID, modelId } },
     );
 
     await queryInterface.sequelize.query(

@@ -70,16 +70,24 @@ export class RoundtableService {
       throw Object.assign(new Error("At least 2 agents are required"), { status: 400 });
     }
 
-    // Verify all agents exist
+    // Verify all agents exist and are primary (system agents cannot participate)
     const agents = await Agent.findAll({
       where: { id: agentIds },
-      attributes: ["id", "definition", "agentName"],
+      attributes: ["id", "type", "definition", "agentName"],
     });
     if (agents.length !== agentIds.length) {
       const found = new Set(agents.map((a) => a.id));
       const missing = agentIds.filter((id) => !found.has(id));
       throw Object.assign(
         new Error(`Agent(s) not found: ${missing.join(", ")}`),
+        { status: 400 },
+      );
+    }
+    const systemAgents = agents.filter((a) => (a as any).type === "system");
+    if (systemAgents.length > 0) {
+      const names = systemAgents.map((a) => a.definition || a.id).join(", ");
+      throw Object.assign(
+        new Error(`System agents cannot participate in roundtables: ${names}`),
         { status: 400 },
       );
     }
