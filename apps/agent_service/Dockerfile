@@ -42,7 +42,9 @@
     # volume would come up root-owned and the CLI (which runs as `agent`) would
     # fail to write session files. This works because Docker copies ownership
     # from the image directory into a fresh named volume on first creation.
-    RUN mkdir -p /home/agent/.claude && chown -R agent:agent /home/agent
+    RUN mkdir -p /home/agent/.claude/agents
+    COPY apps/agent_service/claude-config/ /home/agent/.claude/
+    RUN chown -R agent:agent /home/agent
     VOLUME ["/app/data"]
 
     ENV NODE_ENV=production
