@@ -298,6 +298,11 @@ export interface AgentSkillLink {
   active: boolean;
 }
 
+export interface AgentToolLink {
+  toolId: number;
+  active: boolean;
+}
+
 export type AgentType = "primary" | "system" | "external";
 
 export interface AdminAgent {
@@ -326,6 +331,10 @@ export interface AdminAgent {
   skillIds?: number[];
   /** All skill assignments with active status. */
   skillLinks: AgentSkillLink[];
+  /** Active tool IDs (backward compat). */
+  toolIds?: number[];
+  /** All tool assignments with active status. */
+  toolLinks: AgentToolLink[];
   createdAt: string;
 }
 
@@ -350,6 +359,14 @@ export interface AdminMcpServerLaunchSummary {
 export interface AdminMcpServerUpdateResponse {
   server: AdminMcpServer;
   launchSummary: AdminMcpServerLaunchSummary;
+}
+
+export interface AdminTool {
+  id: number;
+  name: string;
+  slug: string;
+  description: string | null;
+  category: string | null;
 }
 
 export interface AdminSkill {
@@ -456,6 +473,8 @@ export const admin = {
     }),
   deleteSkill: (id: number) =>
     request<{ deleted: boolean }>(`/admin/skills/${id}`, { method: "DELETE" }),
+  getTools: () =>
+    request<AdminTool[]>("/admin/tools"),
   createAgent: (data: {
     definition?: string;
     agentName?: string | null;
@@ -464,6 +483,7 @@ export const admin = {
     mcpServerIds?: number[];
     modelId?: string | null;
     skillIds?: number[];
+    toolIds?: number[];
     type?: AgentType;
   }) =>
     request<AdminAgent>("/admin/agents", {
@@ -482,6 +502,8 @@ export const admin = {
       modelId?: string | null;
       skillIds?: number[];
       skillLinks?: AgentSkillLink[];
+      toolIds?: number[];
+      toolLinks?: AgentToolLink[];
     },
   ) =>
     request<AdminAgent>(`/admin/agents/${id}`, {

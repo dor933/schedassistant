@@ -30,6 +30,7 @@ export class AgentsController {
         req.body.skillIds,
         req.body.agentName,
         req.body.type,
+        req.body.toolIds,
       );
       return res.status(201).json(agent);
     } catch (err: any) {
@@ -54,6 +55,8 @@ export class AgentsController {
           modelId: req.body.modelId,
           skillIds: req.body.skillIds,
           skillLinks: req.body.skillLinks,
+          toolIds: req.body.toolIds,
+          toolLinks: req.body.toolLinks,
         },
       );
       return res.json(agent);

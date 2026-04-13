@@ -44,6 +44,7 @@ import {
   RequestStageChangesTool,
   parseContinuationMarker,
 } from "../../../tools/epicTaskTools";
+import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 
 // Cap the orchestrator's tool-call chain per chat turn. This is the EPIC
@@ -159,7 +160,10 @@ export async function epicCallModelNode(
   // Load MCP tools assigned to this agent (bash, filesystem servers)
   const mcpTools = await getMcpTools(agentId);
 
-  // Epic-specific tools only
+  const activeSlugs = await loadActiveToolSlugs(agentId);
+  const has = (slug: string) => activeSlugs === null || activeSlugs.has(slug);
+
+  // Core + epic-specific tools (always available for epic agents)
   const tools: StructuredToolInterface[] = [
     ReadAgentNotesTool(agentId),
     AppendAgentNotesTool(agentId),
@@ -168,13 +172,7 @@ export async function epicCallModelNode(
     RecallEpisodicMemoryTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
-    // External expertise & research
-    ListAgentsTool(agentId),
-    ConsultAgentTool(agentId, state.userId, state.groupId, state.singleChatId),
-    DelegateWebSearchTool(agentId, state.userId, state.groupId, state.singleChatId),
-    // Epic workflow tools
-    ListProjectsTool(state.userId),
-    ListRepositoriesTool(),
+    // Epic workflow tools (always on for epic agents)
     CreateEpicPlanTool(state.userId, agentId),
     ExecuteEpicTaskTool({
       threadId,
@@ -190,6 +188,18 @@ export async function epicCallModelNode(
     RequestStageChangesTool(),
     ...mcpTools,
   ];
+
+  // Configurable tools — gated by agent_available_tools
+  if (has("list_agents"))
+    tools.push(ListAgentsTool(agentId));
+  if (has("consult_agent"))
+    tools.push(ConsultAgentTool(agentId, state.userId, state.groupId, state.singleChatId));
+  if (has("delegate_to_deep_agent"))
+    tools.push(DelegateWebSearchTool(agentId, state.userId, state.groupId, state.singleChatId));
+  if (has("list_projects"))
+    tools.push(ListProjectsTool(state.userId));
+  if (has("list_repositories"))
+    tools.push(ListRepositoriesTool());
 
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

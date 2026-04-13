@@ -44,6 +44,7 @@ import {
   type AdminRole,
   type AdminMcpServer,
   type AdminSkill,
+  type AdminTool,
   type AdminProject,
   type AdminRepository,
   type ConversationModelInfo,
@@ -288,6 +289,7 @@ export default function AdminPage() {
   const [newAgentInstructions, setNewAgentInstructions] = useState("");
   const [newAgentCharacteristics, setNewAgentCharacteristics] = useState("");
   const [newAgentSkillIds, setNewAgentSkillIds] = useState<number[]>([]);
+  const [newAgentToolIds, setNewAgentToolIds] = useState<number[]>([]);
   const [newAgentMcpServerIds, setNewAgentMcpServerIds] = useState<number[]>([]);
   const [newAgentModelId, setNewAgentModelId] = useState<string | null>(null);
   const [newAgentType, setNewAgentType] = useState<AgentType>("primary");
@@ -302,6 +304,7 @@ export default function AdminPage() {
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
 
+  const [tools, setTools] = useState<AdminTool[]>([]);
   const [skills, setSkills] = useState<AdminSkill[]>([]);
   const [newSkillName, setNewSkillName] = useState("");
   const [newSkillSlug, setNewSkillSlug] = useState("");
@@ -400,7 +403,7 @@ export default function AdminPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [u, a, g, m, v, r, mcp, sk, proj] = await Promise.all([
+      const [u, a, g, m, v, r, mcp, sk, tl, proj] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
@@ -409,6 +412,7 @@ export default function AdminPage() {
         admin.getRoles(),
         admin.getMcpServers(),
         admin.getSkills().catch(() => [] as AdminSkill[]),
+        admin.getTools().catch(() => [] as AdminTool[]),
         admin.getProjects().catch(() => [] as AdminProject[]),
       ]);
       setUsers(u);
@@ -419,6 +423,7 @@ export default function AdminPage() {
       setRoles(r);
       setMcpServers(mcp);
       setSkills(sk);
+      setTools(tl);
       setProjects(proj);
       if (a.length > 0 && !newGroupAgentId) setNewGroupAgentId(a[0].id);
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
@@ -516,6 +521,7 @@ export default function AdminPage() {
         characteristics,
         modelId: newAgentModelId,
         skillIds: newAgentSkillIds.length > 0 ? newAgentSkillIds : undefined,
+        toolIds: newAgentToolIds.length > 0 ? newAgentToolIds : undefined,
         mcpServerIds: newAgentMcpServerIds.length > 0 ? newAgentMcpServerIds : undefined,
         type: newAgentType,
       });
@@ -524,6 +530,7 @@ export default function AdminPage() {
       setNewAgentInstructions("");
       setNewAgentCharacteristics("");
       setNewAgentSkillIds([]);
+      setNewAgentToolIds([]);
       setNewAgentMcpServerIds([]);
       setNewAgentModelId(null);
       setNewAgentType("primary");
@@ -1369,6 +1376,41 @@ export default function AdminPage() {
                   )}
                 </div>
               </div>
+              {/* Tools */}
+              {tools.length > 0 && (
+              <div>
+                <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  <Plug className="h-3 w-3" />
+                  Tools
+                  <span className="font-normal normal-case text-gray-400">(all enabled by default if none selected)</span>
+                </label>
+                <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                  {tools.map((t) => {
+                    const selected = newAgentToolIds.includes(t.id);
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() =>
+                          setNewAgentToolIds((prev) =>
+                            selected ? prev.filter((id) => id !== t.id) : [...prev, t.id],
+                          )
+                        }
+                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                          selected
+                            ? "bg-violet-100 text-violet-800 ring-1 ring-violet-200 shadow-sm"
+                            : "bg-white text-gray-500 ring-1 ring-gray-200 hover:bg-gray-100 hover:text-gray-700"
+                        }`}
+                      >
+                        <Plug className="h-3 w-3" />
+                        {t.name}
+                        {selected && <X className="h-3 w-3" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              )}
               {/* Model selection */}
               <div>
                 <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -1406,7 +1448,7 @@ export default function AdminPage() {
               </h3>
               <div className="space-y-2.5">
                 {agents.filter((a) => a.type === "primary").map((a) => (
-                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allMcpServers={mcpServers} onSaved={reload} />
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
                 ))}
                 {agents.filter((a) => a.type === "primary").length === 0 && (
                   <p className="py-2 text-xs text-gray-400">No primary agents yet.</p>
@@ -1425,7 +1467,7 @@ export default function AdminPage() {
               </h3>
               <div className="space-y-2.5">
                 {agents.filter((a) => a.type === "system").map((a) => (
-                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allMcpServers={mcpServers} onSaved={reload} />
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
                 ))}
                 {agents.filter((a) => a.type === "system").length === 0 && (
                   <p className="py-2 text-xs text-gray-400">No system agents yet.</p>
@@ -1445,7 +1487,7 @@ export default function AdminPage() {
               </h3>
               <div className="space-y-2.5">
                 {agents.filter((a) => a.type === "external").map((a) => (
-                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allMcpServers={mcpServers} onSaved={reload} />
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
                 ))}
                 {agents.filter((a) => a.type === "external").length === 0 && (
                   <p className="py-2 text-xs text-gray-400">No external agents yet.</p>

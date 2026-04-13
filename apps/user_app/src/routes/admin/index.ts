@@ -10,6 +10,7 @@ import { mcpServersRouter } from "./mcpServers.routes";
 import { skillsRouter } from "./skills.routes";
 import { projectsRouter } from "./projects.routes";
 import { roundtableRouter } from "./roundtable.routes";
+import { toolsRouter } from "./tools.routes";
 
 const router = Router();
 
@@ -24,6 +25,7 @@ router.use("/mcp-servers", mcpServersRouter);
 router.use("/skills", skillsRouter);
 router.use("/projects", projectsRouter);
 router.use("/roundtables", roundtableRouter);
+router.use("/tools", toolsRouter);
 // models router handles /models, /vendors, and /single-chats paths
 router.use("/", modelsRouter);
 

@@ -29,6 +29,7 @@ import { agentSkillTools } from "../../../tools/skillsTools";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
+import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 
 const MAX_TOOL_ROUNDS = 15;
@@ -205,18 +206,13 @@ export async function roundtableCallModelNode(
 
   const mcpTools = agentId ? await getMcpTools(agentId) : [];
 
+  const activeSlugs = await loadActiveToolSlugs(agentId);
+  const has = (slug: string) => activeSlugs === null || activeSlugs.has(slug);
+
+  // Core tools — always available
   const tools: StructuredToolInterface[] = [
     EditUserIdentityTool(state.userId),
     EditAgentNameTool(agentId),
-    ConsultAgentTool(agentId, state.userId, state.groupId, state.singleChatId),
-    ListAgentsTool(agentId),
-    ListSystemAgentsTool(),
-    SyncDelegateToDeepAgentTool(
-      agentId,
-      state.userId,
-      state.groupId,
-      state.singleChatId,
-    ),
     ReadAgentNotesTool(agentId),
     AppendAgentNotesTool(agentId),
     EditAgentNotesTool(agentId),
@@ -224,11 +220,24 @@ export async function roundtableCallModelNode(
     RecallEpisodicMemoryTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
-    ListProjectsTool(state.userId),
-    ListRepositoriesTool(),
-    QueryDatabaseTool(),
     ...mcpTools,
   ];
+
+  // Configurable tools — gated by agent_available_tools
+  if (has("consult_agent"))
+    tools.push(ConsultAgentTool(agentId, state.userId, state.groupId, state.singleChatId));
+  if (has("list_agents"))
+    tools.push(ListAgentsTool(agentId));
+  if (has("list_system_agents"))
+    tools.push(ListSystemAgentsTool());
+  if (has("delegate_to_deep_agent"))
+    tools.push(SyncDelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId));
+  if (has("list_projects"))
+    tools.push(ListProjectsTool(state.userId));
+  if (has("list_repositories"))
+    tools.push(ListRepositoriesTool());
+  if (has("query_database"))
+    tools.push(QueryDatabaseTool());
 
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

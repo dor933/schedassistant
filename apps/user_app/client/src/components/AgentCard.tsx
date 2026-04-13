@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AdminAgent, AdminMcpServer, AdminSkill, ConversationModelInfo, type AgentMcpServerLink, type AgentSkillLink } from "../api";
+import { AdminAgent, AdminMcpServer, AdminSkill, AdminTool, ConversationModelInfo, type AgentMcpServerLink, type AgentSkillLink, type AgentToolLink } from "../api";
 import { Box } from "@mui/material";
 import { Loader2, Save, X, Pencil, Sparkles, Plug, Power, PowerOff, Lock } from "lucide-react";
 import { admin } from "../api";
@@ -14,6 +14,7 @@ export default function AgentCard({
     currentUserRole,
     allModels,
     allSkills,
+    allTools,
     allMcpServers,
     onSaved,
   }: {
@@ -22,6 +23,7 @@ export default function AgentCard({
     currentUserRole: string;
     allModels: ConversationModelInfo[];
     allSkills: AdminSkill[];
+    allTools: AdminTool[];
     allMcpServers: AdminMcpServer[];
     onSaved: () => void;
   }) {
@@ -49,6 +51,9 @@ export default function AgentCard({
     const [skLinks, setSkLinks] = useState<AgentSkillLink[]>(
       agent.skillLinks ?? [],
     );
+    const [tlLinks, setTlLinks] = useState<AgentToolLink[]>(
+      agent.toolLinks ?? [],
+    );
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
@@ -59,6 +64,7 @@ export default function AgentCard({
       setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
       setMcpLinks(agent.mcpServerLinks ?? []);
       setSkLinks(agent.skillLinks ?? []);
+      setTlLinks(agent.toolLinks ?? []);
     }, [agent, allModels]);
 
     function isSkillLocked(id: number) {
@@ -110,6 +116,22 @@ export default function AgentCard({
       setSkLinks((prev) => prev.filter((l) => l.skillId !== id));
     }
 
+    // ── Tool link helpers ──────────────────────────────────────────────
+    function getToolLinkState(id: number): "unassigned" | "active" | "inactive" {
+      const link = tlLinks.find((l) => l.toolId === id);
+      if (!link) return "unassigned";
+      return link.active ? "active" : "inactive";
+    }
+
+    function cycleTool(id: number) {
+      setTlLinks((prev) => {
+        const existing = prev.find((l) => l.toolId === id);
+        if (!existing) return [...prev, { toolId: id, active: true }];
+        if (existing.active) return prev.map((l) => l.toolId === id ? { ...l, active: false } : l);
+        return prev.filter((l) => l.toolId !== id);
+      });
+    }
+
     async function save() {
       let characteristics: Record<string, unknown> | null = null;
       const trimmed = characteristicsJson.trim();
@@ -137,6 +159,7 @@ export default function AgentCard({
           modelId: selectedModel?.id ?? null,
           mcpServerLinks: mcpLinks,
           skillLinks: skLinks,
+          toolLinks: tlLinks,
         });
         setEditing(false);
         onSaved();
@@ -158,6 +181,10 @@ export default function AgentCard({
       ...link,
       server: allMcpServers.find((s) => s.id === link.mcpServerId),
     })).filter((l) => l.server);
+    const assignedToolLinks = (agent.toolLinks ?? []).map((link) => ({
+      ...link,
+      tool: allTools.find((t) => t.id === link.toolId),
+    })).filter((l) => l.tool);
 
     return (
       <Box
@@ -356,6 +383,44 @@ export default function AgentCard({
               )}
             </div>
 
+            {/* Tools */}
+            {allTools.length > 0 && (
+            <div>
+              <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                <Plug className="h-3 w-3" />
+                Tools
+              </label>
+              <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                {allTools.map((t) => {
+                  const st = getToolLinkState(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => cycleTool(t.id)}
+                      title={`${t.description ?? t.slug} — click to cycle: active → inactive → unassigned`}
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
+                        st === "active"
+                          ? "bg-violet-100 text-violet-800 ring-1 ring-violet-200 shadow-sm"
+                          : st === "inactive"
+                            ? "bg-gray-100 text-gray-400 ring-1 ring-gray-200 line-through"
+                            : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-100"
+                      }`}
+                    >
+                      {st === "active" ? <Power className="h-3 w-3" /> : st === "inactive" ? <PowerOff className="h-3 w-3" /> : <Plug className="h-3 w-3 opacity-40" />}
+                      {t.name}
+                    </button>
+                  );
+                })}
+              </div>
+              {tlLinks.length > 0 && (
+                <p className="mt-1 text-[10px] text-gray-400">
+                  {tlLinks.filter((l) => l.active).length} active, {tlLinks.filter((l) => !l.active).length} inactive
+                </p>
+              )}
+            </div>
+            )}
+
             {/* Model */}
             <div>
               <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -474,6 +539,24 @@ export default function AgentCard({
                   >
                     {l.active ? <Power className="h-2.5 w-2.5" /> : <PowerOff className="h-2.5 w-2.5" />}
                     {l.server!.name}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {assignedToolLinks.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {assignedToolLinks.map((l) => (
+                  <span
+                    key={l.toolId}
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${
+                      l.active
+                        ? "bg-violet-50 text-violet-600 ring-violet-100"
+                        : "bg-gray-50 text-gray-400 ring-gray-200 line-through decoration-gray-400/50"
+                    }`}
+                  >
+                    {l.active ? <Power className="h-2.5 w-2.5" /> : <PowerOff className="h-2.5 w-2.5" />}
+                    {l.tool!.name}
                   </span>
                 ))}
               </div>

@@ -8,7 +8,9 @@ import {
   User,
   AgentAvailableMcpServer,
   AgentAvailableSkill,
+  AgentAvailableTool,
   Skill,
+  Tool,
   LLMModel,
   Vendor,
   sequelize,
@@ -75,6 +77,19 @@ export class AgentsService {
       }
     }
 
+    // Fetch ALL tool assignments (including inactive) for all agents
+    const toolLinks = await AgentAvailableTool.findAll({
+      attributes: ["agentId", "toolId", "active"],
+    });
+    const toolIdsByAgent: Record<string, number[]> = {};
+    const toolLinksByAgent: Record<string, { toolId: number; active: boolean }[]> = {};
+    for (const link of toolLinks) {
+      (toolLinksByAgent[link.agentId] ??= []).push({ toolId: link.toolId, active: link.active });
+      if (link.active) {
+        (toolIdsByAgent[link.agentId] ??= []).push(link.toolId);
+      }
+    }
+
     return agents.map((a) => ({
       ...a.toJSON(),
       groupCount: groupCountByAgent[a.id] ?? 0,
@@ -82,8 +97,10 @@ export class AgentsService {
       isLocked: a.isLocked,
       mcpServerIds: mcpServerIdsByAgent[a.id] ?? [],
       skillIds: skillIdsByAgent[a.id] ?? [],
+      toolIds: toolIdsByAgent[a.id] ?? [],
       mcpServerLinks: mcpLinksByAgent[a.id] ?? [],
       skillLinks: skillLinksByAgent[a.id] ?? [],
+      toolLinks: toolLinksByAgent[a.id] ?? [],
     }));
   }
 
@@ -97,6 +114,7 @@ export class AgentsService {
     skillIds?: number[],
     agentName?: string | null,
     agentType?: "primary" | "system" | "external",
+    toolIds?: number[],
   ) {
     const normalizedAgentName =
       agentName !== undefined && agentName !== null && String(agentName).trim() !== ""
@@ -142,6 +160,28 @@ export class AgentsService {
           active: true,
         })),
       );
+    }
+
+    // Link tools to the agent. If none specified, assign ALL tools by default.
+    if (toolIds && toolIds.length > 0) {
+      await AgentAvailableTool.bulkCreate(
+        toolIds.map((toolId) => ({
+          agentId: agent.id,
+          toolId,
+          active: true,
+        })),
+      );
+    } else {
+      const allTools = await Tool.findAll({ attributes: ["id"] });
+      if (allTools.length > 0) {
+        await AgentAvailableTool.bulkCreate(
+          allTools.map((t) => ({
+            agentId: agent.id,
+            toolId: t.id,
+            active: true,
+          })),
+        );
+      }
     }
 
     // Eagerly create a SingleChat for every user — primary agents only
@@ -203,6 +243,8 @@ export class AgentsService {
       modelId?: string | null;
       skillIds?: number[];
       skillLinks?: { skillId: number; active: boolean }[];
+      toolIds?: number[];
+      toolLinks?: { toolId: number; active: boolean }[];
     },
   ) {
     const agent = await Agent.findByPk(agentId);
@@ -328,6 +370,31 @@ export class AgentsService {
           finalIds.map((skillId) => ({
             agentId: agent.id,
             skillId,
+            active: true,
+          })),
+        );
+      }
+    }
+
+    // Sync tool assignments if provided (new format takes precedence)
+    if (data.toolLinks !== undefined) {
+      await AgentAvailableTool.destroy({ where: { agentId: agent.id } });
+      if (data.toolLinks.length > 0) {
+        await AgentAvailableTool.bulkCreate(
+          data.toolLinks.map((link) => ({
+            agentId: agent.id,
+            toolId: link.toolId,
+            active: link.active,
+          })),
+        );
+      }
+    } else if (data.toolIds !== undefined) {
+      await AgentAvailableTool.destroy({ where: { agentId: agent.id } });
+      if (data.toolIds.length > 0) {
+        await AgentAvailableTool.bulkCreate(
+          data.toolIds.map((toolId) => ({
+            agentId: agent.id,
+            toolId,
             active: true,
           })),
         );
