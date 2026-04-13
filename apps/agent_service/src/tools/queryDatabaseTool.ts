@@ -27,7 +27,7 @@ function getExternalDb(): Sequelize {
     port: Number(port),
     dialect: "postgres",
     logging: false,
-    pool: { max: 3, min: 0, acquire: 15_000, idle: 10_000 },
+    pool: { max: 3, min: 0, acquire: 50_000, idle: 10_000 },
   });
 
   return externalDb;
