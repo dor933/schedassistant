@@ -43,8 +43,10 @@ const MAX_ROWS = 200;
 function validateSelectOnly(sql: string): string | null {
   const trimmed = sql.trim().replace(/;+$/, "").trim();
 
-  if (!trimmed.toUpperCase().startsWith("SELECT")) {
-    return "Only SELECT queries are allowed.";
+  const upper = trimmed.toUpperCase();
+  const ALLOWED_PREFIXES = ["SELECT", "WITH", "EXPLAIN", "SHOW", "TABLE", "VALUES"];
+  if (!ALLOWED_PREFIXES.some((p) => upper.startsWith(p))) {
+    return "Only read-only queries are allowed (SELECT, WITH, EXPLAIN, SHOW, TABLE, VALUES).";
   }
 
   if (FORBIDDEN_PATTERN.test(trimmed)) {
@@ -104,9 +106,10 @@ export function QueryDatabaseTool() {
     {
       name: "query_database",
       description:
-        "Run a read-only SQL SELECT query against the company's PostgreSQL database. " +
+        "Run a read-only SQL query against the company's PostgreSQL database. " +
         "Use this to look up data, answer questions about business data, or investigate records. " +
-        "Only SELECT statements are allowed — no INSERT, UPDATE, DELETE, or DDL. " +
+        "Allowed statements: SELECT, WITH (CTEs), EXPLAIN, SHOW, TABLE, VALUES. " +
+        "No INSERT, UPDATE, DELETE, or DDL. " +
         "Results are capped at 200 rows. " +
         "Load the database schema skill first to understand the available tables and columns.",
       schema: z.object({
@@ -114,8 +117,9 @@ export function QueryDatabaseTool() {
           .string()
           .min(1)
           .describe(
-            "A SQL SELECT query to execute. Must start with SELECT. " +
-            "Use proper PostgreSQL syntax. You can use JOINs, aggregations, subqueries, CTEs, etc.",
+            "A read-only SQL query to execute. " +
+            "Supports SELECT, WITH ... AS (CTEs), EXPLAIN / EXPLAIN ANALYZE, SHOW, TABLE, and VALUES. " +
+            "Use proper PostgreSQL syntax. You can use JOINs, aggregations, subqueries, CTEs, window functions, etc.",
           ),
       }),
     },
@@ -127,9 +131,13 @@ export function QueryDatabaseTool() {
 /**
  * If the query doesn't already have a LIMIT, wrap it in a subquery with one.
  * This prevents runaway result sets.
+ * Only applies to SELECT / WITH / TABLE / VALUES — EXPLAIN and SHOW are
+ * passed through unchanged (they don't return unbounded row sets).
  */
 function applyRowLimit(sql: string, limit: number): string {
   const upper = sql.toUpperCase().replace(/\s+/g, " ").trim();
+  // EXPLAIN / SHOW don't return data rows — skip wrapping
+  if (upper.startsWith("EXPLAIN") || upper.startsWith("SHOW")) return sql;
   if (/\bLIMIT\s+\d+/i.test(upper)) return sql;
   return `SELECT * FROM (${sql.trim().replace(/;+$/, "")}) AS _limited LIMIT ${limit}`;
 }
