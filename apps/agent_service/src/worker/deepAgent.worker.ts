@@ -17,6 +17,11 @@ import { agentChatQueue } from "../queues/agentChat.bull";
 import { getMcpToolsByServerIds } from "../mcpClient";
 import { systemAgentSkillTools } from "../tools/skillsTools";
 import { workspaceTools } from "../tools/workspaceTools";
+import { loadActiveToolSlugs } from "../tools/resolveAgentTools";
+import { QueryDatabaseTool } from "../tools/queryDatabaseTool";
+import { ConsultAgentTool } from "../tools/consultAgentTool";
+import { ListSystemAgentsTool } from "../tools/listSystemAgentsTool";
+import { ListAgentsTool } from "../tools/listAgentsTool";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogle } from "@langchain/google";
@@ -257,7 +262,18 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
           const skillTools = systemAgentSkillTools(executorAgent.id);
           const wsTools = workspaceTools(callerAgentId);
-          const allTools = [...mcpTools, ...skillTools, ...wsTools];
+
+          // Load configurable tools gated by agent_available_tools (same as callModel)
+          const activeSlugs = await loadActiveToolSlugs(executorAgent.id);
+          const has = (slug: string) => activeSlugs === null || activeSlugs.has(slug);
+          const configurableTools: any[] = [];
+          if (has("query_database")) configurableTools.push(QueryDatabaseTool());
+          if (has("consult_agent"))
+            configurableTools.push(ConsultAgentTool(executorAgent.id, userId, groupId ?? null, singleChatId ?? null));
+          if (has("list_agents")) configurableTools.push(ListAgentsTool(executorAgent.id));
+          if (has("list_system_agents")) configurableTools.push(ListSystemAgentsTool());
+
+          const allTools = [...mcpTools, ...skillTools, ...wsTools, ...configurableTools];
 
           logger.info("DeepAgent: creating agent", {
             delegationId,
