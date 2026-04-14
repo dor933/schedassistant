@@ -1,6 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { Agent, AgentAvailableMcpServer, McpServer } from "@scheduling-agent/database";
+import { Agent, AgentAvailableMcpServer, McpServer, LLMModel } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 
 /**
@@ -31,7 +31,7 @@ export function ListSystemAgentsTool() {
 
       const agents = await Agent.findAll({
         where,
-        attributes: ["id", "slug", "agentName", "description", "modelSlug"],
+        attributes: ["id", "slug", "agentName", "description", "modelId"],
         order: [["agentName", "ASC"]],
       });
 
@@ -66,10 +66,27 @@ export function ListSystemAgentsTool() {
         serversByAgent.set(link.agentId, list);
       }
 
+      // Resolve model names via modelId FK -> models table
+      const modelIdsToResolve = agents
+        .filter((a) => a.modelId)
+        .map((a) => a.modelId as string);
+      const uniqueModelIds = [...new Set(modelIdsToResolve)];
+      const modelSlugById = new Map<string, string>();
+      if (uniqueModelIds.length > 0) {
+        const models = await LLMModel.findAll({
+          where: { id: { [Op.in]: uniqueModelIds } },
+          attributes: ["id", "slug"],
+        });
+        for (const m of models) {
+          modelSlugById.set(m.id, m.slug);
+        }
+      }
+
       for (const a of agents) {
+        const modelDisplay = modelSlugById.get(a.modelId ?? "") ?? "unknown";
         lines.push(`**${a.agentName}**`);
         lines.push(`  - ID: \`${a.id}\``);
-        lines.push(`  - Model: ${a.modelSlug}`);
+        lines.push(`  - Model: ${modelDisplay}`);
         if (a.description) {
           lines.push(`  - Description: ${a.description}`);
         }
