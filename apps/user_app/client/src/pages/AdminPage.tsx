@@ -1460,7 +1460,7 @@ export default function AdminPage() {
             </div>
 
             {/* System Agents */}
-            <div>
+            <div className="mb-4">
               <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
                 <Cpu className="h-3.5 w-3.5 text-emerald-500" />
                 System Agents
