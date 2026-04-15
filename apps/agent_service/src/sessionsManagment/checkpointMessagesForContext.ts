@@ -6,7 +6,7 @@ import {
   isToolMessage,
 } from "@langchain/core/messages";
 
-const MAX_MESSAGES = 50;
+const MAX_MESSAGES = 30;
 const MAX_CHARS_PER_MESSAGE = 4000;
 
 export type CheckpointMessagesForContext = {
@@ -51,8 +51,8 @@ export function formatCheckpointMessagesForSystemPrompt(
   const list = messages ?? [];
   if (list.length === 0) {
     const emptyBody =
-      "## LangGraph thread (checkpoint state)\n\n" +
-      "*(No messages in the LangGraph checkpoint for this thread yet — this may be the first turn.)*\n\n" +
+      "## Your shared thread (all conversations)\n\n" +
+      "*(No messages in your shared thread yet — this may be the first turn.)*\n\n" +
       "When turns exist, they are also supplied as **chat messages after this system message**.\n";
     return { body: emptyBody, messageCount: 0 };
   }
@@ -62,21 +62,20 @@ export function formatCheckpointMessagesForSystemPrompt(
 
   const sharedPoolNote =
     opts.singleChatId && !opts.groupId
-      ? "For **pool agents**, one LangGraph thread is **shared** across all users; this snapshot may include **other users’** turns (see sender labels). "
+      ? "It may include turns from **different users and chats** — not just the current one (see sender labels). "
       : opts.groupId
-        ? "This is the **group** thread checkpoint; human messages may name different senders. "
+        ? "This is the **group** thread; human messages may come from different senders. "
         : "";
 
-  const dualChannel =
-    "**Important:** The same checkpoint messages are also passed to you as **normal chat messages immediately after this system message** (HumanMessage / AIMessage / ToolMessage). " +
-    "Use **both** this section and that history consistently; they describe the same underlying thread state.\n\n";
-
   const intro =
-    "## LangGraph thread (checkpoint state)\n\n" +
-    "This block is a **snapshot of messages stored in the LangGraph checkpoint** for this `thread_id`. " +
+    "## Your shared thread (all conversations)\n\n" +
+    "This is your running thread state, **shared across all conversations** you serve. " +
     sharedPoolNote +
-    "After summarization or thread rotation, this window may be shorter than the full past; durable history for **this** chat (or group) is in **Recent messages (durable conversation log)** below.\n\n" +
-    dualChannel;
+    "Use this to stay aware of your recent activity and decisions across all your work.\n\n" +
+    "After summarization or thread rotation, this window may be shorter than your full history; " +
+    "the complete transcript for **this specific conversation** is in **\"This conversation\"** below.\n\n" +
+    "**Note:** These messages are also passed as **chat messages after this system message** — " +
+    "use both this section and that history consistently.\n\n";
 
   const lines: string[] = [];
   for (const m of slice) {

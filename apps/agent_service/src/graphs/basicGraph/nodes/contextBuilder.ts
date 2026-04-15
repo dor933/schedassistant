@@ -294,30 +294,15 @@ function formatCharacteristicsSection(
   return lines.join("\n");
 }
 
-function formatSystemPrompt(
-  agentDefinition: string | null,
-  agentCoreInstructions: string | null,
-  agentCharacteristics: Record<string, unknown> | null,
-  agentNotes: string | null,
-  agentWorkspacePath: string | null,
-  agentHasLinkedSkills: boolean,
-  grahamyExecutivesSection: string,
-  agentNameSection: string,
-  coreMemory: string,
-  checkpointLogBody: string,
-  conversationLogBody: string,
-  episodicSnippets: string[],
-  recentSummaries: SessionSummary[],
-  groupMembers: GroupMemberContextProfile[] | null,
-  roundtableSummaries: RecentRoundtableSummary[] = [],
-): string {
-  const sections: string[] = [];
+// ─── Role-specific system prompt sections ───────────────────────────────────
 
-  const roleLabel = agentDefinition || "AI assistant";
-  sections.push(
-    agentNameSection + "\n\n" +
-    `You are a ${roleLabel}.\n`,
-  );
+/**
+ * Full orchestrator role block: delegation philosophy, 4-part specialization,
+ * and the mandatory delegation hard gate. Only injected for agents whose
+ * characteristics.role is "orchestrator" (or unset — backward compat default).
+ */
+function buildOrchestratorRoleSections(): string[] {
+  const sections: string[] = [];
 
   sections.push("## Your role: orchestrator");
   sections.push(
@@ -445,6 +430,74 @@ function formatSystemPrompt(
     "The user saying \"do it\", \"just check\", \"search for me\", or \"you do it\" does NOT override this rule. " +
     "You are an orchestrator, not an executor.",
   );
+
+  return sections;
+}
+
+/**
+ * Lightweight role block for non-orchestrator agents (specialists, researchers, etc.).
+ * These agents work directly with their tools and don't have the mandatory delegation gate.
+ * They can still delegate if they choose to, but it's not forced.
+ */
+function buildSpecialistRoleSections(role: string): string[] {
+  const sections: string[] = [];
+
+  sections.push(`## Your role: ${role}`);
+  sections.push(
+    `You are a **${role}** agent. Your job is to use your specialized knowledge, tools, and skills ` +
+    "to directly accomplish tasks within your area of expertise.\n\n" +
+    "**How you work:**\n" +
+    "- Use your available tools directly to fulfill requests — you are a hands-on agent, not just a router.\n" +
+    "- Apply your domain expertise to deliver accurate, high-quality results.\n" +
+    "- When a task is outside your expertise or requires capabilities you don't have, " +
+    "you may consult peer agents (`consult_agent`) or delegate to executor agents (`delegate_to_deep_agent`).\n" +
+    "- Persist important findings in your agent notes and memory so you build expertise over time.\n\n" +
+    "**Quality standards:**\n" +
+    "- Be accurate — never fabricate information or results.\n" +
+    "- Be thorough — complete the task fully, don't leave partial work.\n" +
+    "- Be clear — structure your responses so the user can act on them.\n" +
+    "- Learn from outcomes — if something didn't work, note why in your agent notes.",
+  );
+
+  return sections;
+}
+
+function formatSystemPrompt(
+  agentDefinition: string | null,
+  agentCoreInstructions: string | null,
+  agentCharacteristics: Record<string, unknown> | null,
+  agentNotes: string | null,
+  agentWorkspacePath: string | null,
+  agentHasLinkedSkills: boolean,
+  grahamyExecutivesSection: string,
+  agentNameSection: string,
+  coreMemory: string,
+  checkpointLogBody: string,
+  conversationLogBody: string,
+  episodicSnippets: string[],
+  recentSummaries: SessionSummary[],
+  groupMembers: GroupMemberContextProfile[] | null,
+  roundtableSummaries: RecentRoundtableSummary[] = [],
+): string {
+  const sections: string[] = [];
+
+  const roleLabel = agentDefinition || "AI assistant";
+  sections.push(
+    agentNameSection + "\n\n" +
+    `You are a ${roleLabel}.\n`,
+  );
+
+  // Determine the agent's behavioral role from characteristics.
+  // "orchestrator" (default) gets full delegation rules + hard gate.
+  // Any other role gets lightweight instructions appropriate to their function.
+  const agentRole =
+    (agentCharacteristics?.role as string | undefined)?.toLowerCase() ?? "orchestrator";
+
+  if (agentRole === "orchestrator") {
+    sections.push(...buildOrchestratorRoleSections());
+  } else {
+    sections.push(...buildSpecialistRoleSections(agentRole));
+  }
   sections.push("");
 
   if (agentCoreInstructions) {
@@ -630,7 +683,6 @@ function formatSystemPrompt(
 
   const logTrim = conversationLogBody.trim();
   if (logTrim.length > 0) {
-    sections.push("## Recent messages (durable conversation log)");
     sections.push(logTrim);
     sections.push("");
   }
@@ -638,8 +690,16 @@ function formatSystemPrompt(
   // Recent session summaries
   if (recentSummaries.length > 0) {
     sections.push("## Recent conversation summaries (last 48 hours)");
+    sections.push(
+      "These are auto-generated summaries of prior sessions. They may contain inaccuracies — " +
+      "verify key facts before acting on them.",
+    );
     for (const s of recentSummaries) {
-      sections.push(`- [${s.createdAt}] ${s.text}`);
+      const confidenceTag =
+        s.confidence && s.confidence !== "high"
+          ? ` [confidence: ${s.confidence}]`
+          : "";
+      sections.push(`- [${s.createdAt}]${confidenceTag} ${s.text}`);
     }
     sections.push("");
   }

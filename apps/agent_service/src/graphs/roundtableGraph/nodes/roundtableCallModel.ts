@@ -207,7 +207,7 @@ export async function roundtableCallModelNode(
   const mcpTools = agentId ? await getMcpTools(agentId) : [];
 
   const activeSlugs = await loadActiveToolSlugs(agentId);
-  const has = (slug: string) => activeSlugs === null || activeSlugs.has(slug);
+  const has = (slug: string) => activeSlugs.has(slug);
 
   // Core tools — always available
   const tools: StructuredToolInterface[] = [

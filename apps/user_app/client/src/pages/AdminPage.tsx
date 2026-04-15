@@ -1385,7 +1385,7 @@ export default function AdminPage() {
                 <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                   <Plug className="h-3 w-3" />
                   Tools
-                  <span className="font-normal normal-case text-gray-400">(all enabled by default if none selected)</span>
+                  <span className="font-normal normal-case text-gray-400">(only basic tools if none selected — select explicitly for delegation/query access)</span>
                 </label>
                 <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
                   {tools.map((t) => {

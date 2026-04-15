@@ -40,6 +40,47 @@ const DEEP_AGENT_RECURSION_LIMIT = Number(
   process.env.DEEP_AGENT_RECURSION_LIMIT ?? 80,
 );
 
+/** Max retries for transient failures (rate limits, network errors). */
+const DEEP_AGENT_MAX_RETRIES = Number(
+  process.env.DEEP_AGENT_MAX_RETRIES ?? 2,
+);
+
+/** Max characters for a deep agent result injected into caller context. */
+const MAX_RESULT_CHARS = Number(
+  process.env.DEEP_AGENT_MAX_RESULT_CHARS ?? 15_000,
+);
+
+/**
+ * Determines if an error is transient and worth retrying (rate limits, network).
+ */
+function isTransientError(err: unknown): boolean {
+  if (err instanceof DeepAgentTimeoutError) return false; // timeouts are not retried
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /rate.?limit/i.test(msg) ||
+    /429/i.test(msg) ||
+    /503/i.test(msg) ||
+    /ECONNREFUSED/i.test(msg) ||
+    /ETIMEDOUT/i.test(msg) ||
+    /ECONNRESET/i.test(msg) ||
+    /overloaded/i.test(msg)
+  );
+}
+
+/**
+ * Truncates a deep agent result if it exceeds MAX_RESULT_CHARS so the caller
+ * agent's context window isn't blown by a single delegation result.
+ */
+function truncateResult(text: string): string {
+  if (text.length <= MAX_RESULT_CHARS) return text;
+  const truncated = text.slice(0, MAX_RESULT_CHARS);
+  return (
+    truncated +
+    `\n\n[RESULT TRUNCATED — original was ${text.length.toLocaleString()} chars, showing first ${MAX_RESULT_CHARS.toLocaleString()}. ` +
+    `If you need the full result, ask the user to re-run with a narrower scope.]`
+  );
+}
+
 class DeepAgentTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`Deep agent execution timed out after ${Math.round(timeoutMs / 1000)} seconds`);
@@ -265,7 +306,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
           // Load configurable tools gated by agent_available_tools (same as callModel)
           const activeSlugs = await loadActiveToolSlugs(executorAgent.id);
-          const has = (slug: string) => activeSlugs === null || activeSlugs.has(slug);
+          const has = (slug: string) => activeSlugs.has(slug);
           const configurableTools: any[] = [];
           if (has("query_database")) configurableTools.push(QueryDatabaseTool());
           if (has("consult_agent"))
@@ -402,13 +443,14 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         // In syncMode the caller is blocking via waitUntilFinished — skip the callback.
         if (!job.data.syncMode) {
           const label = executorAgent.agentName || executorAgent.definition || executorAgentId;
+          const callbackResult = truncateResult(resultText);
           await agentChatQueue.add("delegation_result", {
             userId,
             message:
               `[Executor Agent Result — Delegation ${delegationId}]\n` +
               `Executor: ${label} (${executorAgentId})\n` +
               `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
-              `## Result\n${resultText}`,
+              `## Result\n${callbackResult}`,
             requestId: `delegation-${delegationId}`,
             groupId: groupId ?? null,
             singleChatId: singleChatId ?? null,
@@ -430,6 +472,22 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           err?.message?.includes("recursion limit") ||
           err?.message?.includes("Recursion limit");
 
+        // Retry transient errors (rate limits, network) with exponential backoff
+        const attemptsMade = (job.attemptsMade ?? 0) + 1;
+        if (isTransientError(err) && attemptsMade <= DEEP_AGENT_MAX_RETRIES) {
+          const backoffMs = Math.min(1000 * Math.pow(2, attemptsMade), 30_000);
+          logger.warn("DeepAgent: transient error, will retry", {
+            delegationId,
+            executorAgentId,
+            attempt: attemptsMade,
+            maxRetries: DEEP_AGENT_MAX_RETRIES,
+            backoffMs,
+            error: err?.message,
+          });
+          // Re-throw to let BullMQ handle the retry with configured backoff
+          throw err;
+        }
+
         let failureReason: string;
         if (isTimeout) {
           failureReason =
@@ -449,6 +507,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           error: failureReason,
           isTimeout,
           isRecursionLimit,
+          attempt: attemptsMade,
         });
 
         // Mark as failed
@@ -493,6 +552,12 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
       lockDuration: Number(
         process.env.DEEP_AGENT_LOCK_DURATION_MS ?? 30 * 60 * 1000, // 30 min default
       ),
+      settings: {
+        backoffStrategy: (attemptsMade: number) => {
+          // Exponential backoff: 2s, 4s, 8s, ... capped at 30s
+          return Math.min(1000 * Math.pow(2, attemptsMade), 30_000);
+        },
+      },
     },
   );
 

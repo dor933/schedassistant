@@ -40,6 +40,36 @@ import getMcpTools from "../../../mcpClient";
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 10;
 
+/** Max characters for a single tool result before truncation. */
+const MAX_TOOL_RESULT_CHARS = 10_000;
+
+/**
+ * Sanitizes a tool result before passing it back to the LLM:
+ * - Truncates excessively long results to prevent context bloat.
+ * - Detects error-shaped responses and prefixes them clearly.
+ */
+function sanitizeToolResult(content: string, toolName: string | undefined): string {
+  // Detect error-shaped responses that the LLM might hallucinate from
+  const looksLikeError =
+    /^(Error:|ERROR:|HTTP\s+[45]\d\d|status\s*:\s*[45]\d\d|ECONNREFUSED|ETIMEDOUT|ENOTFOUND)/i.test(
+      content.trim(),
+    );
+  if (looksLikeError && !content.startsWith("[TOOL ERROR]")) {
+    content = `[TOOL ERROR] ${content}`;
+  }
+
+  // Truncate excessively long results
+  if (content.length > MAX_TOOL_RESULT_CHARS) {
+    const truncated = content.slice(0, MAX_TOOL_RESULT_CHARS);
+    content =
+      truncated +
+      `\n\n[TRUNCATED — result was ${content.length.toLocaleString()} chars, showing first ${MAX_TOOL_RESULT_CHARS.toLocaleString()}. ` +
+      `Tool: ${toolName ?? "unknown"}. If you need more detail, narrow your query.]`;
+  }
+
+  return content;
+}
+
 
 
 /**
@@ -255,7 +285,7 @@ export async function callModelNode(
   // Load configurable tool slugs from agent_available_tools.
   // null = no assignments exist yet → include all for backward compatibility.
   const activeSlugs = await loadActiveToolSlugs(agentId);
-  const has = (slug: string) => activeSlugs === null || activeSlugs.has(slug);
+  const has = (slug: string) => activeSlugs.has(slug);
 
   // Core tools — always available regardless of DB assignments
   const tools: StructuredToolInterface[] = [
@@ -433,9 +463,13 @@ export async function callModelNode(
               toolCallId: tc.id,
               error: rawVendorErrorText(toolErr),
             });
-            content = `Error executing tool: ${rawVendorErrorText(toolErr)}`;
+            content = `[TOOL ERROR] Error executing tool: ${rawVendorErrorText(toolErr)}`;
           }
         }
+
+        // Sanitize: truncate long results, tag error-shaped responses
+        content = sanitizeToolResult(content, tc.name);
+
         toolMsgs.push(
           new ToolMessage({
             content,

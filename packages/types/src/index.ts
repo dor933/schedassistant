@@ -172,6 +172,8 @@ export interface SessionSummary {
   createdAt: string;
   messageCount?: number;
   tokenCount?: number;
+  /** How confident the summarizer was that key facts are accurately captured. */
+  confidence?: "high" | "medium" | "low";
 }
 
 /** Attributes exposed by the `Thread` Sequelize model (`threads` table). */

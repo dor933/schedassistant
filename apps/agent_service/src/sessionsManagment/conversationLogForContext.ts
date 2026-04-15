@@ -1,6 +1,6 @@
 import { ConversationMessage } from "@scheduling-agent/database";
 
-const RECENT_MESSAGE_LIMIT = 50;
+const RECENT_MESSAGE_LIMIT = 30;
 
 export type ConversationLogForContext = {
   /** Non-empty when there are rows to show (intro + formatted lines). */
@@ -38,16 +38,20 @@ export async function loadRecentConversationMessagesForContext(
   }
 
   const scopeExplanation = singleChatId
-    ? "This is the **durable database transcript** for **this** one-on-one chat only (`conversation_messages` for this `single_chat_id`). " +
-      "It includes every persisted turn for **this user’s chat**, regardless of LangGraph thread rotation. " +
-      "It may list different or more messages than the **LangGraph checkpoint** section above: that section reflects **shared thread state** (possibly including other users on a pool agent), while **this** block is **only** this conversation scope."
-    : "This is the **durable database transcript** for **this group** (`conversation_messages` for this `group_id`). " +
-      "It is scoped to this group only. The **LangGraph checkpoint** section above reflects thread state, which may differ in length or ordering after summarization.";
+    ? "## This conversation (durable transcript)\n\n" +
+      "This is the complete message history for **this specific chat only** — scoped to this user. " +
+      "Unlike the shared thread above (which spans all your conversations), this block is **only** what happened in this conversation. " +
+      "**This is the primary context you are responding to right now.**\n\n" +
+      "If messages appear in both sections, that’s expected — the shared thread captured them as part of your overall activity, " +
+      "and this section shows them in their conversation-specific context."
+    : "## This conversation (durable transcript)\n\n" +
+      "This is the complete message history for **this group** — scoped to this group only. " +
+      "Unlike the shared thread above (which spans all your conversations), this block is **only** this group’s discussion. " +
+      "**This is the primary context you are responding to right now.**\n\n" +
+      "If messages appear in both sections, that’s expected — the shared thread captured them as part of your overall activity, " +
+      "and this section shows them in their conversation-specific context.";
 
-  const distinction =
-    " This block is also **different from** **session summaries** and **episodic memory** elsewhere in this prompt: those are agent-level or cross-thread; this block is the authoritative per-conversation log.";
-
-  const intro = `${scopeExplanation}${distinction}\n`;
+  const intro = `${scopeExplanation}\n`;
 
   const lines = chronological.map((r) => {
     const ts =

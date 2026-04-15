@@ -161,7 +161,7 @@ export async function epicCallModelNode(
   const mcpTools = await getMcpTools(agentId);
 
   const activeSlugs = await loadActiveToolSlugs(agentId);
-  const has = (slug: string) => activeSlugs === null || activeSlugs.has(slug);
+  const has = (slug: string) => activeSlugs.has(slug);
 
   // Core + epic-specific tools (always available for epic agents)
   const tools: StructuredToolInterface[] = [

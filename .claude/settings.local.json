@@ -52,5 +52,9 @@
       "Bash(echo \"EXIT=$?\")",
       "Bash(find:*)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "claude-flow"
+  ],
+  "enableAllProjectMcpServers": true
 }

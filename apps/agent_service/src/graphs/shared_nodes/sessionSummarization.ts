@@ -24,6 +24,14 @@ const sessionSummarizationSchema = z.object({
     .describe(
       "A free-form text summary capturing the overall gist of the conversation.",
     ),
+  confidence: z
+    .enum(["high", "medium", "low"])
+    .describe(
+      "How confident you are that this summary accurately captures the key facts and decisions. " +
+        "'high' = all key facts were explicitly stated and unambiguous. " +
+        "'medium' = some details required inference or the conversation was partially ambiguous. " +
+        "'low' = significant portions were unclear, contradictory, or required guesswork.",
+    ),
   chunks: z
     .array(z.string())
     .describe(
@@ -186,6 +194,7 @@ export async function sessionSummarizationNode(
           threadId,
           summaryLen: result.summary.length,
           chunkCount: result.chunks.length,
+          confidence: result.confidence,
         });
 
         const now = new Date();
@@ -193,6 +202,7 @@ export async function sessionSummarizationNode(
           text: result.summary,
           createdAt: now.toISOString(),
           messageCount: messages.length,
+          confidence: result.confidence,
         };
         await Thread.update(
           {
