@@ -635,6 +635,16 @@ export default function ChatPage() {
       }
     };
 
+    // On (re)connect, clear stale typing indicators then re-populate from
+    // actually-active jobs.  This prevents "Agent is typing..." from being
+    // stuck forever when the server crashed while processing a job.
+    const onConnect = () => {
+      setTypingConversations(new Set());
+      setEpicTypingConversations(new Set());
+      emitSyncActiveTyping();
+    };
+
+    socket.on("connect", onConnect);
     socket.on("thread:typing", onTyping);
     socket.on("chat:reply", onReply);
     socket.on("user:typing", onUserTyping);
@@ -644,6 +654,7 @@ export default function ChatPage() {
     // Restore sidebar "typing..." after navigating back from Admin (same socket, no reconnect).
     emitSyncActiveTyping();
     return () => {
+      socket.off("connect", onConnect);
       socket.off("thread:typing", onTyping);
       socket.off("chat:reply", onReply);
       socket.off("user:typing", onUserTyping);
@@ -752,16 +763,8 @@ export default function ChatPage() {
       return;
     }
 
-    const replyPromise = new Promise<ChatReplyPayload>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
-        pendingReplies.current.delete(requestId);
-        reject(new Error("Timed out waiting for assistant reply."));
-      }, 20 * 60 * 1000);
-
-      pendingReplies.current.set(requestId, (p) => {
-        window.clearTimeout(timeout);
-        resolve(p);
-      });
+    const replyPromise = new Promise<ChatReplyPayload>((resolve) => {
+      pendingReplies.current.set(requestId, resolve);
     });
 
     try {

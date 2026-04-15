@@ -8,7 +8,7 @@ import {
 } from "../queues/agentChat.bull";
 import { getRedisConfig } from "../redisClient";
 import { executeChatTurn, storeMessageOnly } from "../chat/executeChatTurn";
-import { createThreadLockRedis, withThreadLock } from "./threadLock";
+import { createThreadLockRedis, withThreadLock, withThreadLockTimeout, LockTimeoutError } from "./threadLock";
 import { emitAgentReply, emitAgentTyping } from "../socket";
 import { ensureCanonicalThreadId } from "../sessionsManagment/canonicalThread";
 import { writeConversationMessage } from "../sessionsManagment/conversationMessageWriter";
@@ -22,6 +22,11 @@ import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
 const lockRedis = createThreadLockRedis(redisConfig);
+
+/** How long a user-facing message waits for the thread lock before bouncing. */
+const USER_LOCK_WAIT_TIMEOUT_MS = Number(
+  process.env.AGENT_CHAT_USER_LOCK_WAIT_TIMEOUT_MS ?? "30000",
+);
 
 export type AgentChatWorkerHandle = {
   worker: Worker<AgentChatJobData, AgentChatJobResult, string>;
@@ -177,7 +182,7 @@ export function startAgentChatWorker(
       if (groupId && mentionsAgent === false) {
         let storeThreadId = "";
         try {
-          await withThreadLock(lockRedis, lockKey, async () => {
+          await withThreadLockTimeout(lockRedis, lockKey, USER_LOCK_WAIT_TIMEOUT_MS, async () => {
             const threadId = await ensureCanonicalThreadId({
               userId,
               groupId: groupId ?? null,
@@ -205,6 +210,30 @@ export function startAgentChatWorker(
           });
           return { threadId: storeThreadId, reply: "", systemPrompt: null };
         } catch (err: any) {
+          if (err instanceof LockTimeoutError) {
+            logger.warn("Store-only timed out waiting for thread lock", {
+              requestId,
+              groupId,
+              lockKey,
+            });
+            // Still persist the message in the conversation DB so the user sees it in the UI,
+            // even though it couldn't be written to the LangGraph thread.
+            const threadId = await ensureCanonicalThreadId({
+              userId,
+              groupId: groupId ?? null,
+              singleChatId: singleChatId ?? null,
+            });
+            await writeConversationMessage({
+              groupId: groupId ?? null,
+              singleChatId: singleChatId ?? null,
+              threadId,
+              role: "user",
+              content: message,
+              senderName: displayName,
+              requestId,
+            });
+            return { threadId, reply: "", systemPrompt: null };
+          }
           logger.error("Store-only failed", {
             requestId,
             groupId,
@@ -217,8 +246,15 @@ export function startAgentChatWorker(
 
       let threadIdForError: string | undefined;
 
+      // System-internal messages block indefinitely — they must eventually
+      // complete.  User-facing messages get a timeout so the user isn't left
+      // waiting forever when the agent is busy with another conversation.
+      const acquireLock = isSystemInternalRequest
+        ? <T>(fn: () => Promise<T>) => withThreadLock(lockRedis, lockKey, fn)
+        : <T>(fn: () => Promise<T>) => withThreadLockTimeout(lockRedis, lockKey, USER_LOCK_WAIT_TIMEOUT_MS, fn);
+
       try {
-        const result = await withThreadLock(lockRedis, lockKey, async () => {
+        const result = await acquireLock(async () => {
           const threadId = await ensureCanonicalThreadId({
             userId,
             groupId: groupId ?? null,
@@ -412,6 +448,58 @@ export function startAgentChatWorker(
 
         return turnResult;
       } catch (err: any) {
+        // ── Agent busy bounce ────────────────────────────────────────
+        if (err instanceof LockTimeoutError) {
+          logger.info("Bouncing user message — agent busy (lock timeout)", {
+            requestId,
+            userId,
+            groupId,
+            singleChatId,
+            lockKey,
+          });
+
+          const threadId = await ensureCanonicalThreadId({
+            userId,
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+          });
+
+          const busyMessage =
+            "The agent is currently busy with another conversation. " +
+            "Please try again in a few moments.";
+
+          await writeConversationMessage({
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+            threadId,
+            role: "user",
+            content: message,
+            senderName: displayName,
+            requestId,
+          });
+          await writeConversationMessage({
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+            threadId,
+            role: "assistant",
+            content: busyMessage,
+            requestId,
+          });
+
+          emitAgentReply({
+            requestId,
+            userId,
+            threadId,
+            groupId: groupId ?? null,
+            singleChatId: singleChatId ?? null,
+            ok: true,
+            reply: busyMessage,
+            systemPrompt: null,
+          });
+
+          return { threadId, reply: busyMessage, systemPrompt: null };
+        }
+
         const errorText = err?.message ?? "Agent processing failed";
 
         logger.error("Chat turn failed", {
