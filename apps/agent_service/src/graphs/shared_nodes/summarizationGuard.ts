@@ -16,7 +16,7 @@ import { logger } from "../../logger";
  *                       summarization fires. Prevents hitting model context limits.
  */
 const TTL_IDLE_MINUTES = parseInt(process.env.TTL_IDLE_MINUTES ?? "30", 10);
-const MAX_MESSAGES = parseInt(process.env.MAX_MESSAGES ?? "50", 10);
+const MAX_MESSAGES = parseInt(process.env.MAX_MESSAGES ?? "30", 10);
 const MAX_CHECKPOINT_BYTES = parseInt(
   process.env.MAX_CHECKPOINT_BYTES ?? "500000",
   10,
