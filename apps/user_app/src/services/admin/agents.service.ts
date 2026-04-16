@@ -30,6 +30,7 @@ export class AgentsService {
         "type",
         "definition",
         "agentName",
+        "description",
         "coreInstructions",
         "characteristics",
         "createdByUserId",
@@ -115,6 +116,7 @@ export class AgentsService {
     agentName?: string | null,
     agentType?: "primary" | "system" | "external",
     toolIds?: number[],
+    description?: string | null,
   ) {
     const normalizedAgentName =
       agentName !== undefined && agentName !== null && String(agentName).trim() !== ""
@@ -126,6 +128,7 @@ export class AgentsService {
       type: agentType ?? "primary",
       definition,
       agentName: normalizedAgentName,
+      description: description?.trim() || null,
       coreInstructions: coreInstructions ?? null,
       characteristics: characteristics ?? null,
       createdByUserId: actorId ?? null,
@@ -236,6 +239,7 @@ export class AgentsService {
     data: {
       definition?: string;
       agentName?: string | null;
+      description?: string | null;
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
       mcpServerIds?: number[];
@@ -272,6 +276,8 @@ export class AgentsService {
 
     const patch: Record<string, any> = {};
     if (data.definition !== undefined) patch.definition = data.definition;
+    if (data.description !== undefined)
+      patch.description = data.description?.trim() || null;
     if (data.agentName !== undefined) {
       patch.agentName =
         data.agentName === null || String(data.agentName).trim() === ""

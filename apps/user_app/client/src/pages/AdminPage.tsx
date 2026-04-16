@@ -286,6 +286,7 @@ export default function AdminPage() {
   const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
   const [newAgentDefinition, setNewAgentDefinition] = useState("");
   const [newAgentDisplayName, setNewAgentDisplayName] = useState("");
+  const [newAgentDescription, setNewAgentDescription] = useState("");
   const [newAgentInstructions, setNewAgentInstructions] = useState("");
   const [newAgentCharacteristics, setNewAgentCharacteristics] = useState("");
   const [newAgentSkillIds, setNewAgentSkillIds] = useState<number[]>([]);
@@ -518,6 +519,7 @@ export default function AdminPage() {
       await admin.createAgent({
         definition: newAgentDefinition.trim() || undefined,
         agentName: newAgentDisplayName.trim() || null,
+        description: newAgentDescription.trim() || null,
         coreInstructions: newAgentInstructions.trim() || undefined,
         characteristics,
         modelId: newAgentModelId,
@@ -528,6 +530,7 @@ export default function AdminPage() {
       });
       setNewAgentDefinition("");
       setNewAgentDisplayName("");
+      setNewAgentDescription("");
       setNewAgentInstructions("");
       setNewAgentCharacteristics("");
       setNewAgentSkillIds([]);
@@ -1295,6 +1298,18 @@ export default function AdminPage() {
                   className={inputClass}
                 />
                 <p className={`mt-1 text-[10px] text-right ${newAgentDisplayName.length >= 120 ? "text-red-400" : "text-gray-400"}`}>{newAgentDisplayName.length}/120</p>
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  Description <span className="font-normal normal-case text-gray-400">(shown in list_system_agents)</span>
+                </label>
+                <input
+                  type="text"
+                  value={newAgentDescription}
+                  onChange={(e) => setNewAgentDescription(e.target.value)}
+                  placeholder="Short description of what this agent does"
+                  className={inputClass}
+                />
               </div>
               <textarea
                 value={newAgentInstructions}

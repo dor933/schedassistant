@@ -31,6 +31,7 @@ export class AgentsController {
         req.body.agentName,
         req.body.type,
         req.body.toolIds,
+        req.body.description,
       );
       return res.status(201).json(agent);
     } catch (err: any) {
@@ -48,6 +49,7 @@ export class AgentsController {
         {
           definition: req.body.definition,
           agentName: req.body.agentName,
+          description: req.body.description,
           coreInstructions: req.body.coreInstructions,
           characteristics: req.body.characteristics,
           mcpServerIds: req.body.mcpServerIds,

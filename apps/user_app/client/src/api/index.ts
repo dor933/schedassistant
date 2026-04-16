@@ -311,6 +311,8 @@ export interface AdminAgent {
   definition: string;
   /** Optional display name (system prompt, @mention label in groups, list_agents). */
   agentName: string | null;
+  /** Short description shown when listing system agents (used by list_system_agents tool). */
+  description: string | null;
   coreInstructions: string | null;
   /** Persona traits (tone, etc.) — rendered as "Your Characteristics" in the agent context. */
   characteristics: Record<string, unknown> | null;
@@ -479,6 +481,7 @@ export const admin = {
   createAgent: (data: {
     definition?: string;
     agentName?: string | null;
+    description?: string | null;
     coreInstructions?: string;
     characteristics?: Record<string, unknown> | null;
     mcpServerIds?: number[];
@@ -496,6 +499,7 @@ export const admin = {
     data: {
       definition?: string;
       agentName?: string | null;
+      description?: string | null;
       coreInstructions?: string;
       characteristics?: Record<string, unknown> | null;
       mcpServerIds?: number[];

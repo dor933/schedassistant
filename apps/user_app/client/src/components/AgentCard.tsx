@@ -36,6 +36,7 @@ export default function AgentCard({
     const [editing, setEditing] = useState(false);
     const [definition, setDefinition] = useState(agent.definition ?? "");
     const [displayName, setDisplayName] = useState(agent.agentName ?? "");
+    const [description, setDescription] = useState(agent.description ?? "");
     const [instructions, setInstructions] = useState(
       agent.coreInstructions ?? "",
     );
@@ -59,6 +60,7 @@ export default function AgentCard({
     useEffect(() => {
       setDefinition(agent.definition ?? "");
       setDisplayName(agent.agentName ?? "");
+      setDescription(agent.description ?? "");
       setInstructions(agent.coreInstructions ?? "");
       setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
       setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
@@ -154,6 +156,7 @@ export default function AgentCard({
         await admin.updateAgent(agent.id, {
           definition: definition || undefined,
           agentName: displayName.trim() || null,
+          description: description.trim() || null,
           ...(canViewCoreInstructions ? { coreInstructions: instructions || undefined } : {}),
           characteristics,
           modelId: selectedModel?.id ?? null,
@@ -233,6 +236,18 @@ export default function AgentCard({
                 className={smallInput}
               />
               <p className={`text-[10px] text-right ${displayName.length >= 120 ? "text-red-400" : "text-gray-400"}`}>{displayName.length}/120</p>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                Description <span className="font-normal normal-case text-gray-400">(shown in list_system_agents)</span>
+              </label>
+              <input
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Short description of what this agent does"
+                className={smallInput}
+              />
             </div>
 
             {/* Instructions (restricted) */}
@@ -452,6 +467,7 @@ export default function AgentCard({
                   setEditing(false);
                   setDefinition(agent.definition ?? "");
                   setDisplayName(agent.agentName ?? "");
+                  setDescription(agent.description ?? "");
                   setInstructions(agent.coreInstructions ?? "");
                   setCharacteristicsJson(stringifyAgentCharacteristics(agent.characteristics));
                   setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
@@ -494,6 +510,11 @@ export default function AgentCard({
             {agent.agentName?.trim() && (
               <p className="mb-1 text-xs font-medium text-indigo-600">
                 Display name: {agent.agentName}
+              </p>
+            )}
+            {agent.description?.trim() && (
+              <p className="mb-1 text-xs text-gray-500 italic">
+                {agent.description}
               </p>
             )}
             {canViewCoreInstructions && (
