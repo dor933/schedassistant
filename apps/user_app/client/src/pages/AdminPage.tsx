@@ -1301,7 +1301,7 @@ export default function AdminPage() {
               </div>
               <div>
                 <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-                  Description <span className="font-normal normal-case text-gray-400">(shown in list_system_agents)</span>
+                  Description 
                 </label>
                 <input
                   type="text"
