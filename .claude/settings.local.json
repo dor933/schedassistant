@@ -50,11 +50,13 @@
       "Bash(npx sequelize-cli:*)",
       "Bash(echo \"exit: $?\")",
       "Bash(echo \"EXIT=$?\")",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(node scripts/parse-session.cjs)",
+      "Bash(node scripts/parse-session2.cjs)"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "claude-flow"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

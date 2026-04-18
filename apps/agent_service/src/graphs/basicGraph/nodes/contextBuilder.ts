@@ -1,6 +1,11 @@
 import { RunnableConfig } from "@langchain/core/runnables";
 import { Op } from "sequelize";
-import { Agent, AgentAvailableSkill, GroupMember, User } from "@scheduling-agent/database";
+import {
+  Agent,
+  GroupMember,
+  Organization,
+  User,
+} from "@scheduling-agent/database";
 import type {
   AssembledContext,
   GroupMemberContextProfile,
@@ -73,6 +78,54 @@ async function loadAgentNameSection(agentId: AgentId): Promise<string> {
 }
 
 /**
+ * Looks up the organization's currently active web-search system agent and
+ * renders a section telling this agent to route *all* web searches to it.
+ * Exactly one web-search agent is active per org (enforced by the
+ * `organizations.web_search_agent_id` pointer); this section names that
+ * agent explicitly so the LLM never tries to do web search itself.
+ */
+async function loadWebSearchAgentSection(
+  organizationId: string | null,
+): Promise<string> {
+  if (!organizationId) return "";
+  try {
+    const org = await Organization.findByPk(organizationId, {
+      attributes: ["webSearchAgentId"],
+    });
+    const activeId = org?.webSearchAgentId ?? null;
+    if (!activeId) return "";
+
+    const agent = await Agent.findByPk(activeId, {
+      attributes: ["id", "slug", "agentName", "description", "modelSlug"],
+    });
+    if (!agent) return "";
+
+    const label = agent.agentName?.trim() || agent.slug || "Web Search Agent";
+    const lines: string[] = [];
+    lines.push("## Web search — dedicated system agent");
+    lines.push(
+      `This organization has **one** dedicated system agent for web search: ` +
+        `**${label}** (slug: \`${agent.slug}\`). ` +
+        "All web search, browsing, and up-to-date-information lookups MUST " +
+        "be routed to this agent via `delegate_to_deep_agent`. " +
+        "Do NOT attempt web searches yourself, and do NOT delegate them to any " +
+        "other system agent — it is always this one.",
+    );
+    if (agent.description?.trim()) {
+      lines.push("");
+      lines.push(`> ${agent.description.trim()}`);
+    }
+    lines.push("");
+    return lines.join("\n");
+  } catch (err) {
+    logger.warn("Web search agent section skipped", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return "";
+  }
+}
+
+/**
  * Builds the complete LLM context for one conversation turn.
  *
  * This function is designed to be called from a LangGraph node (or as a
@@ -95,11 +148,19 @@ export async function buildContext(
   let agentCharacteristics: Record<string, unknown> | null = null;
   let agentNotes: string | null = null;
   let agentWorkspacePath: string | null = null;
+  let agentOrganizationId: string | null = null;
   let agentHasLinkedSkills = false;
   if (agentId) {
     try {
       const agent = await Agent.findByPk(agentId, {
-        attributes: ["definition", "coreInstructions", "characteristics", "agentNotes", "workspacePath"],
+        attributes: [
+          "definition",
+          "coreInstructions",
+          "characteristics",
+          "agentNotes",
+          "workspacePath",
+          "organizationId",
+        ],
       });
       const def = agent?.definition?.trim();
       agentDefinition = def && def.length > 0 ? def : null;
@@ -113,9 +174,12 @@ export async function buildContext(
       const notes = agent?.agentNotes?.trim();
       agentNotes = notes && notes.length > 0 ? notes : null;
       agentWorkspacePath = agent?.workspacePath ?? null;
+      agentOrganizationId = agent?.organizationId ?? null;
 
-      const skillLinkCount = await AgentAvailableSkill.count({ where: { agentId, active: true } });
-      agentHasLinkedSkills = skillLinkCount > 0;
+      // Auto-assigned in-house skills (notes, workspace, skill library) are always
+      // available via list_agent_skills/get_agent_skill — so the "Linked skills"
+      // help section is always relevant, regardless of per-agent junction rows.
+      agentHasLinkedSkills = true;
     } catch {
       throw new Error(`Failed to load agent from database: ${agentId}`);
     }
@@ -202,6 +266,8 @@ export async function buildContext(
 
   const agentNameSection = await loadAgentNameSection(agentId);
 
+  const webSearchAgentSection = await loadWebSearchAgentSection(agentOrganizationId);
+
   // ── 4b. Recent roundtable summaries this agent participated in ──
   const roundtableSummaries = await loadRecentRoundtableSummaries(agentId, { limit: 2 });
 
@@ -215,6 +281,7 @@ export async function buildContext(
     agentHasLinkedSkills,
     grahamyExecutivesSection,
     agentNameSection,
+    webSearchAgentSection,
     coreMemory,
     checkpointLog.body,
     conversationLog.body,
@@ -471,6 +538,7 @@ function formatSystemPrompt(
   agentHasLinkedSkills: boolean,
   grahamyExecutivesSection: string,
   agentNameSection: string,
+  webSearchAgentSection: string,
   coreMemory: string,
   checkpointLogBody: string,
   conversationLogBody: string,
@@ -545,6 +613,12 @@ function formatSystemPrompt(
   );
   sections.push("");
 
+  const webSearchTrim = webSearchAgentSection.trim();
+  if (webSearchTrim.length > 0) {
+    sections.push(webSearchTrim);
+    sections.push("");
+  }
+
   sections.push("## Projects & repositories");
   sections.push(
     "You have access to the user's registered projects and their repositories:\n" +
@@ -607,7 +681,7 @@ function formatSystemPrompt(
     sections.push("## Workspace");
     sections.push(
       "You have a persistent workspace folder where you can store, read, and edit `.md` and `.txt` files. " +
-      "These files persist across all conversations and are private to you.\n\n" +
+      "These files persist across all conversations.\n\n" +
       "Available tools:\n" +
       "- `workspace_list_files` — list all files in your workspace\n" +
       "- `workspace_read_file` — read a file's content\n" +
@@ -615,7 +689,13 @@ function formatSystemPrompt(
       "- `workspace_edit_file` — replace a specific text snippet in a file\n" +
       "- `workspace_delete_file` — delete a file\n\n" +
       "Use your workspace for persistent documents, plans, research, templates, or any information " +
-      "you want to retain and build upon over time.",
+      "you want to retain and build upon over time.\n\n" +
+      "**Shared with executor/system agents you delegate to.** When you delegate a task to a system agent " +
+      "(via `delegate_to_deep_agent`, `delegate_web_search`, etc.), that agent writes into **this same " +
+      "workspace folder** on your behalf — system agents do not have their own workspaces. After a " +
+      "delegation result comes back, check the `Workspace writes` section in the result message (and run " +
+      "`workspace_list_files` if needed) to see what files the executor left for you, then " +
+      "`workspace_read_file` to inspect them.",
     );
     sections.push("");
   }

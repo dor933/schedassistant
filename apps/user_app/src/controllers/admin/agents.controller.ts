@@ -7,7 +7,11 @@ export class AgentsController {
 
   getAll = async (req: Request, res: Response) => {
     try {
-      const agents = await this.agentsService.getAll(req.user!.userId, req.user!.role);
+      const agents = await this.agentsService.getAll(
+        req.user!.userId,
+        req.user!.role,
+        req.user!.organizationId,
+      );
       return res.json(agents);
     } catch (err: any) {
       logger.error("GET /agents error:", err);
@@ -32,6 +36,7 @@ export class AgentsController {
         req.body.type,
         req.body.toolIds,
         req.body.description,
+        req.user!.organizationId,
       );
       return res.status(201).json(agent);
     } catch (err: any) {
@@ -46,6 +51,7 @@ export class AgentsController {
         req.params.id as string,
         req.user!.userId,
         req.user!.role,
+        req.user!.organizationId,
         {
           definition: req.body.definition,
           agentName: req.body.agentName,

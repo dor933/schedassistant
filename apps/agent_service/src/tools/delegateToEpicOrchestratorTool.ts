@@ -1,9 +1,9 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { DeepAgentDelegation } from "@scheduling-agent/database";
+import { Agent, DeepAgentDelegation } from "@scheduling-agent/database";
 import { agentChatQueue } from "../queues/agentChat.bull";
 import { linkDelegationToConsultation } from "../consultationChain";
-import { EPIC_ORCHESTRATOR_AGENT_ID } from "../constants/epicAgent";
+import { EPIC_ORCHESTRATOR_DEFINITION } from "../constants/epicAgent";
 import { logger } from "../logger";
 
 /**
@@ -26,6 +26,29 @@ export function DelegateToEpicOrchestratorTool(
     async (input) => {
       const { request } = input;
 
+      // Each org has its OWN Epic Orchestrator (seeded at signup) — resolve
+      // the one that belongs to the caller's organization.
+      const callerAgent = await Agent.findByPk(callerAgentId, {
+        attributes: ["id", "organizationId"],
+      });
+      if (!callerAgent) {
+        return `Error: caller agent "${callerAgentId}" not found.`;
+      }
+      const epicAgent = await Agent.findOne({
+        where: {
+          type: "primary",
+          organizationId: callerAgent.organizationId,
+          definition: EPIC_ORCHESTRATOR_DEFINITION,
+        },
+        attributes: ["id"],
+      });
+      if (!epicAgent) {
+        return (
+          `Error: no Epic Orchestrator is configured for this organization. ` +
+          `Ask an administrator to seed the standard agents.`
+        );
+      }
+
       // Create delegation record (executorAgentId = null for epic delegations)
       const delegation = await DeepAgentDelegation.create({
         callerAgentId,
@@ -38,7 +61,7 @@ export function DelegateToEpicOrchestratorTool(
       });
 
       // Enqueue to the agent chat queue — the worker routes to epicGraph
-      // when it sees the epic orchestrator agent ID.
+      // when it sees an epic orchestrator agent (definition match).
       await agentChatQueue.add("epic_delegation", {
         userId,
         message:
@@ -47,7 +70,7 @@ export function DelegateToEpicOrchestratorTool(
         requestId: `epic-delegation-${delegation.id}`,
         groupId: null,
         singleChatId: null,
-        agentId: EPIC_ORCHESTRATOR_AGENT_ID,
+        agentId: epicAgent.id,
         mentionsAgent: true,
         displayName: "delegation",
       } as any);

@@ -11,6 +11,8 @@ import { skillsRouter } from "./skills.routes";
 import { projectsRouter } from "./projects.routes";
 import { roundtableRouter } from "./roundtable.routes";
 import { toolsRouter } from "./tools.routes";
+import { cronJobsRouter } from "./cronJobs.routes";
+import { webSearchAgentRouter } from "./webSearchAgent.routes";
 
 const router = Router();
 
@@ -26,6 +28,8 @@ router.use("/skills", skillsRouter);
 router.use("/projects", projectsRouter);
 router.use("/roundtables", roundtableRouter);
 router.use("/tools", toolsRouter);
+router.use("/cron-jobs", cronJobsRouter);
+router.use("/web-search-agent", webSearchAgentRouter);
 // models router handles /models, /vendors, and /single-chats paths
 router.use("/", modelsRouter);
 

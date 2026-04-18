@@ -9,24 +9,31 @@ import { Op } from "sequelize";
  * The orchestrator agent calls this BEFORE delegating to understand what
  * specialists are available and pick the best match for the task at hand.
  */
-export function ListSystemAgentsTool() {
+export function ListSystemAgentsTool(callerAgentId: string) {
   return tool(
     async (input) => {
       const { query } = input;
 
-      const where: any = { type: "system" };
+      // Scope results to the caller's organization — system agents are
+      // per-tenant (each org has its own set, even for shared specialists
+      // like the web-search agents).
+      const callerAgent = await Agent.findByPk(callerAgentId, {
+        attributes: ["organizationId"],
+      });
+      if (!callerAgent) {
+        return `Error: caller agent "${callerAgentId}" not found.`;
+      }
+
+      const where: any = {
+        type: "system",
+        organizationId: callerAgent.organizationId,
+      };
       if (query) {
-        where[Op.and] = [
-          { type: "system" },
-          {
-            [Op.or]: [
-              { agentName: { [Op.iLike]: `%${query}%` } },
-              { slug: { [Op.iLike]: `%${query}%` } },
-              { description: { [Op.iLike]: `%${query}%` } },
-            ],
-          },
+        where[Op.or] = [
+          { agentName: { [Op.iLike]: `%${query}%` } },
+          { slug: { [Op.iLike]: `%${query}%` } },
+          { description: { [Op.iLike]: `%${query}%` } },
         ];
-        delete where.type;
       }
 
       const agents = await Agent.findAll({

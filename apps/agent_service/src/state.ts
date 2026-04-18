@@ -1,6 +1,6 @@
 import { Annotation } from "@langchain/langgraph";
 import type { BaseMessage } from "@langchain/core/messages";
-import { AgentId } from "@scheduling-agent/types";
+import { AgentId, UserId, UserIdentity } from "@scheduling-agent/types";
 
 /**
  * LangGraph state annotation for conversational agents (any specialization).
@@ -106,6 +106,14 @@ export const AgentAnnotation = Annotation.Root({
     roundNumber: number;
     maxTurnsPerAgent: number;
     agentOrder: { agentId: string; definition: string }[];
+    /** True when the roundtable's creator takes a turn each round. */
+    includeUser: boolean;
+    /** The participating user (loaded once by the worker). */
+    participantUser: {
+      id: UserId;
+      displayName: string;
+      userIdentity: UserIdentity | null;
+    } | null;
   } | null>({
     reducer: (_state, update) => (update !== undefined ? update : _state),
     default: () => null,

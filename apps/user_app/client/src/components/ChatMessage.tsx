@@ -6,12 +6,12 @@ import remarkGfm from "remark-gfm";
 import { VendorIcon } from "./VendorModelBadge";
 
 const vendorAvatarColors: Record<string, string> = {
-  openai: "bg-emerald-50 text-emerald-700 shadow-emerald-100/50 ring-emerald-200/60",
-  anthropic: "bg-amber-50 text-amber-700 shadow-amber-100/50 ring-amber-200/60",
-  google: "bg-blue-50 text-blue-700 shadow-blue-100/50 ring-blue-200/60",
+  openai: "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30",
+  anthropic: "bg-amber-500/15 text-amber-300 ring-amber-400/30",
+  google: "bg-sky-500/15 text-sky-300 ring-sky-400/30",
 };
 
-const defaultAvatarColor = "bg-gray-100 text-gray-500 shadow-gray-100/50 ring-gray-200/60";
+const defaultAvatarColor = "bg-white/[0.06] text-indigo-200 ring-white/15";
 
 /** Highlight occurrences of `term` within `text`. */
 function HighlightedText({ text, term }: { text: string; term: string }) {
@@ -122,8 +122,8 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
           sx={{ mr: 1.5, flexShrink: 0 }}
         >
           <Box
-            className={`flex h-8 w-8 items-center justify-center rounded-xl shadow-sm ring-1 ${isError
-              ? "bg-red-100 text-red-500 ring-red-200/60"
+            className={`flex h-8 w-8 items-center justify-center rounded-xl backdrop-blur-sm ring-1 ${isError
+              ? "bg-rose-500/15 text-rose-300 ring-rose-400/30"
               : vendorSlug
                 ? vendorAvatarColors[vendorSlug] ?? defaultAvatarColor
                 : defaultAvatarColor
@@ -140,7 +140,7 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
           {modelName && !isError && (
             <Box
               component="span"
-              className="text-center font-medium text-gray-400"
+              className="text-center font-medium text-indigo-200/50"
               sx={{
                 maxWidth: "4.5rem",
                 overflow: "hidden",
@@ -161,7 +161,7 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
           spacing={0.5}
           sx={{ mr: 1.5, flexShrink: 0 }}
         >
-          <Box className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-blue-100 to-indigo-100 text-xs font-bold text-indigo-600 shadow-sm ring-1 ring-indigo-100">
+          <Box className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/30 to-fuchsia-500/30 text-xs font-bold text-indigo-100 backdrop-blur-sm ring-1 ring-indigo-400/40">
             {senderName.charAt(0).toUpperCase()}
           </Box>
         </Stack>
@@ -171,13 +171,13 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
       {isError ? (
         <Box sx={{ maxWidth: { xs: "88%", sm: "75%" }, minWidth: 0 }}>
           <Box
-            className="rounded-2xl rounded-tl-md border border-red-200/60 bg-red-50 shadow-sm"
+            className="rounded-2xl rounded-tl-md border border-rose-400/30 bg-rose-500/10 backdrop-blur-xl"
             sx={{
               px: 2,
               py: 1.5,
               fontSize: "0.875rem",
               lineHeight: "1.625",
-              color: "rgb(153 27 27)",
+              color: "rgb(254 205 211)",
               minWidth: 0,
               overflow: "hidden",
             }}
@@ -186,7 +186,7 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
               direction="row"
               alignItems="center"
               spacing={0.75}
-              sx={{ mb: 0.75, fontSize: "0.75rem", fontWeight: 600, color: "rgb(239 68 68)" }}
+              sx={{ mb: 0.75, fontSize: "0.75rem", fontWeight: 600, color: "rgb(251 113 133)" }}
             >
               <AlertTriangle className="h-3.5 w-3.5" />
               <span>Error</span>
@@ -205,33 +205,36 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
               {content.replace(/^Error:\s*/, "")}
             </Box>
           </Box>
-          {ts && <Box className="mt-1 ml-1 text-[10px] text-gray-400" sx={{ userSelect: "none" }}>{ts}</Box>}
+          {ts && <Box className="mt-1 ml-1 text-[10px] text-indigo-200/40" sx={{ userSelect: "none" }}>{ts}</Box>}
         </Box>
       ) : isOtherUser ? (
         <Box sx={{ maxWidth: { xs: "88%", sm: "75%" }, minWidth: 0 }}>
-          <Box component="p" className="mb-1 ml-1 text-[11px] font-semibold text-indigo-500">{senderName}</Box>
-          <Box className="rounded-2xl rounded-tl-md bg-white px-4 py-3 text-sm text-gray-800 shadow-glass ring-1 ring-gray-950/[0.04]" sx={{ minWidth: 0, overflow: "hidden" }}>
-            {renderContent("chat-prose")}
+          <Box component="p" className="mb-1 ml-1 text-[11px] font-semibold text-indigo-300">{senderName}</Box>
+          <Box
+            className="rounded-2xl rounded-tl-md border border-white/10 bg-white/[0.05] px-4 py-3 text-sm text-slate-100 backdrop-blur-xl shadow-[0_8px_32px_-12px_rgba(0,0,0,0.5)]"
+            sx={{ minWidth: 0, overflow: "hidden" }}
+          >
+            {renderContent("chat-prose chat-prose-dark")}
           </Box>
-          {ts && <Box className="mt-1 ml-1 text-[10px] text-gray-400" sx={{ userSelect: "none" }}>{ts}</Box>}
+          {ts && <Box className="mt-1 ml-1 text-[10px] text-indigo-200/40" sx={{ userSelect: "none" }}>{ts}</Box>}
         </Box>
       ) : (
         <Box sx={{ maxWidth: { xs: "88%", sm: "75%" }, minWidth: 0 }}>
           {isSelfInGroup && (
-            <Box component="p" className="mb-1 mr-1 text-right text-[11px] font-semibold text-gray-400">You</Box>
+            <Box component="p" className="mb-1 mr-1 text-right text-[11px] font-semibold text-indigo-200/60">You</Box>
           )}
           <Box
             className={`text-sm ${isUser
-              ? "rounded-2xl rounded-tr-md bg-gradient-to-br from-blue-600 to-indigo-600 px-4 py-3 text-white shadow-md shadow-blue-200/50"
-              : "rounded-2xl rounded-tl-md bg-white px-4 py-3 text-gray-800 shadow-glass ring-1 ring-gray-950/[0.04]"
+              ? "rounded-2xl rounded-tr-md bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 px-4 py-3 text-white shadow-[0_0_28px_-6px_rgba(168,85,247,0.55)]"
+              : "rounded-2xl rounded-tl-md border border-white/10 bg-white/[0.05] px-4 py-3 text-slate-100 backdrop-blur-xl shadow-[0_8px_32px_-12px_rgba(0,0,0,0.5)]"
               }`}
             sx={{ minWidth: 0, overflow: "hidden" }}
           >
-            {renderContent(`chat-prose ${isUser ? "chat-prose-user" : ""}`)}
+            {renderContent(`chat-prose ${isUser ? "chat-prose-user" : "chat-prose-dark"}`)}
           </Box>
           {ts && (
             <Box
-              className={`mt-1 text-[10px] text-gray-400 ${isUser ? "mr-1 text-right" : "ml-1"}`}
+              className={`mt-1 text-[10px] text-indigo-200/40 ${isUser ? "mr-1 text-right" : "ml-1"}`}
               sx={{ userSelect: "none" }}
             >
               {ts}
@@ -242,7 +245,7 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
 
       {/* Right-side avatar: current user's own messages */}
       {isUser && !isOtherUser && (
-        <Box className="ml-3 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-gray-100 to-gray-200 text-gray-500 shadow-sm ring-1 ring-gray-950/[0.04]">
+        <Box className="ml-3 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/40 to-fuchsia-500/40 text-indigo-100 backdrop-blur-sm ring-1 ring-white/15">
           <User className="h-4 w-4" />
         </Box>
       )}

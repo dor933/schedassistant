@@ -8,6 +8,7 @@ import { authRouter } from "./routes/auth.routes";
 import { chatRouter } from "./routes/chat.routes";
 import { sessionsRouter } from "./routes/sessions.routes";
 import { notificationsRouter } from "./routes/notifications.routes";
+import { inAppNotificationsRouter } from "./routes/inAppNotifications.routes";
 import { adminRouter } from "./routes/admin/index";
 import { attachSocketIO } from "./sockets/server/socketServer";
 import { connectToAgentService } from "./sockets/client/socketClient";
@@ -48,6 +49,7 @@ async function main(): Promise<void> {
   app.use("/api/chat", chatRouter);
   app.use("/api/sessions", sessionsRouter);
   app.use("/api/notifications", notificationsRouter);
+  app.use("/api/in-app-notifications", inAppNotificationsRouter);
   app.use("/api/admin", adminRouter);
 
   const clientDist = path.join(__dirname, "..", "client", "dist");

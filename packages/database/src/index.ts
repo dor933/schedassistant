@@ -1,4 +1,5 @@
 export { sequelize } from "./connection";
+export { Organization } from "./models/Organization";
 export { Role } from "./models/Role";
 export { Vendor } from "./models/Vendor";
 export { LLMModel } from "./models/LLMModel";
@@ -28,4 +29,7 @@ export { TaskExecution } from "./models/TaskExecution";
 export { TaskDependency } from "./models/TaskDependency";
 export { Roundtable } from "./models/Roundtable";
 export { RoundtableAgent } from "./models/RoundtableAgent";
+export { RoundtableUser } from "./models/RoundtableUser";
 export { RoundtableMessage } from "./models/RoundtableMessage";
+export { Notification } from "./models/Notification";
+export { AgentCronJob } from "./models/AgentCronJob";

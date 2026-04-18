@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 import LoginPage from "./pages/LoginPage";
+import OnboardingWizard from "./pages/OnboardingWizard";
 import ChatPage from "./pages/ChatPage";
 import AdminPage from "./pages/AdminPage";
 import RoundtablePage from "./pages/RoundtablePage";
@@ -36,6 +37,10 @@ export default function App() {
       <Route
         path="/login"
         element={user ? <Navigate to="/" replace /> : <LoginPage />}
+      />
+      <Route
+        path="/onboarding"
+        element={user ? <Navigate to="/" replace /> : <OnboardingWizard />}
       />
       <Route
         path="/admin"

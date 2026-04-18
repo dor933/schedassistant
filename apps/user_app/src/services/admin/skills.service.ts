@@ -1,12 +1,14 @@
 import { Skill } from "@scheduling-agent/database";
+import { Op } from "sequelize";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
-import type { UserId } from "@scheduling-agent/types";
+import { AUTO_ASSIGNED_SKILL_SLUGS, type UserId } from "@scheduling-agent/types";
 
 export class SkillsService {
   async getAll() {
     const rows = await Skill.findAll({
       attributes: ["id", "name", "slug", "description", "skillText", "locked", "createdAt", "updatedAt"],
+      where: { slug: { [Op.notIn]: [...AUTO_ASSIGNED_SKILL_SLUGS] } },
       order: [["name", "ASC"]],
     });
     return rows.map((r) => r.toJSON());

@@ -55,6 +55,17 @@ export interface Conversations {
   singleChats: SingleChatConversation[];
 }
 
+export interface OrganizationInfo {
+  id: string;
+  name: string;
+  slug: string | null;
+  logo: string | null;
+  /** Currently active web-search system agent for this org (null if unset). */
+  webSearchAgentId?: string | null;
+}
+
+export type WebSearchChoice = "gemini" | "brave";
+
 export interface LoginResponse {
   token: string;
   user: {
@@ -64,6 +75,7 @@ export interface LoginResponse {
     role: string;
   };
   conversations: Conversations;
+  organization?: OrganizationInfo;
 }
 
 export function login(userName: string, password: string) {
@@ -73,18 +85,24 @@ export function login(userName: string, password: string) {
   });
 }
 
+/** Onboarding payload — creates an org + admin + N agents. */
 export interface RegisterData {
-  userName: string;
-  displayName: string;
-  password: string;
-  userIdentity?: {
-    role?: string;
-    department?: string;
-    /** Place and IANA zone together, e.g. `Israel (Asia/Jerusalem)`. */
-    location?: string;
-    /** @deprecated Use `location` with zone embedded. */
-    timezone?: string;
+  organization: {
+    name: string;
+    logo?: string;
   };
+  admin: {
+    userName: string;
+    displayName: string;
+    password: string;
+  };
+  agents: Array<{
+    definition: string;
+    description?: string;
+    modelId?: string;
+  }>;
+  /** Which seeded web-search system agent to mark active (defaults to Gemini). */
+  webSearchChoice?: WebSearchChoice;
 }
 
 export function register(data: RegisterData) {
@@ -94,11 +112,16 @@ export function register(data: RegisterData) {
   });
 }
 
+export function getPublicModels() {
+  return request<ConversationModelInfo[]>("/auth/public-models");
+}
+
 export interface MeResponse {
   id: number;
   displayName: string | null;
   role: string;
   conversations: Conversations;
+  organization: OrganizationInfo | null;
 }
 
 export function getMe() {
@@ -409,6 +432,23 @@ export interface AdminRepository {
   updatedAt: string;
 }
 
+export interface AdminCronJob {
+  id: string;
+  agentId: string;
+  organizationId: string;
+  createdByUserId: number | null;
+  name: string;
+  prompt: string;
+  cronExpression: string;
+  timezone: string;
+  enabled: boolean;
+  lastRunAt: string | null;
+  lastStatus: "success" | "failed" | "enqueued" | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AdminProject {
   id: string;
   name: string;
@@ -419,6 +459,23 @@ export interface AdminProject {
   repositories: AdminRepository[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AdminWebSearchCandidate {
+  id: string;
+  slug: string | null;
+  agentName: string | null;
+  description: string | null;
+  modelSlug: string | null;
+}
+
+export interface AdminWebSearchStatus {
+  activeChoice: WebSearchChoice;
+  activeAgentId: string;
+  candidates: {
+    gemini: AdminWebSearchCandidate | null;
+    brave: AdminWebSearchCandidate | null;
+  };
 }
 
 export const admin = {
@@ -654,6 +711,51 @@ export const admin = {
       method: "POST",
     }),
 
+  // ── Agent Cron Jobs ─────────────────────────────────────────────────────
+  getAgentCronJobs: (agentId: string) =>
+    request<AdminCronJob[]>(`/admin/agents/${agentId}/cron-jobs`),
+  createAgentCronJob: (
+    agentId: string,
+    data: {
+      name: string;
+      prompt: string;
+      cronExpression: string;
+      timezone?: string;
+      enabled?: boolean;
+    },
+  ) =>
+    request<AdminCronJob>(`/admin/agents/${agentId}/cron-jobs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateCronJob: (
+    id: string,
+    data: {
+      name?: string;
+      prompt?: string;
+      cronExpression?: string;
+      timezone?: string;
+      enabled?: boolean;
+    },
+  ) =>
+    request<AdminCronJob>(`/admin/cron-jobs/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  deleteCronJob: (id: string) =>
+    request<{ deleted: boolean }>(`/admin/cron-jobs/${id}`, {
+      method: "DELETE",
+    }),
+
+  // ── Web search agent (per-org active pick) ─────────────────────────────
+  getWebSearchAgent: () =>
+    request<AdminWebSearchStatus>("/admin/web-search-agent"),
+  setWebSearchAgent: (choice: WebSearchChoice) =>
+    request<AdminWebSearchStatus>("/admin/web-search-agent", {
+      method: "PATCH",
+      body: JSON.stringify({ choice }),
+    }),
+
   // ── Roundtables ─────────────────────────────────────────────────────────
   getRoundtables: () =>
     request<RoundtableSummary[]>("/admin/roundtables"),
@@ -665,6 +767,10 @@ export const admin = {
     maxTurnsPerAgent?: number;
     groupId?: string | null;
     singleChatId?: string | null;
+    /** Legacy flag — kept for back-compat, prefer `participantUserIds`. */
+    includeUser?: boolean;
+    /** User IDs (any number of them) that should participate with their own turn. */
+    participantUserIds?: number[];
   }) =>
     request<{ id: string; threadId: string; status: string }>("/admin/roundtables", {
       method: "POST",
@@ -674,6 +780,11 @@ export const admin = {
     request<{ ok: boolean }>(`/admin/roundtables/${id}/stop`, {
       method: "POST",
     }),
+  submitRoundtableUserTurn: (id: string, content: string) =>
+    request<{ ok: boolean }>(`/admin/roundtables/${id}/user-turn`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    }),
 };
 
 // ── Roundtable types ──────────────────────────────────────────────────────
@@ -681,9 +792,10 @@ export const admin = {
 export interface RoundtableSummary {
   id: string;
   topic: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "waiting_for_user" | "completed" | "failed";
   maxTurnsPerAgent: number;
   currentRound: number;
+  includeUser: boolean;
   createdAt: string;
 }
 
@@ -695,10 +807,23 @@ export interface RoundtableAgentInfo {
   agentName: string;
 }
 
+export interface RoundtableUserInfo {
+  id: string;
+  userId: number;
+  turnOrder: number;
+  turnsCompleted: number;
+  displayName: string;
+}
+
 export interface RoundtableMessageInfo {
   id: string;
-  agentId: string;
+  /** Null when this row is a user contribution. */
+  agentId: string | null;
+  /** Non-null when this row is a user contribution. */
+  userId?: number | null;
+  senderType?: "agent" | "user";
   agentName: string;
+  displayName?: string | null;
   roundNumber: number;
   content: string;
   createdAt: string;
@@ -707,8 +832,48 @@ export interface RoundtableMessageInfo {
 export interface RoundtableDetail extends RoundtableSummary {
   threadId: string;
   agents: RoundtableAgentInfo[];
+  users: RoundtableUserInfo[];
   messages: RoundtableMessageInfo[];
   /** Final summary — populated once the roundtable transitions to "completed". */
   summary: string | null;
   summaryGeneratedAt: string | null;
+}
+
+// ─── In-app notifications ────────────────────────────────────────────────
+
+export type InAppNotificationType =
+  | "roundtable_invite"
+  | "roundtable_turn"
+  | "roundtable_completed";
+
+export interface InAppNotification {
+  id: string;
+  type: InAppNotificationType;
+  title: string;
+  body: string | null;
+  link: string | null;
+  data: Record<string, unknown> | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface InAppNotificationList {
+  items: InAppNotification[];
+  unreadCount: number;
+}
+
+export function listInAppNotifications() {
+  return request<InAppNotificationList>("/in-app-notifications");
+}
+
+export function markInAppNotificationRead(id: string) {
+  return request<InAppNotification>(`/in-app-notifications/${id}/read`, {
+    method: "POST",
+  });
+}
+
+export function markAllInAppNotificationsRead() {
+  return request<{ updated: number }>("/in-app-notifications/read-all", {
+    method: "POST",
+  });
 }

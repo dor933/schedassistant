@@ -16,7 +16,7 @@ import {
 import { agentChatQueue } from "../queues/agentChat.bull";
 import { getMcpToolsByServerIds } from "../mcpClient";
 import { systemAgentSkillTools } from "../tools/skillsTools";
-import { workspaceTools } from "../tools/workspaceTools";
+import { workspaceTools, type WorkspaceWriteRecorder } from "../tools/workspaceTools";
 import { loadActiveToolSlugs } from "../tools/resolveAgentTools";
 import { QueryDatabaseTool } from "../tools/queryDatabaseTool";
 import { ConsultAgentTool } from "../tools/consultAgentTool";
@@ -235,6 +235,11 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
         let resultText: string;
 
+        // Captures durable writes the executor performs in the caller's
+        // shared workspace — reported back in the delegation result so the
+        // caller agent knows what changed in its workspace folder.
+        const workspaceWrites: { action: "write" | "edit" | "delete"; fileName: string }[] = [];
+
         if (useGoogleSearch) {
           // ── Google Search agent: invoke the model directly with grounding ──
           // We skip createDeepAgent entirely because it binds its own built-in
@@ -302,7 +307,14 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           });
 
           const skillTools = systemAgentSkillTools(executorAgent.id);
-          const wsTools = workspaceTools(callerAgentId);
+
+          // Recorder surfaces durable workspace writes back to the caller.
+          const writeRecorder: WorkspaceWriteRecorder = {
+            record: (action, fileName) => {
+              workspaceWrites.push({ action, fileName });
+            },
+          };
+          const wsTools = workspaceTools(callerAgentId, writeRecorder);
 
           // Load configurable tools gated by agent_available_tools (same as callModel)
           const activeSlugs = await loadActiveToolSlugs(executorAgent.id);
@@ -312,7 +324,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           if (has("consult_agent"))
             configurableTools.push(ConsultAgentTool(executorAgent.id, userId, groupId ?? null, singleChatId ?? null));
           if (has("list_agents")) configurableTools.push(ListAgentsTool(executorAgent.id));
-          if (has("list_system_agents")) configurableTools.push(ListSystemAgentsTool());
+          if (has("list_system_agents")) configurableTools.push(ListSystemAgentsTool(executorAgent.id));
 
           const allTools = [...mcpTools, ...skillTools, ...wsTools, ...configurableTools];
 
@@ -366,7 +378,11 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
               `2. **Do your work:** use Tier 1 (\`write_file\`/\`edit_file\`) freely for scratch and intermediate reasoning.\n` +
               `3. **Finish by persisting what matters:** if your task produced findings, conclusions, or artifacts that ` +
               `the orchestrator or future tasks will benefit from, save them to Tier 2 with \`workspace_write_file\` ` +
-              `using a clear filename. Do not save ephemeral scratch here.`,
+              `using a clear filename. Do not save ephemeral scratch here.\n` +
+              `4. **Announce every workspace write:** in your final response, include a short "Workspace writes" ` +
+              `section listing every file you created, edited, or deleted in the orchestrator's workspace (with a ` +
+              `one-line note on what it contains). The orchestrator needs to know what changed in its workspace ` +
+              `so it can inspect or reference those files later.`,
             checkpointer,
           });
 
@@ -440,6 +456,26 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           threadId,
         });
 
+        // Build a summary of durable writes the executor made to the caller's
+        // workspace — the caller must be told what changed so it can inspect.
+        const dedupedWrites = (() => {
+          const seen = new Map<string, "write" | "edit" | "delete">();
+          for (const w of workspaceWrites) {
+            // later actions win (e.g. write then edit → edit)
+            seen.set(w.fileName, w.action);
+          }
+          return [...seen.entries()].map(([fileName, action]) => ({ fileName, action }));
+        })();
+
+        const workspaceWritesSection = dedupedWrites.length === 0
+          ? ""
+          : "\n\n## Workspace writes (to your shared workspace folder)\n" +
+            "The executor agent persisted the following files in your workspace. " +
+            "Use `workspace_read_file` to inspect them:\n" +
+            dedupedWrites
+              .map((w) => `- **${w.action}** \`${w.fileName}\``)
+              .join("\n");
+
         // In syncMode the caller is blocking via waitUntilFinished — skip the callback.
         if (!job.data.syncMode) {
           const label = executorAgent.agentName || executorAgent.definition || executorAgentId;
@@ -450,7 +486,8 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
               `[Executor Agent Result — Delegation ${delegationId}]\n` +
               `Executor: ${label} (${executorAgentId})\n` +
               `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
-              `## Result\n${callbackResult}`,
+              `## Result\n${callbackResult}` +
+              workspaceWritesSection,
             requestId: `delegation-${delegationId}`,
             groupId: groupId ?? null,
             singleChatId: singleChatId ?? null,
@@ -462,6 +499,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           logger.info("DeepAgent: enqueued delegation_result callback", {
             delegationId,
             callerAgentId,
+            workspaceWriteCount: dedupedWrites.length,
           });
         }
 

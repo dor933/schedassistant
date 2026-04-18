@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import bcrypt from "bcrypt";
 import {
   User,
@@ -8,9 +10,30 @@ import {
   Agent,
   LLMModel,
   Vendor,
+  Organization,
+  sequelize,
 } from "@scheduling-agent/database";
 import { signToken } from "../middlewares/auth";
-import type { UserId } from "@scheduling-agent/types";
+import { logger } from "../logger";
+import { seedOrganizationAgents } from "./admin/orgAgentSeeder";
+import {
+  type UserId,
+  type RegisterOrganizationInput,
+} from "@scheduling-agent/types";
+
+const ADMIN_ROLE_ID = "00000000-0000-4000-c000-000000000001";
+const WORKSPACES_ROOT = path.join(process.env.DATA_DIR || "/app/data", "workspaces");
+
+function slugifyOrg(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "org"
+  );
+}
 
 export class AuthService {
   async login(userName: string, password: string) {
@@ -32,10 +55,11 @@ export class AuthService {
       userId: user.id,
       displayName: user.displayName,
       role: roleName,
+      organizationId: user.organizationId,
     });
 
-    await this.ensureAgentSingleChats(user.id);
-    const conversations = await this.loadUserConversations(user.id);
+    await this.ensureAgentSingleChats(user.id, user.organizationId);
+    const conversations = await this.loadUserConversations(user.id, user.organizationId);
 
     return {
       token,
@@ -49,9 +73,159 @@ export class AuthService {
     };
   }
 
+  /**
+   * Creates a new tenant (organization) with:
+   *  - admin user
+   *  - N primary agents
+   *  - SingleChats for admin ↔ each agent
+   * Returns a ready-to-use JWT (same shape as `login`).
+   */
+  async registerOrganization(data: RegisterOrganizationInput) {
+    const parsedAdmin = {
+      userName: data.admin.userName.toLowerCase(),
+      displayName: data.admin.displayName.trim(),
+      password: data.admin.password,
+    };
+
+    const existing = await User.findOne({ where: { userName: parsedAdmin.userName } });
+    if (existing)
+      throw Object.assign(new Error("Username is already taken."), { status: 409 });
+
+    const hashed = await bcrypt.hash(parsedAdmin.password, 10);
+    const baseSlug = slugifyOrg(data.organization.name);
+
+    const { org, adminUser, agents, epicOrchestratorId } = await sequelize.transaction(async (tx) => {
+      // Ensure slug is unique
+      let slug = baseSlug;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const clash = await Organization.findOne({ where: { slug }, transaction: tx });
+        if (!clash) break;
+        slug = `${baseSlug}-${Math.random().toString(36).slice(2, 6)}`;
+      }
+
+      const org = await Organization.create(
+        {
+          name: data.organization.name.trim(),
+          slug,
+          logo: data.organization.logo ?? null,
+          // web_search_agent_id is set after the per-org agents are seeded
+          // (the chosen web-search agent doesn't exist yet at this point).
+          webSearchAgentId: null,
+        },
+        { transaction: tx },
+      );
+
+      const adminUser = await User.create(
+        {
+          userName: parsedAdmin.userName,
+          displayName: parsedAdmin.displayName,
+          password: hashed,
+          roleId: ADMIN_ROLE_ID,
+          organizationId: org.id,
+        },
+        { transaction: tx },
+      );
+
+      const agents = [];
+      for (const a of data.agents) {
+        const agent = await Agent.create(
+          {
+            type: "primary",
+            definition: a.definition.trim(),
+            description: a.description?.trim() || null,
+            modelId: a.modelId ?? null,
+            createdByUserId: adminUser.id,
+            organizationId: org.id,
+          },
+          { transaction: tx },
+        );
+        agents.push(agent);
+      }
+
+      for (const agent of agents) {
+        await SingleChat.create(
+          {
+            userId: adminUser.id,
+            agentId: agent.id,
+            title: agent.definition?.trim() || "Agent Chat",
+          },
+          { transaction: tx },
+        );
+      }
+
+      // Every org gets its OWN epic orchestrator + web-search agents (Gemini
+      // and Brave). Sharing them across orgs would mix episodic memory,
+      // agent notes, and workspace folders across tenants.
+      const seeded = await seedOrganizationAgents({
+        organizationId: org.id,
+        actorId: adminUser.id,
+        webSearchChoice: data.webSearchChoice ?? "gemini",
+        transaction: tx,
+      });
+
+      await org.update(
+        { webSearchAgentId: seeded.activeWebSearchAgentId },
+        { transaction: tx },
+      );
+
+      return {
+        org,
+        adminUser,
+        agents,
+        epicOrchestratorId: seeded.epicOrchestratorId,
+      };
+    });
+
+    // Primary agents get a persistent workspace folder. System agents never
+    // do — they write into their caller's workspace when delegated to.
+    // Includes the user-defined primary agents plus the epic orchestrator
+    // seeded for this org.
+    const epicOrchestrator = await Agent.findByPk(epicOrchestratorId);
+    const primaryAgentsNeedingWorkspace = [
+      ...agents,
+      ...(epicOrchestrator ? [epicOrchestrator] : []),
+    ];
+    for (const agent of primaryAgentsNeedingWorkspace) {
+      const workspacePath = path.join(WORKSPACES_ROOT, agent.definition || agent.id);
+      try {
+        fs.mkdirSync(workspacePath, { recursive: true });
+        await agent.update({ workspacePath });
+      } catch (err) {
+        logger.error("Failed to create workspace for agent", { agentId: agent.id, error: String(err) });
+      }
+    }
+
+    const token = signToken({
+      userId: adminUser.id,
+      displayName: adminUser.displayName,
+      role: "admin",
+      organizationId: org.id,
+    });
+
+    const conversations = await this.loadUserConversations(adminUser.id, org.id);
+
+    return {
+      token,
+      user: {
+        id: adminUser.id,
+        displayName: adminUser.displayName,
+        userIdentity: adminUser.userIdentity,
+        role: "admin",
+      },
+      organization: {
+        id: org.id,
+        name: org.name,
+        slug: org.slug,
+        logo: org.logo,
+        webSearchAgentId: org.webSearchAgentId,
+      },
+      conversations,
+    };
+  }
+
   async getMe(userId: UserId) {
     const user = await User.findByPk(userId, {
-      attributes: ["id", "displayName", "userIdentity", "roleId"],
+      attributes: ["id", "displayName", "userIdentity", "roleId", "organizationId"],
     });
     if (!user)
       throw Object.assign(new Error("User not found."), { status: 404 });
@@ -62,25 +236,38 @@ export class AuthService {
       if (role) roleName = role.name;
     }
 
-    await this.ensureAgentSingleChats(user.id);
-    const conversations = await this.loadUserConversations(user.id);
+    const org = await Organization.findByPk(user.organizationId, {
+      attributes: ["id", "name", "slug", "logo", "webSearchAgentId"],
+    });
+
+    await this.ensureAgentSingleChats(user.id, user.organizationId);
+    const conversations = await this.loadUserConversations(user.id, user.organizationId);
 
     return {
       id: user.id,
       displayName: user.displayName,
       userIdentity: user.userIdentity,
       role: roleName,
+      organization: org
+        ? {
+            id: org.id,
+            name: org.name,
+            slug: org.slug,
+            logo: org.logo,
+            webSearchAgentId: org.webSearchAgentId,
+          }
+        : null,
       conversations,
     };
   }
 
   /**
-   * Ensures a `single_chats` row exists for every agent for this user (DM surface;
-   * same agent may also be used in groups — shared LangGraph thread is on `agents`).
+   * Ensures a `single_chats` row exists for every primary agent in this user's
+   * organization. System agents are internal-only.
    */
-  private async ensureAgentSingleChats(userId: UserId): Promise<void> {
+  private async ensureAgentSingleChats(userId: UserId, organizationId: string): Promise<void> {
     const agents = await Agent.findAll({
-      where: { type: "primary" },
+      where: { type: "primary", organizationId },
       attributes: ["id", "definition"],
     });
     for (const agent of agents) {
@@ -95,7 +282,7 @@ export class AuthService {
     }
   }
 
-  async loadUserConversations(userId: UserId) {
+  async loadUserConversations(userId: UserId, organizationId: string) {
     const memberships = await GroupMember.findAll({
       where: { userId },
       attributes: ["groupId"],
@@ -112,7 +299,7 @@ export class AuthService {
       groups = await Promise.all(
         groupRows.map(async (g) => {
           const agent = await Agent.findByPk(g.agentId, {
-            attributes: ["definition", "modelId"],
+            attributes: ["definition", "modelId", "organizationId"],
           });
           return {
             id: g.id,
@@ -125,12 +312,15 @@ export class AuthService {
       );
     }
 
-    // Only return SingleChats for primary agents (system agents are internal-only)
+    // Only return SingleChats for primary agents in the caller's org
     const primaryAgentIds = (
-      await Agent.findAll({ where: { type: "primary" }, attributes: ["id"] })
+      await Agent.findAll({
+        where: { type: "primary", organizationId },
+        attributes: ["id"],
+      })
     ).map((a) => a.id);
 
-    const singleChatRows = await SingleChat.findAll({
+    const singleChatRows = primaryAgentIds.length === 0 ? [] : await SingleChat.findAll({
       where: { userId, agentId: primaryAgentIds },
       attributes: ["id", "agentId", "title"],
       order: [["created_at", "DESC"]],

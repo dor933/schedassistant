@@ -2,7 +2,12 @@ import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
 import type { UserId } from "@scheduling-agent/types";
 
-export type RoundtableStatus = "pending" | "running" | "completed" | "failed";
+export type RoundtableStatus =
+  | "pending"
+  | "running"
+  | "waiting_for_user"
+  | "completed"
+  | "failed";
 
 export interface RoundtableAttributes {
   id: string;
@@ -11,6 +16,8 @@ export interface RoundtableAttributes {
   maxTurnsPerAgent: number;
   currentRound: number;
   currentAgentOrderIndex: number;
+  /** When true, the creating user is a participant and gets the last turn of each round. */
+  includeUser: boolean;
   groupId: string | null;
   singleChatId: string | null;
   threadId: string;
@@ -29,6 +36,7 @@ type CreationAttrs = Optional<
   | "maxTurnsPerAgent"
   | "currentRound"
   | "currentAgentOrderIndex"
+  | "includeUser"
   | "summary"
   | "summaryGeneratedAt"
   | "createdAt"
@@ -45,6 +53,7 @@ class Roundtable
   declare maxTurnsPerAgent: number;
   declare currentRound: number;
   declare currentAgentOrderIndex: number;
+  declare includeUser: boolean;
   declare groupId: string | null;
   declare singleChatId: string | null;
   declare threadId: string;
@@ -88,6 +97,12 @@ Roundtable.init(
       allowNull: false,
       defaultValue: 0,
       field: "current_agent_order_index",
+    },
+    includeUser: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: "include_user",
     },
     groupId: {
       type: DataTypes.UUID,

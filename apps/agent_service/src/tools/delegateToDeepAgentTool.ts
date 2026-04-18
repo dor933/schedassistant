@@ -1,11 +1,9 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { Agent, DeepAgentDelegation } from "@scheduling-agent/database";
+import { Agent, DeepAgentDelegation, Organization } from "@scheduling-agent/database";
 import { getDeepAgentQueue } from "../queues/deepAgent.bull";
 import { linkDelegationToConsultation } from "../consultationChain";
 import { logger } from "../logger";
-
-const WEB_SEARCH_SYSTEM_AGENT_ID = "00000000-0000-4000-a000-000000000200";
 
 /**
  * Async executor agent delegation tool (Tier 2).
@@ -24,11 +22,25 @@ export function DelegateToDeepAgentTool(
     async (input) => {
       const { systemAgentId, request } = input;
 
+      const callerAgent = await Agent.findByPk(callerAgentId, {
+        attributes: ["id", "organizationId"],
+      });
+      if (!callerAgent) {
+        return `Error: caller agent "${callerAgentId}" not found.`;
+      }
+
       const executorAgent = await Agent.findOne({
-        where: { id: systemAgentId, type: "system" },
+        where: {
+          id: systemAgentId,
+          type: "system",
+          organizationId: callerAgent.organizationId,
+        },
       });
       if (!executorAgent) {
-        return `Error: system agent with id "${systemAgentId}" not found. Use list_system_agents to see available executor agents.`;
+        return (
+          `Error: system agent with id "${systemAgentId}" not found in this organization. ` +
+          `Use list_system_agents to see available executor agents.`
+        );
       }
 
       const delegation = await DeepAgentDelegation.create({
@@ -100,7 +112,10 @@ export function DelegateToDeepAgentTool(
 /**
  * Purpose-built web-search delegation tool for the Epic Orchestrator.
  *
- * Hardcodes the target system agent to the seeded web_search agent by ID.
+ * Resolves the target web-search system agent by looking up the caller
+ * agent's organization and following `organizations.web_search_agent_id`.
+ * Each org owns its own Gemini + Brave web-search agents; the admin
+ * chooses which one is active per org.
  */
 export function DelegateWebSearchTool(
   callerAgentId: string,
@@ -112,13 +127,34 @@ export function DelegateWebSearchTool(
     async (input) => {
       const { request } = input;
 
+      const callerAgent = await Agent.findByPk(callerAgentId, {
+        attributes: ["id", "organizationId"],
+      });
+      if (!callerAgent) {
+        return `Error: caller agent "${callerAgentId}" not found.`;
+      }
+
+      const org = await Organization.findByPk(callerAgent.organizationId, {
+        attributes: ["id", "webSearchAgentId"],
+      });
+      if (!org?.webSearchAgentId) {
+        return (
+          `Error: no web-search agent is configured for this organization. ` +
+          `Ask an administrator to pick Gemini or Brave in the admin panel.`
+        );
+      }
+
       const executorAgent = await Agent.findOne({
-        where: { id: WEB_SEARCH_SYSTEM_AGENT_ID, type: "system" },
+        where: {
+          id: org.webSearchAgentId,
+          organizationId: org.id,
+          type: "system",
+        },
       });
       if (!executorAgent) {
         return (
-          `Error: the web_search system agent is not configured in this environment. ` +
-          `Contact the administrator to seed the web_search system agent.`
+          `Error: the organization's configured web-search agent (${org.webSearchAgentId}) ` +
+          `could not be loaded. Ask an administrator to re-select one in the admin panel.`
         );
       }
 

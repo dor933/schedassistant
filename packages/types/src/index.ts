@@ -1,3 +1,46 @@
+// ─── Organization (tenant) ─────────────────────────────────────────────────
+
+export type OrganizationId = string;
+
+export interface OrganizationAttributes {
+  id: OrganizationId;
+  name: string;
+  /** URL-safe identifier. Unique. */
+  slug: string | null;
+  /** Logo as a base64 data URL — no file-storage infra. */
+  logo: string | null;
+  /**
+   * FK to `agents.id` — the single, currently active system web-search agent
+   * for this org. Exactly one of the two web-search system agents
+   * (Gemini-powered `web_search` / Brave-powered `web_search_brave`) is
+   * pointed to at any time. Resolved at runtime when an agent delegates a
+   * web search so queries always land on the org's chosen agent.
+   */
+  webSearchAgentId: AgentId | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Fixed UUIDs for the two seeded web-search system agents (see migration 20240101000083). */
+export const WEB_SEARCH_AGENT_ID_GEMINI = "00000000-0000-4000-a000-000000000200";
+export const WEB_SEARCH_AGENT_ID_BRAVE = "00000000-0000-4000-a000-000000000201";
+export type WebSearchChoice = "gemini" | "brave";
+
+/**
+ * Skills that are always auto-assigned to every agent and never appear in the
+ * admin UI. They describe the in-house tools (agent notes, workspace, skill
+ * library) that are hardcoded into every call. Admins cannot attach or detach
+ * them; agents always have access.
+ */
+export const AUTO_ASSIGNED_SKILL_SLUGS: readonly string[] = [
+  "dev-in-house-agent-notes",
+  "dev-in-house-workspace",
+  "dev-in-house-skill-library",
+];
+export const AUTO_ASSIGNED_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
+  AUTO_ASSIGNED_SKILL_SLUGS,
+);
+
 // ─── User ────────────────────────────────────────────────────────────────────
 
 /** Canonical user identifier (`users.id` — integer, auto-generated). */
@@ -70,6 +113,8 @@ export interface AgentAttributes {
   description: string | null;
   /** When true, this agent cannot be reconfigured via the admin UI. */
   isLocked: boolean;
+  /** FK to `organizations.id` — the tenant this agent belongs to. */
+  organizationId: OrganizationId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -234,6 +279,8 @@ export interface UserAttributes {
   password?: string | null;
   /** FK to `roles.id` — determines the user's access level. */
   roleId?: string | null;
+  /** FK to `organizations.id` — the tenant this user belongs to. */
+  organizationId: OrganizationId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -448,6 +495,32 @@ export interface TaskDependencyAttributes {
   createdAt: Date;
 }
 
+// ─── Agent Cron Jobs ─────────────────────────────────────────────────────────
+
+export type AgentCronJobId = string;
+export type AgentCronJobStatus = "success" | "failed" | "enqueued";
+
+export interface AgentCronJobAttributes {
+  id: AgentCronJobId;
+  agentId: AgentId;
+  organizationId: OrganizationId;
+  createdByUserId: UserId | null;
+  /** Human label shown in the admin UI. */
+  name: string;
+  /** Message sent to the agent on every tick. */
+  prompt: string;
+  /** Standard 5-field cron expression (minute hour dom month dow). */
+  cronExpression: string;
+  /** IANA timezone string, default "UTC". */
+  timezone: string;
+  enabled: boolean;
+  lastRunAt: Date | null;
+  lastStatus: AgentCronJobStatus | null;
+  lastError: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ─── Validation (Zod schemas) ───────────────────────────────────────────────
 
 export {
@@ -455,7 +528,10 @@ export {
   passwordSchema,
   displayNameSchema,
   registerSchema,
+  registerOrganizationSchema,
+  webSearchChoiceSchema,
   loginSchema,
   type RegisterInput,
+  type RegisterOrganizationInput,
   type LoginInput,
 } from "./validation";

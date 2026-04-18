@@ -43,6 +43,7 @@ import SessionSidebar, {
 } from "../components/SessionSidebar";
 import ChatMessage from "../components/ChatMessage";
 import ChatInput from "../components/ChatInput";
+import NotificationBell from "../components/NotificationBell";
 
 const PAGE_SIZE = 20;
 
@@ -831,12 +832,19 @@ export default function ChatPage() {
   return (
     <Stack
       direction="row"
+      className="space-bg"
       sx={{
         height: "100dvh",
-        bgcolor: "rgb(249 250 251 / 0.5)",
         overflow: "hidden",
+        position: "relative",
       }}
     >
+      {/* Deep-space ambient layers */}
+      <Box className="space-grid" aria-hidden="true" />
+      <Box className="space-orb space-orb-1" aria-hidden="true" />
+      <Box className="space-orb space-orb-2" aria-hidden="true" />
+      <Box className="space-orb space-orb-3" aria-hidden="true" />
+
       {/* Mobile sidebar toggle — hidden when sidebar is open */}
       {!sidebarOpen && (
         <Box
@@ -844,7 +852,7 @@ export default function ChatPage() {
           onClick={() => {
             setSidebarOpen(true);
           }}
-          className="rounded-xl border border-gray-200/80 bg-white/90 shadow-glass backdrop-blur-sm transition-all duration-200 hover:shadow-md active:scale-95"
+          className="rounded-xl border border-white/15 bg-white/[0.06] backdrop-blur-xl transition-all duration-200 hover:bg-white/10 hover:border-white/25 active:scale-95"
           sx={{
             position: "fixed",
             left: 12,
@@ -854,7 +862,7 @@ export default function ChatPage() {
             display: { xs: "block", sm: "none" },
           }}
         >
-          <Menu className="h-5 w-5 text-gray-600" />
+          <Menu className="h-5 w-5 text-indigo-100" />
         </Box>
       )}
 
@@ -887,6 +895,8 @@ export default function ChatPage() {
             user?.displayName ??
             (user?.id != null ? String(user.id) : null)
           }
+          orgLogo={user?.organizationLogo}
+          orgName={user?.organizationName}
         />
       </Box>
 
@@ -907,13 +917,22 @@ export default function ChatPage() {
       )}
 
       {/* Main Chat Area */}
-      <Stack component="main" sx={{ flex: 1, minWidth: 0, bgcolor: "white" }}>
+      <Stack
+        component="main"
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          bgcolor: "transparent",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
         {/* Chat Header */}
         <Stack
           component="header"
           direction="row"
           alignItems="center"
-          className="border-b border-gray-100 bg-white/80 backdrop-blur-xl"
+          className="border-b border-white/5 bg-slate-950/40 backdrop-blur-xl"
           sx={{
             px: { xs: 2, sm: 3 },
             py: 1.75,
@@ -929,7 +948,7 @@ export default function ChatPage() {
           >
             <Box
               component="h2"
-              className="font-semibold text-gray-900 tracking-tight"
+              className="font-semibold text-white tracking-tight"
               sx={{
                 fontSize: { xs: "13px", sm: "14px" },
                 overflow: "hidden",
@@ -944,26 +963,12 @@ export default function ChatPage() {
                 direction="row"
                 alignItems="center"
                 spacing={0.75}
-                className={`text-xs font-medium ${isEpicExecution ? "text-violet-600" : "text-emerald-600"}`}
+                className={`text-xs font-medium ${isEpicExecution ? "text-fuchsia-300" : "text-indigo-300"}`}
               >
                 <Box
                   component="span"
-                  sx={{
-                    position: "relative",
-                    display: "flex",
-                    width: 8,
-                    height: 8,
-                  }}
-                >
-                  <Box
-                    component="span"
-                    className={`absolute inline-flex h-full w-full animate-ping rounded-full ${isEpicExecution ? "bg-violet-400" : "bg-emerald-400"} opacity-75`}
-                  />
-                  <Box
-                    component="span"
-                    className={`relative inline-flex h-2 w-2 rounded-full ${isEpicExecution ? "bg-violet-500" : "bg-emerald-500"}`}
-                  />
-                </Box>
+                  className={`typing-dot ${isEpicExecution ? "typing-dot-epic" : ""}`}
+                />
                 <span>{isEpicExecution ? "Executing epic task..." : "Agent is typing..."}</span>
               </Stack>
             ) : usersTypingNames.length > 0 ? (
@@ -971,26 +976,9 @@ export default function ChatPage() {
                 direction="row"
                 alignItems="center"
                 spacing={0.75}
-                className="text-xs font-medium text-blue-600"
+                className="text-xs font-medium text-sky-300"
               >
-                <Box
-                  component="span"
-                  sx={{
-                    position: "relative",
-                    display: "flex",
-                    width: 8,
-                    height: 8,
-                  }}
-                >
-                  <Box
-                    component="span"
-                    className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75"
-                  />
-                  <Box
-                    component="span"
-                    className="relative inline-flex h-2 w-2 rounded-full bg-blue-500"
-                  />
-                </Box>
+                <Box component="span" className="typing-dot typing-dot-user" />
                 <span>
                   {usersTypingNames.length === 1
                     ? `${usersTypingNames[0]} is typing...`
@@ -1004,7 +992,7 @@ export default function ChatPage() {
                 direction="row"
                 alignItems="center"
                 onClick={() => setShowGroupInfo(true)}
-                className="rounded-full bg-gray-100 text-[10px] font-medium text-gray-500 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                className="rounded-full border border-white/10 bg-white/[0.04] text-[10px] font-medium text-indigo-200/80 transition-colors hover:bg-indigo-400/10 hover:text-indigo-100 hover:border-indigo-400/30"
                 sx={{
                   mt: 0.25,
                   gap: 0.5,
@@ -1021,7 +1009,7 @@ export default function ChatPage() {
                 <ChevronRight className="h-2.5 w-2.5" />
               </Stack>
             ) : (
-              <Box component="p" className="text-xs text-gray-400">
+              <Box component="p" className="text-xs text-indigo-200/50">
                 {activeConv?.type === "single" ? "Direct Chat" : "Default Chat"}
               </Box>
             )}
@@ -1047,14 +1035,15 @@ export default function ChatPage() {
                   }
                 }}
                 className={`flex-shrink-0 rounded-xl p-2 transition-all duration-200 ${searchOpen
-                  ? "bg-indigo-50 text-indigo-600 ring-1 ring-indigo-200/60"
-                  : "text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                  ? "bg-indigo-500/20 text-indigo-200 ring-1 ring-indigo-400/40"
+                  : "text-indigo-200/60 hover:bg-white/[0.06] hover:text-indigo-100"
                   }`}
                 title="Search in chat"
               >
                 <Search className="h-4 w-4" />
               </Box>
             )}
+            <NotificationBell />
           </Stack>
         </Stack>
 
@@ -1064,17 +1053,17 @@ export default function ChatPage() {
             direction="row"
             alignItems="center"
             justifyContent="center"
-            className="border-b border-gray-100 bg-gray-50/80 animate-slide-up"
+            className="border-b border-white/5 bg-slate-950/30 backdrop-blur-md animate-slide-up"
             sx={{ px: { xs: 2, sm: 3 }, py: 1 }}
           >
             <Stack
               direction="row"
               alignItems="center"
               spacing={1}
-              className="rounded-full bg-white ring-1 ring-gray-200/80 shadow-sm"
+              className="rounded-full border border-white/10 bg-white/[0.05] backdrop-blur-md transition focus-within:border-indigo-400/40 focus-within:bg-white/[0.08] focus-within:shadow-[0_0_28px_-12px_rgba(129,140,248,0.55)]"
               sx={{ width: "100%", maxWidth: "36rem", px: 2, py: 0.75 }}
             >
-              <Search className="h-4 w-4 flex-shrink-0 text-gray-400" />
+              <Search className="h-4 w-4 flex-shrink-0 text-indigo-200/60" />
               <Box
                 component="input"
                 autoFocus
@@ -1105,17 +1094,17 @@ export default function ChatPage() {
                   }
                 }}
                 placeholder="Search messages..."
-                className="bg-transparent text-sm text-gray-900 placeholder-gray-400 outline-none"
+                className="bg-transparent text-sm text-white placeholder-indigo-200/40 outline-none"
                 sx={{ flex: 1, minWidth: 0 }}
               />
               {searching && (
-                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-300/70" />
               )}
               {searchResults.length > 0 && (
                 <Stack direction="row" alignItems="center" spacing={0.5}>
                   <Box
                     component="span"
-                    className="text-xs text-gray-500 tabular-nums"
+                    className="text-xs text-indigo-200/70 tabular-nums"
                     sx={{ whiteSpace: "nowrap" }}
                   >
                     {searchIdx + 1} / {searchResults.length}
@@ -1123,14 +1112,14 @@ export default function ChatPage() {
                   <Box
                     component="button"
                     onClick={() => handleSearchNav("prev")}
-                    className="rounded-lg p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition"
+                    className="rounded-lg p-1 text-indigo-200/60 hover:bg-white/10 hover:text-indigo-100 transition"
                   >
                     <ChevronUp className="h-3.5 w-3.5" />
                   </Box>
                   <Box
                     component="button"
                     onClick={() => handleSearchNav("next")}
-                    className="rounded-lg p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition"
+                    className="rounded-lg p-1 text-indigo-200/60 hover:bg-white/10 hover:text-indigo-100 transition"
                   >
                     <ChevronDown className="h-3.5 w-3.5" />
                   </Box>
@@ -1139,7 +1128,7 @@ export default function ChatPage() {
               {searchQuery && searchResults.length === 0 && !searching && (
                 <Box
                   component="span"
-                  className="text-xs text-gray-400"
+                  className="text-xs text-indigo-200/50"
                   sx={{ whiteSpace: "nowrap" }}
                 >
                   No results
@@ -1153,7 +1142,7 @@ export default function ChatPage() {
                   setSearchResults([]);
                   setSearchIdx(-1);
                 }}
-                className="rounded-lg p-1 text-gray-400 hover:bg-gray-200 hover:text-gray-600 transition"
+                className="rounded-lg p-1 text-indigo-200/60 hover:bg-white/10 hover:text-indigo-100 transition"
               >
                 <X className="h-3.5 w-3.5" />
               </Box>
@@ -1178,22 +1167,25 @@ export default function ChatPage() {
               className="animate-fade-in"
               sx={{ height: "100%", textAlign: "center" }}
             >
-              <Box className="mb-5 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-indigo-50 to-blue-50 shadow-glass">
-                <Sparkles className="h-9 w-9 text-indigo-400" />
+              <Box className="relative mb-6 flex h-24 w-24 items-center justify-center">
+                <Box className="absolute inset-0 rounded-full bg-gradient-to-br from-indigo-500/40 via-violet-500/30 to-fuchsia-500/20 blur-2xl aurora-glow" />
+                <Box className="relative flex h-20 w-20 items-center justify-center rounded-3xl border border-white/15 bg-gradient-to-br from-indigo-500/30 via-violet-500/20 to-fuchsia-500/20 backdrop-blur-xl shadow-[0_0_48px_-12px_rgba(129,140,248,0.6)]">
+                  <Sparkles className="h-9 w-9 text-indigo-100" />
+                </Box>
               </Box>
               <Box
                 component="h3"
-                className="mb-1.5 text-lg font-bold text-gray-900 tracking-tight"
+                className="mb-2 text-xl font-bold text-white tracking-tight"
               >
-                Select a conversation
+                A new way to orchestrate
               </Box>
               <Box
                 component="p"
-                className="text-sm text-gray-500 leading-relaxed"
-                sx={{ maxWidth: "20rem" }}
+                className="text-sm text-indigo-200/70 leading-relaxed"
+                sx={{ maxWidth: "22rem" }}
               >
-                Choose a group or direct chat from the sidebar to start
-                messaging.
+                Select an agent or group from the sidebar — your constellation
+                of AI collaborators is ready.
               </Box>
             </Stack>
           )}
@@ -1205,8 +1197,8 @@ export default function ChatPage() {
               className="animate-fade-in"
               sx={{ height: "100%" }}
             >
-              <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
-              <Box component="p" className="mt-3 text-sm text-gray-400">
+              <Loader2 className="h-8 w-8 animate-spin text-indigo-300" />
+              <Box component="p" className="mt-3 text-sm text-indigo-200/60">
                 Loading conversation...
               </Box>
             </Stack>
@@ -1222,21 +1214,24 @@ export default function ChatPage() {
                 className="animate-fade-in"
                 sx={{ height: "100%", textAlign: "center" }}
               >
-                <Box className="mb-5 flex h-20 w-20 items-center justify-center rounded-3xl bg-gradient-to-br from-indigo-50 to-blue-50 shadow-glass">
-                  <Sparkles className="h-9 w-9 text-indigo-400" />
+                <Box className="relative mb-6 flex h-24 w-24 items-center justify-center">
+                  <Box className="absolute inset-0 rounded-full bg-gradient-to-br from-indigo-500/40 via-violet-500/30 to-fuchsia-500/20 blur-2xl aurora-glow" />
+                  <Box className="relative flex h-20 w-20 items-center justify-center rounded-3xl border border-white/15 bg-gradient-to-br from-indigo-500/30 via-violet-500/20 to-fuchsia-500/20 backdrop-blur-xl shadow-[0_0_48px_-12px_rgba(129,140,248,0.6)]">
+                    <Sparkles className="h-9 w-9 text-indigo-100" />
+                  </Box>
                 </Box>
                 <Box
                   component="h3"
-                  className="mb-1.5 text-lg font-bold text-gray-900 tracking-tight"
+                  className="mb-2 text-xl font-bold text-white tracking-tight"
                 >
                   {convName}
                 </Box>
                 <Box
                   component="p"
-                  className="text-sm text-gray-500 leading-relaxed"
-                  sx={{ maxWidth: "20rem" }}
+                  className="text-sm text-indigo-200/70 leading-relaxed"
+                  sx={{ maxWidth: "22rem" }}
                 >
-                  Send a message to start the conversation.
+                  Send a message — the agent is listening across the network.
                 </Box>
               </Stack>
             )}
@@ -1254,7 +1249,7 @@ export default function ChatPage() {
                   className="animate-fade-in"
                   sx={{ py: 1.5 }}
                 >
-                  <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
+                  <Loader2 className="h-5 w-5 animate-spin text-indigo-300/70" />
                 </Stack>
               )}
               {hasMoreMessages && !loadingMore && (
@@ -1262,8 +1257,8 @@ export default function ChatPage() {
                   <Box
                     component="button"
                     onClick={handleLoadMore}
-                    className="rounded-full bg-gray-100 text-[11px] font-medium text-gray-500 transition hover:bg-gray-200 hover:text-gray-700"
-                    sx={{ px: 1.5, py: 0.5 }}
+                    className="rounded-full border border-white/10 bg-white/[0.04] text-[11px] font-medium text-indigo-200/70 backdrop-blur-sm transition hover:bg-white/[0.08] hover:text-indigo-100 hover:border-indigo-400/30"
+                    sx={{ px: 1.75, py: 0.5 }}
                   >
                     Load older messages
                   </Box>
@@ -1317,22 +1312,22 @@ export default function ChatPage() {
               {(sending || agentIsTyping) && (
                 <Stack direction="row" className="animate-fade-in">
                   <Box
-                    className={`mr-3 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${activeConv?.model?.vendor?.slug === "openai"
-                      ? "bg-emerald-50 text-emerald-700 ring-emerald-200/60"
+                    className={`mr-3 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl backdrop-blur-sm ring-1 ${activeConv?.model?.vendor?.slug === "openai"
+                      ? "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30"
                       : activeConv?.model?.vendor?.slug === "anthropic"
-                        ? "bg-amber-50 text-amber-700 ring-amber-200/60"
+                        ? "bg-amber-500/15 text-amber-300 ring-amber-400/30"
                         : activeConv?.model?.vendor?.slug === "google"
-                          ? "bg-blue-50 text-blue-700 ring-blue-200/60"
-                          : "bg-gray-100 text-gray-500 ring-gray-200/60"
+                          ? "bg-sky-500/15 text-sky-300 ring-sky-400/30"
+                          : "bg-white/[0.06] text-indigo-200 ring-white/15"
                       }`}
                   >
                     <Bot className="h-4 w-4" />
                   </Box>
-                  <Box className="rounded-2xl rounded-tl-md bg-white px-4 py-3 shadow-glass ring-1 ring-gray-950/[0.04]">
+                  <Box className="rounded-2xl rounded-tl-md border border-white/10 bg-white/[0.05] px-4 py-3 backdrop-blur-xl shadow-[0_8px_32px_-12px_rgba(0,0,0,0.5)]">
                     <Stack direction="row" spacing={0.75}>
-                      <Box className="h-2 w-2 animate-bounce rounded-full bg-gray-300 [animation-delay:-0.3s]" />
-                      <Box className="h-2 w-2 animate-bounce rounded-full bg-gray-300 [animation-delay:-0.15s]" />
-                      <Box className="h-2 w-2 animate-bounce rounded-full bg-gray-300" />
+                      <Box className="h-2 w-2 rounded-full bg-indigo-300/80 animate-bounce [animation-delay:-0.3s]" />
+                      <Box className="h-2 w-2 rounded-full bg-fuchsia-300/80 animate-bounce [animation-delay:-0.15s]" />
+                      <Box className="h-2 w-2 rounded-full bg-violet-300/80 animate-bounce" />
                     </Stack>
                   </Box>
                 </Stack>
@@ -1377,12 +1372,12 @@ export default function ChatPage() {
             position: "fixed",
             inset: 0,
             zIndex: 50,
-            bgcolor: "rgba(0,0,0,0.3)",
-            backdropFilter: "blur(4px)",
+            bgcolor: "rgba(7,8,25,0.55)",
+            backdropFilter: "blur(6px)",
           }}
         >
           <Box
-            className="animate-scale-in border border-gray-200/60 bg-white/95 shadow-glass-lg backdrop-blur-xl"
+            className="animate-scale-in glass-panel-elevated"
             onClick={(e: React.MouseEvent) => e.stopPropagation()}
             sx={{
               width: "100%",
@@ -1400,17 +1395,17 @@ export default function ChatPage() {
               sx={{ mb: 2.5 }}
             >
               <Stack direction="row" alignItems="center" spacing={1.5}>
-                <Box className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-md">
+                <Box className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 text-white shadow-[0_0_28px_-6px_rgba(168,85,247,0.6)]">
                   <Users className="h-5 w-5" />
                 </Box>
                 <Box>
                   <Box
                     component="h3"
-                    className="text-base font-bold text-gray-900"
+                    className="text-base font-bold text-white"
                   >
                     {activeConv.name}
                   </Box>
-                  <Box component="p" className="text-[11px] text-gray-400">
+                  <Box component="p" className="text-[11px] text-indigo-200/60">
                     {groupMembersList.length} member
                     {groupMembersList.length !== 1 ? "s" : ""} + 1 agent
                   </Box>
@@ -1419,7 +1414,7 @@ export default function ChatPage() {
               <Box
                 component="button"
                 onClick={() => setShowGroupInfo(false)}
-                className="rounded-xl p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+                className="rounded-xl p-2 text-indigo-200/60 hover:bg-white/10 hover:text-indigo-100 transition"
               >
                 <X className="h-4 w-4" />
               </Box>
@@ -1430,7 +1425,7 @@ export default function ChatPage() {
               <Box sx={{ mb: 2 }}>
                 <Box
                   component="p"
-                  className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400"
+                  className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-indigo-300/60"
                 >
                   Agent
                 </Box>
@@ -1438,17 +1433,17 @@ export default function ChatPage() {
                   direction="row"
                   alignItems="center"
                   spacing={1.5}
-                  className="rounded-xl bg-gradient-to-r from-gray-50 to-indigo-50/50 ring-1 ring-gray-100"
+                  className="rounded-xl border border-white/10 bg-gradient-to-r from-white/[0.04] to-indigo-500/10 backdrop-blur-sm"
                   sx={{ p: 1.5 }}
                 >
                   <Box
-                    className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ${activeConv.model?.vendor?.slug === "openai"
-                      ? "bg-emerald-50 text-emerald-600 ring-emerald-200/60"
+                    className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl backdrop-blur-sm ring-1 ${activeConv.model?.vendor?.slug === "openai"
+                      ? "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30"
                       : activeConv.model?.vendor?.slug === "anthropic"
-                        ? "bg-amber-50 text-amber-600 ring-amber-200/60"
+                        ? "bg-amber-500/15 text-amber-300 ring-amber-400/30"
                         : activeConv.model?.vendor?.slug === "google"
-                          ? "bg-blue-50 text-blue-600 ring-blue-200/60"
-                          : "bg-violet-50 text-violet-600 ring-violet-200/60"
+                          ? "bg-sky-500/15 text-sky-300 ring-sky-400/30"
+                          : "bg-violet-500/15 text-violet-300 ring-violet-400/30"
                       }`}
                   >
                     <Bot className="h-4 w-4" />
@@ -1456,14 +1451,14 @@ export default function ChatPage() {
                   <Box sx={{ minWidth: 0, flex: 1 }}>
                     <Box
                       component="p"
-                      className="text-sm font-semibold text-gray-900 truncate"
+                      className="text-sm font-semibold text-white truncate"
                     >
                       {activeConv.agentDefinition}
                     </Box>
                     {activeConv.model && (
                       <Box
                         component="p"
-                        className="text-[11px] text-gray-400 truncate"
+                        className="text-[11px] text-indigo-200/60 truncate"
                       >
                         {activeConv.model.vendor?.name} &middot;{" "}
                         {activeConv.model.name}
@@ -1478,11 +1473,11 @@ export default function ChatPage() {
             <Box>
               <Box
                 component="p"
-                className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-gray-400"
+                className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-indigo-300/60"
               >
                 Members
               </Box>
-              <Stack spacing={0.5} sx={{ maxHeight: 240, overflowY: "auto" }}>
+              <Stack spacing={0.5} sx={{ maxHeight: 240, overflowY: "auto" }} className="dark-scroll">
                 {groupMembersList.map((m) => {
                   const name = m.displayName ?? String(m.userId);
                   const isCurrentUser = m.userId === user?.id;
@@ -1492,13 +1487,13 @@ export default function ChatPage() {
                       direction="row"
                       alignItems="center"
                       spacing={1.5}
-                      className="rounded-xl transition-colors hover:bg-gray-50"
+                      className="rounded-xl transition-colors hover:bg-white/[0.04]"
                       sx={{ px: 1.5, py: 1.25 }}
                     >
                       <Box
-                        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold shadow-sm ring-1 ring-gray-950/[0.04] ${isCurrentUser
-                          ? "bg-gradient-to-br from-indigo-100 to-blue-100 text-indigo-600"
-                          : "bg-gradient-to-br from-gray-100 to-gray-200 text-gray-600"
+                        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl text-xs font-bold backdrop-blur-sm ring-1 ${isCurrentUser
+                          ? "bg-gradient-to-br from-indigo-500/30 to-fuchsia-500/30 text-indigo-100 ring-indigo-400/40"
+                          : "bg-white/[0.06] text-indigo-200 ring-white/10"
                           }`}
                       >
                         {name.charAt(0).toUpperCase()}
@@ -1506,13 +1501,13 @@ export default function ChatPage() {
                       <Box sx={{ minWidth: 0, flex: 1 }}>
                         <Box
                           component="p"
-                          className="text-sm font-medium text-gray-900 truncate"
+                          className="text-sm font-medium text-white truncate"
                         >
                           {name}
                           {isCurrentUser && (
                             <Box
                               component="span"
-                              className="ml-1.5 text-[10px] font-semibold text-indigo-500"
+                              className="ml-1.5 text-[10px] font-semibold text-indigo-300"
                             >
                               you
                             </Box>
@@ -1538,12 +1533,12 @@ export default function ChatPage() {
             position: "fixed",
             inset: 0,
             zIndex: 50,
-            bgcolor: "rgba(0,0,0,0.3)",
-            backdropFilter: "blur(4px)",
+            bgcolor: "rgba(7,8,25,0.55)",
+            backdropFilter: "blur(6px)",
           }}
         >
           <Box
-            className="animate-scale-in border border-gray-200/60 bg-white/95 shadow-glass-lg backdrop-blur-xl"
+            className="animate-scale-in glass-panel-elevated"
             sx={{
               width: "100%",
               maxWidth: "24rem",
@@ -1552,21 +1547,21 @@ export default function ChatPage() {
               mx: { xs: 0, sm: 2 },
             }}
           >
-            <Box className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-100">
-              <AlertTriangle className="h-6 w-6 text-red-500" />
+            <Box className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-500/15 ring-1 ring-rose-400/30 backdrop-blur-sm">
+              <AlertTriangle className="h-6 w-6 text-rose-300" />
             </Box>
             <Box
               component="h3"
-              className="mb-1 text-base font-bold text-gray-900"
+              className="mb-1 text-base font-bold text-white"
             >
               Clear "{deleteTarget.title}"?
             </Box>
             <Box
               component="p"
-              className="mb-5 text-sm text-gray-500 leading-relaxed"
+              className="mb-5 text-sm text-indigo-200/70 leading-relaxed"
             >
               This will permanently delete{" "}
-              <strong className="text-gray-700">
+              <strong className="text-indigo-100">
                 all conversation history
               </strong>{" "}
               for this chat. The chat will remain in your sidebar so you can
@@ -1577,7 +1572,7 @@ export default function ChatPage() {
                 component="button"
                 onClick={() => setDeleteTarget(null)}
                 disabled={deleting}
-                className="rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition-all duration-200 hover:bg-gray-50 active:scale-[0.98]"
+                className="rounded-xl border border-white/15 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-indigo-100 transition-all duration-200 hover:bg-white/[0.08] hover:border-white/25 active:scale-[0.98]"
               >
                 Cancel
               </Box>
@@ -1585,7 +1580,7 @@ export default function ChatPage() {
                 component="button"
                 onClick={handleConfirmDelete}
                 disabled={deleting}
-                className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-red-700 active:scale-[0.98] disabled:opacity-50"
+                className="rounded-xl bg-gradient-to-br from-rose-500 to-rose-600 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_0_24px_-6px_rgba(244,63,94,0.65)] transition-all duration-200 hover:from-rose-400 hover:to-rose-500 active:scale-[0.98] disabled:opacity-50"
               >
                 {deleting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />

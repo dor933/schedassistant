@@ -18,13 +18,16 @@ import {
 import { Op, QueryTypes } from "sequelize";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
-import type { UserId } from "@scheduling-agent/types";
+import { AUTO_ASSIGNED_SKILL_SLUGS, type UserId } from "@scheduling-agent/types";
 
 const WORKSPACES_ROOT = path.join(process.env.DATA_DIR || "/app/data", "workspaces");
 
 export class AgentsService {
-  async getAll(callerId: UserId, callerRole: string) {
+  async getAll(callerId: UserId, callerRole: string, organizationId: string) {
+    // super_admin still sees everything; all other roles are scoped to their org.
+    const where = callerRole === "super_admin" ? {} : { organizationId };
     const agents = await Agent.findAll({
+      where,
       attributes: [
         "id",
         "type",
@@ -36,6 +39,7 @@ export class AgentsService {
         "createdByUserId",
         "modelId",
         "isLocked",
+        "organizationId",
         "createdAt",
       ],
       order: [["created_at", "DESC"]],
@@ -65,6 +69,14 @@ export class AgentsService {
       }
     }
 
+    // Resolve auto-assigned skill ids so they are stripped from admin views
+    // (tools + skill_text for these are always injected at runtime).
+    const autoSkillRows = await Skill.findAll({
+      attributes: ["id"],
+      where: { slug: { [Op.in]: [...AUTO_ASSIGNED_SKILL_SLUGS] } },
+    });
+    const autoSkillIds = new Set(autoSkillRows.map((s) => s.id));
+
     // Fetch ALL skill assignments (including inactive) for all agents
     const skillLinks = await AgentAvailableSkill.findAll({
       attributes: ["agentId", "skillId", "active"],
@@ -72,6 +84,7 @@ export class AgentsService {
     const skillIdsByAgent: Record<string, number[]> = {};
     const skillLinksByAgent: Record<string, { skillId: number; active: boolean }[]> = {};
     for (const link of skillLinks) {
+      if (autoSkillIds.has(link.skillId)) continue;
       (skillLinksByAgent[link.agentId] ??= []).push({ skillId: link.skillId, active: link.active });
       if (link.active) {
         (skillIdsByAgent[link.agentId] ??= []).push(link.skillId);
@@ -117,6 +130,7 @@ export class AgentsService {
     agentType?: "primary" | "system" | "external",
     toolIds?: number[],
     description?: string | null,
+    organizationId?: string,
   ) {
     const normalizedAgentName =
       agentName !== undefined && agentName !== null && String(agentName).trim() !== ""
@@ -124,8 +138,14 @@ export class AgentsService {
         : null;
     if (modelId) await this.rejectGoogleModel(modelId);
 
+    if (!organizationId) {
+      throw Object.assign(new Error("organizationId is required to create an agent."), { status: 400 });
+    }
+
+    const resolvedType = agentType ?? "primary";
+
     const agent = await Agent.create({
-      type: agentType ?? "primary",
+      type: resolvedType,
       definition,
       agentName: normalizedAgentName,
       description: description?.trim() || null,
@@ -133,15 +153,19 @@ export class AgentsService {
       characteristics: characteristics ?? null,
       createdByUserId: actorId ?? null,
       modelId: modelId ?? null,
+      organizationId,
     });
 
-    // Create persistent workspace folder for this agent (using definition as folder name)
-    const workspacePath = path.join(WORKSPACES_ROOT, agent.definition || agent.id);
-    try {
-      fs.mkdirSync(workspacePath, { recursive: true });
-      await agent.update({ workspacePath });
-    } catch (err) {
-      logger.error("Failed to create workspace for agent", { agentId: agent.id, error: String(err) });
+    // System agents do not get their own workspace — when they execute a
+    // delegation they write into the caller's workspace folder instead.
+    if (resolvedType !== "system") {
+      const workspacePath = path.join(WORKSPACES_ROOT, agent.definition || agent.id);
+      try {
+        fs.mkdirSync(workspacePath, { recursive: true });
+        await agent.update({ workspacePath });
+      } catch (err) {
+        logger.error("Failed to create workspace for agent", { agentId: agent.id, error: String(err) });
+      }
     }
 
     // Link MCP servers to the agent
@@ -199,7 +223,10 @@ export class AgentsService {
         }
       }
 
-      const allUsers = await User.findAll({ attributes: ["id"] });
+      const allUsers = await User.findAll({
+        where: { organizationId },
+        attributes: ["id"],
+      });
       for (const u of allUsers) {
         const [sc] = await SingleChat.findOrCreate({
           where: { userId: u.id, agentId: agent.id },
@@ -236,6 +263,7 @@ export class AgentsService {
     agentId: string,
     callerId: UserId,
     callerRole: string,
+    callerOrgId: string,
     data: {
       definition?: string;
       agentName?: string | null;
@@ -254,6 +282,11 @@ export class AgentsService {
     const agent = await Agent.findByPk(agentId);
     if (!agent)
       throw Object.assign(new Error("Agent not found."), { status: 404 });
+
+    // Cross-org edits blocked (super_admin is the one exception).
+    if (callerRole !== "super_admin" && agent.organizationId !== callerOrgId) {
+      throw Object.assign(new Error("Agent not found."), { status: 404 });
+    }
 
     if (agent.isLocked) {
       throw Object.assign(

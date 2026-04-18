@@ -4,8 +4,10 @@ import { HumanMessage } from "@langchain/core/messages";
 import {
   Roundtable,
   RoundtableAgent,
+  RoundtableUser,
   RoundtableMessage,
   Agent,
+  User,
 } from "@scheduling-agent/database";
 import {
   ROUNDTABLE_QUEUE_NAME,
@@ -24,6 +26,9 @@ import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
 const lockRedis = createThreadLockRedis(redisConfig);
+
+/** 5-minute deadline displayed to the user on the `roundtable:user_turn` event. */
+export const USER_TURN_TIMEOUT_SECONDS = 5 * 60;
 
 export type RoundtableWorkerHandle = {
   worker: Worker<RoundtableTurnJobData>;
@@ -98,6 +103,36 @@ export function startRoundtableWorker(
         );
       }
 
+      // Load participating users (if any) ordered by turn_order so the graph
+      // knows who is in the discussion and downstream logic can route turns.
+      const roundtableUsers = await RoundtableUser.findAll({
+        where: { roundtableId },
+        order: [["turnOrder", "ASC"]],
+      });
+      let participantUsers: {
+        id: number;
+        displayName: string;
+        userIdentity: any;
+      }[] = [];
+      if (roundtableUsers.length > 0) {
+        const userRows = await User.findAll({
+          where: { id: roundtableUsers.map((u) => u.userId) },
+          attributes: ["id", "displayName", "userIdentity"],
+        });
+        const byId = new Map(userRows.map((u) => [u.id, u]));
+        participantUsers = roundtableUsers
+          .map((ru) => byId.get(ru.userId))
+          .filter((u): u is User => !!u)
+          .map((u) => ({
+            id: u.id,
+            displayName: u.displayName?.trim() || `User #${u.id}`,
+            userIdentity: u.userIdentity,
+          }));
+      }
+      // Preserve the `participantUser` var used in the graph invoke below —
+      // for backward compatibility, it points to the first participant.
+      const participantUser = participantUsers[0] ?? null;
+
       try {
         const result = await withThreadLock(lockRedis, lockKey, async () => {
           // Ensure the LangGraph session exists for this thread
@@ -148,6 +183,9 @@ export function startRoundtableWorker(
                 roundNumber,
                 maxTurnsPerAgent: roundtable.maxTurnsPerAgent,
                 agentOrder,
+                includeUser: roundtable.includeUser,
+                participantUser,
+                participantUsers,
               },
             },
             { configurable: { thread_id: threadId } },
@@ -250,69 +288,51 @@ export function startRoundtableWorker(
             roundNumber,
           });
         } else {
-          // All agents spoke this round — advance to next round
-          const nextRound = roundNumber + 1;
-
-          if (nextRound >= roundtable.maxTurnsPerAgent) {
-            // All rounds complete — generate a final summary, persist it, push
-            // it into every participant's episodic memory, then mark completed.
-            const summary = await generateAndPersistSummary({
-              roundtableId,
-              threadId,
-              userId,
-              participantAgentIds: roundtableAgents.map((ra) => ra.agentId),
-              topic: roundtable.topic,
-            });
-
-            await Roundtable.update(
-              {
-                status: "completed",
-                currentRound: nextRound,
-                currentAgentOrderIndex: 0,
-              },
-              { where: { id: roundtableId } },
+          // All agents spoke this round.
+          if (roundtableUsers.length > 0) {
+            // Users take their turns after the agents. Find the first user who
+            // hasn't spoken in this round (turnsCompleted == roundNumber).
+            const nextUser = roundtableUsers.find(
+              (u) => u.turnsCompleted <= roundNumber,
             );
+            if (nextUser) {
+              await Roundtable.update(
+                { status: "waiting_for_user" },
+                { where: { id: roundtableId } },
+              );
 
-            if (io) {
-              io.emit("roundtable:completed", {
+              const nextUserProfile = participantUsers.find(
+                (p) => p.id === nextUser.userId,
+              );
+
+              if (io) {
+                io.emit("roundtable:user_turn", {
+                  roundtableId,
+                  roundNumber,
+                  userId: nextUser.userId,
+                  displayName: nextUserProfile?.displayName ?? null,
+                  deadlineSeconds: USER_TURN_TIMEOUT_SECONDS,
+                });
+              }
+
+              logger.info("Roundtable: awaiting user turn", {
                 roundtableId,
-                summary,
-                summaryGeneratedAt: new Date().toISOString(),
+                roundNumber,
+                userId: nextUser.userId,
               });
+              return;
             }
-
-            logger.info("Roundtable: completed all rounds", {
-              roundtableId,
-              totalRounds: roundtable.maxTurnsPerAgent,
-              summaryLen: summary?.length ?? 0,
-            });
-          } else {
-            // Start next round with first agent
-            const firstAgent = roundtableAgents[0];
-
-            await Roundtable.update(
-              {
-                currentRound: nextRound,
-                currentAgentOrderIndex: 0,
-              },
-              { where: { id: roundtableId } },
-            );
-
-            await roundtableQueue.add("roundtable_turn", {
-              roundtableId,
-              agentId: firstAgent.agentId,
-              roundNumber: nextRound,
-              userId,
-              groupId,
-              singleChatId,
-            });
-
-            logger.info("Roundtable: starting next round", {
-              roundtableId,
-              nextRound,
-              firstAgentId: firstAgent.agentId,
-            });
           }
+
+          await advanceRoundOrComplete({
+            roundtable,
+            roundtableAgents,
+            completedRoundNumber: roundNumber,
+            userId,
+            groupId,
+            singleChatId,
+            io,
+          });
         }
       } catch (err: any) {
         const errorText = err?.message ?? "Roundtable turn failed";
@@ -367,6 +387,288 @@ export function startRoundtableWorker(
       await lockRedis.quit();
     },
   };
+}
+
+// ─── Round advancement helper (shared with user-turn submission) ────────────
+
+type IO = ReturnType<typeof getAgentIO> | null;
+
+async function advanceRoundOrComplete(params: {
+  roundtable: Roundtable;
+  roundtableAgents: RoundtableAgent[];
+  completedRoundNumber: number;
+  userId: number;
+  groupId: string | null;
+  singleChatId: string | null;
+  io: IO;
+}): Promise<void> {
+  const {
+    roundtable,
+    roundtableAgents,
+    completedRoundNumber,
+    userId,
+    groupId,
+    singleChatId,
+    io,
+  } = params;
+
+  const roundtableId = roundtable.id;
+  const threadId = roundtable.threadId;
+  const nextRound = completedRoundNumber + 1;
+
+  if (nextRound >= roundtable.maxTurnsPerAgent) {
+    const summary = await generateAndPersistSummary({
+      roundtableId,
+      threadId,
+      userId,
+      participantAgentIds: roundtableAgents.map((ra) => ra.agentId),
+      topic: roundtable.topic,
+    });
+
+    await Roundtable.update(
+      {
+        status: "completed",
+        currentRound: nextRound,
+        currentAgentOrderIndex: 0,
+      },
+      { where: { id: roundtableId } },
+    );
+
+    if (io) {
+      io.emit("roundtable:completed", {
+        roundtableId,
+        summary,
+        summaryGeneratedAt: new Date().toISOString(),
+      });
+    }
+
+    logger.info("Roundtable: completed all rounds", {
+      roundtableId,
+      totalRounds: roundtable.maxTurnsPerAgent,
+      summaryLen: summary?.length ?? 0,
+    });
+    return;
+  }
+
+  const firstAgent = roundtableAgents[0];
+
+  await Roundtable.update(
+    {
+      status: "running",
+      currentRound: nextRound,
+      currentAgentOrderIndex: 0,
+    },
+    { where: { id: roundtableId } },
+  );
+
+  await roundtableQueue.add("roundtable_turn", {
+    roundtableId,
+    agentId: firstAgent.agentId,
+    roundNumber: nextRound,
+    userId,
+    groupId,
+    singleChatId,
+  });
+
+  logger.info("Roundtable: starting next round", {
+    roundtableId,
+    nextRound,
+    firstAgentId: firstAgent.agentId,
+  });
+}
+
+// ─── User-turn submission (called by HTTP route) ────────────────────────────
+
+/**
+ * Handles the participating user's submission for the current round.
+ *
+ * Responsibilities:
+ *   1. Validate that the roundtable is actually waiting for the user.
+ *   2. Persist the user's message as a `RoundtableMessage` row.
+ *   3. Inject a `HumanMessage` into the LangGraph thread so downstream agents
+ *      see the user's contribution in subsequent turns.
+ *   4. Emit `roundtable:message` with senderType=user for UI rendering.
+ *   5. Either start the next round or finalize the roundtable.
+ */
+export async function submitRoundtableUserTurn(
+  roundtableGraph: CompiledStateGraph<any, any, any>,
+  params: { roundtableId: string; userId: number; content: string },
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  const { roundtableId, userId, content } = params;
+
+  const roundtable = await Roundtable.findByPk(roundtableId);
+  if (!roundtable) {
+    return { ok: false, status: 404, error: "Roundtable not found" };
+  }
+  if (roundtable.status !== "waiting_for_user") {
+    return {
+      ok: false,
+      status: 400,
+      error: `Roundtable is not waiting for user input (status=${roundtable.status})`,
+    };
+  }
+
+  const participants = await RoundtableUser.findAll({
+    where: { roundtableId },
+    order: [["turnOrder", "ASC"]],
+  });
+  if (participants.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      error: "Roundtable has no user participants",
+    };
+  }
+
+  const roundNumber = roundtable.currentRound;
+  const activeParticipant = participants.find(
+    (p) => p.turnsCompleted <= roundNumber,
+  );
+  if (!activeParticipant) {
+    return {
+      ok: false,
+      status: 400,
+      error: "No active user turn awaiting submission",
+    };
+  }
+  if (activeParticipant.userId !== userId) {
+    return {
+      ok: false,
+      status: 403,
+      error: "It is not your turn yet",
+    };
+  }
+
+  const userRow = await User.findByPk(userId, {
+    attributes: ["id", "displayName"],
+  });
+  const displayName = userRow?.displayName?.trim() || `User #${userId}`;
+
+  const text = typeof content === "string" ? content.trim() : "";
+  const safeContent = text.length > 0 ? text : "(This participant chose to skip this round.)";
+
+  // 1. Persist the user message.
+  await RoundtableMessage.create({
+    roundtableId,
+    agentId: null,
+    userId,
+    roundNumber,
+    content: safeContent,
+  });
+
+  // 2. Increment this user's turnsCompleted so subsequent logic skips them.
+  await RoundtableUser.update(
+    { turnsCompleted: activeParticipant.turnsCompleted + 1 },
+    { where: { id: activeParticipant.id } },
+  );
+
+  // 3. Inject into LangGraph thread state so agents (and other users) see it.
+  try {
+    const sanitizedName = sanitizeSenderName(displayName);
+    await roundtableGraph.updateState(
+      { configurable: { thread_id: roundtable.threadId } },
+      {
+        messages: [
+          new HumanMessage({
+            content: `[${displayName} — round ${roundNumber + 1} user contribution]\n\n${safeContent}`,
+            name: sanitizedName,
+          }),
+        ],
+      },
+    );
+  } catch (err: any) {
+    logger.error("Roundtable: failed to inject user message into thread state", {
+      roundtableId,
+      error: err?.message ?? String(err),
+    });
+  }
+
+  // 4. Emit socket event so all clients render the user's message.
+  let io: IO = null;
+  try {
+    io = getAgentIO();
+  } catch {
+    /* socket not initialized */
+  }
+  if (io) {
+    io.emit("roundtable:message", {
+      roundtableId,
+      agentId: null,
+      agentLabel: displayName,
+      senderType: "user",
+      userId,
+      displayName,
+      roundNumber,
+      content: safeContent,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  // 5. Determine next step: another user to speak this round, or advance.
+  const nextParticipant = participants.find(
+    (p) =>
+      p.id !== activeParticipant.id &&
+      p.turnsCompleted <= roundNumber &&
+      p.turnOrder > activeParticipant.turnOrder,
+  );
+
+  if (nextParticipant) {
+    // Another participant still owes a turn this round.
+    const nextRow = await User.findByPk(nextParticipant.userId, {
+      attributes: ["id", "displayName"],
+    });
+    const nextDisplayName =
+      nextRow?.displayName?.trim() || `User #${nextParticipant.userId}`;
+
+    // status already == "waiting_for_user"; just emit the next prompt.
+    if (io) {
+      io.emit("roundtable:user_turn", {
+        roundtableId,
+        roundNumber,
+        userId: nextParticipant.userId,
+        displayName: nextDisplayName,
+        deadlineSeconds: USER_TURN_TIMEOUT_SECONDS,
+      });
+    }
+
+    logger.info("Roundtable: handed off to next user", {
+      roundtableId,
+      roundNumber,
+      userId: nextParticipant.userId,
+    });
+
+    return { ok: true };
+  }
+
+  // 6. All users spoke — advance to next round (or finalize).
+  const roundtableAgents = await RoundtableAgent.findAll({
+    where: { roundtableId },
+    order: [["turnOrder", "ASC"]],
+    include: [{ association: "agent", attributes: ["definition", "agentName"] }],
+  });
+
+  await advanceRoundOrComplete({
+    roundtable,
+    roundtableAgents,
+    completedRoundNumber: roundNumber,
+    userId,
+    groupId: roundtable.groupId,
+    singleChatId: roundtable.singleChatId,
+    io,
+  });
+
+  logger.info("Roundtable: user turn processed", {
+    roundtableId,
+    roundNumber,
+    userId,
+    contentLen: safeContent.length,
+  });
+
+  return { ok: true };
+}
+
+function sanitizeSenderName(raw: string): string {
+  return raw.replace(/[\s<|\\/>]+/g, "_").replace(/^_+|_+$/g, "") || "user";
 }
 
 // ─── End-of-roundtable summary pipeline ──────────────────────────────────────

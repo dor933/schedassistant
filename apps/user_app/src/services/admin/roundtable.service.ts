@@ -2,21 +2,49 @@ import crypto from "node:crypto";
 import {
   Roundtable,
   RoundtableAgent,
+  RoundtableUser,
   RoundtableMessage,
   Agent,
+  User,
 } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
 import { logger } from "../../logger";
+import { InAppNotificationsService } from "../inAppNotifications.service";
 
 const AGENT_SERVICE_URL =
   process.env.AGENT_SERVICE_URL ?? "http://localhost:3001";
 
 export class RoundtableService {
+  private notifications = new InAppNotificationsService();
+
   async getAll(userId: UserId) {
-    return Roundtable.findAll({
+    const participantRows = await RoundtableUser.findAll({
+      where: { userId },
+      attributes: ["roundtableId"],
+    });
+    const participantIds = participantRows.map((r) => r.roundtableId);
+
+    const asCreator = await Roundtable.findAll({
       where: { createdBy: userId },
       order: [["createdAt", "DESC"]],
     });
+
+    let asParticipant: Roundtable[] = [];
+    if (participantIds.length > 0) {
+      asParticipant = await Roundtable.findAll({
+        where: { id: participantIds },
+        order: [["createdAt", "DESC"]],
+      });
+    }
+
+    const seen = new Set<string>();
+    const merged = [...asCreator, ...asParticipant].filter((r) => {
+      if (seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
+    merged.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return merged;
   }
 
   async getById(roundtableId: string) {
@@ -29,10 +57,19 @@ export class RoundtableService {
       include: [{ association: "agent", attributes: ["definition", "agentName"] }],
     });
 
+    const users = await RoundtableUser.findAll({
+      where: { roundtableId },
+      order: [["turnOrder", "ASC"]],
+      include: [{ association: "user", attributes: ["id", "displayName"] }],
+    });
+
     const messages = await RoundtableMessage.findAll({
       where: { roundtableId },
       order: [["createdAt", "ASC"]],
-      include: [{ association: "agent", attributes: ["definition", "agentName"] }],
+      include: [
+        { association: "agent", attributes: ["definition", "agentName"] },
+        { association: "user", attributes: ["id", "displayName"] },
+      ],
     });
 
     return {
@@ -42,16 +79,37 @@ export class RoundtableService {
         agentId: ra.agentId,
         turnOrder: ra.turnOrder,
         turnsCompleted: ra.turnsCompleted,
-        agentName: (ra as any).agent?.agentName || (ra as any).agent?.definition || ra.agentId,
+        agentName:
+          (ra as any).agent?.agentName ||
+          (ra as any).agent?.definition ||
+          ra.agentId,
       })),
-      messages: messages.map((m) => ({
-        id: m.id,
-        agentId: m.agentId,
-        agentName: (m as any).agent?.agentName || (m as any).agent?.definition || m.agentId,
-        roundNumber: m.roundNumber,
-        content: m.content,
-        createdAt: m.createdAt,
+      users: users.map((ru) => ({
+        id: ru.id,
+        userId: ru.userId,
+        turnOrder: ru.turnOrder,
+        turnsCompleted: ru.turnsCompleted,
+        displayName:
+          (ru as any).user?.displayName?.trim() || `User #${ru.userId}`,
       })),
+      messages: messages.map((m) => {
+        const agent = (m as any).agent;
+        const user = (m as any).user;
+        const isUser = m.userId != null;
+        return {
+          id: m.id,
+          agentId: m.agentId,
+          userId: m.userId,
+          senderType: isUser ? "user" : "agent",
+          agentName: isUser
+            ? user?.displayName || "User"
+            : agent?.agentName || agent?.definition || m.agentId,
+          displayName: user?.displayName ?? null,
+          roundNumber: m.roundNumber,
+          content: m.content,
+          createdAt: m.createdAt,
+        };
+      }),
     };
   }
 
@@ -62,6 +120,7 @@ export class RoundtableService {
     maxTurnsPerAgent: number = 5,
     groupId?: string | null,
     singleChatId?: string | null,
+    participantUserIds: UserId[] = [],
   ) {
     if (!topic?.trim()) {
       throw Object.assign(new Error("topic is required"), { status: 400 });
@@ -70,7 +129,6 @@ export class RoundtableService {
       throw Object.assign(new Error("At least 2 agents are required"), { status: 400 });
     }
 
-    // Verify all agents exist and are primary (system agents cannot participate)
     const agents = await Agent.findAll({
       where: { id: agentIds },
       attributes: ["id", "type", "definition", "agentName"],
@@ -92,18 +150,41 @@ export class RoundtableService {
       );
     }
 
+    // Deduplicate user ids, keep stable order, validate they exist.
+    const uniqueUserIds: UserId[] = [];
+    for (const id of participantUserIds) {
+      if (typeof id !== "number" || !Number.isFinite(id)) continue;
+      if (!uniqueUserIds.includes(id)) uniqueUserIds.push(id);
+    }
+    let participantRows: User[] = [];
+    if (uniqueUserIds.length > 0) {
+      participantRows = await User.findAll({
+        where: { id: uniqueUserIds },
+        attributes: ["id", "displayName"],
+      });
+      if (participantRows.length !== uniqueUserIds.length) {
+        const found = new Set(participantRows.map((u) => u.id));
+        const missing = uniqueUserIds.filter((id) => !found.has(id));
+        throw Object.assign(
+          new Error(`User(s) not found: ${missing.join(", ")}`),
+          { status: 400 },
+        );
+      }
+    }
+
     const threadId = crypto.randomUUID();
+    const hasUsers = uniqueUserIds.length > 0;
 
     const roundtable = await Roundtable.create({
       topic: topic.trim(),
       maxTurnsPerAgent,
       threadId,
       createdBy: userId,
+      includeUser: hasUsers,
       groupId: groupId ?? null,
       singleChatId: singleChatId ?? null,
     });
 
-    // Create agent entries preserving the order from the request
     for (let i = 0; i < agentIds.length; i++) {
       await RoundtableAgent.create({
         roundtableId: roundtable.id,
@@ -112,7 +193,36 @@ export class RoundtableService {
       });
     }
 
-    // Notify agent_service to enqueue the first turn
+    for (let i = 0; i < uniqueUserIds.length; i++) {
+      await RoundtableUser.create({
+        roundtableId: roundtable.id,
+        userId: uniqueUserIds[i],
+        turnOrder: i,
+      });
+    }
+
+    // Notify participants other than the creator
+    const creator = await User.findByPk(userId, { attributes: ["displayName"] });
+    const creatorName = creator?.displayName?.trim() || `User #${userId}`;
+    for (const pid of uniqueUserIds) {
+      if (pid === userId) continue;
+      try {
+        await this.notifications.create({
+          userId: pid,
+          type: "roundtable_invite",
+          title: `${creatorName} invited you to a roundtable`,
+          body: topic.trim().slice(0, 200),
+          link: `/roundtable/${roundtable.id}`,
+          data: { roundtableId: roundtable.id, createdBy: userId },
+        });
+      } catch (err) {
+        logger.warn("Failed to create roundtable invite notification", {
+          recipientId: pid,
+          error: String(err),
+        });
+      }
+    }
+
     const firstAgentId = agentIds[0];
     try {
       const res = await fetch(`${AGENT_SERVICE_URL}/api/roundtable/start`, {
@@ -124,6 +234,7 @@ export class RoundtableService {
           userId,
           groupId: groupId ?? null,
           singleChatId: singleChatId ?? null,
+          includeUser: hasUsers,
         }),
       });
 
@@ -164,7 +275,11 @@ export class RoundtableService {
     if (roundtable.createdBy !== userId) {
       throw Object.assign(new Error("Not authorized"), { status: 403 });
     }
-    if (roundtable.status !== "running" && roundtable.status !== "pending") {
+    if (
+      roundtable.status !== "running" &&
+      roundtable.status !== "pending" &&
+      roundtable.status !== "waiting_for_user"
+    ) {
       throw Object.assign(
         new Error(`Cannot stop roundtable with status "${roundtable.status}"`),
         { status: 400 },
@@ -178,7 +293,7 @@ export class RoundtableService {
         body: JSON.stringify({ roundtableId }),
       });
     } catch {
-      // Best effort — update locally anyway
+      // Best effort
     }
 
     await Roundtable.update(
@@ -187,5 +302,89 @@ export class RoundtableService {
     );
 
     return { ok: true };
+  }
+
+  /**
+   * Forwards a participating user's contribution for the current round to
+   * agent_service, which persists the message and resumes the next user or round.
+   * The submitter must be the active user whose turn it currently is.
+   */
+  async submitUserTurn(
+    roundtableId: string,
+    userId: UserId,
+    content: string,
+  ) {
+    const roundtable = await Roundtable.findByPk(roundtableId);
+    if (!roundtable) {
+      throw Object.assign(new Error("Roundtable not found"), { status: 404 });
+    }
+    if (roundtable.status !== "waiting_for_user") {
+      throw Object.assign(
+        new Error(
+          `Cannot submit user turn when status is "${roundtable.status}"`,
+        ),
+        { status: 400 },
+      );
+    }
+
+    // Verify the submitter is the active user (i.e. the next roundtable_user
+    // whose turns_completed < currentRound+1 in turn_order).
+    const participants = await RoundtableUser.findAll({
+      where: { roundtableId },
+      order: [["turnOrder", "ASC"]],
+    });
+    if (participants.length === 0) {
+      throw Object.assign(
+        new Error("This roundtable has no user participants"),
+        { status: 400 },
+      );
+    }
+    const roundIndex = roundtable.currentRound;
+    const active = participants.find((p) => p.turnsCompleted <= roundIndex) ??
+      participants.find((p) => p.turnsCompleted === roundIndex);
+    if (!active) {
+      throw Object.assign(
+        new Error("No active user turn awaiting a submission"),
+        { status: 400 },
+      );
+    }
+    if (active.userId !== userId) {
+      throw Object.assign(
+        new Error("It is not your turn yet"),
+        { status: 403 },
+      );
+    }
+
+    const text = typeof content === "string" ? content : "";
+    try {
+      const res = await fetch(
+        `${AGENT_SERVICE_URL}/api/roundtable/user-turn`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            roundtableId,
+            userId,
+            content: text,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          (data as any)?.error ?? "Failed to submit user turn",
+        );
+      }
+      return (await res.json()) as { ok: boolean };
+    } catch (err: any) {
+      logger.error("Failed to submit user turn", {
+        roundtableId,
+        error: err?.message,
+      });
+      throw Object.assign(
+        new Error(err?.message ?? "Failed to submit user turn"),
+        { status: 500 },
+      );
+    }
   }
 }

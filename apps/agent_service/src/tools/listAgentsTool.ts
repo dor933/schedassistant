@@ -15,15 +15,25 @@ export function ListAgentsTool(callerAgentId: string) {
     async (input) => {
       const { query } = input;
 
+      // Scope peer agents to the caller's organization — agents are per-tenant.
+      const callerAgent = await Agent.findByPk(callerAgentId, {
+        attributes: ["organizationId"],
+      });
+      if (!callerAgent) {
+        return `Error: caller agent "${callerAgentId}" not found.`;
+      }
+
       const where: any = {
         // Exclude the calling agent and external (roundtable-only) agents from results
         id: { [Op.ne]: callerAgentId },
         type: { [Op.ne]: "external" },
+        organizationId: callerAgent.organizationId,
       };
       if (query) {
         where[Op.and] = [
           { id: { [Op.ne]: callerAgentId } },
           { type: { [Op.ne]: "external" } },
+          { organizationId: callerAgent.organizationId },
           {
             [Op.or]: [
               { agentName: { [Op.iLike]: `%${query}%` } },
@@ -33,6 +43,7 @@ export function ListAgentsTool(callerAgentId: string) {
         ];
         delete where.id;
         delete where.type;
+        delete where.organizationId;
       }
 
       const agents = await Agent.findAll({

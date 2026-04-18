@@ -24,6 +24,11 @@ import {
 import { startAgentChatWorker } from "./worker/agentChat.worker";
 import { startDeepAgentWorker } from "./worker/deepAgent.worker";
 import { startRoundtableWorker } from "./worker/roundtable.worker";
+import {
+  startCronAgentWorker,
+  syncCronSchedulers,
+} from "./worker/cronAgent.worker";
+import { cronAgentQueue, cronAgentQueueEvents } from "./queues/cronAgent.bull";
 import { roundtableQueueEvents } from "./queues/roundtable.bull";
 import { attachAgentSocketIO } from "./socket";
 import { logger } from "./logger";
@@ -73,12 +78,22 @@ async function main(): Promise<void> {
   await agentChatQueueEvents.waitUntilReady();
   await deepAgentQueueEvents.waitUntilReady();
   await roundtableQueueEvents.waitUntilReady();
+  await cronAgentQueueEvents.waitUntilReady();
   const agentChatWorker = startAgentChatWorker(graph, epicGraph);
   const deepAgentWorker = startDeepAgentWorker();
   const roundtableWorker = startRoundtableWorker(roundtableGraph);
+  const cronAgentWorker = startCronAgentWorker();
+
+  // Initial reconcile so DB rows created while the service was offline are registered.
+  try {
+    await syncCronSchedulers();
+    logger.info("cronAgent schedulers synced from DB");
+  } catch (err) {
+    logger.error("cronAgent initial sync failed", { error: String(err) });
+  }
 
   // 4. HTTP + Socket.IO server (chat enqueues jobs; results emitted via socket).
-  const app = createServer({ agentChatQueue, graph });
+  const app = createServer({ agentChatQueue, graph, roundtableGraph });
   const httpServer = createHttpServer(app);
   attachAgentSocketIO(httpServer);
 
@@ -93,13 +108,17 @@ async function main(): Promise<void> {
       server.close((err) => (err ? reject(err) : resolve()));
     });
     try {
+      cronAgentWorker.stopSync();
       await agentChatWorker.close();
       await deepAgentWorker.close();
       await roundtableWorker.close();
+      await cronAgentWorker.close();
       await agentChatQueue.close();
       await agentChatQueueEvents.close();
       await deepAgentQueueEvents.close();
       await roundtableQueueEvents.close();
+      await cronAgentQueue.close();
+      await cronAgentQueueEvents.close();
       await shutdownLangfuse();
       await sequelize.close();
     } catch (e) {

@@ -15,7 +15,7 @@ import { writeConversationMessage } from "../sessionsManagment/conversationMessa
 import { popConsultationOrigin } from "../consultationChain";
 import { agentChatQueue } from "../queues/agentChat.bull";
 import { Group, SingleChat, Agent, DeepAgentDelegation } from "@scheduling-agent/database";
-import { EPIC_ORCHESTRATOR_AGENT_ID } from "../constants/epicAgent";
+import { EPIC_ORCHESTRATOR_DEFINITION } from "../constants/epicAgent";
 import { isEpicExecutionRequest } from "../utils/epicDetection";
 import { isEpicOrchestratorBusy } from "../utils/epicBusyCheck";
 import { logger } from "../logger";
@@ -76,6 +76,15 @@ export function startAgentChatWorker(
 
       const lockKey = `agent:thread:${resolvedAgentId}`;
 
+      // Every org has its OWN Epic Orchestrator, identified by definition
+      // string (not a global singleton UUID). Look up the agent record once
+      // so we can route to epicGraph for any org's orchestrator.
+      const resolvedAgentRecord = await Agent.findByPk(resolvedAgentId, {
+        attributes: ["id", "definition"],
+      });
+      const isEpicOrchestrator =
+        resolvedAgentRecord?.definition === EPIC_ORCHESTRATOR_DEFINITION;
+
       logger.info("Processing chat job", {
         requestId,
         userId,
@@ -86,8 +95,7 @@ export function startAgentChatWorker(
       });
 
       // Select the correct graph for this agent
-      const activeGraph =
-        resolvedAgentId === EPIC_ORCHESTRATOR_AGENT_ID ? epicGraph : graph;
+      const activeGraph = isEpicOrchestrator ? epicGraph : graph;
 
       // Is this an epic delegation callback? (epic orchestrator finished a delegated task)
       const isEpicDelegationCallback =
@@ -107,7 +115,7 @@ export function startAgentChatWorker(
       // is a shared singleton), reply immediately with a busy notice instead
       // of queueing behind the thread lock.
       if (
-        resolvedAgentId === EPIC_ORCHESTRATOR_AGENT_ID &&
+        isEpicOrchestrator &&
         mentionsAgent !== false &&
         !isSystemInternalRequest
       ) {

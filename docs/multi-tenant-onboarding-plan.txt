@@ -1,0 +1,263 @@
+================================================================================
+MULTI-TENANT ORGANIZATION REGISTRATION — IMPLEMENTATION PLAN
+================================================================================
+
+WHAT THE USER REQUESTED
+========================
+
+The application today is a single-tenant platform for human-agent integrated
+companies (an "Agent Management Interaction Platform"). All users, agents,
+groups, and chats live in one flat namespace with no concept of organizations
+or tenants.
+
+The user wants to add a REGISTRATION FLOW where a new person can sign up and
+create a new TENANT (organization). During registration, the user:
+
+  1. Fills in the organization name
+  2. Uploads a logo for the organization
+     - The logo must display beautifully at the size used in the sidebar
+       (currently 36x36px, rounded-xl in SessionSidebar.tsx)
+  3. Sets the initial number of agents they want
+  4. Configures those agents (name, description, model)
+
+The registration must be a PAGE-BY-PAGE WIZARD interface using MUI Stepper
+components, displayed beautifully with animations and a feeling of
+"new world" and "new reality."
+
+On the database side, the user wants the MINIMUM and EASIEST changes possible
+to turn the existing single-tenant schema into a multi-tenant one, with as
+few column additions as possible.
+
+Currently, registration is disabled (the backend returns 503).
+
+
+================================================================================
+CURRENT STATE ANALYSIS
+================================================================================
+
+DATABASE (PostgreSQL via Sequelize):
+  - users: id, userName, displayName, password, userIdentity, roleId, timestamps
+  - agents: id, type, definition, slug, agentName, description, coreInstructions,
+            characteristics, modelId, createdByUserId, isLocked, timestamps
+  - groups: id, name, agentId, timestamps
+  - group_members: groupId → groups, userId → users
+  - single_chats: userId → users, agentId → agents (unique pair)
+  - conversation_messages: group_id or single_chat_id (XOR), threadId, content
+  - roles: admin, user, super_admin (global)
+  - vendors, models, mcp_servers, skills, tools — global catalog tables
+  - agents has UNIQUE partial indexes on definition and slug (must become per-org)
+
+AUTH:
+  - JWT with 8h expiration, payload: { userId, displayName, role }
+  - No organizationId in token — critical gap
+  - Registration endpoint returns 503 (disabled)
+
+FRONTEND:
+  - React + MUI 7 + Tailwind CSS + lucide-react
+  - Logo in sidebar: h-9 w-9 (36x36px) rounded-xl
+  - LoginPage has Sign In / Register tabs (Register calls disabled endpoint)
+  - No framer-motion installed; CSS animations used (animate-fade-in, animate-slide-up)
+
+
+================================================================================
+PHASE 1: DATABASE — MULTI-TENANCY FOUNDATION
+================================================================================
+
+One migration file: 20240101000081-add-organizations-and-org-id.js
+
+NEW TABLE — organizations:
+  ┌──────────────┬──────────────────┬─────────────────────────────────────┐
+  │ Column       │ Type             │ Notes                               │
+  ├──────────────┼──────────────────┼─────────────────────────────────────┤
+  │ id           │ UUID PK          │ UUIDV4 default                      │
+  │ name         │ VARCHAR NOT NULL │ Organization display name            │
+  │ slug         │ VARCHAR UNIQUE   │ URL-safe identifier                  │
+  │ logo         │ TEXT NULL        │ Base64 data URL (no file infra)      │
+  │ created_at   │ TIMESTAMPTZ      │                                     │
+  │ updated_at   │ TIMESTAMPTZ      │                                     │
+  └──────────────┴──────────────────┴─────────────────────────────────────┘
+
+ADD organization_id TO 2 TABLES ONLY:
+  - users.organization_id    UUID FK → organizations.id
+  - agents.organization_id   UUID FK → organizations.id
+
+WHY ONLY 2 TABLES?
+  All other data (groups, single_chats, conversation_messages, projects,
+  roundtables, etc.) is linked through users and agents via foreign keys.
+  Scoping queries on agents + users by organization_id naturally isolates
+  everything downstream. No need to touch 18+ tables.
+
+INDEX CHANGES ON agents:
+  - DROP agents_definition_unique
+  - CREATE UNIQUE(organization_id, definition) WHERE definition IS NOT NULL
+  - DROP agents_slug_unique
+  - CREATE UNIQUE(organization_id, slug) WHERE slug IS NOT NULL
+
+BACKFILL STRATEGY:
+  Create a "Default" organization for pre-existing users/agents, set their
+  organization_id, then ALTER COLUMN SET NOT NULL.
+
+GLOBAL TABLES (unchanged):
+  vendors, models, roles, mcp_servers, skills, tools
+
+
+================================================================================
+PHASE 2: BACKEND — AUTH & ORG SCOPING
+================================================================================
+
+2a. JWT & Middleware
+─────────────────────
+File: apps/user_app/src/middlewares/auth.ts
+  - Add organizationId: string to AuthPayload interface
+  - req.user.organizationId becomes available in all authenticated routes
+
+2b. Registration Endpoint
+──────────────────────────
+File: apps/user_app/src/controllers/auth.controller.ts
+  - Replace the 503 stub in register() with real logic
+
+File: apps/user_app/src/services/auth.service.ts
+  - New method registerOrganization(data) in a single DB transaction:
+    1. Create Organization (name, slug, logo)
+    2. Create User (hashed password, roleId = "admin", organizationId)
+    3. Create N Agents (definition, description, type "primary", organizationId)
+    4. Create SingleChats for each agent ↔ admin user
+    5. Return JWT (with organizationId) + user + conversations
+
+API CONTRACT:
+  POST /auth/register
+  {
+    organization: { name: string, logo?: string },
+    admin: { userName: string, displayName: string, password: string },
+    agents: [{ definition: string, description?: string, modelId?: string }]
+  }
+  → { token, user, conversations }  (same shape as login response)
+
+2c. Public Models Endpoint
+───────────────────────────
+New route: GET /api/models (unauthenticated)
+  Returns vendor + model list so the onboarding wizard can offer model
+  selection before the user has a JWT.
+
+2d. Org-Scope Existing Queries
+───────────────────────────────
+File: apps/user_app/src/services/auth.service.ts
+  - login(): include organizationId in signToken call
+  - ensureAgentSingleChats(): filter agents by user.organizationId
+  - loadUserConversations(): filter agents by org
+  - getMe(): include organizationName + organizationLogo in response
+
+File: apps/user_app/src/services/admin/agents.service.ts
+  - getAll(): add WHERE organizationId = :orgId to Agent.findAll
+  - create(): set organizationId on new agent; scope User.findAll to same org
+  - update(): verify agent belongs to caller's org before allowing edit
+
+File: apps/user_app/src/controllers/admin/agents.controller.ts
+  - Pass req.user.organizationId to all service methods
+
+
+================================================================================
+PHASE 3: FRONTEND — ONBOARDING WIZARD
+================================================================================
+
+3a. New Page: OnboardingWizard.tsx
+───────────────────────────────────
+Uses MUI Stepper (4 steps), full-screen immersive experience.
+
+STEP 1 — "Your Organization"
+  - Organization name input (with live slug preview)
+  - Dramatic gradient background with floating orbs (like LoginPage but vivid)
+  - Headline: "Create Your AI-Powered Organization"
+
+STEP 2 — "Brand Identity"
+  - Logo upload with drag-and-drop zone
+  - FileReader → base64 data URL, client-side resize to max 200x200
+  - Live preview: shows logo exactly as it will appear in sidebar (36x36)
+  - Preview mock of sidebar header with org name + logo
+
+STEP 3 — "Your Team of Agents"
+  - Number selector (1–5 initial agents)
+  - For each agent: expandable card with definition, description, model picker
+  - Model options fetched from GET /api/models (public endpoint)
+  - Cards animate in as user increases count
+
+STEP 4 — "Launch"
+  - Admin account setup: username, display name, password
+  - Review summary: org name, logo, agent list
+  - "Launch Your Organization" button
+  - On submit: dramatic animation — spinner → checkmark → redirect to ChatPage
+  - This is the "new world" / "new reality" moment
+
+3b. Animations Strategy
+────────────────────────
+No new npm dependencies. Uses:
+  - CSS @keyframes + Tailwind transition-all duration-500
+  - Existing animate-fade-in / animate-slide-up classes
+  - New keyframes in index.css: scale-in, float-up, glow-pulse
+  - Step transitions: fade+slide in from right, old step slides out left
+  - Logo upload: preview scales in with subtle bounce
+  - Launch button: gradient pulse while submitting
+  - Success: scale-in checkmark + radial gradient burst
+
+3c. Route & Page Edits
+────────────────────────
+App.tsx:
+  - Add /onboarding route (unprotected, redirects to / if logged in)
+
+LoginPage.tsx:
+  - "Register" tab → navigates to /onboarding instead of inline form
+
+api/index.ts:
+  - Update register() to accept wizard payload shape
+  - Add getPublicModels() function
+
+3d. Auth Context & Sidebar
+────────────────────────────
+AuthContext.tsx:
+  - Add organizationName, organizationLogo to user state
+  - Populated from login/register/me responses
+
+SessionSidebar.tsx:
+  - Replace hardcoded logo.svg with orgLogo ?? defaultLogo
+  - Replace hardcoded "GrahamyClaw" with orgName ?? "GrahamyClaw"
+  - Logo is already h-9 w-9 rounded-xl object-cover — perfect for uploaded logo
+
+
+================================================================================
+FILE CHANGE SUMMARY
+================================================================================
+
+  ACTION │ FILE
+  ───────┼──────────────────────────────────────────────────────────────────
+  NEW    │ packages/database/migrations/20240101000081-add-organizations-and-org-id.js
+  NEW    │ packages/database/src/models/Organization.ts
+  NEW    │ apps/user_app/client/src/pages/OnboardingWizard.tsx
+  EDIT   │ packages/database/src/models/User.ts — add organizationId
+  EDIT   │ packages/database/src/models/Agent.ts — add organizationId
+  EDIT   │ packages/database/src/index.ts — export Organization
+  EDIT   │ packages/types/src/index.ts — add org types
+  EDIT   │ apps/user_app/src/middlewares/auth.ts — organizationId in JWT
+  EDIT   │ apps/user_app/src/controllers/auth.controller.ts — real register
+  EDIT   │ apps/user_app/src/services/auth.service.ts — registerOrg + scoping
+  EDIT   │ apps/user_app/src/services/admin/agents.service.ts — org scoping
+  EDIT   │ apps/user_app/src/controllers/admin/agents.controller.ts — pass orgId
+  EDIT   │ apps/user_app/client/src/App.tsx — /onboarding route
+  EDIT   │ apps/user_app/client/src/pages/LoginPage.tsx — register → /onboarding
+  EDIT   │ apps/user_app/client/src/api/index.ts — register payload + models
+  EDIT   │ apps/user_app/client/src/context/AuthContext.tsx — org data in state
+  EDIT   │ apps/user_app/client/src/components/SessionSidebar.tsx — dynamic logo
+
+  TOTAL: 3 new files, 14 edits. No new npm dependencies.
+
+
+================================================================================
+VERIFICATION
+================================================================================
+
+  1. Run migration: npx sequelize-cli db:migrate
+  2. Visit /onboarding → complete all 4 steps → verify org + user + agents in DB
+  3. Login with new admin → sidebar shows uploaded logo + org name
+  4. Admin page → only this org's agents visible
+  5. Create second org → verify complete isolation (no data leaks)
+  6. npm run build passes
+  7. Existing seed data still works (backfilled to "Default" org)

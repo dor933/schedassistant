@@ -2,6 +2,7 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { sequelize, Skill, AgentAvailableSkill } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 import { z } from "zod";
+import { AUTO_ASSIGNED_SKILL_SLUGS } from "@scheduling-agent/types";
 
 const addSkillSchema = z.object({
   name: z.string().min(1).describe("Short display name for the skill"),
@@ -131,21 +132,45 @@ export function AddAgentSkillTool(agentId: string) {
 export function ListAgentSkillsTool(agentId: string) {
   return tool(
     async () => {
-      const rows = await AgentAvailableSkill.findAll({
-        where: { agentId, active: true },
-        include: [{ model: Skill, as: "skill", attributes: ["id", "name", "slug", "description"] }],
-        order: [["createdAt", "DESC"]],
-      });
-      const list = rows.map((r) => {
+      const [rows, autoSkills] = await Promise.all([
+        AgentAvailableSkill.findAll({
+          where: { agentId, active: true },
+          include: [
+            {
+              model: Skill,
+              as: "skill",
+              attributes: ["id", "name", "slug", "description"],
+            },
+          ],
+          order: [["createdAt", "DESC"]],
+        }),
+        Skill.findAll({
+          where: { slug: { [Op.in]: [...AUTO_ASSIGNED_SKILL_SLUGS] } },
+          attributes: ["id", "name", "slug", "description"],
+          order: [["name", "ASC"]],
+        }),
+      ]);
+
+      const byId = new Map<number, { id: number; name: string; slug: string | null; description: string | null }>();
+      for (const r of rows) {
         const s = r.get("skill") as Skill | null;
-        if (!s) return null;
-        return {
+        if (!s) continue;
+        byId.set(s.id, {
           id: s.id,
           name: s.name,
           slug: s.slug,
           description: s.description,
-        };
-      }).filter(Boolean);
+        });
+      }
+      for (const s of autoSkills) {
+        byId.set(s.id, {
+          id: s.id,
+          name: s.name,
+          slug: s.slug,
+          description: s.description,
+        });
+      }
+      const list = [...byId.values()];
       if (list.length === 0) {
         return "No skills are linked to this agent yet. Use add_agent_skill to create one.";
       }
@@ -168,11 +193,21 @@ export function GetAgentSkillTool(agentId: string) {
         where: { agentId, skillId: skill_id },
         include: [{ model: Skill, as: "skill", attributes: ["id", "name", "slug", "description", "skillText"] }],
       });
-      if (!row) {
+      let s: Skill | null = row ? ((row.get("skill") as Skill | null) ?? null) : null;
+      if (!s) {
+        // Auto-assigned skills are accessible to every agent regardless of linking.
+        const autoSkill = await Skill.findOne({
+          where: {
+            id: skill_id,
+            slug: { [Op.in]: [...AUTO_ASSIGNED_SKILL_SLUGS] },
+          },
+          attributes: ["id", "name", "slug", "description", "skillText"],
+        });
+        s = autoSkill;
+      }
+      if (!s) {
         return `No skill with id ${skill_id} is linked to this agent. Use list_agent_skills to see valid ids.`;
       }
-      const s = row.get("skill") as Skill | null;
-      if (!s) return "Skill record missing.";
       return [
         `id: ${s.id}`,
         `name: ${s.name}`,

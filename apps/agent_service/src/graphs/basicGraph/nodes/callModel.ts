@@ -307,7 +307,7 @@ export async function callModelNode(
   if (has("list_agents"))
     tools.push(ListAgentsTool(agentId));
   if (has("list_system_agents"))
-    tools.push(ListSystemAgentsTool());
+    tools.push(ListSystemAgentsTool(agentId));
   if (has("delegate_to_deep_agent"))
     tools.push(DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId));
   if (has("delegate_to_epic_orchestrator"))

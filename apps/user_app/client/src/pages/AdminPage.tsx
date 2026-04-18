@@ -32,7 +32,7 @@ import {
   ChevronDown,
   ChevronUp,
   Globe,
-  MessagesSquare,
+  Search,
 } from "lucide-react";
 import {
   admin,
@@ -47,7 +47,9 @@ import {
   type AdminTool,
   type AdminProject,
   type AdminRepository,
+  type AdminWebSearchStatus,
   type ConversationModelInfo,
+  type WebSearchChoice,
 } from "../api";
 import { VendorIcon } from "../components/VendorModelBadge";
 import UserCard from "../components/UserCard";
@@ -284,6 +286,9 @@ export default function AdminPage() {
   const [savingKeyVendorId, setSavingKeyVendorId] = useState<string | null>(null);
 
   const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
+  const [webSearchStatus, setWebSearchStatus] =
+    useState<AdminWebSearchStatus | null>(null);
+  const [webSearchSwitching, setWebSearchSwitching] = useState(false);
   const [newAgentDefinition, setNewAgentDefinition] = useState("");
   const [newAgentDisplayName, setNewAgentDisplayName] = useState("");
   const [newAgentDescription, setNewAgentDescription] = useState("");
@@ -405,7 +410,7 @@ export default function AdminPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [u, a, g, m, v, r, mcp, sk, tl, proj] = await Promise.all([
+      const [u, a, g, m, v, r, mcp, sk, tl, proj, ws] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
@@ -416,6 +421,7 @@ export default function AdminPage() {
         admin.getSkills().catch(() => [] as AdminSkill[]),
         admin.getTools().catch(() => [] as AdminTool[]),
         admin.getProjects().catch(() => [] as AdminProject[]),
+        admin.getWebSearchAgent().catch(() => null),
       ]);
       setUsers(u);
       setAgents(a);
@@ -427,6 +433,7 @@ export default function AdminPage() {
       setSkills(sk);
       setTools(tl);
       setProjects(proj);
+      setWebSearchStatus(ws);
       if (a.length > 0 && !newGroupAgentId) setNewGroupAgentId(a[0].id);
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
     } catch {
@@ -437,6 +444,29 @@ export default function AdminPage() {
   useEffect(() => {
     reload();
   }, [reload]);
+
+  const handleSwitchWebSearchAgent = useCallback(
+    async (choice: WebSearchChoice) => {
+      if (webSearchSwitching) return;
+      if (webSearchStatus?.activeChoice === choice) return;
+      setWebSearchSwitching(true);
+      try {
+        const next = await admin.setWebSearchAgent(choice);
+        setWebSearchStatus(next);
+        toast(
+          choice === "brave"
+            ? "Brave is now the active web-search agent."
+            : "Gemini is now the active web-search agent.",
+          "success",
+        );
+      } catch (e: any) {
+        toast(e?.message ?? "Failed to switch web-search agent.", "error");
+      } finally {
+        setWebSearchSwitching(false);
+      }
+    },
+    [toast, webSearchStatus, webSearchSwitching],
+  );
 
   // Listen for admin changes from other admins and auto-refresh
   const reloadRef = useRef(reload);
@@ -1493,6 +1523,87 @@ export default function AdminPage() {
               </div>
             </div>
 
+            {/* Dedicated Web Search Agent (pick Gemini or Brave — only one active) */}
+            <div className="mb-4">
+              <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <Search className="h-3.5 w-3.5 text-sky-500" />
+                Dedicated Web Search Agent
+                <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-500">
+                  {webSearchStatus?.activeChoice === "brave" ? "Brave" : "Gemini"}
+                </span>
+                <span className="ml-1 text-[9px] font-normal normal-case text-gray-400">
+                  only one can be active
+                </span>
+              </h3>
+              {webSearchStatus ? (
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                  {(["gemini", "brave"] as WebSearchChoice[]).map((choice) => {
+                    const candidate =
+                      choice === "brave"
+                        ? webSearchStatus.candidates.brave
+                        : webSearchStatus.candidates.gemini;
+                    const isActive = webSearchStatus.activeChoice === choice;
+                    const accent =
+                      choice === "brave"
+                        ? "from-orange-500 to-rose-600"
+                        : "from-sky-500 to-indigo-600";
+                    const icon = choice === "brave" ? Search : Globe;
+                    const Icon = icon;
+                    return (
+                      <button
+                        key={choice}
+                        type="button"
+                        disabled={!candidate || webSearchSwitching}
+                        onClick={() => handleSwitchWebSearchAgent(choice)}
+                        className={`group relative flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-200 ${
+                          isActive
+                            ? "border-sky-300 bg-sky-50/60 shadow-sm"
+                            : "border-gray-200/80 bg-white hover:border-indigo-300 hover:bg-white"
+                        } ${!candidate ? "cursor-not-allowed opacity-60" : ""}`}
+                      >
+                        <div
+                          className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${accent} text-white shadow-sm`}
+                        >
+                          <Icon className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-semibold text-gray-900">
+                              {candidate?.agentName ??
+                                (choice === "brave"
+                                  ? "Brave Web Search"
+                                  : "Gemini Web Search")}
+                            </span>
+                            {isActive && (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600">
+                                <CheckCircle2 className="h-3 w-3" />
+                                Active
+                              </span>
+                            )}
+                          </div>
+                          <p className="mt-1 line-clamp-2 text-[11px] text-gray-500">
+                            {candidate?.description ??
+                              (choice === "brave"
+                                ? "Routes web searches through the brave-search MCP server."
+                                : "Uses Gemini's built-in web grounding for search.")}
+                          </p>
+                          {candidate?.modelSlug && (
+                            <p className="mt-1 text-[10px] font-medium text-gray-400">
+                              {candidate.modelSlug}
+                            </p>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="py-2 text-xs text-gray-400">
+                  Loading web-search configuration...
+                </p>
+              )}
+            </div>
+
             {/* External Agents (roundtable-only) */}
             <div>
               <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
@@ -1542,13 +1653,6 @@ export default function AdminPage() {
               <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
                 {groups.length}
               </span>
-              <button
-                onClick={() => navigate("/roundtable")}
-                className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-amber-500 to-orange-600 px-3 py-1.5 text-[11px] font-semibold text-white shadow-sm transition-all duration-150 hover:shadow-md hover:brightness-110"
-              >
-                <MessagesSquare className="h-3.5 w-3.5" />
-                Roundtable
-              </button>
             </h2>
             <div className="mb-5 space-y-2.5">
               <input

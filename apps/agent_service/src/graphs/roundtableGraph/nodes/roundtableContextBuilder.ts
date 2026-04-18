@@ -65,9 +65,17 @@ export async function roundtableContextBuilderNode(
 
     // ── Roundtable briefing ─────────────────────────────────────────────
     if (roundtableConfig) {
-      const { topic, roundNumber, maxTurnsPerAgent, agentOrder } = roundtableConfig;
+      const {
+        topic,
+        roundNumber,
+        maxTurnsPerAgent,
+        agentOrder,
+        includeUser,
+        participantUser,
+      } = roundtableConfig;
       const totalAgents = agentOrder.length;
       const turnsRemaining = maxTurnsPerAgent - (roundNumber + 1);
+      const userDisplayName = participantUser?.displayName?.trim() || "The user";
 
       sections.push("## Roundtable discussion");
       sections.push(
@@ -79,6 +87,11 @@ export async function roundtableContextBuilderNode(
       for (const a of agentOrder) {
         const marker = a.agentId === agentId ? " **(you)**" : "";
         sections.push(`- ${a.definition}${marker}`);
+      }
+      if (includeUser && participantUser) {
+        sections.push(
+          `- ${userDisplayName} — human participant (contributes at the end of each round)`,
+        );
       }
       sections.push("");
 
@@ -99,6 +112,14 @@ export async function roundtableContextBuilderNode(
         "- Address other agents by name when referencing their points.\n" +
         "- On your final turn, summarize your key contributions and any open items.\n",
       );
+
+      if (includeUser && participantUser) {
+        sections.push(
+          `A human participant (**${userDisplayName}**) is in this roundtable. ` +
+          `Address them by name when relevant, react to their input just as you would another agent's, ` +
+          `and remember they speak last in each round.\n`,
+        );
+      }
     }
 
     // ── Agent notes ─────────────────────────────────────────────────────

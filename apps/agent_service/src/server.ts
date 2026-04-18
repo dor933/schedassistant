@@ -14,6 +14,7 @@ import { roundtableRouter } from "./routes/roundtable.routes";
 export type CreateServerDeps = {
   agentChatQueue: Queue<AgentChatJobData, AgentChatJobResult, string>;
   graph: CompiledStateGraph<any, any, any>;
+  roundtableGraph: CompiledStateGraph<any, any, any>;
 };
 
 /**

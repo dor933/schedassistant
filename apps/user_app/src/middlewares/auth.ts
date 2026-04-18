@@ -7,6 +7,8 @@ export interface AuthPayload {
   userId: number;
   displayName: string | null;
   role: string;
+  /** Tenant scope — every authenticated query must filter by this. */
+  organizationId: string;
 }
 
 declare global {

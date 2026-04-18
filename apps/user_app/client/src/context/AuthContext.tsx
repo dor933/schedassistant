@@ -1,4 +1,4 @@
-import {
+import React, {
   createContext,
   useContext,
   useState,
@@ -19,6 +19,8 @@ interface User {
   id: number;
   displayName: string | null;
   role: string;
+  organizationName: string | null;
+  organizationLogo: string | null;
 }
 
 interface AuthContextValue {
@@ -28,6 +30,8 @@ interface AuthContextValue {
   loading: boolean;
   login: (userName: string, password: string) => Promise<void>;
   register: (data: RegisterData) => Promise<void>;
+  /** Set the user/conversations without re-registering. Call after deferred animations. */
+  activateSession: () => void;
   logout: () => void;
 }
 
@@ -46,7 +50,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     getMe()
       .then((me) => {
-        setUser({ id: me.id, displayName: me.displayName, role: me.role ?? "user" });
+        setUser({
+          id: me.id,
+          displayName: me.displayName,
+          role: me.role ?? "user",
+          organizationName: me.organization?.name ?? null,
+          organizationLogo: me.organization?.logo ?? null,
+        });
         setConversations(me.conversations);
       })
       .catch(() => {
@@ -58,15 +68,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (userName: string, password: string) => {
     const res = await apiLogin(userName, password);
     localStorage.setItem("token", res.token);
-    setUser({ id: res.user.id, displayName: res.user.displayName, role: res.user.role ?? "user" });
+    setUser({
+      id: res.user.id,
+      displayName: res.user.displayName,
+      role: res.user.role ?? "user",
+      organizationName: res.organization?.name ?? null,
+      organizationLogo: res.organization?.logo ?? null,
+    });
     setConversations(res.conversations);
   }, []);
+
+  // Pending registration data — stored so the onboarding animation can play
+  // before we set `user` (which would trigger the route redirect).
+  const pendingSessionRef = React.useRef<{ user: User; conversations: Conversations } | null>(null);
 
   const register = useCallback(async (data: RegisterData) => {
     const res = await apiRegister(data);
     localStorage.setItem("token", res.token);
-    setUser({ id: res.user.id, displayName: res.user.displayName, role: res.user.role ?? "user" });
-    setConversations(res.conversations);
+    // Store but do NOT activate yet — the caller will call activateSession()
+    // after any deferred UI (e.g. the cinematic launch animation) is complete.
+    pendingSessionRef.current = {
+      user: {
+        id: res.user.id,
+        displayName: res.user.displayName,
+        role: res.user.role ?? "user",
+        organizationName: res.organization?.name ?? null,
+        organizationLogo: res.organization?.logo ?? null,
+      },
+      conversations: res.conversations,
+    };
+  }, []);
+
+  const activateSession = useCallback(() => {
+    const pending = pendingSessionRef.current;
+    if (pending) {
+      setUser(pending.user);
+      setConversations(pending.conversations);
+      pendingSessionRef.current = null;
+    }
   }, []);
 
   const logout = useCallback(() => {
@@ -183,7 +222,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ user, conversations, setConversations, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, conversations, setConversations, loading, login, register, activateSession, logout }}>
       {children}
     </AuthContext.Provider>
   );

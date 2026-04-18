@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
 import { AdminAgent, AdminMcpServer, AdminSkill, AdminTool, ConversationModelInfo, type AgentMcpServerLink, type AgentSkillLink, type AgentToolLink } from "../api";
 import { Box } from "@mui/material";
-import { Loader2, Save, X, Pencil, Sparkles, Plug, Power, PowerOff, Lock } from "lucide-react";
+import { Loader2, Save, X, Pencil, Sparkles, Plug, Power, PowerOff, Lock, Plus, ShieldCheck } from "lucide-react";
 import { admin } from "../api";
 import { stringifyAgentCharacteristics } from "../pages/AdminPage";
 import { useToast } from "./Toast";
 import ModelSelector from "./ModelSelector";
 import VendorModelBadge from "./VendorModelBadge";
+import AgentSchedulesSection from "./AgentSchedulesSection";
 
 export default function AgentCard({
     agent,
@@ -74,21 +75,19 @@ export default function AgentCard({
       return sk?.locked === true;
     }
 
+    const isSuperAdmin = currentUserRole === "super_admin";
+
     // ── MCP server link helpers ───────────────────────────────────────
-    function getMcpLinkState(id: number): "unassigned" | "active" | "inactive" {
-      const link = mcpLinks.find((l) => l.mcpServerId === id);
-      if (!link) return "unassigned";
-      return link.active ? "active" : "inactive";
+    function toggleMcpServer(id: number) {
+      setMcpLinks((prev) =>
+        prev.map((l) => l.mcpServerId === id ? { ...l, active: !l.active } : l),
+      );
     }
 
-    function cycleMcpServer(id: number) {
+    function addMcpServer(id: number) {
       setMcpLinks((prev) => {
-        const existing = prev.find((l) => l.mcpServerId === id);
-        if (!existing) return [...prev, { mcpServerId: id, active: true }];
-        // active → inactive
-        if (existing.active) return prev.map((l) => l.mcpServerId === id ? { ...l, active: false } : l);
-        // inactive → unassigned (remove)
-        return prev.filter((l) => l.mcpServerId !== id);
+        if (prev.some((l) => l.mcpServerId === id)) return prev;
+        return [...prev, { mcpServerId: id, active: true }];
       });
     }
 
@@ -97,19 +96,18 @@ export default function AgentCard({
     }
 
     // ── Skill link helpers ────────────────────────────────────────────
-    function getSkillLinkState(id: number): "unassigned" | "active" | "inactive" {
-      const link = skLinks.find((l) => l.skillId === id);
-      if (!link) return "unassigned";
-      return link.active ? "active" : "inactive";
+    function toggleSkill(id: number) {
+      if (isSkillLocked(id)) return;
+      setSkLinks((prev) =>
+        prev.map((l) => l.skillId === id ? { ...l, active: !l.active } : l),
+      );
     }
 
-    function cycleSkill(id: number) {
+    function addSkill(id: number) {
       if (isSkillLocked(id)) return;
       setSkLinks((prev) => {
-        const existing = prev.find((l) => l.skillId === id);
-        if (!existing) return [...prev, { skillId: id, active: true }];
-        if (existing.active) return prev.map((l) => l.skillId === id ? { ...l, active: false } : l);
-        return prev.filter((l) => l.skillId !== id);
+        if (prev.some((l) => l.skillId === id)) return prev;
+        return [...prev, { skillId: id, active: true }];
       });
     }
 
@@ -119,19 +117,21 @@ export default function AgentCard({
     }
 
     // ── Tool link helpers ──────────────────────────────────────────────
-    function getToolLinkState(id: number): "unassigned" | "active" | "inactive" {
-      const link = tlLinks.find((l) => l.toolId === id);
-      if (!link) return "unassigned";
-      return link.active ? "active" : "inactive";
+    function toggleTool(id: number) {
+      setTlLinks((prev) =>
+        prev.map((l) => l.toolId === id ? { ...l, active: !l.active } : l),
+      );
     }
 
-    function cycleTool(id: number) {
+    function addTool(id: number) {
       setTlLinks((prev) => {
-        const existing = prev.find((l) => l.toolId === id);
-        if (!existing) return [...prev, { toolId: id, active: true }];
-        if (existing.active) return prev.map((l) => l.toolId === id ? { ...l, active: false } : l);
-        return prev.filter((l) => l.toolId !== id);
+        if (prev.some((l) => l.toolId === id)) return prev;
+        return [...prev, { toolId: id, active: true }];
       });
+    }
+
+    function removeTool(id: number) {
+      setTlLinks((prev) => prev.filter((l) => l.toolId !== id));
     }
 
     async function save() {
@@ -281,53 +281,88 @@ export default function AgentCard({
             </div>
 
             {/* MCP Servers */}
-            {allMcpServers.length > 0 && (
+            {(mcpLinks.length > 0 || (isSuperAdmin && allMcpServers.length > 0)) && (
             <div>
               <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                 <Plug className="h-3 w-3" />
                 MCP Servers
               </label>
-              <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                {allMcpServers.map((s) => {
-                  const state = getMcpLinkState(s.id);
-                  return (
-                    <span key={s.id} className="group/chip inline-flex items-center gap-0">
-                      <button
-                        type="button"
-                        onClick={() => cycleMcpServer(s.id)}
-                        title={state === "unassigned" ? "Click to assign" : state === "active" ? "Click to deactivate" : "Click to remove"}
-                        className={`inline-flex items-center gap-1.5 py-1 text-[11px] font-medium transition-all duration-150 ${
-                          state === "active"
-                            ? "rounded-full bg-gradient-to-r from-violet-50 to-purple-50 text-violet-800 ring-1 ring-violet-200/80 shadow-sm px-2.5"
-                            : state === "inactive"
-                              ? "rounded-full bg-gray-50 text-gray-400 ring-1 ring-gray-300 ring-dashed px-2.5 line-through decoration-gray-400/50"
-                              : "rounded-full bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300 px-2.5"
-                        }`}
-                      >
-                        {state === "active" && <Power className="h-3 w-3 text-violet-500" />}
-                        {state === "inactive" && <PowerOff className="h-3 w-3 text-gray-400" />}
-                        {state === "unassigned" && <Plug className="h-3 w-3" />}
-                        {s.name}
-                      </button>
-                      {state !== "unassigned" && (
+
+              {/* Assigned MCP servers */}
+              {mcpLinks.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                  {mcpLinks.map((link) => {
+                    const server = allMcpServers.find((s) => s.id === link.mcpServerId);
+                    if (!server) return null;
+                    return (
+                      <span key={link.mcpServerId} className="group/chip inline-flex items-center gap-0">
                         <button
                           type="button"
-                          onClick={() => removeMcpServer(s.id)}
-                          title="Remove from agent"
-                          className="ml-0.5 rounded-full p-0.5 text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                          onClick={() => toggleMcpServer(link.mcpServerId)}
+                          title={link.active ? "Click to deactivate" : "Click to activate"}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
+                            link.active
+                              ? "bg-gradient-to-r from-violet-50 to-purple-50 text-violet-800 ring-1 ring-violet-200/80 shadow-sm"
+                              : "bg-gray-50 text-gray-400 ring-1 ring-gray-300 ring-dashed line-through decoration-gray-400/50"
+                          }`}
                         >
-                          <X className="h-3 w-3" />
+                          {link.active ? <Power className="h-3 w-3 text-violet-500" /> : <PowerOff className="h-3 w-3 text-gray-400" />}
+                          {server.name}
                         </button>
-                      )}
-                    </span>
-                  );
-                })}
-              </div>
+                        {isSuperAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => removeMcpServer(link.mcpServerId)}
+                            title="Unassign from agent"
+                            className="ml-0.5 rounded-full p-0.5 text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 px-3 py-2 text-[11px] text-gray-400">
+                  No MCP servers assigned.
+                </p>
+              )}
+
               {mcpLinks.length > 0 && (
                 <p className="mt-1 text-[10px] text-gray-400">
                   {mcpLinks.filter((l) => l.active).length} active, {mcpLinks.filter((l) => !l.active).length} inactive
                 </p>
               )}
+
+              {/* Available to add — super_admin only */}
+              {isSuperAdmin && (() => {
+                const assignedIds = new Set(mcpLinks.map((l) => l.mcpServerId));
+                const available = allMcpServers.filter((s) => !assignedIds.has(s.id));
+                if (available.length === 0) return null;
+                return (
+                  <div className="mt-2">
+                    <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider text-indigo-400">
+                      <ShieldCheck className="h-2.5 w-2.5" />
+                      Available to add
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {available.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          onClick={() => addMcpServer(s.id)}
+                          title={`Assign "${s.name}" to this agent`}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-gray-400 ring-1 ring-gray-200 transition-all duration-150 hover:bg-indigo-50 hover:text-indigo-600 hover:ring-indigo-200"
+                        >
+                          <Plus className="h-3 w-3" />
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             )}
 
@@ -337,102 +372,182 @@ export default function AgentCard({
                 <Sparkles className="h-3 w-3" />
                 Skills
               </label>
-              <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                {allSkills.filter((sk) => !sk.locked || skLinks.some((l) => l.skillId === sk.id)).map((sk) => {
-                  const state = getSkillLinkState(sk.id);
-                  const locked = isSkillLocked(sk.id);
-                  return (
-                    <span key={sk.id} className="group/chip inline-flex items-center gap-0">
-                      <button
-                        type="button"
-                        onClick={() => cycleSkill(sk.id)}
-                        disabled={locked}
-                        title={locked ? "This skill is locked and cannot be changed" : state === "unassigned" ? "Click to assign" : state === "active" ? "Click to deactivate" : "Click to remove"}
-                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
-                          locked
-                            ? "bg-gray-100 text-gray-500 ring-1 ring-gray-300 cursor-not-allowed opacity-75"
-                            : state === "active"
-                              ? "bg-gradient-to-r from-amber-50 to-yellow-50 text-amber-800 ring-1 ring-amber-200/80 shadow-sm"
-                              : state === "inactive"
-                                ? "bg-gray-50 text-gray-400 ring-1 ring-gray-300 ring-dashed line-through decoration-gray-400/50"
-                                : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-50 hover:text-gray-600 hover:ring-gray-300"
-                        }`}
-                      >
-                        {locked ? (
-                          <span
-                            className="flex items-center justify-center rounded-full bg-gray-400 text-white text-[9px] font-bold"
-                            style={{ width: 18, height: 18 }}
-                          >
-                            {"\u2713"}
-                          </span>
-                        ) : state === "active" ? (
-                          <Power className="h-3 w-3 text-amber-600" />
-                        ) : state === "inactive" ? (
-                          <PowerOff className="h-3 w-3 text-gray-400" />
-                        ) : (
-                          <Sparkles className="h-3 w-3" />
-                        )}
-                        {sk.name}
-                      </button>
-                      {state !== "unassigned" && !locked && (
+
+              {/* Assigned skills */}
+              {skLinks.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                  {skLinks.map((link) => {
+                    const sk = allSkills.find((s) => s.id === link.skillId);
+                    if (!sk) return null;
+                    const locked = sk.locked === true;
+                    return (
+                      <span key={link.skillId} className="group/chip inline-flex items-center gap-0">
                         <button
                           type="button"
-                          onClick={() => removeSkill(sk.id)}
-                          title="Remove from agent"
-                          className="ml-0.5 rounded-full p-0.5 text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                          onClick={() => toggleSkill(link.skillId)}
+                          disabled={locked}
+                          title={locked ? "This skill is locked and cannot be changed" : link.active ? "Click to deactivate" : "Click to activate"}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
+                            locked
+                              ? "bg-gray-100 text-gray-500 ring-1 ring-gray-300 cursor-not-allowed opacity-75"
+                              : link.active
+                                ? "bg-gradient-to-r from-amber-50 to-yellow-50 text-amber-800 ring-1 ring-amber-200/80 shadow-sm"
+                                : "bg-gray-50 text-gray-400 ring-1 ring-gray-300 ring-dashed line-through decoration-gray-400/50"
+                          }`}
                         >
-                          <X className="h-3 w-3" />
+                          {locked ? (
+                            <span
+                              className="flex items-center justify-center rounded-full bg-gray-400 text-white text-[9px] font-bold"
+                              style={{ width: 18, height: 18 }}
+                            >
+                              {"\u2713"}
+                            </span>
+                          ) : link.active ? (
+                            <Power className="h-3 w-3 text-amber-600" />
+                          ) : (
+                            <PowerOff className="h-3 w-3 text-gray-400" />
+                          )}
+                          {sk.name}
                         </button>
-                      )}
-                    </span>
-                  );
-                })}
-                {allSkills.filter((sk) => !sk.locked).length === 0 && (
-                  <p className="text-[11px] text-gray-400 py-0.5">No skills defined yet (super admin can add in Skills).</p>
-                )}
-              </div>
+                        {isSuperAdmin && !locked && (
+                          <button
+                            type="button"
+                            onClick={() => removeSkill(link.skillId)}
+                            title="Unassign from agent"
+                            className="ml-0.5 rounded-full p-0.5 text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 px-3 py-2 text-[11px] text-gray-400">
+                  No skills assigned.
+                </p>
+              )}
+
               {skLinks.length > 0 && (
                 <p className="mt-1 text-[10px] text-gray-400">
                   {skLinks.filter((l) => l.active).length} active, {skLinks.filter((l) => !l.active).length} inactive
                 </p>
               )}
+
+              {/* Available to add — super_admin only */}
+              {isSuperAdmin && (() => {
+                const assignedIds = new Set(skLinks.map((l) => l.skillId));
+                const available = allSkills.filter((sk) => !assignedIds.has(sk.id) && !sk.locked);
+                if (available.length === 0) return null;
+                return (
+                  <div className="mt-2">
+                    <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider text-indigo-400">
+                      <ShieldCheck className="h-2.5 w-2.5" />
+                      Available to add
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {available.map((sk) => (
+                        <button
+                          key={sk.id}
+                          type="button"
+                          onClick={() => addSkill(sk.id)}
+                          title={`Assign "${sk.name}" to this agent`}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-gray-400 ring-1 ring-gray-200 transition-all duration-150 hover:bg-amber-50 hover:text-amber-600 hover:ring-amber-200"
+                        >
+                          <Plus className="h-3 w-3" />
+                          {sk.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Tools */}
-            {allTools.length > 0 && (
+            {(tlLinks.length > 0 || (isSuperAdmin && allTools.length > 0)) && (
             <div>
               <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                 <Plug className="h-3 w-3" />
                 Tools
               </label>
-              <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
-                {allTools.map((t) => {
-                  const st = getToolLinkState(t.id);
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => cycleTool(t.id)}
-                      title={`${t.description ?? t.slug} — click to cycle: active → inactive → unassigned`}
-                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
-                        st === "active"
-                          ? "bg-violet-100 text-violet-800 ring-1 ring-violet-200 shadow-sm"
-                          : st === "inactive"
-                            ? "bg-gray-100 text-gray-400 ring-1 ring-gray-200 line-through"
-                            : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-gray-100"
-                      }`}
-                    >
-                      {st === "active" ? <Power className="h-3 w-3" /> : st === "inactive" ? <PowerOff className="h-3 w-3" /> : <Plug className="h-3 w-3 opacity-40" />}
-                      {t.name}
-                    </button>
-                  );
-                })}
-              </div>
+
+              {/* Assigned tools */}
+              {tlLinks.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                  {tlLinks.map((link) => {
+                    const tool = allTools.find((t) => t.id === link.toolId);
+                    if (!tool) return null;
+                    return (
+                      <span key={link.toolId} className="group/chip inline-flex items-center gap-0">
+                        <button
+                          type="button"
+                          onClick={() => toggleTool(link.toolId)}
+                          title={`${tool.description ?? tool.slug} — ${link.active ? "Click to deactivate" : "Click to activate"}`}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
+                            link.active
+                              ? "bg-violet-100 text-violet-800 ring-1 ring-violet-200 shadow-sm"
+                              : "bg-gray-100 text-gray-400 ring-1 ring-gray-200 line-through"
+                          }`}
+                        >
+                          {link.active ? <Power className="h-3 w-3" /> : <PowerOff className="h-3 w-3" />}
+                          {tool.name}
+                        </button>
+                        {isSuperAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => removeTool(link.toolId)}
+                            title="Unassign from agent"
+                            className="ml-0.5 rounded-full p-0.5 text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 px-3 py-2 text-[11px] text-gray-400">
+                  No tools assigned.
+                </p>
+              )}
+
               {tlLinks.length > 0 && (
                 <p className="mt-1 text-[10px] text-gray-400">
                   {tlLinks.filter((l) => l.active).length} active, {tlLinks.filter((l) => !l.active).length} inactive
                 </p>
               )}
+
+              {/* Available to add — super_admin only */}
+              {isSuperAdmin && (() => {
+                const assignedIds = new Set(tlLinks.map((l) => l.toolId));
+                const available = allTools.filter((t) => !assignedIds.has(t.id));
+                if (available.length === 0) return null;
+                return (
+                  <div className="mt-2">
+                    <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider text-indigo-400">
+                      <ShieldCheck className="h-2.5 w-2.5" />
+                      Available to add
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {available.map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => addTool(t.id)}
+                          title={`Assign "${t.name}" to this agent`}
+                          className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-gray-400 ring-1 ring-gray-200 transition-all duration-150 hover:bg-violet-50 hover:text-violet-600 hover:ring-violet-200"
+                        >
+                          <Plus className="h-3 w-3" />
+                          {t.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
             )}
 
@@ -447,6 +562,9 @@ export default function AgentCard({
                 compact
               />
             </div>
+
+            {/* Schedules (cron) */}
+            <AgentSchedulesSection agentId={agent.id} />
 
             {/* Actions */}
             <div className="flex gap-2 pt-1">

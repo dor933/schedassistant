@@ -112,7 +112,10 @@ export async function summarizeRoundtable(roundtableId: string): Promise<string>
   const messages = await RoundtableMessage.findAll({
     where: { roundtableId },
     order: [["createdAt", "ASC"]],
-    include: [{ association: "agent", attributes: ["definition", "agentName"] }],
+    include: [
+      { association: "agent", attributes: ["definition", "agentName"] },
+      { association: "user", attributes: ["id", "displayName"] },
+    ],
   });
 
   if (messages.length === 0) {
@@ -139,7 +142,10 @@ export async function summarizeRoundtable(roundtableId: string): Promise<string>
 
   const transcriptLines = messages.map((m) => {
     const a = (m as any).agent;
-    const name = a?.agentName || a?.definition || m.agentId;
+    const u = (m as any).user;
+    const name = m.userId != null
+      ? (u?.displayName ? `${u.displayName} (user)` : "User")
+      : a?.agentName || a?.definition || m.agentId;
     return `### Round ${m.roundNumber + 1} — ${name}\n${m.content.trim()}`;
   });
 

@@ -18,32 +18,38 @@ import {
   Clock,
   Radio,
   ScrollText,
+  Send,
+  User as UserIcon,
+  Timer,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useToast } from "../components/Toast";
+import { useAuth } from "../context/AuthContext";
 import { getChatSocket } from "../sockets/chatSocket";
 import {
   admin as api,
   type AdminAgent,
+  type AdminUser,
   type RoundtableSummary,
   type RoundtableDetail,
   type RoundtableMessageInfo,
 } from "../api";
+import NotificationBell from "../components/NotificationBell";
 
 // ─── Shared design tokens ───────────────────────────────────────────────────
 
 const inputClass =
-  "w-full rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-2.5 text-sm transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10";
+  "w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white placeholder-indigo-200/40 backdrop-blur-sm transition-all duration-200 focus:border-indigo-400/50 focus:bg-white/[0.08] focus:outline-none focus:shadow-[0_0_28px_-10px_rgba(129,140,248,0.6)]";
 
 const btnPrimary =
-  "inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:shadow-md hover:shadow-indigo-200/50 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none";
+  "inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_0_24px_-4px_rgba(168,85,247,0.65)] transition-all duration-200 hover:shadow-[0_0_32px_-4px_rgba(168,85,247,0.9)] hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none";
 
 const btnGhost =
-  "inline-flex items-center gap-1.5 rounded-xl border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition-all duration-200 hover:bg-gray-50 hover:shadow-sm active:scale-[0.98]";
+  "inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/[0.04] px-3 py-2 text-sm font-medium text-indigo-100 backdrop-blur-sm transition-all duration-200 hover:border-white/25 hover:bg-white/[0.08] active:scale-[0.98]";
 
 const cardClass =
-  "rounded-2xl border border-gray-200/60 bg-white/80 p-5 sm:p-6 shadow-glass backdrop-blur-sm";
+  "glass-panel-elevated rounded-2xl p-5 sm:p-6";
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<
@@ -51,35 +57,40 @@ function StatusPill({ status }: { status: string }) {
     { className: string; Icon: typeof Clock; label: string }
   > = {
     pending: {
-      className: "bg-amber-50 text-amber-700 ring-1 ring-amber-200/70",
+      className: "bg-amber-500/15 text-amber-300 ring-1 ring-amber-400/30",
       Icon: Clock,
       label: "Pending",
     },
     running: {
-      className: "bg-blue-50 text-blue-700 ring-1 ring-blue-200/70",
+      className: "bg-sky-500/15 text-sky-300 ring-1 ring-sky-400/30",
       Icon: Radio,
       label: "Running",
     },
+    waiting_for_user: {
+      className: "bg-fuchsia-500/15 text-fuchsia-200 ring-1 ring-fuchsia-400/30",
+      Icon: Timer,
+      label: "Your turn",
+    },
     completed: {
-      className: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200/70",
+      className: "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-400/30",
       Icon: CheckCircle2,
       label: "Completed",
     },
     failed: {
-      className: "bg-rose-50 text-rose-700 ring-1 ring-rose-200/70",
+      className: "bg-rose-500/15 text-rose-300 ring-1 ring-rose-400/30",
       Icon: AlertTriangle,
       label: "Failed",
     },
   };
   const entry = map[status] ?? {
-    className: "bg-gray-100 text-gray-600 ring-1 ring-gray-200/70",
+    className: "bg-white/10 text-indigo-100 ring-1 ring-white/15",
     Icon: Clock,
     label: status,
   };
   const { Icon, className, label } = entry;
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${className}`}
+      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium backdrop-blur-sm ${className}`}
     >
       <Icon
         className={`h-3 w-3 ${status === "running" ? "animate-pulse-soft" : ""}`}
@@ -89,25 +100,54 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+// Deep-space ambient background decoration
+function SpaceAmbient() {
+  return (
+    <>
+      <Box className="space-grid" aria-hidden="true" />
+      <Box className="space-orb space-orb-1" aria-hidden="true" />
+      <Box className="space-orb space-orb-2" aria-hidden="true" />
+      <Box className="space-orb space-orb-3" aria-hidden="true" />
+    </>
+  );
+}
+
 // ─── Roundtable list + create form ─────────────────────────────────────────
 
 function RoundtableListView() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [roundtables, setRoundtables] = useState<RoundtableSummary[]>([]);
   const [agents, setAgents] = useState<AdminAgent[]>([]);
+  const [orgUsers, setOrgUsers] = useState<AdminUser[]>([]);
   const [topic, setTopic] = useState("");
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
+  const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
   const [maxTurns, setMaxTurns] = useState(5);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     api.getRoundtables().then(setRoundtables).catch(console.error);
-    api.getAgents().then((all) => setAgents(all.filter((a) => a.type === "primary" || a.type === "external"))).catch(console.error);
+    api
+      .getAgents()
+      .then((all) =>
+        setAgents(
+          all.filter((a) => a.type === "primary" || a.type === "external"),
+        ),
+      )
+      .catch(console.error);
+    api.getUsers().then(setOrgUsers).catch(console.error);
   }, []);
 
   const toggleAgent = (id: string) => {
     setSelectedAgentIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
+
+  const toggleUser = (id: number) => {
+    setSelectedUserIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
   };
@@ -120,6 +160,7 @@ function RoundtableListView() {
         topic: topic.trim(),
         agentIds: selectedAgentIds,
         maxTurnsPerAgent: maxTurns,
+        participantUserIds: selectedUserIds,
       });
       navigate(`/roundtable/${result.id}`);
     } catch (err: any) {
@@ -135,43 +176,53 @@ function RoundtableListView() {
   return (
     <Stack
       component="main"
-      className="min-h-screen w-full bg-gradient-to-br from-slate-50 via-white to-indigo-50/30"
+      className="space-bg"
+      sx={{ minHeight: "100vh", width: "100%", position: "relative" }}
     >
+      <SpaceAmbient />
+
       <Container
         maxWidth={false}
         disableGutters
         className="mx-auto box-border w-full min-w-0 max-w-5xl px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-8"
+        sx={{ position: "relative", zIndex: 1 }}
       >
         {/* Sticky header */}
         <Stack
           component="header"
           direction="row"
-          className="sticky top-0 z-10 -mx-4 mb-6 min-w-0 items-center justify-between gap-3 border-b border-gray-200/60 bg-white/90 px-4 py-3 backdrop-blur-xl sm:-mx-6 sm:mb-8 sm:px-6 sm:py-4 lg:-mx-8 lg:px-8"
+          className="sticky top-0 z-10 -mx-4 mb-6 min-w-0 items-center justify-between gap-3 border-b border-white/5 bg-slate-950/50 px-4 py-3 backdrop-blur-xl sm:-mx-6 sm:mb-8 sm:px-6 sm:py-4 lg:-mx-8 lg:px-8"
         >
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm">
-              <MessagesSquare className="h-4.5 w-4.5" />
+            <div className="relative flex h-10 w-10 items-center justify-center">
+              <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-indigo-500/40 via-violet-500/30 to-fuchsia-500/40 blur-md" />
+              <div className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_0_20px_-4px_rgba(168,85,247,0.65)] ring-1 ring-white/20">
+                <MessagesSquare className="h-5 w-5" />
+              </div>
             </div>
             <div className="min-w-0">
-              <h1 className="text-base sm:text-lg font-bold tracking-tight text-gray-900">
+              <h1 className="text-base sm:text-lg font-bold tracking-tight text-white">
                 Roundtables
               </h1>
-              <p className="text-[10px] sm:text-xs text-gray-400">
-                Multi-agent discussions
+              <p className="text-[10px] sm:text-xs text-indigo-200/60">
+                Multi-agent discussions across the network
               </p>
             </div>
           </div>
-          <button onClick={() => navigate("/")} className={btnGhost}>
-            <ArrowLeft className="h-4 w-4" />
-            <span className="hidden sm:inline">Back to Chat</span>
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <NotificationBell />
+            <button onClick={() => navigate("/")} className={btnGhost}>
+              <ArrowLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">Back to Chat</span>
+            </button>
+          </div>
         </Stack>
 
         <Stack component="section" className="w-full min-w-0 space-y-6 sm:space-y-8">
           {/* Create form */}
           <Box className={`${cardClass} animate-slide-up`}>
-            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm">
+            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-white">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_0_18px_-4px_rgba(168,85,247,0.7)] ring-1 ring-white/15">
                 <Sparkles className="h-4 w-4" />
               </div>
               New Roundtable Discussion
@@ -179,7 +230,7 @@ function RoundtableListView() {
 
             <div className="space-y-5">
               <div>
-                <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-indigo-300/60">
                   Topic
                 </label>
                 <textarea
@@ -192,15 +243,15 @@ function RoundtableListView() {
               </div>
 
               <div>
-                <label className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-                  <Users2 className="h-3.5 w-3.5 text-gray-400" />
+                <label className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-indigo-300/60">
+                  <Users2 className="h-3.5 w-3.5 text-indigo-300/70" />
                   Participants
-                  <span className="ml-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium normal-case tracking-normal text-gray-500">
+                  <span className="ml-1 rounded-full border border-white/10 bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium normal-case tracking-normal text-indigo-100">
                     {selectedAgentIds.length} selected · min 2
                   </span>
                 </label>
                 {agents.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 px-4 py-6 text-center text-xs text-gray-400">
+                  <p className="rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-6 text-center text-xs text-indigo-200/50">
                     No agents available.
                   </p>
                 ) : (
@@ -211,16 +262,18 @@ function RoundtableListView() {
                         <button
                           key={a.id}
                           onClick={() => toggleAgent(a.id)}
-                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150 active:scale-[0.97] ${
+                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium backdrop-blur-sm transition-all duration-150 active:scale-[0.97] ${
                             selected
-                              ? "bg-gradient-to-r from-indigo-500 to-violet-500 text-white shadow-sm shadow-indigo-200/50"
-                              : "border border-gray-200 bg-white text-gray-600 hover:border-indigo-200 hover:bg-indigo-50/50 hover:text-indigo-700"
+                              ? "bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_0_18px_-4px_rgba(168,85,247,0.65)] ring-1 ring-white/20"
+                              : "border border-white/10 bg-white/[0.04] text-indigo-100 hover:border-indigo-300/40 hover:bg-indigo-500/15 hover:text-white"
                           }`}
                         >
                           <Bot className="h-3 w-3" />
                           {a.agentName || a.definition}
                           {a.type === "external" && (
-                            <span className="ml-1 rounded bg-amber-50 px-1 py-0.5 text-[8px] font-semibold text-amber-600 uppercase">ext</span>
+                            <span className="ml-1 rounded bg-amber-500/20 px-1 py-0.5 text-[8px] font-semibold uppercase text-amber-200 ring-1 ring-amber-400/30">
+                              ext
+                            </span>
                           )}
                         </button>
                       );
@@ -230,8 +283,56 @@ function RoundtableListView() {
               </div>
 
               <div>
-                <label className="mb-1.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-                  <Hash className="h-3.5 w-3.5 text-gray-400" />
+                <label className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-indigo-300/60">
+                  <UserIcon className="h-3.5 w-3.5 text-fuchsia-300/70" />
+                  Human participants
+                  <span className="ml-1 rounded-full border border-white/10 bg-white/[0.06] px-2 py-0.5 text-[10px] font-medium normal-case tracking-normal text-indigo-100">
+                    {selectedUserIds.length} selected · optional
+                  </span>
+                </label>
+                <p className="mb-2.5 text-[11px] text-indigo-200/60">
+                  Each selected person gets their own turn at the end of every
+                  round (5-minute window). Invitees are notified.
+                </p>
+                {orgUsers.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-white/10 bg-white/[0.03] px-4 py-6 text-center text-xs text-indigo-200/50">
+                    No users available.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {orgUsers.map((u) => {
+                      const selected = selectedUserIds.includes(u.id);
+                      const isMe = user?.id === u.id;
+                      const label =
+                        u.displayName?.trim() || `User #${u.id}`;
+                      return (
+                        <button
+                          key={u.id}
+                          type="button"
+                          onClick={() => toggleUser(u.id)}
+                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium backdrop-blur-sm transition-all duration-150 active:scale-[0.97] ${
+                            selected
+                              ? "bg-gradient-to-r from-fuchsia-500 via-violet-500 to-indigo-500 text-white shadow-[0_0_18px_-4px_rgba(232,121,249,0.65)] ring-1 ring-white/20"
+                              : "border border-white/10 bg-white/[0.04] text-indigo-100 hover:border-fuchsia-300/40 hover:bg-fuchsia-500/15 hover:text-white"
+                          }`}
+                        >
+                          <UserIcon className="h-3 w-3" />
+                          {label}
+                          {isMe && (
+                            <span className="ml-0.5 rounded bg-white/20 px-1 py-0.5 text-[8px] font-semibold uppercase">
+                              you
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label className="mb-1.5 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-indigo-300/60">
+                  <Hash className="h-3.5 w-3.5 text-indigo-300/70" />
                   Turns per agent
                 </label>
                 <input
@@ -268,20 +369,20 @@ function RoundtableListView() {
 
           {/* Existing roundtables */}
           <Box className={`${cardClass} animate-slide-up`}>
-            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm">
+            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-white">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-[0_0_18px_-4px_rgba(16,185,129,0.55)] ring-1 ring-white/15">
                 <MessagesSquare className="h-4 w-4" />
               </div>
               Previous Roundtables
-              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+              <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-0.5 text-xs font-medium text-indigo-100">
                 {roundtables.length}
               </span>
             </h2>
 
             {roundtables.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/40 px-4 py-10 text-center">
-                <MessagesSquare className="mx-auto mb-2 h-6 w-6 text-gray-300" />
-                <p className="text-xs text-gray-400">
+              <div className="rounded-xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-10 text-center">
+                <MessagesSquare className="mx-auto mb-2 h-6 w-6 text-indigo-300/40" />
+                <p className="text-xs text-indigo-200/50">
                   No roundtables yet. Start one above to see it here.
                 </p>
               </div>
@@ -291,17 +392,17 @@ function RoundtableListView() {
                   <button
                     key={rt.id}
                     onClick={() => navigate(`/roundtable/${rt.id}`)}
-                    className="group w-full rounded-xl border border-gray-200/70 bg-white p-4 text-left transition-all duration-200 hover:-translate-y-0.5 hover:border-indigo-200 hover:shadow-md hover:shadow-indigo-100/50"
+                    className="group w-full rounded-xl border border-white/10 bg-white/[0.04] p-4 text-left backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-fuchsia-400/40 hover:bg-white/[0.07] hover:shadow-[0_0_28px_-8px_rgba(217,70,239,0.45)]"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-gray-800 group-hover:text-indigo-700">
+                        <p className="truncate text-sm font-semibold text-white group-hover:text-fuchsia-100">
                           {rt.topic}
                         </p>
-                        <p className="mt-1 flex items-center gap-2 text-[11px] text-gray-400">
+                        <p className="mt-1 flex items-center gap-2 text-[11px] text-indigo-200/60">
                           <Hash className="h-3 w-3" />
                           Round {rt.currentRound + 1} of {rt.maxTurnsPerAgent}
-                          <span className="text-gray-300">·</span>
+                          <span className="text-indigo-300/40">·</span>
                           {new Date(rt.createdAt).toLocaleDateString()}
                         </p>
                       </div>
@@ -321,23 +422,82 @@ function RoundtableListView() {
 // ─── Roundtable detail view (chat-like display) ─────────────────────────────
 
 const AGENT_ACCENTS = [
-  { border: "border-l-indigo-400", dot: "bg-indigo-500", text: "text-indigo-700", chip: "bg-indigo-50 ring-indigo-200/70" },
-  { border: "border-l-emerald-400", dot: "bg-emerald-500", text: "text-emerald-700", chip: "bg-emerald-50 ring-emerald-200/70" },
-  { border: "border-l-amber-400", dot: "bg-amber-500", text: "text-amber-700", chip: "bg-amber-50 ring-amber-200/70" },
-  { border: "border-l-rose-400", dot: "bg-rose-500", text: "text-rose-700", chip: "bg-rose-50 ring-rose-200/70" },
-  { border: "border-l-cyan-400", dot: "bg-cyan-500", text: "text-cyan-700", chip: "bg-cyan-50 ring-cyan-200/70" },
-  { border: "border-l-violet-400", dot: "bg-violet-500", text: "text-violet-700", chip: "bg-violet-50 ring-violet-200/70" },
-  { border: "border-l-orange-400", dot: "bg-orange-500", text: "text-orange-700", chip: "bg-orange-50 ring-orange-200/70" },
-  { border: "border-l-teal-400", dot: "bg-teal-500", text: "text-teal-700", chip: "bg-teal-50 ring-teal-200/70" },
+  {
+    border: "border-l-indigo-400/60",
+    dot: "bg-indigo-400",
+    text: "text-indigo-200",
+    chip: "bg-indigo-500/15 ring-indigo-400/30",
+    glow: "shadow-[0_0_24px_-10px_rgba(129,140,248,0.65)]",
+  },
+  {
+    border: "border-l-emerald-400/60",
+    dot: "bg-emerald-400",
+    text: "text-emerald-200",
+    chip: "bg-emerald-500/15 ring-emerald-400/30",
+    glow: "shadow-[0_0_24px_-10px_rgba(52,211,153,0.65)]",
+  },
+  {
+    border: "border-l-amber-400/60",
+    dot: "bg-amber-400",
+    text: "text-amber-200",
+    chip: "bg-amber-500/15 ring-amber-400/30",
+    glow: "shadow-[0_0_24px_-10px_rgba(251,191,36,0.65)]",
+  },
+  {
+    border: "border-l-rose-400/60",
+    dot: "bg-rose-400",
+    text: "text-rose-200",
+    chip: "bg-rose-500/15 ring-rose-400/30",
+    glow: "shadow-[0_0_24px_-10px_rgba(251,113,133,0.65)]",
+  },
+  {
+    border: "border-l-cyan-400/60",
+    dot: "bg-cyan-400",
+    text: "text-cyan-200",
+    chip: "bg-cyan-500/15 ring-cyan-400/30",
+    glow: "shadow-[0_0_24px_-10px_rgba(34,211,238,0.65)]",
+  },
+  {
+    border: "border-l-violet-400/60",
+    dot: "bg-violet-400",
+    text: "text-violet-200",
+    chip: "bg-violet-500/15 ring-violet-400/30",
+    glow: "shadow-[0_0_24px_-10px_rgba(167,139,250,0.65)]",
+  },
+  {
+    border: "border-l-orange-400/60",
+    dot: "bg-orange-400",
+    text: "text-orange-200",
+    chip: "bg-orange-500/15 ring-orange-400/30",
+    glow: "shadow-[0_0_24px_-10px_rgba(251,146,60,0.65)]",
+  },
+  {
+    border: "border-l-fuchsia-400/60",
+    dot: "bg-fuchsia-400",
+    text: "text-fuchsia-200",
+    chip: "bg-fuchsia-500/15 ring-fuchsia-400/30",
+    glow: "shadow-[0_0_24px_-10px_rgba(232,121,249,0.65)]",
+  },
 ];
 
 function RoundtableDetailView({ id }: { id: string }) {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [data, setData] = useState<RoundtableDetail | null>(null);
   const [messages, setMessages] = useState<RoundtableMessageInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [stopping, setStopping] = useState(false);
+  const [userTurn, setUserTurn] = useState<{
+    roundNumber: number;
+    deadline: number;
+    userId: number | null;
+    displayName: string | null;
+  } | null>(null);
+  const [userDraft, setUserDraft] = useState("");
+  const [submittingTurn, setSubmittingTurn] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState<number>(0);
+  const userDraftRef = useRef("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const fetchData = useCallback(async () => {
@@ -345,6 +505,17 @@ function RoundtableDetailView({ id }: { id: string }) {
       const result = await api.getRoundtable(id);
       setData(result);
       setMessages(result.messages);
+      if (result.status === "waiting_for_user") {
+        const activeUser =
+          result.users.find((u) => u.turnsCompleted <= result.currentRound) ??
+          null;
+        setUserTurn({
+          roundNumber: result.currentRound,
+          deadline: Date.now() + 5 * 60 * 1000,
+          userId: activeUser?.userId ?? null,
+          displayName: activeUser?.displayName ?? null,
+        });
+      }
     } catch (err) {
       console.error("Failed to load roundtable", err);
     } finally {
@@ -364,24 +535,52 @@ function RoundtableDetailView({ id }: { id: string }) {
 
     const handleMessage = (payload: {
       roundtableId: string;
-      agentId: string;
+      agentId: string | null;
       agentLabel: string;
       roundNumber: number;
       content: string;
       createdAt: string;
+      senderType?: "agent" | "user";
+      userId?: number | null;
+      displayName?: string | null;
     }) => {
       if (payload.roundtableId !== id) return;
       setMessages((prev) => [
         ...prev,
         {
           id: `live-${Date.now()}`,
-          agentId: payload.agentId,
+          agentId: payload.agentId ?? null,
           agentName: payload.agentLabel,
           roundNumber: payload.roundNumber,
           content: payload.content,
           createdAt: payload.createdAt,
+          senderType: payload.senderType ?? "agent",
+          userId: payload.userId ?? undefined,
+          displayName: payload.displayName ?? undefined,
         },
       ]);
+      if (payload.senderType === "user") {
+        setUserTurn(null);
+      }
+    };
+
+    const handleUserTurn = (payload: {
+      roundtableId: string;
+      roundNumber: number;
+      userId: number;
+      displayName: string;
+      deadlineSeconds: number;
+    }) => {
+      if (payload.roundtableId !== id) return;
+      setUserTurn({
+        roundNumber: payload.roundNumber,
+        deadline: Date.now() + payload.deadlineSeconds * 1000,
+        userId: payload.userId,
+        displayName: payload.displayName,
+      });
+      setUserDraft("");
+      userDraftRef.current = "";
+      setData((prev) => (prev ? { ...prev, status: "waiting_for_user" } : prev));
     };
 
     const handleCompleted = (payload: {
@@ -390,6 +589,7 @@ function RoundtableDetailView({ id }: { id: string }) {
       summaryGeneratedAt?: string | null;
     }) => {
       if (payload.roundtableId !== id) return;
+      setUserTurn(null);
       setData((prev) =>
         prev
           ? {
@@ -408,15 +608,18 @@ function RoundtableDetailView({ id }: { id: string }) {
       error: string;
     }) => {
       if (payload.roundtableId !== id) return;
+      setUserTurn(null);
       setData((prev) => (prev ? { ...prev, status: "failed" } : prev));
     };
 
     socket.on("roundtable:message", handleMessage);
+    socket.on("roundtable:user_turn", handleUserTurn);
     socket.on("roundtable:completed", handleCompleted);
     socket.on("roundtable:error", handleError);
 
     return () => {
       socket.off("roundtable:message", handleMessage);
+      socket.off("roundtable:user_turn", handleUserTurn);
       socket.off("roundtable:completed", handleCompleted);
       socket.off("roundtable:error", handleError);
     };
@@ -439,6 +642,51 @@ function RoundtableDetailView({ id }: { id: string }) {
     }
   };
 
+  const submitUserTurn = useCallback(
+    async (content: string) => {
+      if (submittingTurn) return;
+      setSubmittingTurn(true);
+      try {
+        await api.submitRoundtableUserTurn(id, content);
+        setUserTurn(null);
+        setUserDraft("");
+        userDraftRef.current = "";
+      } catch (err: any) {
+        toast(err.message ?? "Failed to submit your turn", "error");
+      } finally {
+        setSubmittingTurn(false);
+      }
+    },
+    [id, submittingTurn, toast],
+  );
+
+  useEffect(() => {
+    userDraftRef.current = userDraft;
+  }, [userDraft]);
+
+  const isMyTurn = !!userTurn && userTurn.userId === user?.id;
+
+  useEffect(() => {
+    if (!userTurn) {
+      setSecondsLeft(0);
+      return;
+    }
+    const tick = () => {
+      const remaining = Math.max(
+        0,
+        Math.ceil((userTurn.deadline - Date.now()) / 1000),
+      );
+      setSecondsLeft(remaining);
+      // Only the active user auto-submits when the timer expires.
+      if (remaining === 0 && isMyTurn) {
+        void submitUserTurn(userDraftRef.current);
+      }
+    };
+    tick();
+    const handle = window.setInterval(tick, 1000);
+    return () => window.clearInterval(handle);
+  }, [userTurn, submitUserTurn, isMyTurn]);
+
   const agentAccentMap = useMemo(() => {
     const map = new Map<string, (typeof AGENT_ACCENTS)[number]>();
     data?.agents.forEach((a, i) => {
@@ -449,63 +697,80 @@ function RoundtableDetailView({ id }: { id: string }) {
 
   if (loading) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-white to-indigo-50/30">
-        <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+      <div className="space-bg relative flex h-screen items-center justify-center">
+        <SpaceAmbient />
+        <div className="relative flex flex-col items-center gap-3">
+          <div className="relative flex h-16 w-16 items-center justify-center">
+            <div className="absolute inset-0 rounded-full bg-gradient-to-br from-indigo-500/40 via-violet-500/30 to-fuchsia-500/30 blur-xl aurora-glow" />
+            <Loader2 className="relative h-8 w-8 animate-spin text-indigo-200" />
+          </div>
+          <p className="text-xs font-medium text-indigo-200/60">
+            Loading roundtable...
+          </p>
+        </div>
       </div>
     );
   }
 
   if (!data) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-4 bg-gradient-to-br from-slate-50 via-white to-indigo-50/30">
-        <AlertTriangle className="h-8 w-8 text-gray-300" />
-        <p className="text-sm text-gray-500">Roundtable not found</p>
-        <button onClick={() => navigate("/roundtable")} className={btnGhost}>
-          <ArrowLeft className="h-4 w-4" />
-          Back to list
-        </button>
+      <div className="space-bg relative flex h-screen flex-col items-center justify-center gap-4">
+        <SpaceAmbient />
+        <div className="relative flex flex-col items-center gap-4">
+          <AlertTriangle className="h-8 w-8 text-rose-300/80" />
+          <p className="text-sm text-indigo-200/70">Roundtable not found</p>
+          <button onClick={() => navigate("/roundtable")} className={btnGhost}>
+            <ArrowLeft className="h-4 w-4" />
+            Back to list
+          </button>
+        </div>
       </div>
     );
   }
 
-  const isActive = data.status === "running" || data.status === "pending";
+  const isActive =
+    data.status === "running" ||
+    data.status === "pending" ||
+    data.status === "waiting_for_user";
 
   return (
-    <div className="flex h-screen flex-col bg-gradient-to-br from-slate-50 via-white to-indigo-50/30">
+    <div className="space-bg relative flex h-screen flex-col">
+      <SpaceAmbient />
+
       {/* Header */}
-      <header className="shrink-0 border-b border-gray-200/60 bg-white/80 backdrop-blur-xl">
+      <header className="relative z-10 shrink-0 border-b border-white/5 bg-slate-950/50 backdrop-blur-xl">
         <div className="mx-auto flex max-w-5xl items-start justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex min-w-0 flex-1 items-start gap-3">
             <button
               onClick={() => navigate("/roundtable")}
-              className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 transition-all hover:-translate-x-0.5 hover:border-indigo-200 hover:text-indigo-600"
+              className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-indigo-200/80 backdrop-blur-sm transition-all hover:-translate-x-0.5 hover:border-fuchsia-400/40 hover:bg-white/[0.08] hover:text-white"
               aria-label="Back"
             >
               <ArrowLeft className="h-4 w-4" />
             </button>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="truncate text-base font-semibold text-gray-900 sm:text-lg">
+                <h1 className="truncate text-base font-semibold text-white sm:text-lg">
                   {data.topic}
                 </h1>
                 <StatusPill status={data.status} />
               </div>
-              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-indigo-200/60">
                 <span className="inline-flex items-center gap-1">
-                  <Hash className="h-3 w-3 text-gray-400" />
+                  <Hash className="h-3 w-3 text-indigo-300/70" />
                   Round {data.currentRound + 1} of {data.maxTurnsPerAgent}
                 </span>
-                <span className="text-gray-300">·</span>
+                <span className="text-indigo-300/30">·</span>
                 <div className="flex flex-wrap items-center gap-1.5">
                   {data.agents.map((a) => {
                     const accent = agentAccentMap.get(a.agentId);
                     return (
                       <span
                         key={a.agentId}
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${accent?.chip ?? "bg-gray-50 ring-gray-200/70"} ${accent?.text ?? "text-gray-600"}`}
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 backdrop-blur-sm ${accent?.chip ?? "bg-white/[0.04] ring-white/10"} ${accent?.text ?? "text-indigo-100"}`}
                       >
                         <span
-                          className={`h-1.5 w-1.5 rounded-full ${accent?.dot ?? "bg-gray-400"}`}
+                          className={`h-1.5 w-1.5 rounded-full ${accent?.dot ?? "bg-indigo-300"}`}
                         />
                         {a.agentName}
                       </span>
@@ -515,54 +780,57 @@ function RoundtableDetailView({ id }: { id: string }) {
               </div>
             </div>
           </div>
-          {isActive && (
-            <button
-              onClick={handleStop}
-              disabled={stopping}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-sm font-medium text-rose-600 transition-all duration-200 hover:bg-rose-50 hover:shadow-sm active:scale-[0.98] disabled:opacity-50"
-            >
-              {stopping ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Square className="h-3.5 w-3.5 fill-rose-600" />
-              )}
-              Stop
-            </button>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            <NotificationBell />
+            {isActive && (
+              <button
+                onClick={handleStop}
+                disabled={stopping}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-200 backdrop-blur-sm transition-all duration-200 hover:bg-rose-500/20 hover:text-rose-100 hover:shadow-[0_0_18px_-6px_rgba(244,63,94,0.65)] active:scale-[0.98] disabled:opacity-50"
+              >
+                {stopping ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Square className="h-3.5 w-3.5 fill-rose-300" />
+                )}
+                Stop
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="relative z-10 flex-1 overflow-y-auto dark-scroll">
         <div className="mx-auto max-w-5xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
           {data.summary && (
-            <div className="animate-slide-up overflow-hidden rounded-2xl border border-indigo-200/60 bg-gradient-to-br from-indigo-50/80 via-white to-violet-50/60 shadow-glass backdrop-blur-sm">
-              <div className="flex items-center justify-between gap-3 border-b border-indigo-100/80 bg-white/40 px-5 py-3">
+            <div className="glass-panel-elevated animate-slide-up overflow-hidden rounded-2xl">
+              <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-indigo-500/10 via-violet-500/10 to-fuchsia-500/10 px-5 py-3 backdrop-blur-sm">
                 <div className="flex items-center gap-2.5">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-sm">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_0_18px_-4px_rgba(168,85,247,0.7)] ring-1 ring-white/15">
                     <ScrollText className="h-4 w-4" />
                   </span>
                   <div>
-                    <h2 className="text-sm font-bold text-gray-900">
+                    <h2 className="text-sm font-bold text-white">
                       Discussion Summary
                     </h2>
-                    <p className="text-[11px] text-gray-500">
+                    <p className="text-[11px] text-indigo-200/60">
                       Auto-generated when the roundtable ended
                       {data.summaryGeneratedAt && (
                         <>
-                          <span className="text-gray-300"> · </span>
+                          <span className="text-indigo-300/30"> · </span>
                           {new Date(data.summaryGeneratedAt).toLocaleString()}
                         </>
                       )}
                     </p>
                   </div>
                 </div>
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200/70">
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-medium text-emerald-200 ring-1 ring-emerald-400/30 backdrop-blur-sm">
                   <Sparkles className="h-3 w-3" />
                   AI
                 </span>
               </div>
-              <div className="chat-prose px-5 py-4 text-sm text-gray-700">
+              <div className="chat-prose chat-prose-dark px-5 py-4 text-sm text-slate-100">
                 <Markdown remarkPlugins={[remarkGfm]}>{data.summary}</Markdown>
               </div>
             </div>
@@ -571,16 +839,17 @@ function RoundtableDetailView({ id }: { id: string }) {
           {messages.length === 0 && data.status !== "completed" && (
             <div className="flex items-center justify-center py-16">
               <div className="text-center">
-                <div className="relative mx-auto mb-4 h-12 w-12">
-                  <div className="absolute inset-0 animate-ping rounded-full bg-indigo-400/30" />
-                  <div className="relative flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-lg shadow-indigo-200/50">
-                    <MessagesSquare className="h-5 w-5" />
+                <div className="relative mx-auto mb-4 h-14 w-14">
+                  <div className="absolute inset-0 rounded-full bg-gradient-to-br from-indigo-500/40 via-violet-500/40 to-fuchsia-500/40 blur-xl aurora-glow" />
+                  <div className="absolute inset-0 animate-ping rounded-full bg-fuchsia-400/25" />
+                  <div className="relative flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_0_28px_-4px_rgba(168,85,247,0.75)] ring-1 ring-white/20">
+                    <MessagesSquare className="h-6 w-6" />
                   </div>
                 </div>
-                <p className="text-sm font-medium text-gray-600">
+                <p className="text-sm font-medium text-white">
                   Waiting for the first agent to speak
                 </p>
-                <p className="mt-1 text-xs text-gray-400">
+                <p className="mt-1 text-xs text-indigo-200/60">
                   Responses will stream in live
                 </p>
               </div>
@@ -590,66 +859,214 @@ function RoundtableDetailView({ id }: { id: string }) {
           {messages.map((msg, i) => {
             const showRoundHeader =
               i === 0 || messages[i - 1].roundNumber !== msg.roundNumber;
-            const accent = agentAccentMap.get(msg.agentId);
+            const isUser =
+              msg.senderType === "user" || (msg.userId != null && !msg.agentId);
+            const isMe = isUser && msg.userId != null && msg.userId === user?.id;
+            const accent = msg.agentId ? agentAccentMap.get(msg.agentId) : undefined;
 
             return (
               <div key={msg.id} className="animate-slide-up">
                 {showRoundHeader && (
                   <div className="flex items-center gap-3 py-3">
-                    <div className="h-px flex-1 bg-gradient-to-r from-transparent to-gray-200" />
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500 shadow-sm">
-                      <Hash className="h-3 w-3 text-gray-400" />
+                    <div className="h-px flex-1 bg-gradient-to-r from-transparent via-indigo-400/30 to-fuchsia-400/30" />
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-indigo-100 backdrop-blur-sm">
+                      <Hash className="h-3 w-3 text-indigo-300/70" />
                       Round {msg.roundNumber + 1}
                     </span>
-                    <div className="h-px flex-1 bg-gradient-to-l from-transparent to-gray-200" />
+                    <div className="h-px flex-1 bg-gradient-to-l from-transparent via-indigo-400/30 to-fuchsia-400/30" />
                   </div>
                 )}
-                <div
-                  className={`rounded-2xl border border-gray-200/60 border-l-4 bg-white/90 p-4 shadow-glass backdrop-blur-sm sm:p-5 ${accent?.border ?? "border-l-gray-300"}`}
-                >
-                  <div className="mb-2.5 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`flex h-7 w-7 items-center justify-center rounded-lg ${accent?.chip ?? "bg-gray-50 ring-1 ring-gray-200/70"}`}
-                      >
-                        <Bot
-                          className={`h-3.5 w-3.5 ${accent?.text ?? "text-gray-500"}`}
-                        />
-                      </span>
-                      <span className="text-sm font-semibold text-gray-800">
-                        {msg.agentName}
+                {isUser ? (
+                  <div className="rounded-2xl border border-fuchsia-400/25 border-l-4 border-l-fuchsia-400/70 bg-gradient-to-br from-fuchsia-500/[0.08] via-violet-500/[0.05] to-indigo-500/[0.06] p-4 backdrop-blur-xl sm:p-5 shadow-[0_0_24px_-10px_rgba(232,121,249,0.5)]">
+                    <div className="mb-2.5 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-fuchsia-500/20 ring-1 ring-fuchsia-400/40 backdrop-blur-sm">
+                          <UserIcon className="h-3.5 w-3.5 text-fuchsia-200" />
+                        </span>
+                        <span className="text-sm font-semibold text-white">
+                          {msg.displayName ?? msg.agentName ?? "User"}
+                        </span>
+                        {isMe && (
+                          <span className="rounded-full bg-fuchsia-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-fuchsia-100 ring-1 ring-fuchsia-400/40">
+                            You
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[11px] text-indigo-200/50">
+                        {new Date(msg.createdAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
                       </span>
                     </div>
-                    <span className="text-[11px] text-gray-400">
-                      {new Date(msg.createdAt).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
+                      {msg.content}
+                    </div>
                   </div>
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
-                    {msg.content}
+                ) : (
+                  <div
+                    className={`rounded-2xl border border-white/10 border-l-4 bg-white/[0.04] p-4 backdrop-blur-xl sm:p-5 ${accent?.border ?? "border-l-indigo-400/40"} ${accent?.glow ?? ""}`}
+                  >
+                    <div className="mb-2.5 flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`flex h-7 w-7 items-center justify-center rounded-lg ring-1 backdrop-blur-sm ${accent?.chip ?? "bg-white/[0.06] ring-white/10"}`}
+                        >
+                          <Bot
+                            className={`h-3.5 w-3.5 ${accent?.text ?? "text-indigo-200"}`}
+                          />
+                        </span>
+                        <span className="text-sm font-semibold text-white">
+                          {msg.agentName}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-indigo-200/50">
+                        {new Date(msg.createdAt).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
+                    </div>
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
+                      {msg.content}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             );
           })}
 
           {data.status === "running" && messages.length > 0 && (
-            <div className="flex items-center gap-2.5 rounded-xl border border-dashed border-indigo-200/80 bg-indigo-50/40 px-4 py-3 text-sm text-indigo-600">
-              <Loader2 className="h-4 w-4 animate-spin" />
+            <div className="flex items-center gap-2.5 rounded-xl border border-indigo-400/30 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-100 backdrop-blur-sm shadow-[0_0_18px_-8px_rgba(129,140,248,0.55)]">
+              <Loader2 className="h-4 w-4 animate-spin text-indigo-200" />
               <span className="font-medium">Next agent is thinking…</span>
               <span className="flex gap-1">
-                <span className="h-1.5 w-1.5 animate-pulse-soft rounded-full bg-indigo-400" />
+                <span className="typing-dot h-1.5 w-1.5" />
                 <span
-                  className="h-1.5 w-1.5 animate-pulse-soft rounded-full bg-indigo-400"
+                  className="typing-dot h-1.5 w-1.5"
                   style={{ animationDelay: "150ms" }}
                 />
                 <span
-                  className="h-1.5 w-1.5 animate-pulse-soft rounded-full bg-indigo-400"
+                  className="typing-dot h-1.5 w-1.5"
                   style={{ animationDelay: "300ms" }}
                 />
               </span>
+            </div>
+          )}
+
+          {userTurn && data.status === "waiting_for_user" && !isMyTurn && (
+            <div className="glass-panel-elevated animate-slide-up rounded-2xl border border-white/10 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-500/15 ring-1 ring-indigo-400/30 backdrop-blur-sm">
+                    <Loader2 className="h-4 w-4 animate-spin text-indigo-200" />
+                  </span>
+                  <div>
+                    <p className="text-sm font-semibold text-white">
+                      Waiting for {userTurn.displayName ?? "another participant"}…
+                    </p>
+                    <p className="text-[11px] text-indigo-200/60">
+                      Round {userTurn.roundNumber + 1} — they have up to 5
+                      minutes to contribute.
+                    </p>
+                  </div>
+                </div>
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-indigo-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-indigo-200 ring-1 ring-indigo-400/30 backdrop-blur-sm">
+                  <Timer className="h-3 w-3" />
+                  {Math.floor(secondsLeft / 60)}:
+                  {String(secondsLeft % 60).padStart(2, "0")}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {userTurn && isMyTurn && (
+            <div className="glass-panel-elevated animate-slide-up rounded-2xl border-l-4 border-l-fuchsia-400/70 p-4 shadow-[0_0_36px_-10px_rgba(217,70,239,0.55)] sm:p-5">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-fuchsia-500/15 ring-1 ring-fuchsia-400/30 backdrop-blur-sm">
+                    <UserIcon className="h-4 w-4 text-fuchsia-200" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-white">
+                      Your turn{user?.displayName ? `, ${user.displayName}` : ""}
+                    </p>
+                    <p className="text-[11px] text-indigo-200/60">
+                      Round {userTurn.roundNumber + 1} — share your thoughts before the window closes
+                    </p>
+                  </div>
+                </div>
+                <span
+                  className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold backdrop-blur-sm ${
+                    secondsLeft <= 30
+                      ? "bg-rose-500/15 text-rose-200 ring-1 ring-rose-400/40"
+                      : "bg-fuchsia-500/15 text-fuchsia-200 ring-1 ring-fuchsia-400/30"
+                  }`}
+                >
+                  <Timer
+                    className={`h-3 w-3 ${secondsLeft <= 30 ? "animate-pulse-soft" : ""}`}
+                  />
+                  {Math.floor(secondsLeft / 60)}:
+                  {String(secondsLeft % 60).padStart(2, "0")}
+                </span>
+              </div>
+              <textarea
+                value={userDraft}
+                onChange={(e) => setUserDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Enter" &&
+                    (e.metaKey || e.ctrlKey) &&
+                    userDraft.trim()
+                  ) {
+                    e.preventDefault();
+                    void submitUserTurn(userDraft.trim());
+                  }
+                }}
+                placeholder="Type your contribution..."
+                rows={3}
+                disabled={submittingTurn}
+                className={`${inputClass} resize-none`}
+                autoFocus
+              />
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <p className="text-[11px] text-indigo-200/50">
+                  <kbd className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 text-[10px] font-medium text-indigo-100">
+                    {typeof navigator !== "undefined" &&
+                    navigator.platform.includes("Mac")
+                      ? "⌘"
+                      : "Ctrl"}{" "}
+                    + Enter
+                  </kbd>
+                  <span className="ml-1.5">to send · empty = skip</span>
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => void submitUserTurn("")}
+                    disabled={submittingTurn}
+                    className={btnGhost}
+                  >
+                    Skip
+                  </button>
+                  <button
+                    onClick={() => void submitUserTurn(userDraft.trim())}
+                    disabled={!userDraft.trim() || submittingTurn}
+                    className={btnPrimary}
+                  >
+                    {submittingTurn ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Sending...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-4 w-4" />
+                        Send turn
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

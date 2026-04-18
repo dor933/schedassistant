@@ -127,6 +127,9 @@ export function connectToAgentService(): void {
   agentSocket.on("roundtable:error", (payload: unknown) => {
     getIO().emit("roundtable:error", payload);
   });
+  agentSocket.on("roundtable:user_turn", (payload: unknown) => {
+    getIO().emit("roundtable:user_turn", payload);
+  });
 }
 
 async function handleAgentTyping(payload: AgentTypingPayload): Promise<void> {

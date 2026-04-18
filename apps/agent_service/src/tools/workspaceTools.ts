@@ -4,6 +4,15 @@ import { tool } from "@langchain/core/tools";
 import { Agent } from "@scheduling-agent/database";
 import { z } from "zod";
 
+/**
+ * Optional callback surface that observes durable file writes/edits/deletes.
+ * Passed by the deep agent worker so it can report back to the caller which
+ * files were modified in the caller's shared workspace.
+ */
+export interface WorkspaceWriteRecorder {
+  record(action: "write" | "edit" | "delete", fileName: string): void;
+}
+
 /** Resolve and validate the workspace directory for an agent. */
 async function resolveWorkspace(agentId: string): Promise<string | null> {
   const agent = await Agent.findByPk(agentId, {
@@ -90,7 +99,7 @@ export function WorkspaceReadFileTool(agentId: string) {
   );
 }
 
-export function WorkspaceWriteFileTool(agentId: string) {
+export function WorkspaceWriteFileTool(agentId: string, recorder?: WorkspaceWriteRecorder) {
   return tool(
     async (input) => {
       const workspace = await resolveWorkspace(agentId);
@@ -103,6 +112,7 @@ export function WorkspaceWriteFileTool(agentId: string) {
         return `Only ${[...ALLOWED_EXT].join(", ")} files are supported.`;
 
       fs.writeFileSync(filePath, input.content, "utf-8");
+      recorder?.record("write", input.fileName);
       return `File "${input.fileName}" written successfully (${input.content.length} chars).`;
     },
     {
@@ -124,7 +134,7 @@ export function WorkspaceWriteFileTool(agentId: string) {
   );
 }
 
-export function WorkspaceEditFileTool(agentId: string) {
+export function WorkspaceEditFileTool(agentId: string, recorder?: WorkspaceWriteRecorder) {
   return tool(
     async (input) => {
       const workspace = await resolveWorkspace(agentId);
@@ -146,6 +156,7 @@ export function WorkspaceEditFileTool(agentId: string) {
 
       const updated = current.replace(input.oldText, input.newText);
       fs.writeFileSync(filePath, updated, "utf-8");
+      recorder?.record("edit", input.fileName);
       return `File "${input.fileName}" edited successfully. Replaced ${input.oldText.length} chars with ${input.newText.length} chars.`;
     },
     {
@@ -171,7 +182,7 @@ export function WorkspaceEditFileTool(agentId: string) {
   );
 }
 
-export function WorkspaceDeleteFileTool(agentId: string) {
+export function WorkspaceDeleteFileTool(agentId: string, recorder?: WorkspaceWriteRecorder) {
   return tool(
     async (input) => {
       const workspace = await resolveWorkspace(agentId);
@@ -186,6 +197,7 @@ export function WorkspaceDeleteFileTool(agentId: string) {
         return `File "${input.fileName}" does not exist in your workspace.`;
 
       fs.unlinkSync(filePath);
+      recorder?.record("delete", input.fileName);
       return `File "${input.fileName}" deleted.`;
     },
     {
@@ -202,13 +214,19 @@ export function WorkspaceDeleteFileTool(agentId: string) {
   );
 }
 
-/** Convenience: returns all workspace tools for an agent. */
-export function workspaceTools(agentId: string) {
+/**
+ * Convenience: returns all workspace tools for an agent.
+ *
+ * The optional `recorder` is used when a system/executor agent writes to a
+ * caller's workspace on its behalf — the deep agent worker passes a recorder
+ * so it can summarise the writes back to the caller in the delegation result.
+ */
+export function workspaceTools(agentId: string, recorder?: WorkspaceWriteRecorder) {
   return [
     WorkspaceListFilesTool(agentId),
     WorkspaceReadFileTool(agentId),
-    WorkspaceWriteFileTool(agentId),
-    WorkspaceEditFileTool(agentId),
-    WorkspaceDeleteFileTool(agentId),
+    WorkspaceWriteFileTool(agentId, recorder),
+    WorkspaceEditFileTool(agentId, recorder),
+    WorkspaceDeleteFileTool(agentId, recorder),
   ];
 }
