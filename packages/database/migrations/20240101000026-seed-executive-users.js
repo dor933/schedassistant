@@ -6,7 +6,7 @@
  * vendor API keys) via the `/platform-admin` UI.
  *
  * Platform admins live in their own table (`platform_admins`) created by
- * migration 91 and are intentionally disjoint from tenant `users`.
+ * migration 23 and are intentionally disjoint from tenant `users`.
  *
  * Credentials are read from env vars at migrate-time — we never commit a
  * hashed password. If the env vars are missing, the migration skips cleanly
@@ -16,12 +16,16 @@
  *   PLATFORM_ADMIN_EMAIL=systemadmin@company.com
  *   PLATFORM_ADMIN_PASSWORD='strong-password-12+chars'
  *
+ * The password hash is produced by Postgres's `pgcrypto` (`crypt` +
+ * `gen_salt('bf', 12)`), which emits a standard `$2a$12$…` bcrypt string
+ * that Node's `bcrypt.compare` verifies at login. We use pgcrypto rather
+ * than requiring the `bcrypt` node module so this migration can run in
+ * minimal migrate containers that only install `packages/database` deps.
+ *
  * Idempotent: upserts on email, so re-running rotates the password hash.
  *
  * @type {import('sequelize-cli').Migration}
  */
-
-const bcrypt = require("bcrypt");
 
 module.exports = {
   async up(queryInterface, _Sequelize) {
@@ -45,17 +49,18 @@ module.exports = {
       );
     }
 
-    const passwordHash = await bcrypt.hash(password, 12);
+    // pgcrypto provides `crypt()` + `gen_salt('bf', cost)` for bcrypt hashes.
+    // Safe to run repeatedly (extension may already exist from pgvector/UUID setup).
+    await queryInterface.sequelize.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
 
-    // Upsert on unique email. sequelize-cli gives us a raw queryInterface, so
-    // we do the upsert via raw SQL rather than model methods.
+    // Hash server-side and upsert on unique email.
     await queryInterface.sequelize.query(
       `INSERT INTO platform_admins (email, password_hash, created_at, updated_at)
-       VALUES (:email, :passwordHash, NOW(), NOW())
+       VALUES (:email, crypt(:password, gen_salt('bf', 12)), NOW(), NOW())
        ON CONFLICT (email) DO UPDATE
          SET password_hash = EXCLUDED.password_hash,
              updated_at = NOW()`,
-      { replacements: { email, passwordHash } },
+      { replacements: { email, password } },
     );
 
     console.log(`[migration 26] Seeded platform admin: ${email}`);
