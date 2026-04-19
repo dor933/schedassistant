@@ -29,7 +29,7 @@ export class WebSearchAgentController {
       const data = await this.service.set(
         req.user!.organizationId,
         parsed.data,
-        req.user!.id,
+        req.user!.userId,
       );
       return res.json(data);
     } catch (err: any) {
