@@ -435,7 +435,12 @@ export default function AdminPage() {
       setTools(tl);
       setProjects(proj);
       setWebSearchStatus(ws);
-      if (a.length > 0 && !newGroupAgentId) setNewGroupAgentId(a[0].id);
+      // System agents are delegated to by primary agents — they never own a
+      // group / roundtable themselves. External agents are roundtable-only.
+      if (!newGroupAgentId) {
+        const firstPrimary = a.find((x) => x.type === "primary");
+        if (firstPrimary) setNewGroupAgentId(firstPrimary.id);
+      }
       if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
     } catch {
       setError("Failed to load data.");
@@ -1703,7 +1708,7 @@ export default function AdminPage() {
                       onClick={() => setAgentDropdownOpen(false)}
                     />
                     <div className="absolute left-0 right-0 z-20 mt-1.5 max-h-52 overflow-y-auto rounded-xl border border-gray-200/80 bg-white/95 p-1 shadow-glass-lg backdrop-blur-xl">
-                      {agents.filter((a) => a.type !== "external").map((a) => {
+                      {agents.filter((a) => a.type === "primary").map((a) => {
                           const isSelected = a.id === newGroupAgentId;
                           return (
                             <button
@@ -1731,9 +1736,6 @@ export default function AdminPage() {
                               <div className="min-w-0 flex-1">
                                 <p className={`text-sm truncate ${isSelected ? "font-semibold text-indigo-700" : "font-medium text-gray-900"}`}>
                                   {a.definition || "Unnamed Agent"}
-                                  {a.type === "system" && (
-                                    <span className="ml-1.5 rounded bg-emerald-50 px-1 py-0.5 text-[9px] font-semibold text-emerald-600 uppercase">sys</span>
-                                  )}
                                 </p>
                                 <p className="font-mono text-[10px] text-gray-400 truncate">
                                   {a.id}

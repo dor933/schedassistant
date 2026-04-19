@@ -19,7 +19,13 @@ export class GroupsController {
     const { name, agentId, memberUserIds } = req.body;
     if (!name || !agentId) return res.status(400).json({ error: "name and agentId are required." });
     try {
-      const group = await this.groupsService.create(name, agentId, memberUserIds, req.user!.userId);
+      const group = await this.groupsService.create(
+        name,
+        agentId,
+        memberUserIds,
+        req.user!.userId,
+        req.user!.organizationId,
+      );
       return res.status(201).json(group);
     } catch (err: any) {
       if (err.status) return res.status(err.status).json({ error: err.message });

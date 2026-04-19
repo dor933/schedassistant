@@ -14,7 +14,13 @@ export class GroupsService {
     });
   }
 
-  async create(name: string, agentId: string, memberUserIds: UserId[], adminUserId: UserId) {
+  async create(
+    name: string,
+    agentId: string,
+    memberUserIds: UserId[],
+    adminUserId: UserId,
+    organizationId: string,
+  ) {
     const extraMembers: UserId[] = Array.isArray(memberUserIds)
       ? memberUserIds.filter((id) => id !== adminUserId)
       : [];
@@ -22,8 +28,26 @@ export class GroupsService {
       throw Object.assign(new Error("At least one user (besides yourself) must be added to the group."), { status: 400 });
     }
 
-    const agent = await Agent.findByPk(agentId, { attributes: ["id", "definition"] });
+    // Scope by org so a caller can't pull an agent from another tenant just
+    // by sending its UUID. Also load `type` to reject system/external agents.
+    const agent = await Agent.findOne({
+      where: { id: agentId, organizationId },
+      attributes: ["id", "definition", "type"],
+    });
     if (!agent) throw Object.assign(new Error("Agent not found."), { status: 404 });
+
+    if ((agent as any).type === "system") {
+      throw Object.assign(
+        new Error("System agents cannot own a group — they are delegated to by primary agents."),
+        { status: 400 },
+      );
+    }
+    if ((agent as any).type === "external") {
+      throw Object.assign(
+        new Error("External agents are roundtable-only and cannot own a group."),
+        { status: 400 },
+      );
+    }
 
     if (agent.definition === "Epic Task Orchestrator") {
       throw Object.assign(
