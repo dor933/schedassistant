@@ -53,7 +53,8 @@
       "Bash(find:*)",
       "Bash(node scripts/parse-session.cjs)",
       "Bash(node scripts/parse-session2.cjs)",
-      "Bash(86\")"
+      "Bash(86\")",
+      "Bash(tar -xzf langchain-tavily-1.2.0.tgz)"
     ]
   },
   "enableAllProjectMcpServers": true,
