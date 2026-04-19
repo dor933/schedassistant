@@ -21,12 +21,16 @@ export class WebSearchAgentController {
     const parsed = webSearchChoiceSchema.safeParse(req.body?.choice);
     if (!parsed.success) {
       return res.status(400).json({
-        error: "Invalid choice. Expected 'gemini' or 'brave'.",
+        error: "Invalid choice. Expected 'gemini' or 'tavily'.",
       });
     }
 
     try {
-      const data = await this.service.set(req.user!.organizationId, parsed.data);
+      const data = await this.service.set(
+        req.user!.organizationId,
+        parsed.data,
+        req.user!.id,
+      );
       return res.json(data);
     } catch (err: any) {
       if (err.status) return res.status(err.status).json({ error: err.message });

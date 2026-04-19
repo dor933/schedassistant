@@ -19,7 +19,7 @@ import { logger } from "../../logger";
  * This seeder creates one fresh instance of each per org:
  *   - Epic Orchestrator (type=primary) — with its skills + MCP servers
  *   - Web Search Gemini (type=system)  — googleSearch tool_config
- *   - Web Search Brave  (type=system)  — brave-search MCP
+ *   - Web Search Tavily (type=system)  — tavily_search (native LangChain tool)
  *
  * All rows are inserted inside the caller's transaction. Workspace folder
  * creation (filesystem side-effect) is the caller's responsibility — it
@@ -56,18 +56,17 @@ const WEB_SEARCH_GEMINI_INSTRUCTIONS =
   "cite sources when possible, and return the most relevant findings.";
 const WEB_SEARCH_GEMINI_MODEL_SLUG = "gemini-3.1-pro-preview";
 
-const WEB_SEARCH_BRAVE_SLUG = "web_search_brave";
-const WEB_SEARCH_BRAVE_AGENT_NAME = "Web Search Agent (Brave)";
-const WEB_SEARCH_BRAVE_DESCRIPTION =
-  "Searches the web using Brave Search (via MCP) to find up-to-date information, articles, documentation, and answers to questions.";
-const WEB_SEARCH_BRAVE_INSTRUCTIONS =
+const WEB_SEARCH_TAVILY_SLUG = "web_search_tavily";
+const WEB_SEARCH_TAVILY_AGENT_NAME = "Web Search Agent (Tavily)";
+const WEB_SEARCH_TAVILY_DESCRIPTION =
+  "Searches the web using Tavily to find up-to-date information, articles, documentation, and answers to questions.";
+const WEB_SEARCH_TAVILY_INSTRUCTIONS =
   "You are THE dedicated web-search system agent for this organization. " +
   "All web searches from other agents are routed directly to you. " +
-  "Use the `brave-search` MCP server's tools to run queries against " +
-  "Brave Search and fetch pages, then summarize findings clearly, cite " +
-  "sources when possible, and return the most relevant results.";
-const WEB_SEARCH_BRAVE_MODEL_SLUG = "claude-sonnet-4-6";
-const WEB_SEARCH_BRAVE_MCP_SERVER_NAME = "brave-search";
+  "Use the `tavily_search` tool to run queries against Tavily and fetch " +
+  "results, then summarize findings clearly, cite sources when possible, " +
+  "and return the most relevant results.";
+const WEB_SEARCH_TAVILY_MODEL_SLUG = "claude-sonnet-4-6";
 
 export interface SeedOrganizationAgentsInput {
   organizationId: string;
@@ -79,7 +78,7 @@ export interface SeedOrganizationAgentsInput {
 export interface SeedOrganizationAgentsResult {
   epicOrchestratorId: string;
   webSearchGeminiId: string;
-  webSearchBraveId: string;
+  webSearchTavilyId: string;
   /** The web-search agent id the org chose (already one of the above). */
   activeWebSearchAgentId: string;
 }
@@ -94,14 +93,14 @@ export async function seedOrganizationAgents(
 ): Promise<SeedOrganizationAgentsResult> {
   const { organizationId, actorId, webSearchChoice, transaction } = input;
 
-  const [geminiModel, braveModel] = await Promise.all([
+  const [geminiModel, tavilyModel] = await Promise.all([
     LLMModel.findOne({
       where: { slug: WEB_SEARCH_GEMINI_MODEL_SLUG },
       attributes: ["id"],
       transaction,
     }),
     LLMModel.findOne({
-      where: { slug: WEB_SEARCH_BRAVE_MODEL_SLUG },
+      where: { slug: WEB_SEARCH_TAVILY_MODEL_SLUG },
       attributes: ["id"],
       transaction,
     }),
@@ -140,40 +139,41 @@ export async function seedOrganizationAgents(
     { transaction },
   );
 
-  // ── Web Search Brave (system) ───────────────────────────────────────────
-  const brave = await Agent.create(
+  // ── Web Search Tavily (system) ──────────────────────────────────────────
+  // Tavily is a native LangChain tool injected at runtime by the deep agent
+  // worker when it sees `toolConfig.useTavily` — NOT an MCP server. That is
+  // why there's no linkMcpServers call here.
+  const tavily = await Agent.create(
     {
       type: "system",
-      slug: WEB_SEARCH_BRAVE_SLUG,
-      agentName: WEB_SEARCH_BRAVE_AGENT_NAME,
-      description: WEB_SEARCH_BRAVE_DESCRIPTION,
-      instructions: WEB_SEARCH_BRAVE_INSTRUCTIONS,
-      modelSlug: WEB_SEARCH_BRAVE_MODEL_SLUG,
-      modelId: braveModel?.id ?? null,
-      toolConfig: { locked: true },
+      slug: WEB_SEARCH_TAVILY_SLUG,
+      agentName: WEB_SEARCH_TAVILY_AGENT_NAME,
+      description: WEB_SEARCH_TAVILY_DESCRIPTION,
+      instructions: WEB_SEARCH_TAVILY_INSTRUCTIONS,
+      modelSlug: WEB_SEARCH_TAVILY_MODEL_SLUG,
+      modelId: tavilyModel?.id ?? null,
+      toolConfig: { useTavily: true, locked: true },
       isLocked: true,
       organizationId,
     },
     { transaction },
   );
 
-  await linkMcpServers(brave.id, [WEB_SEARCH_BRAVE_MCP_SERVER_NAME], transaction);
-
   const activeWebSearchAgentId =
-    webSearchChoice === "brave" ? brave.id : gemini.id;
+    webSearchChoice === "tavily" ? tavily.id : gemini.id;
 
   logger.info("Seeded per-org standard agents", {
     organizationId,
     epicOrchestratorId: epic.id,
     webSearchGeminiId: gemini.id,
-    webSearchBraveId: brave.id,
+    webSearchTavilyId: tavily.id,
     activeWebSearchAgentId,
   });
 
   return {
     epicOrchestratorId: epic.id,
     webSearchGeminiId: gemini.id,
-    webSearchBraveId: brave.id,
+    webSearchTavilyId: tavily.id,
     activeWebSearchAgentId,
   };
 }

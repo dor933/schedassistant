@@ -357,8 +357,8 @@ export default function AdminPage() {
         const next = await admin.setWebSearchAgent(choice);
         setWebSearchStatus(next);
         toast(
-          choice === "brave"
-            ? "Brave is now the active web-search agent."
+          choice === "tavily"
+            ? "Tavily is now the active web-search agent."
             : "Gemini is now the active web-search agent.",
           "success",
         );
@@ -1198,13 +1198,13 @@ export default function AdminPage() {
               <GooglePermissionsSection agents={agents} />
             )}
 
-            {/* Dedicated Web Search Agent (pick Gemini or Brave — only one active) */}
+            {/* Dedicated Web Search Agent (pick Gemini or Tavily — only one active) */}
             <div className="mb-4">
               <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
                 <Search className="h-3.5 w-3.5 text-sky-500" />
                 Dedicated Web Search Agent
                 <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-500">
-                  {webSearchStatus?.activeChoice === "brave" ? "Brave" : "Gemini"}
+                  {webSearchStatus?.activeChoice === "tavily" ? "Tavily" : "Gemini"}
                 </span>
                 <span className="ml-1 text-[9px] font-normal normal-case text-gray-400">
                   only one can be active
@@ -1212,17 +1212,17 @@ export default function AdminPage() {
               </h3>
               {webSearchStatus ? (
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                  {(["gemini", "brave"] as WebSearchChoice[]).map((choice) => {
+                  {(["gemini", "tavily"] as WebSearchChoice[]).map((choice) => {
                     const candidate =
-                      choice === "brave"
-                        ? webSearchStatus.candidates.brave
+                      choice === "tavily"
+                        ? webSearchStatus.candidates.tavily
                         : webSearchStatus.candidates.gemini;
                     const isActive = webSearchStatus.activeChoice === choice;
                     const accent =
-                      choice === "brave"
-                        ? "from-orange-500 to-rose-600"
+                      choice === "tavily"
+                        ? "from-emerald-500 to-teal-600"
                         : "from-sky-500 to-indigo-600";
-                    const icon = choice === "brave" ? Search : Globe;
+                    const icon = choice === "tavily" ? Search : Globe;
                     const Icon = icon;
                     return (
                       <button
@@ -1245,8 +1245,8 @@ export default function AdminPage() {
                           <div className="flex items-center gap-2">
                             <span className="truncate text-sm font-semibold text-gray-900">
                               {candidate?.agentName ??
-                                (choice === "brave"
-                                  ? "Brave Web Search"
+                                (choice === "tavily"
+                                  ? "Tavily Web Search"
                                   : "Gemini Web Search")}
                             </span>
                             {isActive && (
@@ -1258,8 +1258,8 @@ export default function AdminPage() {
                           </div>
                           <p className="mt-1 line-clamp-2 text-[11px] text-gray-500">
                             {candidate?.description ??
-                              (choice === "brave"
-                                ? "Routes web searches through the brave-search MCP server."
+                              (choice === "tavily"
+                                ? "Routes web searches through the Tavily search API."
                                 : "Uses Gemini's built-in web grounding for search.")}
                           </p>
                           {candidate?.modelSlug && (

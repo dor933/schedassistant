@@ -64,7 +64,7 @@ export interface OrganizationInfo {
   webSearchAgentId?: string | null;
 }
 
-export type WebSearchChoice = "gemini" | "brave";
+export type WebSearchChoice = "gemini" | "tavily";
 
 export interface LoginResponse {
   token: string;
@@ -552,7 +552,7 @@ export interface AdminWebSearchStatus {
   activeAgentId: string;
   candidates: {
     gemini: AdminWebSearchCandidate | null;
-    brave: AdminWebSearchCandidate | null;
+    tavily: AdminWebSearchCandidate | null;
   };
 }
 

@@ -12,7 +12,7 @@ export interface OrganizationAttributes {
   /**
    * FK to `agents.id` — the single, currently active system web-search agent
    * for this org. Exactly one of the two web-search system agents
-   * (Gemini-powered `web_search` / Brave-powered `web_search_brave`) is
+   * (Gemini-powered `web_search` / Tavily-powered `web_search_tavily`) is
    * pointed to at any time. Resolved at runtime when an agent delegates a
    * web search so queries always land on the org's chosen agent.
    */
@@ -34,10 +34,10 @@ export interface OrganizationAttributes {
   updatedAt: Date;
 }
 
-/** Fixed UUIDs for the two seeded web-search system agents (see migration 20240101000083). */
+/** Fixed UUIDs for the two seeded web-search system agents (see migrations 20240101000083 / 20240101000095). */
 export const WEB_SEARCH_AGENT_ID_GEMINI = "00000000-0000-4000-a000-000000000200";
-export const WEB_SEARCH_AGENT_ID_BRAVE = "00000000-0000-4000-a000-000000000201";
-export type WebSearchChoice = "gemini" | "brave";
+export const WEB_SEARCH_AGENT_ID_TAVILY = "00000000-0000-4000-a000-000000000201";
+export type WebSearchChoice = "gemini" | "tavily";
 
 /**
  * Skills that are always auto-assigned to every agent and never appear in the

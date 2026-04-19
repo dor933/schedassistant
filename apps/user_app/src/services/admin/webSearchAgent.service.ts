@@ -2,18 +2,18 @@ import {
   Agent,
   Organization,
 } from "@scheduling-agent/database";
-import { type WebSearchChoice } from "@scheduling-agent/types";
+import { type UserId, type WebSearchChoice } from "@scheduling-agent/types";
 import { logger } from "../../logger";
 import { getIO } from "../../sockets/server/socketServer";
 
 /**
  * Resolves which of the two per-org web-search system agents is currently
  * active for an organization, and flips between them. Each organization
- * has its own pair (Gemini + Brave) seeded on org creation — identified
+ * has its own pair (Gemini + Tavily) seeded on org creation — identified
  * by slug, not by a global UUID.
  */
 const GEMINI_SLUG = "web_search";
-const BRAVE_SLUG = "web_search_brave";
+const TAVILY_SLUG = "web_search_tavily";
 
 interface CandidateShape {
   id: string;
@@ -45,7 +45,7 @@ export class WebSearchAgentService {
         where: {
           organizationId,
           type: "system",
-          slug: [GEMINI_SLUG, BRAVE_SLUG],
+          slug: [GEMINI_SLUG, TAVILY_SLUG],
         },
         attributes: ["id", "slug", "agentName", "description", "modelSlug"],
       }),
@@ -56,30 +56,30 @@ export class WebSearchAgentService {
 
     const bySlug = new Map(agents.map((a) => [a.slug, a]));
     const gemini = bySlug.get(GEMINI_SLUG) ?? null;
-    const brave = bySlug.get(BRAVE_SLUG) ?? null;
+    const tavily = bySlug.get(TAVILY_SLUG) ?? null;
 
-    const activeId = org.webSearchAgentId ?? gemini?.id ?? brave?.id ?? null;
+    const activeId = org.webSearchAgentId ?? gemini?.id ?? tavily?.id ?? null;
     const activeChoice: WebSearchChoice =
-      brave && activeId === brave.id ? "brave" : "gemini";
+      tavily && activeId === tavily.id ? "tavily" : "gemini";
 
     return {
       activeChoice,
       activeAgentId: activeId,
       candidates: {
         gemini: toCandidate(gemini),
-        brave: toCandidate(brave),
+        tavily: toCandidate(tavily),
       },
     };
   }
 
   /** Sets exactly one of the two web-search agents as active for this org. */
-  async set(organizationId: string, choice: WebSearchChoice) {
+  async set(organizationId: string, choice: WebSearchChoice, actorId: UserId) {
     const org = await Organization.findByPk(organizationId);
     if (!org) {
       throw Object.assign(new Error("Organization not found."), { status: 404 });
     }
 
-    const targetSlug = choice === "brave" ? BRAVE_SLUG : GEMINI_SLUG;
+    const targetSlug = choice === "tavily" ? TAVILY_SLUG : GEMINI_SLUG;
     const target = await Agent.findOne({
       where: { organizationId, type: "system", slug: targetSlug },
       attributes: ["id"],
@@ -104,6 +104,7 @@ export class WebSearchAgentService {
         type: "web_search_agent_changed",
         message: `Web search agent switched to ${choice}.`,
         data: { organizationId, choice, agentId: target.id },
+        actorId,
       });
     } catch (err) {
       logger.error("broadcast web_search_agent_changed failed", {

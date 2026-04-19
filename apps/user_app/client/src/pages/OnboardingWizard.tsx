@@ -65,7 +65,7 @@ interface AgentDraft {
   modelId: string;
 }
 
-type WebSearchChoice = "gemini" | "brave";
+type WebSearchChoice = "gemini" | "tavily";
 
 function slugify(name: string): string {
   return (
@@ -324,7 +324,7 @@ export default function OnboardingWizard() {
     if (step === 2) return true; // logo is optional
     if (step === 3)
       return agents.length > 0 && agents.every((a) => a.definition.trim().length > 0);
-    if (step === 4) return webSearchChoice === "gemini" || webSearchChoice === "brave";
+    if (step === 4) return webSearchChoice === "gemini" || webSearchChoice === "tavily";
     if (step === 5) {
       if (signInMethod === "google") return !!googleTicket && domainVerified;
       return (
@@ -1212,12 +1212,12 @@ export default function OnboardingWizard() {
                         "Uses Gemini's built-in Google Search tool — no extra API keys required.",
                     },
                     {
-                      key: "brave" as const,
-                      title: "Brave Search (MCP)",
-                      icon: <Search className="h-5 w-5 text-amber-200" />,
-                      subtitle: "Privacy-first · powered by Brave Search via MCP",
+                      key: "tavily" as const,
+                      title: "Tavily Search",
+                      icon: <Search className="h-5 w-5 text-emerald-200" />,
+                      subtitle: "AI-native · powered by the Tavily search API",
                       blurb:
-                        "Uses the brave-search MCP server. Requires BRAVE_API_KEY in the environment.",
+                        "Uses the @langchain/tavily tool (native LangChain, no MCP subprocess). Requires TAVILY_API_KEY in the environment.",
                     },
                   ].map((opt) => {
                     const selected = webSearchChoice === opt.key;
@@ -1442,8 +1442,8 @@ export default function OnboardingWizard() {
                   <Box className="border-t border-white/5" />
                   <Stack direction="row" alignItems="center" spacing={1.5}>
                     <Box className="flex h-6 w-6 items-center justify-center rounded-lg bg-white/10">
-                      {webSearchChoice === "brave" ? (
-                        <Search className="h-3 w-3 text-amber-200" />
+                      {webSearchChoice === "tavily" ? (
+                        <Search className="h-3 w-3 text-emerald-200" />
                       ) : (
                         <Globe className="h-3 w-3 text-indigo-100" />
                       )}
@@ -1451,8 +1451,8 @@ export default function OnboardingWizard() {
                     <Box className="flex-1 text-xs text-indigo-100">
                       Web search ·{" "}
                       <Box component="span" className="font-semibold">
-                        {webSearchChoice === "brave"
-                          ? "Brave Search (MCP)"
+                        {webSearchChoice === "tavily"
+                          ? "Tavily Search"
                           : "Gemini (Google Search)"}
                       </Box>
                     </Box>

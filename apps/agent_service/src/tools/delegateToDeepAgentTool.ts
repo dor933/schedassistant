@@ -114,7 +114,7 @@ export function DelegateToDeepAgentTool(
  *
  * Resolves the target web-search system agent by looking up the caller
  * agent's organization and following `organizations.web_search_agent_id`.
- * Each org owns its own Gemini + Brave web-search agents; the admin
+ * Each org owns its own Gemini + Tavily web-search agents; the admin
  * chooses which one is active per org.
  */
 export function DelegateWebSearchTool(
@@ -140,7 +140,7 @@ export function DelegateWebSearchTool(
       if (!org?.webSearchAgentId) {
         return (
           `Error: no web-search agent is configured for this organization. ` +
-          `Ask an administrator to pick Gemini or Brave in the admin panel.`
+          `Ask an administrator to pick Gemini or Tavily in the admin panel.`
         );
       }
 

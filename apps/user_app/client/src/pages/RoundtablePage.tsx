@@ -177,15 +177,20 @@ function RoundtableListView() {
     <Stack
       component="main"
       className="space-bg"
-      sx={{ minHeight: "100vh", width: "100%", position: "relative" }}
+      sx={{
+        height: "100vh",
+        width: "100%",
+        position: "relative",
+        overflow: "hidden",
+      }}
     >
       <SpaceAmbient />
 
       <Container
         maxWidth={false}
         disableGutters
-        className="mx-auto box-border w-full min-w-0 max-w-5xl px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-8"
-        sx={{ position: "relative", zIndex: 1 }}
+        className="dark-scroll mx-auto box-border flex w-full min-w-0 max-w-5xl flex-1 flex-col overflow-y-auto px-4 py-5 sm:px-6 sm:py-7 lg:px-8 lg:py-8"
+        sx={{ position: "relative", zIndex: 1, minHeight: 0 }}
       >
         {/* Sticky header */}
         <Stack
@@ -218,7 +223,7 @@ function RoundtableListView() {
           </div>
         </Stack>
 
-        <Stack component="section" className="w-full min-w-0 space-y-6 sm:space-y-8">
+        <Stack component="section" className="w-full min-w-0 flex-1 space-y-6 sm:space-y-8">
           {/* Create form */}
           <Box className={`${cardClass} animate-slide-up`}>
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-white">

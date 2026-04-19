@@ -23,6 +23,7 @@ import { ConsultAgentTool } from "../tools/consultAgentTool";
 import { googleTools } from "../tools/googleTools";
 import { ListSystemAgentsTool } from "../tools/listSystemAgentsTool";
 import { ListAgentsTool } from "../tools/listAgentsTool";
+import { TavilySearchTool } from "../tools/tavilySearchTool";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogle } from "@langchain/google";
@@ -232,9 +233,10 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           );
         }
 
-        // Check if this agent uses Google Search grounding
+        // Check if this agent uses Google Search grounding or Tavily search
         const tc = executorAgent.toolConfig as Record<string, unknown> | null;
         const useGoogleSearch = !!tc?.googleSearch;
+        const useTavily = !!tc?.useTavily;
 
         // Use the executor agent's constant userId for memory scoping.
         const deepAgentUserId = executorAgent.userId ?? userId;
@@ -339,12 +341,19 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           // grant, the tool returns a deny message at invocation time.
           const googleAgentTools = googleTools(callerAgentId);
 
+          // Tavily web-search tool — injected for the dedicated Tavily-backed
+          // web-search system agent (toolConfig.useTavily=true). Tavily is a
+          // LangChain-native tool so, unlike Brave, it does NOT come in via
+          // MCP; we just add it to the tools array directly.
+          const tavilyTools = useTavily ? [TavilySearchTool()] : [];
+
           const allTools = [
             ...mcpTools,
             ...skillTools,
             ...wsTools,
             ...configurableTools,
             ...googleAgentTools,
+            ...tavilyTools,
           ];
 
           logger.info("DeepAgent: creating agent", {

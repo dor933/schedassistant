@@ -49,7 +49,7 @@ export const registerSchema = z.object({
 
 // ─── Onboarding (organization + admin + agents) ─────────────────────────────
 
-export const webSearchChoiceSchema = z.enum(["gemini", "brave"]);
+export const webSearchChoiceSchema = z.enum(["gemini", "tavily"]);
 
 export const registerOrganizationSchema = z
   .object({
@@ -90,8 +90,8 @@ export const registerOrganizationSchema = z
     /**
      * The web-search system agent the new org wants active out of the box.
      * Defaults to the Gemini-powered `web_search` agent; the alternative
-     * is `brave` (backed by the `brave-search` MCP server). Exactly one of
-     * the two is active per org.
+     * is `tavily` (backed by the Tavily search API via @langchain/tavily).
+     * Exactly one of the two is active per org.
      */
     webSearchChoice: webSearchChoiceSchema.optional(),
   })

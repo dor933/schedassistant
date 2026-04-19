@@ -505,7 +505,7 @@ export class AuthService {
       }
 
       // Every org gets its OWN epic orchestrator + web-search agents (Gemini
-      // and Brave). Sharing them across orgs would mix episodic memory,
+      // and Tavily). Sharing them across orgs would mix episodic memory,
       // agent notes, and workspace folders across tenants.
       const seeded = await seedOrganizationAgents({
         organizationId: org.id,
