@@ -298,15 +298,19 @@ export class PlatformCatalogService {
   }
 
   async listVendors() {
+    // Platform catalog only knows *which* vendors exist — API keys now live
+    // per-organization in `organization_vendor_api_keys` and are managed by
+    // each org's super-admin, not the platform. Callers that need to know
+    // whether a given org has configured a key should hit the tenant-facing
+    // admin API at /admin/vendor-api-keys.
     const vendors = await Vendor.findAll({
-      attributes: ["id", "name", "slug", "apiKey"],
+      attributes: ["id", "name", "slug"],
       order: [["name", "ASC"]],
     });
     return vendors.map((v) => ({
       id: v.id,
       name: v.name,
       slug: v.slug,
-      hasApiKey: !!v.apiKey,
     }));
   }
 
@@ -382,20 +386,4 @@ export class PlatformCatalogService {
     return { deleted: true };
   }
 
-  async setVendorApiKey(vendorId: string, apiKey: string | undefined) {
-    const vendor = await Vendor.findByPk(vendorId);
-    if (!vendor) throw Object.assign(new Error("Vendor not found."), { status: 404 });
-    await vendor.update({ apiKey: apiKey || null });
-    broadcast(
-      "vendor_api_key_updated",
-      `API key ${apiKey ? "set" : "removed"} for ${vendor.name}`,
-      { vendorId: vendor.id, vendorName: vendor.name, hasApiKey: !!apiKey },
-    );
-    return {
-      id: vendor.id,
-      name: vendor.name,
-      slug: vendor.slug,
-      hasApiKey: !!apiKey,
-    };
-  }
 }

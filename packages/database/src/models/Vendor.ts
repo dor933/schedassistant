@@ -4,7 +4,7 @@ import type { VendorAttributes } from "@scheduling-agent/types";
 
 type VendorCreationAttributes = Optional<
   VendorAttributes,
-  "id" | "apiKey" | "createdAt" | "updatedAt"
+  "id" | "createdAt" | "updatedAt"
 >;
 
 class Vendor
@@ -14,7 +14,6 @@ class Vendor
   declare id: string;
   declare name: string;
   declare slug: string;
-  declare apiKey: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -34,11 +33,6 @@ Vendor.init(
       type: DataTypes.STRING,
       allowNull: false,
       unique: true,
-    },
-    apiKey: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-      field: "api_key",
     },
     createdAt: {
       type: DataTypes.DATE,

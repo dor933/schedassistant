@@ -21,9 +21,9 @@ import {
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { LLMModel, Vendor } from "@scheduling-agent/database";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
+import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
@@ -73,17 +73,6 @@ function getModel(modelSlug: string, vendorSlug: string, apiKey: string): BaseCh
     return new ChatGoogle({ model: modelSlug, apiKey, temperature: 0.2 });
   }
   return new ChatOpenAI({ modelName: modelSlug, apiKey, temperature: 0.2 });
-}
-
-async function resolveVendor(modelSlug: string) {
-  const model = await LLMModel.findOne({
-    where: { slug: modelSlug },
-    attributes: ["id", "name", "vendorId"],
-  });
-  if (!model) return null;
-  const vendor = await Vendor.findByPk(model.vendorId, { attributes: ["slug", "apiKey"] });
-  if (!vendor) return null;
-  return { slug: vendor.slug, apiKey: vendor.apiKey, modelName: model.name };
 }
 
 function rawVendorErrorText(err: unknown): string {
@@ -148,15 +137,15 @@ export async function epicCallModelNode(
     return { error: "No system prompt assembled. Context builder may have failed." };
   }
 
-  const vendor = await resolveVendor(modelSlug);
+  const vendor = await resolveOrgVendor(modelSlug, agentId);
   if (!vendor) {
-    return { error: `Unknown model "${modelSlug}". Select a different model.` };
+    return { error: `Unknown model "${modelSlug}" or agent has no organization.` };
   }
   if (!vendor.apiKey) {
-    return { error: `API key not configured for ${vendor.slug}.` };
+    return { error: `Your organization has not configured an API key for ${vendor.vendorSlug}.` };
   }
 
-  const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
+  const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
   // Load MCP tools assigned to this agent (bash, filesystem servers)
   const mcpTools = await getMcpTools(agentId);
@@ -251,7 +240,7 @@ export async function epicCallModelNode(
   }
 
   const llmMessagesForProvider =
-    vendor.slug === "openai" ? normalizeHistoryForOpenAI(llmMessages) : llmMessages;
+    vendor.vendorSlug === "openai" ? normalizeHistoryForOpenAI(llmMessages) : llmMessages;
 
   try {
     let working: BaseMessage[] = llmMessagesForProvider;
@@ -270,7 +259,7 @@ export async function epicCallModelNode(
         (response as AIMessage).additional_kwargs = {
           ...(response as AIMessage).additional_kwargs,
           modelSlug,
-          vendorSlug: vendor.slug,
+          vendorSlug: vendor.vendorSlug,
           modelName: vendor.modelName,
         };
         newMessages.push(response);
@@ -336,7 +325,7 @@ export async function epicCallModelNode(
           (wrapUpResponse as AIMessage).additional_kwargs = {
             ...(wrapUpResponse as AIMessage).additional_kwargs,
             modelSlug,
-            vendorSlug: vendor.slug,
+            vendorSlug: vendor.vendorSlug,
             modelName: vendor.modelName,
           };
           newMessages.push(wrapUpResponse);
@@ -350,7 +339,7 @@ export async function epicCallModelNode(
     return { error: "Too many tool calls in one turn." };
   } catch (err) {
     const vendorText = rawVendorErrorText(err);
-    logger.error("Epic LLM invocation failed", { modelSlug, vendorSlug: vendor.slug, error: vendorText });
+    logger.error("Epic LLM invocation failed", { modelSlug, vendorSlug: vendor.vendorSlug, error: vendorText });
     return { error: vendorText };
   }
 }

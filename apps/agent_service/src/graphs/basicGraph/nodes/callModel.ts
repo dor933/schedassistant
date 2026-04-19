@@ -17,8 +17,8 @@ function sanitizeName(raw: string): string {
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { LLMModel, Vendor } from "@scheduling-agent/database";
 import { resolveModelSlug } from "../../../chat/modelResolution";
+import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import { EditUserIdentityTool } from "../../../tools/editUserIdentityTool";
@@ -73,19 +73,6 @@ function sanitizeToolResult(content: string, toolName: string | undefined): stri
 
 
 
-/**
- * Resolves the vendor slug and API key for a given model slug by querying the DB.
- */
-async function resolveVendor(modelSlug: string): Promise<{ slug: string; apiKey: string | null; modelName: string } | null> {
-  const model = await LLMModel.findOne({
-    where: { slug: modelSlug },
-    attributes: ["id", "name", "vendorId"],
-  });
-  if (!model) return null;
-  const vendor = await Vendor.findByPk(model.vendorId, { attributes: ["slug", "apiKey"] });
-  if (!vendor) return null;
-  return { slug: vendor.slug, apiKey: vendor.apiKey ?? null, modelName: model.name };
-}
 
 /**
  * Strips `signature` fields from `thinking` content blocks in an AI message's content.
@@ -261,24 +248,24 @@ export async function callModelNode(
 
   const modelSlug = await resolveModelSlug(agentId);
 
-  // Resolve vendor + API key from DB
-  const vendor = await resolveVendor(modelSlug);
-  logger.info("Vendor resolved", { vendorSlug: vendor?.slug });
+  // Resolve vendor + org-scoped API key from DB
+  const vendor = await resolveOrgVendor(modelSlug, agentId);
+  logger.info("Vendor resolved", { vendorSlug: vendor?.vendorSlug });
   if (!vendor) {
-    const errMsg = `Unknown model "${modelSlug}". It may have been removed. Please select a different model.`;
-    logger.error("Model not found in DB", { modelSlug });
+    const errMsg = `Unknown model "${modelSlug}" or agent has no organization. Please select a different model.`;
+    logger.error("Model/org not resolvable", { modelSlug, agentId });
     return { error: errMsg };
   }
 
   if (!vendor.apiKey) {
-    const errMsg = `API key not configured for ${vendor.slug}. Please set the API key in the admin panel or switch to a different model.`;
-    logger.error("Missing API key for vendor", { modelSlug, vendorSlug: vendor.slug });
+    const errMsg = `Your organization has not configured an API key for ${vendor.vendorSlug}. Ask a super_admin to upload one in the admin panel, or switch to a different model.`;
+    logger.error("Missing org-scoped API key for vendor", { modelSlug, vendorSlug: vendor.vendorSlug, agentId });
     return { error: errMsg };
   }
 
-  logger.info("Calling LLM", { modelSlug, vendorSlug: vendor.slug, messageCount: stateMessages.length });
+  logger.info("Calling LLM", { modelSlug, vendorSlug: vendor.vendorSlug, messageCount: stateMessages.length });
 
-  const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
+  const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
   // Load MCP tools assigned to this agent via agent_available_mcp_servers.
   const mcpTools = agentId ? await getMcpTools(agentId) : [];
@@ -384,7 +371,7 @@ export async function callModelNode(
   }
 
   const llmMessagesForProvider =
-    vendor.slug === "openai" ? normalizeHistoryForOpenAI(llmMessages) : llmMessages;
+    vendor.vendorSlug === "openai" ? normalizeHistoryForOpenAI(llmMessages) : llmMessages;
 
   try {
     let working: BaseMessage[] = llmMessagesForProvider;
@@ -405,7 +392,7 @@ export async function callModelNode(
         (response as AIMessage).additional_kwargs = {
           ...(response as AIMessage).additional_kwargs,
           modelSlug,
-          vendorSlug: vendor.slug,
+          vendorSlug: vendor.vendorSlug,
           modelName: vendor.modelName,
         };
         newMessages.push(response);
@@ -495,7 +482,7 @@ export async function callModelNode(
     };
   } catch (err) {
     const vendorText = rawVendorErrorText(err);
-    logger.error("LLM invocation failed", { modelSlug, vendorSlug: vendor.slug, vendorError: vendorText });
+    logger.error("LLM invocation failed", { modelSlug, vendorSlug: vendor.vendorSlug, vendorError: vendorText });
     return { error: vendorText };
   }
 }

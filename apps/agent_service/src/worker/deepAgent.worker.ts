@@ -6,9 +6,9 @@ import {
   Agent,
   AgentAvailableMcpServer,
   DeepAgentDelegation,
-  Vendor,
   LLMModel,
 } from "@scheduling-agent/database";
+import { resolveOrgVendorByOrg } from "../services/resolveOrgVendor";
 import {
   DEEP_AGENT_QUEUE_NAME,
   type DeepAgentJobData,
@@ -110,40 +110,46 @@ const DEFAULT_MODEL_SLUG = "gpt-4o";
  *  3. DEFAULT_MODEL_SLUG ("gpt-4o") fallback
  */
 async function resolveModelForAgent(executorAgent: Agent) {
-  let model: LLMModel | null = null;
+  // Pick the model slug first, respecting the same resolution order as before,
+  // then hand off to resolveOrgVendorByOrg to look up the API key scoped to the
+  // executor agent's organization. The executor's org — not the caller's —
+  // owns the keys because the executor is the one making the billable call.
+  let slug: string | null = null;
 
   if (executorAgent.modelId) {
-    model = await LLMModel.findByPk(executorAgent.modelId, {
-      attributes: ["id", "slug", "vendorId"],
-    });
+    const byId = await LLMModel.findByPk(executorAgent.modelId, { attributes: ["slug"] });
+    if (byId) slug = byId.slug;
   }
-  if (!model && executorAgent.modelSlug) {
-    model = await LLMModel.findOne({
-      where: { slug: executorAgent.modelSlug },
-      attributes: ["id", "slug", "vendorId"],
-    });
+  if (!slug && executorAgent.modelSlug) {
+    slug = executorAgent.modelSlug;
   }
-  if (!model) {
-    model = await LLMModel.findOne({
-      where: { slug: DEFAULT_MODEL_SLUG },
-      attributes: ["id", "slug", "vendorId"],
-    });
-  }
-  if (!model) return null;
+  if (!slug) slug = DEFAULT_MODEL_SLUG;
 
-  const slug = model.slug;
-  const vendor = await Vendor.findByPk(model.vendorId, {
-    attributes: ["slug", "apiKey"],
-  });
-  if (!vendor?.apiKey) return null;
+  const vendor = await resolveOrgVendorByOrg(slug, executorAgent.organizationId ?? null);
+  if (!vendor) {
+    logger.warn("DeepAgent: model or organization not resolvable", {
+      agentId: executorAgent.id,
+      organizationId: executorAgent.organizationId ?? null,
+      modelSlug: slug,
+    });
+    return null;
+  }
+  if (!vendor.apiKey) {
+    logger.warn("DeepAgent: organization has no API key for vendor", {
+      agentId: executorAgent.id,
+      organizationId: executorAgent.organizationId ?? null,
+      vendorSlug: vendor.vendorSlug,
+    });
+    return null;
+  }
 
   logger.info("DeepAgent: model resolved", {
     agentId: executorAgent.id,
     resolvedSlug: slug,
-    vendorSlug: vendor.slug,
+    vendorSlug: vendor.vendorSlug,
   });
 
-  switch (vendor.slug) {
+  switch (vendor.vendorSlug) {
     case "anthropic":
       return new ChatAnthropic({
         modelName: slug,

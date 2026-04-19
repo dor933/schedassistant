@@ -156,16 +156,4 @@ export class PlatformController {
     }
   };
 
-  setVendorApiKey = async (req: Request, res: Response) => {
-    const { apiKey } = req.body ?? {};
-    if (apiKey !== undefined && typeof apiKey !== "string") {
-      return res.status(400).json({ error: "apiKey must be a string." });
-    }
-    try {
-      const result = await this.catalog.setVendorApiKey(req.params.id as string, apiKey);
-      return res.json(result);
-    } catch (err: any) {
-      return handleError(res, err, "PATCH /vendors/:id/api-key");
-    }
-  };
 }

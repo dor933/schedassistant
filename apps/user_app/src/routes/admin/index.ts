@@ -14,6 +14,7 @@ import { toolsRouter } from "./tools.routes";
 import { cronJobsRouter } from "./cronJobs.routes";
 import { webSearchAgentRouter } from "./webSearchAgent.routes";
 import { agentUserScopesRouter } from "./agentUserScopes.routes";
+import { vendorApiKeysRouter } from "./vendorApiKeys.routes";
 
 const router = Router();
 
@@ -31,6 +32,7 @@ router.use("/roundtables", roundtableRouter);
 router.use("/tools", toolsRouter);
 router.use("/cron-jobs", cronJobsRouter);
 router.use("/web-search-agent", webSearchAgentRouter);
+router.use("/vendor-api-keys", vendorApiKeysRouter);
 // Agent ↔ user Google scope grants (super_admin gated inside the router).
 // Mounts at the admin root so the same router covers both
 // /admin/google-users and /admin/agents/:agentId/user-scopes.

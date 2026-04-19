@@ -25,11 +25,11 @@ router.post("/skills", controller.createSkill);
 router.patch("/skills/:id", controller.updateSkill);
 router.delete("/skills/:id", controller.deleteSkill);
 
-// Models + vendor API keys
+// Models + vendors — catalog only; API keys are per-org now and live on the
+// tenant-facing /admin API, not the platform API.
 router.get("/models", controller.listModels);
 router.post("/models", controller.createModel);
 router.delete("/models/:id", controller.deleteModel);
 router.get("/vendors", controller.listVendors);
-router.patch("/vendors/:id/api-key", controller.setVendorApiKey);
 
 export { router as platformRouter };

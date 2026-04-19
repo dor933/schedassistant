@@ -7,29 +7,10 @@ import {
   Roundtable,
   RoundtableAgent,
   RoundtableMessage,
-  LLMModel,
-  Vendor,
 } from "@scheduling-agent/database";
 import { resolveModelSlug } from "../../chat/modelResolution";
+import { resolveOrgVendor } from "../../services/resolveOrgVendor";
 import { logger } from "../../logger";
-
-// ─── Vendor / model helpers (mirrors roundtableCallModel — kept local so the
-//     summarizer is a self-contained one-shot invocation outside the graph) ───
-
-async function resolveVendor(
-  modelSlug: string,
-): Promise<{ slug: string; apiKey: string | null; modelName: string } | null> {
-  const model = await LLMModel.findOne({
-    where: { slug: modelSlug },
-    attributes: ["id", "name", "vendorId"],
-  });
-  if (!model) return null;
-  const vendor = await Vendor.findByPk(model.vendorId, {
-    attributes: ["slug", "apiKey"],
-  });
-  if (!vendor) return null;
-  return { slug: vendor.slug, apiKey: vendor.apiKey ?? null, modelName: model.name };
-}
 
 function getModel(
   modelSlug: string,
@@ -123,15 +104,23 @@ export async function summarizeRoundtable(roundtableId: string): Promise<string>
   }
 
   // Pick a model from the first agent; falls back to the system default.
+  // The org-scoped API key is looked up via that agent — all participants
+  // in a roundtable are in the same org, so which one we pick doesn't matter
+  // for key resolution.
   const primaryAgentId = agents[0]?.agentId ?? null;
   const modelSlug = await resolveModelSlug(primaryAgentId ?? undefined);
-  const vendor = await resolveVendor(modelSlug);
-  if (!vendor || !vendor.apiKey) {
+  const vendor = await resolveOrgVendor(modelSlug, primaryAgentId);
+  if (!vendor) {
     throw new Error(
-      `Cannot summarize roundtable: vendor for model "${modelSlug}" is missing an API key`,
+      `Cannot summarize roundtable: unknown model "${modelSlug}" or no organization on the primary agent`,
     );
   }
-  const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
+  if (!vendor.apiKey) {
+    throw new Error(
+      `Cannot summarize roundtable: this organization has not configured an API key for ${vendor.vendorSlug}`,
+    );
+  }
+  const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
   // ── Build the transcript ──────────────────────────────────────────────
   const participantLines = agents.map((ra) => {
@@ -177,7 +166,7 @@ export async function summarizeRoundtable(roundtableId: string): Promise<string>
   logger.info("Roundtable summary generated", {
     roundtableId,
     modelSlug,
-    vendor: vendor.slug,
+    vendor: vendor.vendorSlug,
     summaryLen: text.length,
   });
 

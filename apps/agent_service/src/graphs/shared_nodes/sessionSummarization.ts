@@ -10,9 +10,10 @@ import { insertEpisodicMemoryChunks } from "../../rag/episodicMemoryChunksWriter
 import { embedText } from "../../rag/embeddings";
 import { observeWithContext, getLangfuseCallbackHandler, flushLangfuse } from "../../langfuse";
 import { logger } from "../../logger";
-import { Thread, Vendor, LLMModel } from "@scheduling-agent/database";
+import { Thread } from "@scheduling-agent/database";
 import { SessionSummary } from "@scheduling-agent/types";
 import { resolveModelSlug } from "../../chat/modelResolution";
+import { resolveOrgVendor } from "../../services/resolveOrgVendor";
 
 /**
  * Zod schema for the structured output returned by the LLM during
@@ -44,55 +45,44 @@ const sessionSummarizationSchema = z.object({
     ),
 });
 
-let cachedLlm: BaseChatModel | null = null;
-let cachedForSlug: string | null = null;
-
 /**
- * Resolves a summarization LLM using the agent's configured model,
- * fetching the API key from the Vendors table (not env vars).
- * Falls back to gpt-4o via resolveModelSlug when agentId has no model set.
+ * Resolves a summarization LLM using the agent's configured model, fetching
+ * the API key from the agent's organization (not a global vendor key).
+ *
+ * Deliberately NOT cached at module scope: API keys are per-org, and a cache
+ * keyed only by model slug would leak one org's key into another org's call.
+ * The cost of re-resolving is a couple of indexed lookups per summarization.
  */
 async function getSummarizationLlm(agentId?: string | null): Promise<BaseChatModel> {
   const modelSlug = await resolveModelSlug(agentId);
 
-  if (cachedLlm && cachedForSlug === modelSlug) return cachedLlm;
-
-  const model = await LLMModel.findOne({
-    where: { slug: modelSlug },
-    attributes: ["id", "vendorId"],
-  });
-  if (!model) throw new Error(`LLMModel "${modelSlug}" not found for session summarization`);
-
-  const vendor = await Vendor.findByPk(model.vendorId, {
-    attributes: ["slug", "apiKey"],
-  });
-  if (!vendor?.apiKey) {
-    throw new Error(`Vendor for model "${modelSlug}" has no API key configured`);
+  const vendor = await resolveOrgVendor(modelSlug, agentId ?? null);
+  if (!vendor) {
+    throw new Error(
+      `Cannot summarize session: unknown model "${modelSlug}" or agent has no organization`,
+    );
+  }
+  if (!vendor.apiKey) {
+    throw new Error(
+      `Cannot summarize session: this organization has not configured an API key for ${vendor.vendorSlug}`,
+    );
   }
 
-  let llm: BaseChatModel;
-  switch (vendor.slug) {
+  switch (vendor.vendorSlug) {
     case "openai":
-      llm = new ChatOpenAI({ modelName: modelSlug, temperature: 0, apiKey: vendor.apiKey });
-      break;
+      return new ChatOpenAI({ modelName: modelSlug, temperature: 0, apiKey: vendor.apiKey });
     case "anthropic":
-      llm = new ChatAnthropic({
+      return new ChatAnthropic({
         modelName: modelSlug,
         temperature: 0,
         apiKey: vendor.apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
       });
-      break;
     case "google":
-      llm = new ChatGoogle({ model: modelSlug, temperature: 0, apiKey: vendor.apiKey });
-      break;
+      return new ChatGoogle({ model: modelSlug, temperature: 0, apiKey: vendor.apiKey });
     default:
-      throw new Error(`Unsupported vendor "${vendor.slug}" for session summarization`);
+      throw new Error(`Unsupported vendor "${vendor.vendorSlug}" for session summarization`);
   }
-
-  cachedLlm = llm;
-  cachedForSlug = modelSlug;
-  return llm;
 }
 
 /**

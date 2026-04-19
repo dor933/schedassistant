@@ -35,3 +35,4 @@ export { Notification } from "./models/Notification";
 export { AgentCronJob } from "./models/AgentCronJob";
 export { AgentUserScope } from "./models/AgentUserScope";
 export { PlatformAdmin } from "./models/PlatformAdmin";
+export { OrganizationVendorApiKey } from "./models/OrganizationVendorApiKey";

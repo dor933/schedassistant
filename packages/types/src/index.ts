@@ -175,8 +175,6 @@ export interface VendorAttributes {
   id: VendorId;
   name: string;
   slug: string;
-  /** Encrypted API key for this vendor (null = not configured). */
-  apiKey: string | null;
   createdAt: Date;
   updatedAt: Date;
 }

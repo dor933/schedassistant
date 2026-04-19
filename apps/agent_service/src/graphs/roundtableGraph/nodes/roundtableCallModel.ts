@@ -12,10 +12,10 @@ import {
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { LLMModel, Vendor } from "@scheduling-agent/database";
 import { resolveModelSlug } from "../../../chat/modelResolution";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
+import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
 
 import { EditUserIdentityTool } from "../../../tools/editUserIdentityTool";
 import { EditAgentNameTool } from "../../../tools/agentNameTool";
@@ -36,21 +36,6 @@ import getMcpTools from "../../../mcpClient";
 const MAX_TOOL_ROUNDS = 15;
 
 // ─── Vendor / model helpers (same as basicGraph/callModel) ───────────────────
-
-async function resolveVendor(
-  modelSlug: string,
-): Promise<{ slug: string; apiKey: string | null; modelName: string } | null> {
-  const model = await LLMModel.findOne({
-    where: { slug: modelSlug },
-    attributes: ["id", "name", "vendorId"],
-  });
-  if (!model) return null;
-  const vendor = await Vendor.findByPk(model.vendorId, {
-    attributes: ["slug", "apiKey"],
-  });
-  if (!vendor) return null;
-  return { slug: vendor.slug, apiKey: vendor.apiKey ?? null, modelName: model.name };
-}
 
 function getModel(
   modelSlug: string,
@@ -180,30 +165,30 @@ export async function roundtableCallModelNode(
   } = state;
 
   const modelSlug = await resolveModelSlug(agentId);
-  const vendor = await resolveVendor(modelSlug);
+  const vendor = await resolveOrgVendor(modelSlug, agentId);
 
   if (!vendor) {
-    const errMsg = `Unknown model "${modelSlug}". It may have been removed.`;
+    const errMsg = `Unknown model "${modelSlug}" or agent has no organization.`;
     logger.error("Roundtable: model not found", { modelSlug });
     return { error: errMsg };
   }
   if (!vendor.apiKey) {
-    const errMsg = `API key not configured for ${vendor.slug}.`;
-    logger.error("Roundtable: missing API key", {
+    const errMsg = `Your organization has not configured an API key for ${vendor.vendorSlug}.`;
+    logger.error("Roundtable: missing org API key", {
       modelSlug,
-      vendorSlug: vendor.slug,
+      vendorSlug: vendor.vendorSlug,
     });
     return { error: errMsg };
   }
 
   logger.info("Roundtable: calling LLM", {
     modelSlug,
-    vendorSlug: vendor.slug,
+    vendorSlug: vendor.vendorSlug,
     messageCount: stateMessages.length,
     roundtableId: state.roundtableId,
   });
 
-  const model = getModel(modelSlug, vendor.slug, vendor.apiKey);
+  const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
   const mcpTools = agentId ? await getMcpTools(agentId) : [];
 
@@ -307,7 +292,7 @@ export async function roundtableCallModelNode(
   }
 
   const llmMessagesForProvider =
-    vendor.slug === "openai"
+    vendor.vendorSlug === "openai"
       ? normalizeHistoryForOpenAI(llmMessages)
       : llmMessages;
 
@@ -330,7 +315,7 @@ export async function roundtableCallModelNode(
         (response as AIMessage).additional_kwargs = {
           ...(response as AIMessage).additional_kwargs,
           modelSlug,
-          vendorSlug: vendor.slug,
+          vendorSlug: vendor.vendorSlug,
           modelName: vendor.modelName,
         };
         newMessages.push(response);
@@ -400,7 +385,7 @@ export async function roundtableCallModelNode(
     const vendorText = rawVendorErrorText(err);
     logger.error("Roundtable: LLM invocation failed", {
       modelSlug,
-      vendorSlug: vendor.slug,
+      vendorSlug: vendor.vendorSlug,
       vendorError: vendorText,
     });
     return { error: vendorText };
