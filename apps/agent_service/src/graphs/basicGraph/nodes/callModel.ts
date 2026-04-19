@@ -28,6 +28,7 @@ import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
 import { DelegateToDeepAgentTool } from "../../../tools/delegateToDeepAgentTool";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
+import { ListCronJobsTool } from "../../../tools/listCronJobsTool";
 import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
@@ -284,6 +285,7 @@ export async function callModelNode(
     EditAgentNotesTool(agentId),
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
+    ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),

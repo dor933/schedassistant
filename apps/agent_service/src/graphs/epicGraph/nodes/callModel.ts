@@ -25,6 +25,7 @@ import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
+import { ListCronJobsTool } from "../../../tools/listCronJobsTool";
 import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
@@ -160,6 +161,7 @@ export async function epicCallModelNode(
     EditAgentNotesTool(agentId),
     SaveEpisodicMemoryTool(agentId, userId, threadId),
     RecallEpisodicMemoryTool(agentId),
+    ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
