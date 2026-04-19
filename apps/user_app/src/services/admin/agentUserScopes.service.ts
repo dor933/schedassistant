@@ -96,11 +96,16 @@ export class AgentUserScopesService {
       },
     });
 
-    this.broadcast("agent_user_scope_granted", {
-      agentId: params.agentId,
-      subjectUserId: params.subjectUserId,
-      scope: params.scope,
-    }, params.grantedByUserId);
+    this.broadcast(
+      "agent_user_scope_granted",
+      `Google "${params.scope}" access granted.`,
+      {
+        agentId: params.agentId,
+        subjectUserId: params.subjectUserId,
+        scope: params.scope,
+      },
+      params.grantedByUserId,
+    );
 
     return row.get({ plain: true }) as AgentUserScopeAttributes;
   }
@@ -127,11 +132,16 @@ export class AgentUserScopesService {
       },
     });
     if (n > 0) {
-      this.broadcast("agent_user_scope_revoked", {
-        agentId: params.agentId,
-        subjectUserId: params.subjectUserId,
-        scope: params.scope,
-      }, params.actorId);
+      this.broadcast(
+        "agent_user_scope_revoked",
+        `Google "${params.scope}" access revoked.`,
+        {
+          agentId: params.agentId,
+          subjectUserId: params.subjectUserId,
+          scope: params.scope,
+        },
+        params.actorId,
+      );
     }
     return n;
   }
@@ -151,11 +161,12 @@ export class AgentUserScopesService {
 
   private broadcast(
     type: string,
+    message: string,
     data: Record<string, unknown>,
     actorId: UserId,
   ): void {
     try {
-      getIO().emit("admin:change", { type, data, actorId });
+      getIO().emit("admin:change", { type, message, data, actorId });
     } catch (err) {
       logger.error("agentUserScopes broadcast failed", { error: String(err) });
     }

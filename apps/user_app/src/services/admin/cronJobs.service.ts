@@ -90,13 +90,19 @@ export class CronJobsService {
       enabled: input.enabled ?? true,
     });
 
-    this.broadcast("cron_job_created", { agentId, cronJobId: job.id });
+    this.broadcast(
+      "cron_job_created",
+      `Schedule "${job.name}" was created.`,
+      { agentId, cronJobId: job.id, name: job.name },
+      callerId,
+    );
     return job;
   }
 
   async update(
     cronJobId: string,
     patch: CronJobPatch,
+    callerId: UserId,
     callerRole: string,
     callerOrgId: string,
   ) {
@@ -132,12 +138,18 @@ export class CronJobsService {
     if (patch.enabled !== undefined) update.enabled = patch.enabled;
 
     await job.update(update);
-    this.broadcast("cron_job_updated", { agentId: job.agentId, cronJobId: job.id });
+    this.broadcast(
+      "cron_job_updated",
+      `Schedule "${job.name}" was updated.`,
+      { agentId: job.agentId, cronJobId: job.id, name: job.name },
+      callerId,
+    );
     return job;
   }
 
   async delete(
     cronJobId: string,
+    callerId: UserId,
     callerRole: string,
     callerOrgId: string,
   ) {
@@ -145,8 +157,14 @@ export class CronJobsService {
     if (!job) throw notFound("Cron job not found.");
     await this.assertAgentAccess(job.agentId, callerRole, callerOrgId);
 
+    const deletedName = job.name;
     await job.destroy();
-    this.broadcast("cron_job_deleted", { agentId: job.agentId, cronJobId });
+    this.broadcast(
+      "cron_job_deleted",
+      `Schedule "${deletedName}" was deleted.`,
+      { agentId: job.agentId, cronJobId, name: deletedName },
+      callerId,
+    );
     return { deleted: true };
   }
 
@@ -164,9 +182,14 @@ export class CronJobsService {
     return agent;
   }
 
-  private broadcast(type: string, data: Record<string, unknown>) {
+  private broadcast(
+    type: string,
+    message: string,
+    data: Record<string, unknown>,
+    actorId: UserId,
+  ) {
     try {
-      getIO().emit("admin:change", { type, message: type, data });
+      getIO().emit("admin:change", { type, message, data, actorId });
     } catch (err) {
       logger.error("cronJobs broadcast error", { error: String(err) });
     }

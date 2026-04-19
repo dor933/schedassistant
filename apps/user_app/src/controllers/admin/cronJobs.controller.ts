@@ -54,6 +54,7 @@ export class CronJobsController {
           timezone: req.body.timezone,
           enabled: req.body.enabled,
         },
+        req.user!.userId,
         req.user!.role,
         req.user!.organizationId,
       );
@@ -69,6 +70,7 @@ export class CronJobsController {
     try {
       const result = await this.service.delete(
         req.params.id as string,
+        req.user!.userId,
         req.user!.role,
         req.user!.organizationId,
       );
