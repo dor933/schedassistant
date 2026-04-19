@@ -27,3 +27,7 @@ docker-compose.yml.new
 *claude-flow
 
 *.claude
+
+grahamy-claw-service-account.json
+
+.env

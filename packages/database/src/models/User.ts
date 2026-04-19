@@ -1,6 +1,6 @@
-import { DataTypes, Model, Optional, Sequelize } from "sequelize";
+import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
-import type { UserAttributes, UserIdentity } from "@scheduling-agent/types";
+import type { AuthProvider, UserAttributes, UserIdentity } from "@scheduling-agent/types";
 
 type UserCreationAttributes = Optional<
   UserAttributes,
@@ -14,6 +14,9 @@ type UserCreationAttributes = Optional<
   | "userName"
   | "roleId"
   | "organizationId"
+  | "authProvider"
+  | "externalSub"
+  | "lastLoginAt"
 >;
 
 class User
@@ -28,6 +31,9 @@ class User
   declare password: string | null;
   declare roleId: string | null;
   declare organizationId: string;
+  declare authProvider: AuthProvider;
+  declare externalSub: string | null;
+  declare lastLoginAt: Date | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -76,6 +82,22 @@ User.init(
       allowNull: false,
       field: "organization_id",
       references: { model: "organizations", key: "id" },
+    },
+    authProvider: {
+      type: DataTypes.STRING(16),
+      allowNull: false,
+      defaultValue: "local",
+      field: "auth_provider",
+    },
+    externalSub: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: "external_sub",
+    },
+    lastLoginAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "last_login_at",
     },
     createdAt: {
       type: DataTypes.DATE,

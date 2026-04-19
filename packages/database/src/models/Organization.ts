@@ -4,7 +4,14 @@ import type { OrganizationAttributes } from "@scheduling-agent/types";
 
 type OrganizationCreationAttributes = Optional<
   OrganizationAttributes,
-  "id" | "slug" | "logo" | "webSearchAgentId" | "createdAt" | "updatedAt"
+  | "id"
+  | "slug"
+  | "logo"
+  | "webSearchAgentId"
+  | "googleWorkspaceDomain"
+  | "googleClientId"
+  | "createdAt"
+  | "updatedAt"
 >;
 
 class Organization
@@ -16,6 +23,8 @@ class Organization
   declare slug: string | null;
   declare logo: string | null;
   declare webSearchAgentId: string | null;
+  declare googleWorkspaceDomain: string | null;
+  declare googleClientId: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -44,6 +53,17 @@ Organization.init(
       type: DataTypes.UUID,
       allowNull: true,
       field: "web_search_agent_id",
+    },
+    googleWorkspaceDomain: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      unique: true,
+      field: "google_workspace_domain",
+    },
+    googleClientId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      field: "google_client_id",
     },
     createdAt: {
       type: DataTypes.DATE,

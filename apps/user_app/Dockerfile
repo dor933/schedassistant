@@ -25,6 +25,12 @@ COPY --from=builder /app/node_modules/ ./node_modules/
 COPY --from=builder /app/packages/ ./packages/
 COPY --from=builder /app/apps/user_app/dist/ ./apps/user_app/dist/
 COPY --from=builder /app/apps/user_app/package.json ./apps/user_app/
+# Copy workspace-nested node_modules too — when a workspace dep can't hoist to
+# the root (peer-dep conflict, version pin) npm keeps it under the workspace
+# and Node walks up from dist/ to find it. Without this copy, any nested
+# package silently goes missing at runtime. `|| true` keeps the build working
+# when nothing nested.
+COPY --from=builder /app/apps/user_app/node_modules/ ./apps/user_app/node_modules/
 COPY --from=builder /app/apps/user_app/client/dist/ ./apps/user_app/client/dist/
 COPY --from=builder /app/apps/core_instructions/projectManager.json ./apps/core_instructions/projectManager.json
 

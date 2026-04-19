@@ -1,14 +1,45 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
 import Container from "@mui/material/Container";
 import { useAuth } from "../context/AuthContext";
+import { GOOGLE_CLIENT_ID } from "../constants";
 import { Loader2, Eye, EyeOff, Sparkles } from "lucide-react";
 import logo from "../assets/logo.svg";
+import LaunchAnimation from "../components/LaunchAnimation";
+
+/**
+ * Shape of the payload Google Identity Services hands to the callback — we
+ * only care about `credential` (the id token we POST to /auth/google).
+ */
+interface GoogleCredentialResponse {
+  credential: string;
+}
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize(config: {
+            client_id: string;
+            callback: (resp: GoogleCredentialResponse) => void;
+            auto_select?: boolean;
+            ux_mode?: "popup" | "redirect";
+          }): void;
+          renderButton(
+            parent: HTMLElement,
+            options: Record<string, unknown>,
+          ): void;
+        };
+      };
+    };
+  }
+}
 
 export default function LoginPage() {
-  const { login } = useAuth();
+  const { login, loginWithGoogle, activateSession } = useAuth();
   const navigate = useNavigate();
 
   const [loginUserName, setLoginUserName] = useState("");
@@ -18,18 +49,82 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Non-null while the first-time launch animation is playing — covers both
+  // JIT-provisioned Google SSO users and first-time local password sign-ins
+  // (e.g. admin-created accounts). The session sits in AuthContext's pending
+  // slot until the animation finishes and we call `activateSession()`.
+  const [welcomeOrg, setWelcomeOrg] = useState<{ name: string; logo: string | null } | null>(null);
+
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+
   async function handleLogin(e: FormEvent) {
     e.preventDefault();
     setError("");
     setSubmitting(true);
     try {
-      await login(loginUserName.trim(), password);
+      const result = await login(loginUserName.trim(), password);
+      if (result.isFirstLogin) {
+        setWelcomeOrg(result.organization ?? { name: "your organization", logo: null });
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
       setSubmitting(false);
     }
   }
+
+  // Mount the Google Identity Services button. The GIS script is loaded from
+  // index.html; we poll briefly for window.google since the script is async.
+  // When no client id is configured the button is skipped entirely so dev
+  // deployments without Google SSO don't see a broken widget.
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID) return;
+    let cancelled = false;
+
+    const tryRender = () => {
+      if (cancelled) return;
+      const gsi = window.google?.accounts?.id;
+      if (!gsi || !googleButtonRef.current) {
+        window.setTimeout(tryRender, 100);
+        return;
+      }
+      gsi.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: async (resp) => {
+          setError("");
+          setSubmitting(true);
+          try {
+            const result = await loginWithGoogle(resp.credential);
+            if (result.isFirstLogin) {
+              // Hold the session in AuthContext's pending slot and let the
+              // launch animation run. Activation + redirect happens in the
+              // animation's onComplete.
+              setWelcomeOrg(result.organization ?? { name: "your organization", logo: null });
+            }
+          } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : "Google sign-in failed");
+          } finally {
+            setSubmitting(false);
+          }
+        },
+        ux_mode: "popup",
+      });
+      gsi.renderButton(googleButtonRef.current, {
+        type: "standard",
+        theme: "outline",
+        size: "large",
+        shape: "pill",
+        text: "signin_with",
+        logo_alignment: "left",
+        width: 336,
+      });
+    };
+
+    tryRender();
+    return () => {
+      cancelled = true;
+    };
+  }, [loginWithGoogle]);
 
   const inputClass =
     "mb-4 block w-full rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-3 text-sm placeholder-gray-400 transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10";
@@ -42,6 +137,23 @@ export default function LoginPage() {
       className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-indigo-50/40 px-4"
       sx={{ position: "relative", overflow: "hidden" }}
     >
+      {welcomeOrg && (
+        <LaunchAnimation
+          logo={welcomeOrg.logo}
+          title="Welcome to a new reality."
+          subtitle={`You're in at ${welcomeOrg.name}.`}
+          stages={[
+            "Verifying identity",
+            "Linking your account",
+            "Loading your workspace",
+            "Finishing touches",
+          ]}
+          onComplete={() => {
+            activateSession();
+            navigate("/", { replace: true });
+          }}
+        />
+      )}
       <Box
         className="pointer-events-none fixed inset-0 overflow-hidden"
         aria-hidden
@@ -139,6 +251,21 @@ export default function LoginPage() {
                 "Sign in"
               )}
             </Box>
+
+            {GOOGLE_CLIENT_ID && (
+              <>
+                <Box className="my-5 flex items-center gap-3">
+                  <Box className="h-px flex-1 bg-gray-200" />
+                  <Box component="span" className="text-xs font-medium uppercase tracking-wider text-gray-400">
+                    or
+                  </Box>
+                  <Box className="h-px flex-1 bg-gray-200" />
+                </Box>
+                <Box className="flex justify-center">
+                  <Box ref={googleButtonRef} />
+                </Box>
+              </>
+            )}
           </Box>
 
           {/* Register CTA — navigates to the onboarding wizard */}

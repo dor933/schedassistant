@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import {
   login as apiLogin,
+  googleLogin as apiGoogleLogin,
   register as apiRegister,
   getMe,
   type Conversations,
@@ -23,12 +24,25 @@ interface User {
   organizationLogo: string | null;
 }
 
+/**
+ * Metadata returned from any login flow so the caller can decide whether to
+ * play the "welcome" launch animation. When `isFirstLogin` is true the
+ * session is held in `pendingSessionRef` until the caller fires
+ * `activateSession()` — so the animation can play on a clean login screen
+ * before the authenticated app mounts.
+ */
+export interface LoginResult {
+  isFirstLogin: boolean;
+  organization: { name: string; logo: string | null } | null;
+}
+
 interface AuthContextValue {
   user: User | null;
   conversations: Conversations | null;
   setConversations: React.Dispatch<React.SetStateAction<Conversations | null>>;
   loading: boolean;
-  login: (userName: string, password: string) => Promise<void>;
+  login: (userName: string, password: string) => Promise<LoginResult>;
+  loginWithGoogle: (idToken: string) => Promise<LoginResult>;
   register: (data: RegisterData) => Promise<void>;
   /** Set the user/conversations without re-registering. Call after deferred animations. */
   activateSession: () => void;
@@ -65,22 +79,69 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = useCallback(async (userName: string, password: string) => {
-    const res = await apiLogin(userName, password);
-    localStorage.setItem("token", res.token);
-    setUser({
-      id: res.user.id,
-      displayName: res.user.displayName,
-      role: res.user.role ?? "user",
-      organizationName: res.organization?.name ?? null,
-      organizationLogo: res.organization?.logo ?? null,
-    });
-    setConversations(res.conversations);
-  }, []);
-
-  // Pending registration data — stored so the onboarding animation can play
-  // before we set `user` (which would trigger the route redirect).
+  // Pending session data — stored so a "welcome" animation can finish playing
+  // before we set `user` (which would trigger the route redirect). Used by
+  // org registration, first-time Google SSO, and first-time local password
+  // login for admin-created accounts.
   const pendingSessionRef = React.useRef<{ user: User; conversations: Conversations } | null>(null);
+
+  const login = useCallback(
+    async (userName: string, password: string): Promise<LoginResult> => {
+      const res = await apiLogin(userName, password);
+      localStorage.setItem("token", res.token);
+      const nextUser: User = {
+        id: res.user.id,
+        displayName: res.user.displayName,
+        role: res.user.role ?? "user",
+        organizationName: res.organization?.name ?? null,
+        organizationLogo: res.organization?.logo ?? null,
+      };
+      const meta: LoginResult = {
+        isFirstLogin: res.isFirstLogin === true,
+        organization: res.organization
+          ? { name: res.organization.name, logo: res.organization.logo }
+          : null,
+      };
+      if (meta.isFirstLogin) {
+        // Hold off on activating — the caller will play the launch animation
+        // and then fire `activateSession()` to drop the user into the app.
+        pendingSessionRef.current = { user: nextUser, conversations: res.conversations };
+      } else {
+        setUser(nextUser);
+        setConversations(res.conversations);
+      }
+      return meta;
+    },
+    [],
+  );
+
+  const loginWithGoogle = useCallback(
+    async (idToken: string): Promise<LoginResult> => {
+      const res = await apiGoogleLogin(idToken);
+      localStorage.setItem("token", res.token);
+      const nextUser: User = {
+        id: res.user.id,
+        displayName: res.user.displayName,
+        role: res.user.role ?? "user",
+        organizationName: res.organization?.name ?? null,
+        organizationLogo: res.organization?.logo ?? null,
+      };
+      const meta: LoginResult = {
+        isFirstLogin: res.isFirstLogin === true,
+        organization: res.organization
+          ? { name: res.organization.name, logo: res.organization.logo }
+          : null,
+      };
+      if (meta.isFirstLogin) {
+        pendingSessionRef.current = { user: nextUser, conversations: res.conversations };
+      } else {
+        setUser(nextUser);
+        setConversations(res.conversations);
+      }
+      return meta;
+    },
+    [],
+  );
 
   const register = useCallback(async (data: RegisterData) => {
     const res = await apiRegister(data);
@@ -222,7 +283,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user]);
 
   return (
-    <AuthContext.Provider value={{ user, conversations, setConversations, loading, login, register, activateSession, logout }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        conversations,
+        setConversations,
+        loading,
+        login,
+        loginWithGoogle,
+        register,
+        activateSession,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

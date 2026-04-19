@@ -17,6 +17,19 @@ export interface OrganizationAttributes {
    * web search so queries always land on the org's chosen agent.
    */
   webSearchAgentId: AgentId | null;
+  /**
+   * Primary Google Workspace domain mapped to this tenant (the `hd` claim on
+   * Google id tokens, e.g. `grahamy.com`). Unique. When set, any successful
+   * Google SSO sign-in whose `hd` equals this value is routed into this org,
+   * and users are JIT-provisioned on first login.
+   */
+  googleWorkspaceDomain: string | null;
+  /**
+   * Optional per-org Google OAuth client id. Used to scope audience validation
+   * when each tenant has its own OAuth client. When null, the env-configured
+   * default client id list is accepted instead.
+   */
+  googleClientId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -269,9 +282,18 @@ export interface EpisodicMemoryAttributes {
 
 // ─── User (database row) ─────────────────────────────────────────────────────
 
+/**
+ * How this user authenticates.
+ *  - `local`: classic username + bcrypt password.
+ *  - `google`: JIT-provisioned from Google Workspace SSO. No password is
+ *    stored; identity is asserted by a valid Google id token matching the
+ *    org's `googleWorkspaceDomain`.
+ */
+export type AuthProvider = "local" | "google";
+
 export interface UserAttributes {
   id: UserId;
-  /** Unique login handle — lowercase alphanumeric + underscores only. */
+  /** Unique login handle — for SSO users this is the email; for local users, lowercase alphanumeric + underscores. */
   userName: string;
   externalRef?: string | null;
   displayName?: string | null;
@@ -281,6 +303,20 @@ export interface UserAttributes {
   roleId?: string | null;
   /** FK to `organizations.id` — the tenant this user belongs to. */
   organizationId: OrganizationId;
+  /** Which auth flow owns this user. Defaults to `local` for all pre-existing rows. */
+  authProvider: AuthProvider;
+  /**
+   * Stable provider-side user id (e.g. Google `sub`). Unique per
+   * `(authProvider, externalSub)`. Null for local users.
+   */
+  externalSub?: string | null;
+  /**
+   * Timestamp of this user's most recent successful login. NULL means the
+   * user has never signed in yet — the client uses this to decide whether to
+   * play the "welcome" launch animation. Updated on every successful login
+   * (both password and Google SSO).
+   */
+  lastLoginAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -531,7 +567,13 @@ export {
   registerOrganizationSchema,
   webSearchChoiceSchema,
   loginSchema,
+  googleLoginSchema,
+  googleBootstrapSchema,
+  googleVerifyDomainSchema,
   type RegisterInput,
   type RegisterOrganizationInput,
   type LoginInput,
+  type GoogleLoginInput,
+  type GoogleBootstrapInput,
+  type GoogleVerifyDomainInput,
 } from "./validation";

@@ -20,8 +20,23 @@ import {
   type UserId,
   type RegisterOrganizationInput,
 } from "@scheduling-agent/types";
+import {
+  GoogleAuthService,
+  signBootstrapTicket,
+  verifyBootstrapTicket,
+  checkDomainTxt,
+  domainVerificationTxtValue,
+  DOMAIN_VERIFICATION_TXT_PREFIX,
+  type VerifiedGoogleIdentity,
+} from "./google.service";
 
-const ADMIN_ROLE_ID = "00000000-0000-4000-c000-000000000001";
+/**
+ * Role assigned to the user who creates a new tenant via the onboarding
+ * wizard. `super_admin` — not plain `admin` — so the first person to
+ * provision an org always has the most-privileged role. Seeded in
+ * migration 20240101000024.
+ */
+const SUPER_ADMIN_ROLE_ID = "00000000-0000-4000-c000-000000000003";
 const WORKSPACES_ROOT = path.join(process.env.DATA_DIR || "/app/data", "workspaces");
 
 function slugifyOrg(name: string): string {
@@ -36,10 +51,114 @@ function slugifyOrg(name: string): string {
 }
 
 export class AuthService {
+  private googleAuth = new GoogleAuthService();
+
+  /**
+   * Pre-registration Google sign-in — the admin proves Workspace ownership
+   * before their org exists. We verify the id token against env-level client
+   * ids only (org-scoped verification is impossible pre-org), reject if an
+   * org is already registered for the `hd`, and return a short-lived signed
+   * ticket the client carries through the rest of the wizard. The ticket is
+   * redeemed during `registerOrganization` to create the SSO admin without
+   * ever asking the user for a local username/password.
+   */
+  async bootstrapGoogleIdentity(idToken: string) {
+    const identity = await this.googleAuth.verifyBootstrapIdToken(idToken);
+    // The initial ticket is always `verifiedDomain: false`. The wizard must
+    // redeem it at `/auth/google-verify-domain` (after publishing the TXT
+    // record) to exchange it for a verified ticket before `/auth/register`.
+    const ticket = signBootstrapTicket({
+      sub: identity.sub,
+      email: identity.email,
+      hd: identity.hd,
+      name: identity.name,
+      verifiedDomain: false,
+    });
+    const txtValue = domainVerificationTxtValue(identity.hd, identity.sub);
+    return {
+      ticket,
+      identity: {
+        email: identity.email,
+        name: identity.name,
+        hd: identity.hd,
+        picture: identity.picture,
+      },
+      // Surfaced to the wizard so it can tell the admin exactly what to
+      // publish on their root domain. `name` is the record's DNS name
+      // (root domain), `value` is the full string (prefix + token).
+      txtRecord: {
+        name: identity.hd,
+        value: txtValue,
+      },
+    };
+  }
+
+  /**
+   * DNS-based proof of domain ownership.
+   *
+   * Admin publishes `TXT sched-assist-verify=<token>` at the root of their
+   * Workspace domain; we verify the (still-unverified) bootstrap ticket,
+   * re-derive the expected token from its `(hd, sub)` claims, run a live
+   * DNS lookup, and — on match — re-issue the ticket with `verifiedDomain`
+   * flipped to true. The caller carries the new ticket into `/auth/register`.
+   *
+   * If the lookup fails (record missing, not yet propagated, etc.) we return
+   * a 409 with the expected TXT value so the UI can re-display it.
+   */
+  async verifyGoogleDomain(ticket: string) {
+    const claims = verifyBootstrapTicket(ticket);
+    if (claims.verifiedDomain) {
+      // Already verified — idempotent path. Just re-sign so the TTL is fresh.
+      const refreshed = signBootstrapTicket({
+        sub: claims.sub,
+        email: claims.email,
+        hd: claims.hd,
+        name: claims.name,
+        verifiedDomain: true,
+      });
+      return { ticket: refreshed, verified: true as const };
+    }
+
+    const expected = domainVerificationTxtValue(claims.hd, claims.sub);
+    const ok = await checkDomainTxt(claims.hd, expected);
+    if (!ok) {
+      throw Object.assign(
+        new Error(
+          `No matching TXT record found on ${claims.hd} yet. DNS changes can take up to 30 minutes to propagate — try again shortly.`,
+        ),
+        {
+          status: 409,
+          details: {
+            expectedPrefix: DOMAIN_VERIFICATION_TXT_PREFIX,
+            expectedValue: expected,
+            hd: claims.hd,
+          },
+        },
+      );
+    }
+
+    const verified = signBootstrapTicket({
+      sub: claims.sub,
+      email: claims.email,
+      hd: claims.hd,
+      name: claims.name,
+      verifiedDomain: true,
+    });
+    return { ticket: verified, verified: true as const };
+  }
+
   async login(userName: string, password: string) {
     const user = await User.findOne({ where: { userName } });
     if (!user || !user.password)
       throw Object.assign(new Error("Invalid credentials."), { status: 401 });
+    if (user.authProvider !== "local") {
+      throw Object.assign(
+        new Error(
+          "This account is managed by SSO — sign in with your organization provider.",
+        ),
+        { status: 401 },
+      );
+    }
 
     const valid = await bcrypt.compare(password, user.password);
     if (!valid)
@@ -61,37 +180,258 @@ export class AuthService {
     await this.ensureAgentSingleChats(user.id, user.organizationId);
     const conversations = await this.loadUserConversations(user.id, user.organizationId);
 
+    // Snapshot BEFORE bumping — null means "welcome animation" on the client.
+    const isFirstLogin = user.lastLoginAt === null;
+    await user.update({ lastLoginAt: new Date() });
+
+    const org = await Organization.findByPk(user.organizationId, {
+      attributes: ["id", "name", "slug", "logo", "webSearchAgentId"],
+    });
+
     return {
       token,
+      isFirstLogin,
       user: {
         id: user.id,
         displayName: user.displayName,
         userIdentity: user.userIdentity,
         role: roleName,
       },
+      organization: org
+        ? {
+            id: org.id,
+            name: org.name,
+            slug: org.slug,
+            logo: org.logo,
+            webSearchAgentId: org.webSearchAgentId,
+          }
+        : null,
       conversations,
     };
   }
 
   /**
+   * Just-in-time Google Workspace SSO.
+   *
+   * Verifies the Google id token, resolves the tenant from its `hd` claim,
+   * then either matches an existing SSO user (by provider + `sub`) or
+   * provisions a fresh one in that tenant. Local-auth users that happen to
+   * share the same email are left untouched — SSO always creates its own
+   * record flagged with `auth_provider='google'`. Same JWT shape as the
+   * password login so the client can treat both flows identically.
+   */
+  async loginWithGoogle(idToken: string) {
+    const identity = await this.googleAuth.verifyIdToken(idToken);
+    const user = await this.findOrProvisionGoogleUser(identity);
+
+    let roleName = "user";
+    if (user.roleId) {
+      const role = await Role.findByPk(user.roleId, { attributes: ["name"] });
+      if (role) roleName = role.name;
+    }
+
+    const token = signToken({
+      userId: user.id,
+      displayName: user.displayName,
+      role: roleName,
+      organizationId: user.organizationId,
+    });
+
+    await this.ensureAgentSingleChats(user.id, user.organizationId);
+    const conversations = await this.loadUserConversations(
+      user.id,
+      user.organizationId,
+    );
+
+    // Snapshot BEFORE bumping — null covers JIT provisioning *and* any
+    // pre-existing SSO row that hasn't signed in since this column landed.
+    const isFirstLogin = user.lastLoginAt === null;
+    await user.update({ lastLoginAt: new Date() });
+
+    const org = identity.organization;
+    return {
+      token,
+      isFirstLogin,
+      user: {
+        id: user.id,
+        displayName: user.displayName,
+        userIdentity: user.userIdentity,
+        role: roleName,
+      },
+      organization: {
+        id: org.id,
+        name: org.name,
+        slug: org.slug,
+        logo: org.logo,
+        webSearchAgentId: org.webSearchAgentId,
+      },
+      conversations,
+    };
+  }
+
+  /**
+   * Finds the existing SSO user for this Google identity or creates one
+   * inside the caller's resolved tenant. Matching order:
+   *   1. `(auth_provider='google', external_sub=sub)` — stable across email renames.
+   *   2. `(auth_provider='google', user_name=email)` scoped to this org —
+   *      catches pre-existing SSO rows imported without a `sub` and backfills it.
+   * A local-auth row with the same `user_name` means the tenant already uses
+   * that handle for password auth; we reject rather than silently hijack it.
+   */
+  private async findOrProvisionGoogleUser(
+    identity: VerifiedGoogleIdentity,
+  ): Promise<User> {
+    const org = identity.organization;
+    const userName = identity.email;
+
+    const bySub = await User.findOne({
+      where: { authProvider: "google", externalSub: identity.sub },
+    });
+    if (bySub) {
+      if (bySub.organizationId !== org.id) {
+        throw Object.assign(
+          new Error("This Google account is registered to a different tenant."),
+          { status: 409 },
+        );
+      }
+      // Opportunistically refresh display name/picture on each login so the
+      // local mirror stays in sync with Workspace profile changes.
+      if (identity.name && bySub.displayName !== identity.name) {
+        await bySub.update({ displayName: identity.name });
+      }
+      return bySub;
+    }
+
+    const byNameInOrg = await User.findOne({
+      where: { userName, organizationId: org.id },
+    });
+    if (byNameInOrg) {
+      if (byNameInOrg.authProvider === "local") {
+        throw Object.assign(
+          new Error(
+            "A local account with this email already exists. Ask an admin to migrate it to SSO.",
+          ),
+          { status: 409 },
+        );
+      }
+      // google-provisioned but missing external_sub — backfill and reuse.
+      await byNameInOrg.update({
+        externalSub: identity.sub,
+        displayName: identity.name ?? byNameInOrg.displayName,
+      });
+      return byNameInOrg;
+    }
+
+    // Fresh JIT provisioning. No role assigned — this is a regular member.
+    // Admins still need to grant role/membership explicitly. lastLoginAt is
+    // intentionally left null so the caller's check fires the welcome anim.
+    return await User.create({
+      userName,
+      displayName: identity.name,
+      organizationId: org.id,
+      authProvider: "google",
+      externalSub: identity.sub,
+      password: null,
+      roleId: null,
+    });
+  }
+
+  /**
    * Creates a new tenant (organization) with:
-   *  - admin user
+   *  - admin user (local password OR Google SSO, depending on payload)
    *  - N primary agents
    *  - SingleChats for admin ↔ each agent
    * Returns a ready-to-use JWT (same shape as `login`).
+   *
+   * Exactly one of `data.admin` / `data.googleBootstrapTicket` must be set;
+   * the zod `.refine` on the schema already enforces that.
    */
   async registerOrganization(data: RegisterOrganizationInput) {
-    const parsedAdmin = {
-      userName: data.admin.userName.toLowerCase(),
-      displayName: data.admin.displayName.trim(),
-      password: data.admin.password,
-    };
+    // Resolve the admin identity + org workspace domain from whichever auth
+    // path the caller chose. We compute everything we need up front so the
+    // transaction body below doesn't care which branch we're in.
+    let adminSpec:
+      | {
+          kind: "password";
+          userName: string;
+          displayName: string;
+          passwordHash: string;
+        }
+      | {
+          kind: "google";
+          userName: string;
+          displayName: string;
+          externalSub: string;
+        };
+    let googleWorkspaceDomain: string | null = null;
 
-    const existing = await User.findOne({ where: { userName: parsedAdmin.userName } });
-    if (existing)
-      throw Object.assign(new Error("Username is already taken."), { status: 409 });
+    if (data.googleBootstrapTicket) {
+      const claims = verifyBootstrapTicket(data.googleBootstrapTicket);
+      // The ticket must have cleared DNS TXT domain verification — a fresh
+      // bootstrap ticket won't have this flag until the wizard redeems it at
+      // `/auth/google-verify-domain`. Guards against skipping the proof-of-
+      // ownership step by calling `/auth/register` directly with the
+      // unverified ticket.
+      if (!claims.verifiedDomain) {
+        throw Object.assign(
+          new Error(
+            "Google domain ownership has not been verified. Complete DNS TXT verification before registering.",
+          ),
+          { status: 403 },
+        );
+      }
+      // Race-safety re-check — the bootstrap pre-flight also rejects this,
+      // but a second wizard tab could have raced past it.
+      const existingOrg = await Organization.findOne({
+        where: { googleWorkspaceDomain: claims.hd },
+      });
+      if (existingOrg) {
+        throw Object.assign(
+          new Error(
+            `An organization already exists for ${claims.hd}. Sign in with Google from the login page instead.`,
+          ),
+          { status: 409 },
+        );
+      }
+      const existingUser = await User.findOne({
+        where: { authProvider: "google", externalSub: claims.sub },
+      });
+      if (existingUser) {
+        throw Object.assign(
+          new Error("This Google account is already registered with a tenant."),
+          { status: 409 },
+        );
+      }
+      adminSpec = {
+        kind: "google",
+        userName: claims.email,
+        displayName: claims.name ?? claims.email,
+        externalSub: claims.sub,
+      };
+      googleWorkspaceDomain = claims.hd;
+    } else if (data.admin) {
+      const parsedAdmin = {
+        userName: data.admin.userName.toLowerCase(),
+        displayName: data.admin.displayName.trim(),
+        password: data.admin.password,
+      };
+      const existing = await User.findOne({ where: { userName: parsedAdmin.userName } });
+      if (existing)
+        throw Object.assign(new Error("Username is already taken."), { status: 409 });
+      adminSpec = {
+        kind: "password",
+        userName: parsedAdmin.userName,
+        displayName: parsedAdmin.displayName,
+        passwordHash: await bcrypt.hash(parsedAdmin.password, 10),
+      };
+    } else {
+      // Should be unreachable — the zod schema's refine guards this.
+      throw Object.assign(
+        new Error("Either admin credentials or a Google bootstrap ticket is required."),
+        { status: 400 },
+      );
+    }
 
-    const hashed = await bcrypt.hash(parsedAdmin.password, 10);
     const baseSlug = slugifyOrg(data.organization.name);
 
     const { org, adminUser, agents, epicOrchestratorId } = await sequelize.transaction(async (tx) => {
@@ -111,17 +451,25 @@ export class AuthService {
           // web_search_agent_id is set after the per-org agents are seeded
           // (the chosen web-search agent doesn't exist yet at this point).
           webSearchAgentId: null,
+          // SSO path stamps the workspace domain so future Google sign-ins
+          // from this domain auto-route to this org.
+          googleWorkspaceDomain,
         },
         { transaction: tx },
       );
 
       const adminUser = await User.create(
         {
-          userName: parsedAdmin.userName,
-          displayName: parsedAdmin.displayName,
-          password: hashed,
-          roleId: ADMIN_ROLE_ID,
+          userName: adminSpec.userName,
+          displayName: adminSpec.displayName,
+          password: adminSpec.kind === "password" ? adminSpec.passwordHash : null,
+          authProvider: adminSpec.kind === "google" ? "google" : "local",
+          externalSub: adminSpec.kind === "google" ? adminSpec.externalSub : null,
+          roleId: SUPER_ADMIN_ROLE_ID,
           organizationId: org.id,
+          // The onboarding wizard already plays the cinematic launch
+          // animation. Stamp now so their next login doesn't replay it.
+          lastLoginAt: new Date(),
         },
         { transaction: tx },
       );
@@ -198,7 +546,7 @@ export class AuthService {
     const token = signToken({
       userId: adminUser.id,
       displayName: adminUser.displayName,
-      role: "admin",
+      role: "super_admin",
       organizationId: org.id,
     });
 
@@ -210,7 +558,7 @@ export class AuthService {
         id: adminUser.id,
         displayName: adminUser.displayName,
         userIdentity: adminUser.userIdentity,
-        role: "admin",
+        role: "super_admin",
       },
       organization: {
         id: org.id,

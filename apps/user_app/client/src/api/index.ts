@@ -75,7 +75,14 @@ export interface LoginResponse {
     role: string;
   };
   conversations: Conversations;
-  organization?: OrganizationInfo;
+  organization?: OrganizationInfo | null;
+  /**
+   * Set by both `/auth/login` and `/auth/google` — true when this is the
+   * user's first-ever successful sign-in (server-side `users.last_login_at`
+   * was NULL before this request). The client plays the cinematic "welcome"
+   * launch animation exactly once per user based on this flag.
+   */
+  isFirstLogin?: boolean;
 }
 
 export function login(userName: string, password: string) {
@@ -85,17 +92,37 @@ export function login(userName: string, password: string) {
   });
 }
 
-/** Onboarding payload — creates an org + admin + N agents. */
+/**
+ * Google Workspace SSO. `idToken` is the `credential` string returned by the
+ * Google Identity Services sign-in callback. Backend verifies, matches the
+ * tenant by workspace domain, and JIT-provisions the user on first login.
+ */
+export function googleLogin(idToken: string) {
+  return request<LoginResponse>("/auth/google", {
+    method: "POST",
+    body: JSON.stringify({ idToken }),
+  });
+}
+
+/** Onboarding payload — creates an org + admin + N agents.
+ *
+ * Exactly one of `admin` / `googleBootstrapTicket` must be set: the
+ * password path collects username+password from the user; the SSO path
+ * redeems a short-lived ticket minted by `googleBootstrap()` so the admin
+ * doesn't have to invent a password at all.
+ */
 export interface RegisterData {
   organization: {
     name: string;
     logo?: string;
   };
-  admin: {
+  admin?: {
     userName: string;
     displayName: string;
     password: string;
   };
+  /** Short-lived JWT from `/auth/google-bootstrap` — SSO alternative to `admin`. */
+  googleBootstrapTicket?: string;
   agents: Array<{
     definition: string;
     description?: string;
@@ -109,6 +136,71 @@ export function register(data: RegisterData) {
   return request<LoginResponse>("/auth/register", {
     method: "POST",
     body: JSON.stringify(data),
+  });
+}
+
+/** Identity surfaced back to the wizard after a successful bootstrap. */
+export interface GoogleBootstrapIdentity {
+  email: string;
+  name: string | null;
+  hd: string;
+  picture: string | null;
+}
+
+/** DNS TXT record the admin must publish to prove they own their `hd` domain. */
+export interface BootstrapTxtRecord {
+  /** DNS name the TXT record is published at — the Workspace root domain. */
+  name: string;
+  /** Full record value to paste — includes the `sched-assist-verify=` prefix. */
+  value: string;
+}
+
+export interface GoogleBootstrapResponse {
+  /** Opaque JWT — pass it back in `RegisterData.googleBootstrapTicket`. */
+  ticket: string;
+  identity: GoogleBootstrapIdentity;
+  /** Verification record the admin must publish before `/auth/register` will accept this ticket. */
+  txtRecord: BootstrapTxtRecord;
+}
+
+/**
+ * Pre-registration Google sign-in — verifies the admin's Workspace account
+ * BEFORE their org exists. The returned `ticket` starts life unverified; the
+ * wizard must swap it for a verified one at `/auth/google-verify-domain`
+ * after publishing the TXT record.
+ */
+export function googleBootstrap(idToken: string) {
+  return request<GoogleBootstrapResponse>("/auth/google-bootstrap", {
+    method: "POST",
+    body: JSON.stringify({ idToken }),
+  });
+}
+
+export interface GoogleVerifyDomainResponse {
+  /** Re-issued bootstrap ticket carrying `verifiedDomain: true`. */
+  ticket: string;
+  verified: true;
+}
+
+/** Error shape returned by `/auth/google-verify-domain` when DNS hasn't propagated. */
+export interface GoogleVerifyDomainError {
+  error: string;
+  details?: {
+    expectedPrefix: string;
+    expectedValue: string;
+    hd: string;
+  };
+}
+
+/**
+ * Redeems an unverified bootstrap ticket for a verified one by running a
+ * live DNS TXT lookup on the admin's `hd` domain. Rejects with a 409 (and
+ * a structured `details` body) when the record hasn't propagated yet.
+ */
+export function googleVerifyDomain(ticket: string) {
+  return request<GoogleVerifyDomainResponse>("/auth/google-verify-domain", {
+    method: "POST",
+    body: JSON.stringify({ ticket }),
   });
 }
 
