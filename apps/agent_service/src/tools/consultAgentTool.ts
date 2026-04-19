@@ -72,10 +72,32 @@ export function ConsultAgentTool(
       }
 
       const targetAgent = await Agent.findByPk(targetAgentId, {
-        attributes: ["id", "activeThreadId", "definition"],
+        attributes: ["id", "activeThreadId", "definition", "type", "slug", "agentName"],
       });
       if (!targetAgent) {
         return `Error: agent "${targetAgentId}" not found.`;
+      }
+
+      // System agents (Google Workspace, Web Search Tavily / Gemini, etc.) only
+      // expose their specialist tools when invoked through the deep agent worker
+      // — the main chat graph that `consult_agent` drives does NOT bind those
+      // tools. Consulting a system agent therefore always runs a crippled
+      // version of it (no google_*, no tavily_search, no googleSearch grounding)
+      // and produces nothing useful. Reject up front and point the caller at
+      // the correct tool.
+      if (targetAgent.type === "system") {
+        const label =
+          targetAgent.agentName?.trim() ||
+          targetAgent.slug ||
+          targetAgent.definition ||
+          targetAgentId;
+        return (
+          `Error: "${label}" is a SYSTEM agent, which cannot be reached via ` +
+          `\`consult_agent\`. System agents only have their specialist tools ` +
+          `(Gmail/Calendar/Drive, web search, etc.) when invoked through the deep ` +
+          `agent worker. Use \`delegate_to_deep_agent\` with systemAgentId="${targetAgentId}" ` +
+          `to run this task — that tool spawns the agent with its real tool set.`
+        );
       }
 
       const graph = getGraph();
@@ -217,10 +239,16 @@ export function ConsultAgentTool(
     {
       name: "consult_agent",
       description:
-        "Consult another agent for their expertise. The target agent will receive your request, " +
-        "process it with its own knowledge and tools, and return an answer. " +
-        "Use this when a task falls outside your specialization and another agent is better equipped to handle it. " +
-        "This is a synchronous call — you will receive the answer immediately. " +
+        "Consult another PRIMARY agent for their expertise. The target agent will receive your " +
+        "request, process it with its own knowledge and tools, and return an answer. " +
+        "Use this when a task falls outside your specialization and another primary agent is " +
+        "better equipped to handle it. This is a synchronous call — you will receive the answer " +
+        "immediately. " +
+        "DO NOT use this tool to reach SYSTEM agents (the Google Workspace agent, web-search " +
+        "agents, etc.) — system agents only expose their specialist tools when spawned through " +
+        "the deep agent worker. For system agents (Gmail / Calendar / Drive / web search), use " +
+        "`delegate_to_deep_agent` instead; `consult_agent` will return an error if the target " +
+        "is a system agent. " +
         "If the target agent is busy or the consultation takes too long, you will receive an error message.",
       schema: z.object({
         targetAgentId: z

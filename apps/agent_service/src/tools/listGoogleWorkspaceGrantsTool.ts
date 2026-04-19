@@ -27,14 +27,26 @@ export function ListGoogleWorkspaceGrantsTool(authorityAgentId: string) {
           attributes: ["subjectUserId", "scope"],
         });
 
+        logger.info("list_google_workspace_grants invoked", {
+          authorityAgentId,
+          grantCount: grants.length,
+        });
+
         if (grants.length === 0) {
+          // Include the calling agent's id in the reply so a human diagnosing
+          // "I granted permissions but the tool still says 0" can cross-check
+          // it against the row the admin UI wrote into `agent_user_scopes`.
           return JSON.stringify({
             count: 0,
             users: [],
+            callingAgentId: authorityAgentId,
             note:
               "You have no Google Workspace (Gmail/Calendar/Drive) grants. Ask a super admin " +
-              "to grant you access in Admin → Google Permissions before attempting any Gmail, " +
-              "Google Calendar, or Google Drive operation.",
+              "to grant you access in Admin → Google Permissions for THIS exact agent " +
+              `(agent id ${authorityAgentId}) before attempting any Gmail, Google Calendar, ` +
+              "or Google Drive operation. Grants are keyed to the specific primary agent " +
+              "that is chatting with you — if the super admin granted on a different agent, " +
+              "those grants will not apply here.",
           });
         }
 
