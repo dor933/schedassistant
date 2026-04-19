@@ -376,27 +376,6 @@ export default function OnboardingWizard() {
   }
 
   /**
-   * Programmatically click the hidden Google Identity Services button. GIS
-   * renders the popup in response to any trusted user-gesture click on its
-   * own button element; forwarding the card's click to that button (while
-   * it's invisible, 1x1 offscreen) preserves the user gesture chain, so
-   * Google still considers the popup opened by a real click and doesn't
-   * fall back to "popup blocked" mode.
-   */
-  function openGooglePopup() {
-    const root = googleButtonRef.current;
-    if (!root) return;
-    // GIS renders its pill as either <div role="button"> or <button>
-    // depending on client version; fall through to the first clickable
-    // descendant if neither is present.
-    const btn =
-      root.querySelector<HTMLElement>('div[role="button"]') ??
-      root.querySelector<HTMLElement>("button") ??
-      (root.firstElementChild as HTMLElement | null);
-    btn?.click();
-  }
-
-  /**
    * Swap the unverified bootstrap ticket for a verified one by asking the
    * server to run a live DNS TXT lookup on the admin's Workspace domain.
    * On 409 we leave the ticket intact so the admin can retry after adding
@@ -614,54 +593,20 @@ export default function OnboardingWizard() {
           {/* ── STEP 0 · Sign-in method ────────────────────────────── */}
           {step === 0 && (
             <Stack spacing={2.5}>
-              {/* Google Workspace card — if configured. The entire card is
-                  the click target: clicking anywhere (outside the inner
-                  chip / DNS panel buttons) forwards the user-gesture click
-                  to a hidden GIS button that opens the Google popup, posts
-                  the id token to /auth/google-bootstrap, and enters the
-                  DNS verification flow. */}
+              {/* Google Workspace card — if configured. The GIS pill is
+                  rendered inline at the bottom of the card. Modern GIS
+                  renders its button inside an iframe from Google's domain;
+                  programmatic `.click()` forwarding from a card wrapper
+                  doesn't propagate into that iframe, so the user clicks
+                  the pill directly. */}
               {GOOGLE_CLIENT_ID && (
                 <Box
-                  role={googleTicket ? undefined : "button"}
-                  tabIndex={googleTicket ? -1 : 0}
-                  onClick={googleTicket ? undefined : openGooglePopup}
-                  onKeyDown={
-                    googleTicket
-                      ? undefined
-                      : (e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            openGooglePopup();
-                          }
-                        }
-                  }
-                  sx={{ position: "relative" }}
                   className={`rounded-2xl border p-4 transition ${
                     signInMethod === "google"
                       ? "border-indigo-400 bg-indigo-500/15 ring-2 ring-indigo-400/40"
                       : "border-white/10 bg-slate-900/40"
-                  } ${
-                    googleTicket
-                      ? ""
-                      : "cursor-pointer hover:border-white/20 hover:bg-slate-900/60"
                   }`}
                 >
-                  {/* Hidden GIS button — keeps Google's click handling alive
-                      while we forward real user clicks from the card. */}
-                  <Box
-                    ref={googleButtonRef}
-                    aria-hidden
-                    sx={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: 1,
-                      height: 1,
-                      overflow: "hidden",
-                      opacity: 0,
-                      pointerEvents: "none",
-                    }}
-                  />
                   <Stack direction="row" alignItems="flex-start" spacing={1.75}>
                     <Box className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white ring-1 ring-white/20">
                       {/* Google 4-color "G" — per brand guidelines */}
@@ -908,12 +853,12 @@ export default function OnboardingWizard() {
                           )}
                         </Box>
                       ) : (
-                        // Not signed in yet — the entire card is the
-                        // click target. Just surface loading + errors.
+                        // Not signed in yet — render the GIS pill inline so
+                        // the user clicks Google's button directly (iframe
+                        // rendering means `.click()` forwarding from the
+                        // wrapping card silently no-ops).
                         <Box sx={{ mt: 1.75 }}>
-                          <Box className="text-[11px] font-medium text-indigo-200/70">
-                            Click anywhere on this card to open the Google sign-in popup.
-                          </Box>
+                          <Box ref={googleButtonRef} />
                           {googleSigningIn && (
                             <Stack
                               direction="row"
