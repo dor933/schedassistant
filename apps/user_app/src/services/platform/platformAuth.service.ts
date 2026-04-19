@@ -1,55 +1,76 @@
-import bcrypt from "bcrypt";
-import { PlatformAdmin } from "@scheduling-agent/database";
+import crypto from "crypto";
 import { signPlatformToken } from "../../middlewares/platformAuth";
 
 /**
- * Platform-admin sign-in. Distinct from tenant auth on every axis:
- * separate table, separate password column, separate JWT secret, no
- * organization/role to resolve. The issued token is keyed off
- * `platform_admins.id` and carries `kind: "platform"` so downstream
- * middleware can't confuse it with a tenant session.
+ * Platform-admin sign-in backed by env vars rather than a DB row. There is
+ * exactly one platform operator (the sole owner of this system), so the
+ * `platform_admins` table + bcrypt + bootstrap script were pure overhead.
+ * Credentials live in `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`
+ * alongside every other secret and rotate by updating the env and restarting.
+ *
+ * The comparison uses `crypto.timingSafeEqual` so response timing never leaks
+ * which of the two fields (email vs password) matched — a plain `===` would
+ * short-circuit on the first differing byte.
  */
 export class PlatformAuthService {
   async login(email: string, password: string) {
-    const normalized = email.trim().toLowerCase();
-    const admin = await PlatformAdmin.findOne({ where: { email: normalized } });
-    // Uniform error on both "no such admin" and "wrong password" so the API
-    // doesn't leak which platform admin emails are provisioned.
-    if (!admin) {
-      throw Object.assign(new Error("Invalid credentials."), { status: 401 });
-    }
-    const valid = await bcrypt.compare(password, admin.passwordHash);
-    if (!valid) {
-      throw Object.assign(new Error("Invalid credentials."), { status: 401 });
+    const expectedEmail = process.env.PLATFORM_ADMIN_EMAIL?.trim().toLowerCase();
+    const expectedPassword = process.env.PLATFORM_ADMIN_PASSWORD;
+    if (!expectedEmail || !expectedPassword) {
+      // Misconfigured deployment: fail closed with a 500 (not a 401) so a
+      // silent missing-env-var doesn't look like a user typo in the logs.
+      throw Object.assign(
+        new Error("Platform admin credentials are not configured on the server."),
+        { status: 500 },
+      );
     }
 
-    await admin.update({ lastLoginAt: new Date() });
+    const normalizedEmail = email.trim().toLowerCase();
+    // Evaluate both compares before branching — avoids short-circuiting on
+    // email so response time doesn't distinguish "wrong email" from "wrong
+    // password".
+    const emailOk = timingSafeEqualStr(normalizedEmail, expectedEmail);
+    const passwordOk = timingSafeEqualStr(password, expectedPassword);
+    if (!emailOk || !passwordOk) {
+      throw Object.assign(new Error("Invalid credentials."), { status: 401 });
+    }
 
     const token = signPlatformToken({
-      platformAdminId: admin.id,
-      email: admin.email,
+      platformAdminId: expectedEmail,
+      email: expectedEmail,
     });
 
     return {
       token,
-      admin: {
-        id: admin.id,
-        email: admin.email,
-      },
+      admin: { id: expectedEmail, email: expectedEmail },
     };
   }
 
-  async getMe(platformAdminId: string) {
-    const admin = await PlatformAdmin.findByPk(platformAdminId, {
-      attributes: ["id", "email", "lastLoginAt"],
-    });
-    if (!admin) {
-      throw Object.assign(new Error("Platform admin not found."), { status: 404 });
+  async getMe(email: string) {
+    const expectedEmail = process.env.PLATFORM_ADMIN_EMAIL?.trim().toLowerCase();
+    // Rotating the env var must invalidate tokens issued under the old
+    // credential — otherwise a compromised token would outlive the rotation.
+    if (!expectedEmail || email !== expectedEmail) {
+      throw Object.assign(new Error("Platform admin token no longer valid."), {
+        status: 401,
+      });
     }
-    return {
-      id: admin.id,
-      email: admin.email,
-      lastLoginAt: admin.lastLoginAt,
-    };
+    return { id: expectedEmail, email: expectedEmail, lastLoginAt: null };
   }
+}
+
+function timingSafeEqualStr(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, "utf8");
+  const bBuf = Buffer.from(b, "utf8");
+  // `timingSafeEqual` requires equal-length buffers. Pad to a common length so
+  // the comparison runs in constant time regardless of input length, then
+  // reject mismatched lengths explicitly — otherwise "abc" would equal
+  // "abc\0\0" after padding.
+  const len = Math.max(aBuf.length, bBuf.length);
+  const aPad = Buffer.alloc(len);
+  const bPad = Buffer.alloc(len);
+  aBuf.copy(aPad);
+  bBuf.copy(bPad);
+  const equal = crypto.timingSafeEqual(aPad, bPad);
+  return equal && aBuf.length === bBuf.length;
 }
