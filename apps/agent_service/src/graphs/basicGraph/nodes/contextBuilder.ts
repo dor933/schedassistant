@@ -23,7 +23,7 @@ import {
   formatRoundtableSummariesSection,
   type RecentRoundtableSummary,
 } from "../../../sessionsManagment/roundtableSummaryLoader";
-import { embedText } from "../../../rag/embeddings";
+import { getEmbedderForAgent } from "../../../rag/embeddings";
 import { formatUserIdentityForPrompt } from "../../../utils/formatUserIdentityForPrompt";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
@@ -313,14 +313,17 @@ export async function buildContext(
 
   // ── 3. Episodic snippets (pgvector, scoped by agentId) ────────────
   // Uses OpenAI embeddings only — not the chat model (Anthropic/Google/OpenAI chat keys are separate).
+  // The embedding key is pulled from the agent's organization_vendor_api_keys row (vendor="openai"),
+  // not from env — so embeddings are billed to the tenant like chat calls.
   let episodicSnippets: string[] = [];
   if (userInput) {
     try {
-      const queryEmbedding = await embedText(userInput);
+      const embedder = await getEmbedderForAgent(agentId);
+      const queryEmbedding = await embedder.embedText(userInput);
       episodicSnippets = await retrieveEpisodicMemory(agentId, queryEmbedding);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      logger.warn("Episodic memory skipped (OpenAI embedding failed or missing key)", {
+      logger.warn("Episodic memory skipped (OpenAI embedding failed or missing org key)", {
         threadId,
         agentId,
         error: message,

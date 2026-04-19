@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import type { AgentState } from "../../state";
 import { insertEpisodicMemoryChunks } from "../../rag/episodicMemoryChunksWriter";
-import { embedText } from "../../rag/embeddings";
+import { getEmbedderForAgent } from "../../rag/embeddings";
 import { observeWithContext, getLangfuseCallbackHandler, flushLangfuse } from "../../langfuse";
 import { logger } from "../../logger";
 import { Thread } from "@scheduling-agent/database";
@@ -202,12 +202,13 @@ export async function sessionSummarizationNode(
           { where: { id: threadId } },
         );
 
+        const embedder = await getEmbedderForAgent(agentId);
         await insertEpisodicMemoryChunks(
           threadId,
           userId,
           agentId,
           result.chunks,
-          embedText,
+          embedder.embedText,
         );
 
         logger.info("Session summarization complete — summary and chunks persisted", { threadId });

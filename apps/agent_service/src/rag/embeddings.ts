@@ -1,60 +1,104 @@
 import { OpenAIEmbeddings } from "@langchain/openai";
+import { Agent } from "@scheduling-agent/database";
 
-import {
-  resolveEmbeddingProviderApiKey,
-} from "./embeddingProvider";
+import { resolveEmbeddingProviderApiKeyForOrg } from "./embeddingProvider";
 import { EmbeddingProvider } from "../types/providers";
 
-/** Which backend `getEmbeddingModel` uses; swap when multi-provider embeddings are wired. */
-const EMBEDDING_PROVIDER: EmbeddingProvider = process.env.EMBEDDING_PROVIDER as EmbeddingProvider;
+/** Which backend the embedder uses; swap when multi-provider embeddings are wired. */
+const EMBEDDING_PROVIDER: EmbeddingProvider =
+  (process.env.EMBEDDING_PROVIDER as EmbeddingProvider) || "openai";
 
 /**
- * Shared OpenAI embedding model instance.
+ * Embedding API surface the rest of the codebase uses.
+ *
+ * Always scoped to a specific organization: the API key is looked up from
+ * `organization_vendor_api_keys` for the matching vendor (e.g. "openai").
+ * That makes embeddings billable to the tenant instead of to a platform-wide
+ * shared credential — mirrors how `resolveOrgVendor` gates chat LLM calls.
+ */
+export interface Embedder {
+  embedText(text: string): Promise<number[]>;
+  embedTexts(texts: string[]): Promise<number[][]>;
+}
+
+/**
+ * Cached OpenAI embedding model instances keyed by organization id. Per-org
+ * instances are required because the API key is per-org; caching avoids a DB
+ * round-trip on every embed call without sharing a key across tenants.
  *
  * Uses `text-embedding-3-small` (1536 dimensions) — must match the
- * EMBEDDING_DIMENSION constant in the EpisodicMemory model and the
- * pgvector column created by migrations.
+ * EMBEDDING_DIMENSION constant in the EpisodicMemory model and the pgvector
+ * column created by migrations.
  */
-let embeddingModel: OpenAIEmbeddings | null = null;
+const embeddingModelsByOrg = new Map<string, OpenAIEmbeddings>();
 
-async function getEmbeddingModel(): Promise<OpenAIEmbeddings> {
-  if (embeddingModel) return embeddingModel;
+async function getEmbeddingModelForOrg(
+  organizationId: string,
+): Promise<OpenAIEmbeddings> {
+  const cached = embeddingModelsByOrg.get(organizationId);
+  if (cached) return cached;
 
-  const apiKey = await resolveEmbeddingProviderApiKey(EMBEDDING_PROVIDER as EmbeddingProvider);
+  const apiKey = await resolveEmbeddingProviderApiKeyForOrg(
+    organizationId,
+    EMBEDDING_PROVIDER,
+  );
   if (!apiKey) {
     throw new Error(
-      "OPENAI_EMBEDDINGS_NO_KEY: Set a valid OpenAI API key for vendor \"openai\" in Admin, or OPENAI_API_KEY in agent_service. Embeddings are required for episodic RAG and are independent of the chat model (e.g. Claude).",
+      `OPENAI_EMBEDDINGS_NO_ORG_KEY: Organization ${organizationId} has not ` +
+        `uploaded an API key for vendor "${EMBEDDING_PROVIDER}". A super admin ` +
+        `must add one in Admin → Vendor API Keys. Embeddings are required for ` +
+        `episodic RAG and are billed to the organization — there is no ` +
+        `platform-wide fallback key.`,
     );
   }
 
-  embeddingModel = new OpenAIEmbeddings({
+  const model = new OpenAIEmbeddings({
     modelName: "text-embedding-3-small",
     apiKey,
   });
-  return embeddingModel;
+  embeddingModelsByOrg.set(organizationId, model);
+  return model;
 }
 
-/** Reset cached model so the next call re-reads the key from DB. */
-export function resetEmbeddingModel(): void {
-  embeddingModel = null;
-}
-
-/**
- * Embeds a single text string and returns its vector representation.
- * Used by episodic retrieval (query embedding) and session summarization
- * (chunk embedding).
- */
-export async function embedText(text: string): Promise<number[]> {
-  const model = await getEmbeddingModel();
-  return model.embedQuery(text);
+/** Reset cached model(s) so the next call re-reads the key from DB. */
+export function resetEmbeddingModel(organizationId?: string): void {
+  if (organizationId) embeddingModelsByOrg.delete(organizationId);
+  else embeddingModelsByOrg.clear();
 }
 
 /**
- * Embeds multiple text strings in a single batched API call.
- * More efficient than calling `embedText` in a loop when you have
- * several chunks to embed at once (e.g. during session summarization).
+ * Returns an `Embedder` bound to a specific organization. Call this once per
+ * logical unit of work (one chat turn, one summarization, etc.) and reuse the
+ * returned object for subsequent `embedText` / `embedTexts` calls — the org
+ * resolution happens only once.
  */
-export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const model = await getEmbeddingModel();
-  return model.embedDocuments(texts);
+export async function getEmbedderForOrg(
+  organizationId: string,
+): Promise<Embedder> {
+  const model = await getEmbeddingModelForOrg(organizationId);
+  return {
+    embedText: (text: string) => model.embedQuery(text),
+    embedTexts: (texts: string[]) => model.embedDocuments(texts),
+  };
+}
+
+/**
+ * Convenience: resolve the agent's organization, then return an `Embedder`
+ * scoped to it. Throws if the agent is missing or has no organization.
+ */
+export async function getEmbedderForAgent(
+  agentId: string | null | undefined,
+): Promise<Embedder> {
+  if (!agentId) {
+    throw new Error("Cannot build an embedder without an agent id.");
+  }
+  const agent = await Agent.findByPk(agentId, {
+    attributes: ["organizationId"],
+  });
+  if (!agent?.organizationId) {
+    throw new Error(
+      `Agent ${agentId} has no organization; cannot resolve embedding API key.`,
+    );
+  }
+  return getEmbedderForOrg(agent.organizationId);
 }

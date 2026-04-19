@@ -16,7 +16,7 @@ import {
   formatRoundtableSummariesSection,
   type RecentRoundtableSummary,
 } from "../../../sessionsManagment/roundtableSummaryLoader";
-import { embedText } from "../../../rag/embeddings";
+import { getEmbedderForAgent } from "../../../rag/embeddings";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import {
@@ -120,7 +120,8 @@ export async function buildEpicContext(
   let episodicSnippets: string[] = [];
   if (userInput) {
     try {
-      const queryEmbedding = await embedText(userInput);
+      const embedder = await getEmbedderForAgent(agentId);
+      const queryEmbedding = await embedder.embedText(userInput);
       episodicSnippets = await retrieveEpisodicMemory(agentId, queryEmbedding);
     } catch (err) {
       logger.warn("Episodic memory skipped for epic agent", {

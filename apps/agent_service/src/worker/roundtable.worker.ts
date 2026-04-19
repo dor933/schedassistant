@@ -21,7 +21,7 @@ import { resolveModelSlug } from "../chat/modelResolution";
 import { emitAgentTyping, getAgentIO } from "../socket";
 import { summarizeRoundtable } from "../graphs/roundtableGraph/summarizer";
 import { insertEpisodicMemoryChunks } from "../rag/episodicMemoryChunksWriter";
-import { embedText } from "../rag/embeddings";
+import { getEmbedderForAgent } from "../rag/embeddings";
 import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
@@ -716,27 +716,32 @@ async function generateAndPersistSummary(params: {
 
   // One episodic-memory row per participating agent so each can recall the
   // discussion in any future thread. Uses the roundtable's thread_id as the
-  // provenance pointer.
+  // provenance pointer. Each agent's org pays for its own embedding — looking
+  // up an embedder per agentId preserves that per-tenant billing even when a
+  // roundtable spans agents from different orgs.
   await Promise.all(
-    participantAgentIds.map((agentId) =>
-      insertEpisodicMemoryChunks(
-        threadId,
-        userId,
-        agentId,
-        [summary],
-        embedText,
-        {
-          source: "roundtable_summary",
-          extraMetadata: { roundtableId, topic },
-        },
-      ).catch((err: any) => {
+    participantAgentIds.map(async (agentId) => {
+      try {
+        const embedder = await getEmbedderForAgent(agentId);
+        await insertEpisodicMemoryChunks(
+          threadId,
+          userId,
+          agentId,
+          [summary],
+          embedder.embedText,
+          {
+            source: "roundtable_summary",
+            extraMetadata: { roundtableId, topic },
+          },
+        );
+      } catch (err: any) {
         logger.error("Roundtable: failed to push summary into episodic memory", {
           roundtableId,
           agentId,
           error: err?.message ?? String(err),
         });
-      }),
-    ),
+      }
+    }),
   );
 
   return summary;

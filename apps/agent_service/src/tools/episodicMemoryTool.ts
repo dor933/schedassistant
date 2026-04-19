@@ -7,7 +7,7 @@ import type {
   UserId,
 } from "@scheduling-agent/types";
 
-import { embedText } from "../rag/embeddings";
+import { getEmbedderForAgent } from "../rag/embeddings";
 import { insertEpisodicMemoryChunks } from "../rag/episodicMemoryChunksWriter";
 import { retrieveEpisodicMemory } from "../rag/episodicRetrieval";
 import { logger } from "../logger";
@@ -38,12 +38,13 @@ export function SaveEpisodicMemoryTool(
       if (!content) return "Nothing saved — content was empty.";
 
       try {
+        const embedder = await getEmbedderForAgent(agentId);
         await insertEpisodicMemoryChunks(
           threadId,
           userId,
           agentId,
           [content],
-          embedText,
+          embedder.embedText,
           {
             repositoryId: (input.repositoryId as RepositoryId | undefined) ?? null,
             projectId: (input.projectId as ProjectId | undefined) ?? null,
@@ -130,7 +131,8 @@ export function RecallEpisodicMemoryTool(agentId: AgentId) {
       if (!query) return "Nothing to search — query was empty.";
 
       try {
-        const queryEmbedding = await embedText(query);
+        const embedder = await getEmbedderForAgent(agentId);
+        const queryEmbedding = await embedder.embedText(query);
         const chunks = await retrieveEpisodicMemory(
           agentId,
           queryEmbedding,
