@@ -197,6 +197,7 @@ export default function OnboardingWizard() {
 
   // Step 1
   const [orgName, setOrgName] = useState("");
+  const [orgSummary, setOrgSummary] = useState("");
 
   // Step 2
   const [logo, setLogo] = useState<string | null>(null);
@@ -443,6 +444,7 @@ export default function OnboardingWizard() {
     const base = {
       organization: {
         name: orgName.trim(),
+        ...(orgSummary.trim() ? { summary: orgSummary.trim() } : {}),
         ...(logo ? { logo } : {}),
       },
       agents: agents.map((a) => ({
@@ -997,6 +999,27 @@ export default function OnboardingWizard() {
                     . We'll link this workspace domain to your org.
                   </Box>
                 )}
+              </Box>
+
+              <Box>
+                <Box component="label" className="mb-2 block text-sm font-medium text-indigo-100">
+                  Organization summary{" "}
+                  <Box component="span" className="text-[11px] font-normal text-indigo-300/60">
+                    (optional)
+                  </Box>
+                </Box>
+                <textarea
+                  value={orgSummary}
+                  onChange={(e) => setOrgSummary(e.target.value)}
+                  placeholder="A short description of what your organization does, who your team is, what you care about. Every agent in this org will see this as shared context."
+                  rows={5}
+                  maxLength={4000}
+                  className="block w-full resize-y rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white placeholder-indigo-200/40 transition-all duration-200 focus:border-indigo-400 focus:bg-white/10 focus:outline-none focus:ring-4 focus:ring-indigo-500/20"
+                />
+                <Box className="mt-2 text-[11px] text-indigo-200/60">
+                  Injected into every agent's system prompt as shared grounding. You can edit this
+                  later from the admin page.
+                </Box>
               </Box>
             </Stack>
           )}

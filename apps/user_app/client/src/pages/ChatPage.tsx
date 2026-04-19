@@ -265,7 +265,8 @@ export default function ChatPage() {
   useEffect(() => {
     if (messages.length > 0 && messages.length >= prevMsgCount.current) {
       if (!loadingMore) {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+        const c = scrollContainerRef.current;
+        if (c) c.scrollTo({ top: c.scrollHeight, behavior: "smooth" });
       }
     }
     prevMsgCount.current = messages.length;

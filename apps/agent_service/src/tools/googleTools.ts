@@ -6,14 +6,16 @@ import { logger } from "../logger";
 
 /**
  * Google tools — calendar, drive, gmail — gated by the `agent_user_scopes`
- * table. Every tool takes an explicit `subjectUserId`: the *owner of the
- * data*, not the caller. Before each call we check
- * `AgentUserScope.findOne({ agentId: authorityAgentId, subjectUserId, scope })`
+ * table. Every tool takes an explicit `subjectEmail`: the email of the *owner
+ * of the data*, not the caller. Before each call we look up the user by
+ * `userName` (= workspace email), check
+ * `AgentUserScope.findOne({ agentId: authorityAgentId, subjectUserId, scope })`,
  * and impersonate the subject via DWD only on allow.
  *
  * `authorityAgentId` is the agent whose grants apply. For the primary chat
- * graph this is the agent the user is talking to; for deep agents it is the
- * caller agent, because executor/system agents do not own grants.
+ * graph this is the agent the user is talking to; for deep agents (including
+ * the google_workspace_agent) it is the caller agent, because executor/system
+ * agents do not own grants.
  */
 
 const CALENDAR_READ = "https://www.googleapis.com/auth/calendar.readonly";
@@ -31,10 +33,10 @@ function formatError(err: unknown): string {
 
 async function authorizeOrError(
   authorityAgentId: string,
-  subjectUserId: number,
+  subjectEmail: string,
   scope: Parameters<typeof resolveScopedSubject>[2],
 ): Promise<{ email: string } | { error: string }> {
-  const result = await resolveScopedSubject(authorityAgentId, subjectUserId, scope);
+  const result = await resolveScopedSubject(authorityAgentId, subjectEmail, scope);
   if (!result.ok) return { error: result.reason };
   return { email: result.email };
 }
@@ -51,8 +53,8 @@ export function googleTools(authorityAgentId: string) {
   // ── Calendar ────────────────────────────────────────────────────────
 
   const listCalendarEvents = tool(
-    async ({ subjectUserId, timeMin, timeMax, maxResults }) => {
-      const authz = await authorizeOrError(authorityAgentId, subjectUserId, "calendar.read");
+    async ({ subjectEmail, timeMin, timeMax, maxResults }) => {
+      const authz = await authorizeOrError(authorityAgentId, subjectEmail, "calendar.read");
       if ("error" in authz) return authz.error;
       try {
         const params = new URLSearchParams({
@@ -81,7 +83,7 @@ export function googleTools(authorityAgentId: string) {
       } catch (err) {
         logger.warn("googleTools list_calendar_events failed", {
           authorityAgentId,
-          subjectUserId,
+          subjectEmail,
           error: formatError(err),
         });
         return `Error listing calendar events: ${formatError(err)}`;
@@ -94,7 +96,7 @@ export function googleTools(authorityAgentId: string) {
         "a 'calendar.read' grant on the subject user. Returns JSON with start/end/attendees. " +
         "Times are ISO 8601 (e.g. '2026-04-20T00:00:00Z').",
       schema: z.object({
-        subjectUserId: z.number().int().describe("User ID whose calendar to read."),
+        subjectEmail: z.string().email().describe("Email of the user whose calendar to read."),
         timeMin: z.string().optional().describe("Lower bound (ISO 8601). Defaults to now."),
         timeMax: z.string().optional().describe("Upper bound (ISO 8601)."),
         maxResults: z.number().int().min(1).max(250).optional(),
@@ -103,8 +105,8 @@ export function googleTools(authorityAgentId: string) {
   );
 
   const createCalendarEvent = tool(
-    async ({ subjectUserId, summary, startIso, endIso, description, attendees, timeZone }) => {
-      const authz = await authorizeOrError(authorityAgentId, subjectUserId, "calendar.write");
+    async ({ subjectEmail, summary, startIso, endIso, description, attendees, timeZone }) => {
+      const authz = await authorizeOrError(authorityAgentId, subjectEmail, "calendar.write");
       if ("error" in authz) return authz.error;
       try {
         const body = {
@@ -125,7 +127,7 @@ export function googleTools(authorityAgentId: string) {
       } catch (err) {
         logger.warn("googleTools create_calendar_event failed", {
           authorityAgentId,
-          subjectUserId,
+          subjectEmail,
           error: formatError(err),
         });
         return `Error creating calendar event: ${formatError(err)}`;
@@ -137,7 +139,7 @@ export function googleTools(authorityAgentId: string) {
         "Create an event on another user's primary Google Calendar. Requires a " +
         "'calendar.write' grant on the subject user. Start/end must be ISO 8601.",
       schema: z.object({
-        subjectUserId: z.number().int(),
+        subjectEmail: z.string().email().describe("Email of the user whose calendar to write."),
         summary: z.string().min(1),
         startIso: z.string().describe("Start time, ISO 8601 (e.g. '2026-04-20T14:00:00-07:00')."),
         endIso: z.string().describe("End time, ISO 8601."),
@@ -151,8 +153,8 @@ export function googleTools(authorityAgentId: string) {
   // ── Drive ──────────────────────────────────────────────────────────
 
   const listDriveFiles = tool(
-    async ({ subjectUserId, query, pageSize }) => {
-      const authz = await authorizeOrError(authorityAgentId, subjectUserId, "drive.read");
+    async ({ subjectEmail, query, pageSize }) => {
+      const authz = await authorizeOrError(authorityAgentId, subjectEmail, "drive.read");
       if ("error" in authz) return authz.error;
       try {
         const params = new URLSearchParams({
@@ -177,7 +179,7 @@ export function googleTools(authorityAgentId: string) {
         "List files visible in another user's Google Drive. Requires a 'drive.read' grant. " +
         "Supports Drive search syntax in the 'query' arg (e.g. \"name contains 'report'\").",
       schema: z.object({
-        subjectUserId: z.number().int(),
+        subjectEmail: z.string().email().describe("Email of the user whose drive to list."),
         query: z.string().optional(),
         pageSize: z.number().int().min(1).max(1000).optional(),
       }),
@@ -185,8 +187,8 @@ export function googleTools(authorityAgentId: string) {
   );
 
   const readDriveFile = tool(
-    async ({ subjectUserId, fileId }) => {
-      const authz = await authorizeOrError(authorityAgentId, subjectUserId, "drive.read");
+    async ({ subjectEmail, fileId }) => {
+      const authz = await authorizeOrError(authorityAgentId, subjectEmail, "drive.read");
       if ("error" in authz) return authz.error;
       try {
         // First fetch metadata to learn the mimeType, then pick the right
@@ -223,15 +225,15 @@ export function googleTools(authorityAgentId: string) {
         "a 'drive.read' grant. Google Docs are exported as plain text; Sheets as CSV. " +
         "Binary formats (images, PDFs) are rejected.",
       schema: z.object({
-        subjectUserId: z.number().int(),
+        subjectEmail: z.string().email().describe("Email of the user who owns the file."),
         fileId: z.string().min(1),
       }),
     },
   );
 
   const writeDriveTextFile = tool(
-    async ({ subjectUserId, name, content, mimeType }) => {
-      const authz = await authorizeOrError(authorityAgentId, subjectUserId, "drive.write");
+    async ({ subjectEmail, name, content, mimeType }) => {
+      const authz = await authorizeOrError(authorityAgentId, subjectEmail, "drive.write");
       if ("error" in authz) return authz.error;
       try {
         // Multipart upload: one JSON metadata part + one media part.
@@ -269,7 +271,7 @@ export function googleTools(authorityAgentId: string) {
         "cannot modify pre-existing files the subject owns unless they were created via " +
         "this tool.",
       schema: z.object({
-        subjectUserId: z.number().int(),
+        subjectEmail: z.string().email().describe("Email of the user who will own the new file."),
         name: z.string().min(1),
         content: z.string(),
         mimeType: z.string().optional().describe("Defaults to text/plain."),
@@ -280,8 +282,8 @@ export function googleTools(authorityAgentId: string) {
   // ── Gmail ──────────────────────────────────────────────────────────
 
   const listGmailMessages = tool(
-    async ({ subjectUserId, query, maxResults }) => {
-      const authz = await authorizeOrError(authorityAgentId, subjectUserId, "gmail.read");
+    async ({ subjectEmail, query, maxResults }) => {
+      const authz = await authorizeOrError(authorityAgentId, subjectEmail, "gmail.read");
       if ("error" in authz) return authz.error;
       try {
         const params = new URLSearchParams({
@@ -322,7 +324,7 @@ export function googleTools(authorityAgentId: string) {
         "List recent Gmail messages for another user. Requires a 'gmail.read' grant. " +
         "Supports Gmail search syntax in 'query' (e.g. 'from:boss@x.com after:2026/04/01').",
       schema: z.object({
-        subjectUserId: z.number().int(),
+        subjectEmail: z.string().email().describe("Email of the user whose inbox to list."),
         query: z.string().optional(),
         maxResults: z.number().int().min(1).max(50).optional(),
       }),
@@ -330,8 +332,8 @@ export function googleTools(authorityAgentId: string) {
   );
 
   const sendGmail = tool(
-    async ({ subjectUserId, to, subject, body }) => {
-      const authz = await authorizeOrError(authorityAgentId, subjectUserId, "gmail.send");
+    async ({ subjectEmail, to, subject, body }) => {
+      const authz = await authorizeOrError(authorityAgentId, subjectEmail, "gmail.send");
       if ("error" in authz) return authz.error;
       try {
         const raw = b64url(
@@ -360,7 +362,7 @@ export function googleTools(authorityAgentId: string) {
         "Send an email from another user's Gmail account. Requires a 'gmail.send' grant. " +
         "The 'From' address is always the subject user — you cannot spoof other senders.",
       schema: z.object({
-        subjectUserId: z.number().int(),
+        subjectEmail: z.string().email().describe("Email of the user whose Gmail account sends the message."),
         to: z.array(z.string().email()).min(1),
         subject: z.string().min(1),
         body: z.string().min(1),

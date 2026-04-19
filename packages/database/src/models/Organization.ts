@@ -7,6 +7,7 @@ type OrganizationCreationAttributes = Optional<
   | "id"
   | "slug"
   | "logo"
+  | "summary"
   | "webSearchAgentId"
   | "googleWorkspaceDomain"
   | "googleClientId"
@@ -22,6 +23,7 @@ class Organization
   declare name: string;
   declare slug: string | null;
   declare logo: string | null;
+  declare summary: string | null;
   declare webSearchAgentId: string | null;
   declare googleWorkspaceDomain: string | null;
   declare googleClientId: string | null;
@@ -46,6 +48,10 @@ Organization.init(
       unique: true,
     },
     logo: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    summary: {
       type: DataTypes.TEXT,
       allowNull: true,
     },

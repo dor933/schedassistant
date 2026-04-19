@@ -32,6 +32,7 @@ import {
   ChevronUp,
   Globe,
   Search,
+  Building2,
 } from "lucide-react";
 import {
   admin,
@@ -49,6 +50,7 @@ import {
   type AdminWebSearchStatus,
   type ConversationModelInfo,
   type WebSearchChoice,
+  type AdminOrganization,
 } from "../api";
 import { VendorIcon } from "../components/VendorModelBadge";
 import UserCard from "../components/UserCard";
@@ -179,6 +181,9 @@ export default function AdminPage() {
   const { toast } = useToast();
 
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [organization, setOrganization] = useState<AdminOrganization | null>(null);
+  const [orgSummaryDraft, setOrgSummaryDraft] = useState("");
+  const [savingOrgSummary, setSavingOrgSummary] = useState(false);
   const [agents, setAgents] = useState<AdminAgent[]>([]);
   const [groups, setGroups] = useState<AdminGroup[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<AdminGroup | null>(null);
@@ -299,7 +304,7 @@ export default function AdminPage() {
     try {
       // Vendor API keys are super_admin-only. Use .catch(() => []) so regular
       // admins don't surface the 403 as a page-level error.
-      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak] = await Promise.all([
+      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak, org] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
@@ -321,8 +326,13 @@ export default function AdminPage() {
               updatedAt: string | null;
             }[],
         ),
+        admin.getOrganization().catch(() => null),
       ]);
       setUsers(u);
+      if (org) {
+        setOrganization(org);
+        setOrgSummaryDraft(org.summary ?? "");
+      }
       setAgents(a);
       setGroups(g);
       setModels(m);
@@ -347,6 +357,21 @@ export default function AdminPage() {
   useEffect(() => {
     reload();
   }, [reload]);
+
+  const handleSaveOrgSummary = useCallback(async () => {
+    if (savingOrgSummary) return;
+    setSavingOrgSummary(true);
+    try {
+      const next = await admin.setOrganizationSummary(orgSummaryDraft);
+      setOrganization(next);
+      setOrgSummaryDraft(next.summary ?? "");
+      toast("Organization summary saved.", "success");
+    } catch (e: any) {
+      toast(e?.message ?? "Failed to save organization summary.", "error");
+    } finally {
+      setSavingOrgSummary(false);
+    }
+  }, [orgSummaryDraft, savingOrgSummary, toast]);
 
   const handleSwitchWebSearchAgent = useCallback(
     async (choice: WebSearchChoice) => {
@@ -401,6 +426,21 @@ export default function AdminPage() {
         toast(data.message, "error");
         if (data.actorId === user?.id) return;
         reloadRef.current();
+        return;
+      }
+
+      if (data.type === "organization_summary_changed") {
+        const nextOrg = data.data?.organization as AdminOrganization | undefined;
+        if (nextOrg) {
+          setOrganization(nextOrg);
+          // Only overwrite the draft if another admin changed it — don't
+          // clobber what the local admin is typing.
+          if (data.actorId !== user?.id) {
+            setOrgSummaryDraft(nextOrg.summary ?? "");
+          }
+        }
+        if (data.actorId === user?.id) return;
+        toast(data.message, "info");
         return;
       }
 
@@ -1311,10 +1351,76 @@ export default function AdminPage() {
                 {users.length}
               </span>
             </h2>
-            <div className="max-h-[500px] overflow-y-auto space-y-2.5">
+            <div className="max-h-[280px] overflow-y-auto space-y-2.5">
               {users.map((u) => (
                 <UserCard key={u.id} u={u} roles={roles} currentUserRole={user?.role ?? "user"} onSaved={reload} />
               ))}
+            </div>
+          </div>
+
+          {/* Organization summary — prepended to every agent's system prompt */}
+          <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+            <h2 className="mb-2 flex items-center gap-2.5 text-sm font-bold text-gray-900">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm">
+                <Building2 className="h-4 w-4" />
+              </div>
+              Organization summary
+              {organization?.name && (
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+                  {organization.name}
+                </span>
+              )}
+            </h2>
+            <p className="mb-3 text-xs text-gray-500">
+              Injected into every agent's system prompt as shared grounding. Describe what your
+              organization does, who the team is, and anything every agent should know.
+            </p>
+            <textarea
+              value={orgSummaryDraft}
+              onChange={(e) => setOrgSummaryDraft(e.target.value)}
+              placeholder="A short description of what your organization does, who your team is, what you care about."
+              rows={6}
+              maxLength={4000}
+              className="block w-full resize-y rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+            />
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-gray-400">
+                {orgSummaryDraft.length} / 4000 characters
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOrgSummaryDraft(organization?.summary ?? "")}
+                  disabled={
+                    savingOrgSummary ||
+                    orgSummaryDraft === (organization?.summary ?? "")
+                  }
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveOrgSummary}
+                  disabled={
+                    savingOrgSummary ||
+                    orgSummaryDraft === (organization?.summary ?? "")
+                  }
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:from-indigo-600 hover:to-violet-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingOrgSummary ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Saving…
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-3.5 w-3.5" />
+                      Save summary
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
 

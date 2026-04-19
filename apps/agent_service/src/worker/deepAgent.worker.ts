@@ -9,6 +9,7 @@ import {
   LLMModel,
 } from "@scheduling-agent/database";
 import { resolveOrgVendorByOrg } from "../services/resolveOrgVendor";
+import { loadOrganizationSummarySection } from "../graphs/basicGraph/nodes/contextBuilder";
 import {
   DEEP_AGENT_QUEUE_NAME,
   type DeepAgentJobData,
@@ -233,10 +234,24 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           );
         }
 
-        // Check if this agent uses Google Search grounding or Tavily search
+        // Check if this agent uses Google Search grounding, Tavily search,
+        // or Google Workspace (Gmail / Calendar / Drive) tools. The Google
+        // Workspace tools are bound ONLY to the dedicated
+        // `google_workspace_agent` system agent
+        // (toolConfig.useGoogleWorkspaceTools). Unrelated to the *agent
+        // workspace folder* tools injected below via `workspaceTools()`.
         const tc = executorAgent.toolConfig as Record<string, unknown> | null;
         const useGoogleSearch = !!tc?.googleSearch;
         const useTavily = !!tc?.useTavily;
+        const useGoogleWorkspaceTools = !!tc?.useGoogleWorkspaceTools;
+
+        // Organization-wide grounding prepended to every executor's prompt.
+        const orgSummarySection = await loadOrganizationSummarySection(
+          executorAgent.organizationId ?? null,
+        );
+        const orgSummaryBlock = orgSummarySection.trim().length > 0
+          ? `${orgSummarySection.trim()}\n\n`
+          : "";
 
         // Use the executor agent's constant userId for memory scoping.
         const deepAgentUserId = executorAgent.userId ?? userId;
@@ -271,7 +286,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           const response = await withTimeout(
             googleModel.invoke(
               [
-                new SystemMessage(executorAgent.instructions!),
+                new SystemMessage(`${orgSummaryBlock}${executorAgent.instructions!}`),
                 new HumanMessage(request),
               ],
               langfuseHandler ? { callbacks: [langfuseHandler] } : undefined,
@@ -335,11 +350,14 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           if (has("list_agents")) configurableTools.push(ListAgentsTool(executorAgent.id));
           if (has("list_system_agents")) configurableTools.push(ListSystemAgentsTool(executorAgent.id));
 
-          // Google tools — executor/system agents do NOT own scope grants.
-          // They inherit from the caller, so we key the permission check to
-          // callerAgentId, not executorAgent.id. If the caller lacks the
-          // grant, the tool returns a deny message at invocation time.
-          const googleAgentTools = googleTools(callerAgentId);
+          // Google Workspace (Gmail / Calendar / Drive) tools — bound ONLY to
+          // the dedicated `google_workspace_agent` system agent
+          // (tool_config.useGoogleWorkspaceTools). Executor/system agents do
+          // NOT own scope grants themselves; they inherit from the caller, so
+          // we key the permission check to callerAgentId. If the caller lacks
+          // the grant, the tool returns a deny message at invocation time.
+          // (Distinct from the agent-workspace-folder tools in `wsTools`.)
+          const googleAgentTools = useGoogleWorkspaceTools ? googleTools(callerAgentId) : [];
 
           // Tavily web-search tool — injected for the dedicated Tavily-backed
           // web-search system agent (toolConfig.useTavily=true). Tavily is a
@@ -370,6 +388,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             model: chatModel as any,
             tools: allTools as any[],
             systemPrompt:
+              `${orgSummaryBlock}` +
               `You are ${executorAgent.agentName}, an executor agent — a specialist responsible for carrying out tasks ` +
               `delegated to you by orchestrator agents.\n\n` +
               `${executorAgent.instructions}\n\n` +

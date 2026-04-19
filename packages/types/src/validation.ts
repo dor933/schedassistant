@@ -57,6 +57,8 @@ export const registerOrganizationSchema = z
       name: z.string().min(1, "Organization name is required.").max(120).trim(),
       /** base64 data URL (client-resized); optional. */
       logo: z.string().max(500_000).optional(),
+      /** Admin-authored company/team blurb — prepended to every system prompt. */
+      summary: z.string().max(8000).optional(),
     }),
     /**
      * Password-based admin account. Mutually exclusive with
@@ -105,6 +107,13 @@ export const registerOrganizationSchema = z
   );
 
 export type RegisterOrganizationInput = z.input<typeof registerOrganizationSchema>;
+
+/** Admin update for `organizations.summary`. Empty string clears the field. */
+export const organizationSummarySchema = z.object({
+  summary: z.string().max(8000),
+});
+
+export type OrganizationSummaryInput = z.input<typeof organizationSummarySchema>;
 
 /**
  * Input for `POST /auth/google-bootstrap` — the pre-registration flow that

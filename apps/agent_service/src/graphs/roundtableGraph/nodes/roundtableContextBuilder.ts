@@ -2,6 +2,10 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { Agent, AgentAvailableSkill } from "@scheduling-agent/database";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
+import {
+  loadOrganizationSummarySection,
+  loadGoogleWorkspaceAgentSection,
+} from "../../basicGraph/nodes/contextBuilder";
 
 /**
  * LangGraph node: assembles the system prompt for a roundtable agent turn.
@@ -29,6 +33,7 @@ export async function roundtableContextBuilderNode(
     let agentNotes: string | null = null;
     let agentWorkspacePath: string | null = null;
     let agentHasLinkedSkills = false;
+    let agentOrganizationId: string | null = null;
 
     if (agentId) {
       const agent = await Agent.findByPk(agentId, {
@@ -38,6 +43,7 @@ export async function roundtableContextBuilderNode(
           "coreInstructions",
           "agentNotes",
           "workspacePath",
+          "organizationId",
         ],
       });
       agentDefinition = agent?.definition?.trim() || null;
@@ -45,6 +51,7 @@ export async function roundtableContextBuilderNode(
       agentCoreInstructions = agent?.coreInstructions?.trim() || null;
       agentNotes = agent?.agentNotes?.trim() || null;
       agentWorkspacePath = agent?.workspacePath ?? null;
+      agentOrganizationId = agent?.organizationId ?? null;
 
       const skillLinkCount = await AgentAvailableSkill.count({
         where: { agentId, active: true },
@@ -56,6 +63,18 @@ export async function roundtableContextBuilderNode(
 
     // ── Identity ────────────────────────────────────────────────────────
     sections.push(`# You are ${displayName}\n`);
+
+    // ── Organization summary + workspace agent (shared grounding) ──
+    const [orgSummarySection, googleWorkspaceAgentSection] = await Promise.all([
+      loadOrganizationSummarySection(agentOrganizationId),
+      loadGoogleWorkspaceAgentSection(agentOrganizationId),
+    ]);
+    if (orgSummarySection.trim().length > 0) {
+      sections.push(orgSummarySection);
+    }
+    if (googleWorkspaceAgentSection.trim().length > 0) {
+      sections.push(googleWorkspaceAgentSection);
+    }
 
     if (agentCoreInstructions) {
       sections.push("## Your core instructions");

@@ -19,6 +19,10 @@ import {
 import { embedText } from "../../../rag/embeddings";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
+import {
+  loadOrganizationSummarySection,
+  loadGoogleWorkspaceAgentSection,
+} from "../../basicGraph/nodes/contextBuilder";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -52,6 +56,7 @@ export async function buildEpicContext(
   let agentWorkspacePath: string | null = null;
   let agentHasLinkedSkills = false;
   let agentName: string | null = null;
+  let agentOrganizationId: string | null = null;
 
   if (agentId) {
     try {
@@ -59,6 +64,7 @@ export async function buildEpicContext(
         attributes: [
           "definition", "agentName", "coreInstructions",
           "characteristics", "agentNotes", "workspacePath",
+          "organizationId",
         ],
       });
       agentDefinition = agent?.definition?.trim() || null;
@@ -71,6 +77,7 @@ export async function buildEpicContext(
           : null;
       agentNotes = agent?.agentNotes?.trim() || null;
       agentWorkspacePath = agent?.workspacePath ?? null;
+      agentOrganizationId = agent?.organizationId ?? null;
 
       const skillLinkCount = await AgentAvailableSkill.count({ where: { agentId, active: true } });
       agentHasLinkedSkills = skillLinkCount > 0;
@@ -78,6 +85,12 @@ export async function buildEpicContext(
       throw new Error(`Failed to load agent from database: ${agentId}`);
     }
   }
+
+  // ── 0b. Organization summary + Google Workspace agent blurbs ──
+  const [organizationSummarySection, googleWorkspaceAgentSection] = await Promise.all([
+    loadOrganizationSummarySection(agentOrganizationId),
+    loadGoogleWorkspaceAgentSection(agentOrganizationId),
+  ]);
 
   // ── 1. User identity (minimal) ──
   let userIdentity: UserIdentity | null = null;
@@ -135,6 +148,8 @@ export async function buildEpicContext(
     agentNotes,
     agentWorkspacePath,
     agentHasLinkedSkills,
+    organizationSummarySection,
+    googleWorkspaceAgentSection,
     coreMemory,
     checkpointLogBody: checkpointLog.body,
     conversationLogBody: conversationLog.body,
@@ -200,6 +215,8 @@ function formatEpicSystemPrompt(opts: {
   agentNotes: string | null;
   agentWorkspacePath: string | null;
   agentHasLinkedSkills: boolean;
+  organizationSummarySection: string;
+  googleWorkspaceAgentSection: string;
   coreMemory: string;
   checkpointLogBody: string;
   conversationLogBody: string;
@@ -215,6 +232,20 @@ function formatEpicSystemPrompt(opts: {
 
   const role = opts.agentDefinition || "Project Manager — Epic Task Orchestrator";
   sections.push(`You are a **${role}**.\n`);
+
+  // ── Organization summary (shared grounding for every agent in the org) ──
+  const orgSummaryTrim = opts.organizationSummarySection.trim();
+  if (orgSummaryTrim.length > 0) {
+    sections.push(orgSummaryTrim);
+    sections.push("");
+  }
+
+  // ── Google Workspace agent (Gmail / Calendar / Drive routed here) ──
+  const googleWorkspaceTrim = opts.googleWorkspaceAgentSection.trim();
+  if (googleWorkspaceTrim.length > 0) {
+    sections.push(googleWorkspaceTrim);
+    sections.push("");
+  }
 
   // ── Role description (epic-specific, replaces generic orchestrator + delegation gate) ──
   sections.push("## Your role: Epic Task Orchestrator");

@@ -24,13 +24,13 @@ import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
 import { SyncDelegateToDeepAgentTool } from "../../../tools/syncDelegateToDeepAgentTool";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
+import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
-import { googleTools } from "../../../tools/googleTools";
 import getMcpTools from "../../../mcpClient";
 
 const MAX_TOOL_ROUNDS = 15;
@@ -204,11 +204,15 @@ export async function roundtableCallModelNode(
     EditAgentNotesTool(agentId),
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
+    ListGoogleWorkspaceGrantsTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
     ...mcpTools,
-    // Google tools — call-time permission check per (agentId, subjectUserId, scope).
-    ...(agentId ? googleTools(agentId) : []),
+    // Google Workspace (Gmail / Calendar / Drive) tools are not bound in the
+    // roundtable — they live only on the `google_workspace_agent` system agent.
+    // Delegate via `delegate_to_deep_agent`, passing the subject user's EMAIL
+    // (resolved via list_google_workspace_grants). Distinct from the agent's
+    // own workspace folder, which `workspace_*` manages.
   ];
 
   // Configurable tools — gated by agent_available_tools

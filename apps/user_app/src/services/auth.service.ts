@@ -451,6 +451,7 @@ export class AuthService {
           name: data.organization.name.trim(),
           slug,
           logo: data.organization.logo ?? null,
+          summary: data.organization.summary?.trim() || null,
           // web_search_agent_id is set after the per-org agents are seeded
           // (the chosen web-search agent doesn't exist yet at this point).
           webSearchAgentId: null,

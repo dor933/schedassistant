@@ -28,6 +28,7 @@ import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
 import { DelegateToDeepAgentTool } from "../../../tools/delegateToDeepAgentTool";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
+import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
@@ -35,7 +36,6 @@ import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
-import { googleTools } from "../../../tools/googleTools";
 import getMcpTools from "../../../mcpClient";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
@@ -284,15 +284,16 @@ export async function callModelNode(
     EditAgentNotesTool(agentId),
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
+    ListGoogleWorkspaceGrantsTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
     ...mcpTools,
-    // Google tools — every agent gets the surface; each call is gated by
-    // agent_user_scopes grants in resolveScopedSubject. Permissions are
-    // per-(agentId, subjectUserId, scope) so there's no harm exposing the
-    // tools broadly — absence of grants means the tool returns a deny
-    // message instead of acting.
-    ...(agentId ? googleTools(agentId) : []),
+    // Google Workspace tools (Gmail / Calendar / Drive) are NOT bound to
+    // primary agents — they live only on the `google_workspace_agent` system
+    // agent. Primary agents must delegate those ops via `delegate_to_deep_agent`,
+    // passing the subject user's EMAIL (resolved via list_google_workspace_grants).
+    // (Note: this is distinct from the agent's own workspace folder, which the
+    // `workspace_*` tools above manage.)
   ];
 
   // Configurable tools — gated by agent_available_tools assignments

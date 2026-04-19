@@ -10,6 +10,12 @@ export interface OrganizationAttributes {
   /** Logo as a base64 data URL — no file-storage infra. */
   logo: string | null;
   /**
+   * Admin-authored free-text summary about the organization / company / team.
+   * Prepended to every agent's system prompt so every agent shares common
+   * grounding about who it's working for. Null when not yet filled in.
+   */
+  summary: string | null;
+  /**
    * FK to `agents.id` — the single, currently active system web-search agent
    * for this org. Exactly one of the two web-search system agents
    * (Gemini-powered `web_search` / Tavily-powered `web_search_tavily`) is
@@ -594,6 +600,7 @@ export {
   displayNameSchema,
   registerSchema,
   registerOrganizationSchema,
+  organizationSummarySchema,
   webSearchChoiceSchema,
   loginSchema,
   googleLoginSchema,
@@ -601,6 +608,7 @@ export {
   googleVerifyDomainSchema,
   type RegisterInput,
   type RegisterOrganizationInput,
+  type OrganizationSummaryInput,
   type LoginInput,
   type GoogleLoginInput,
   type GoogleBootstrapInput,

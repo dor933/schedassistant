@@ -25,6 +25,7 @@ import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
+import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
@@ -45,7 +46,6 @@ import {
   parseContinuationMarker,
 } from "../../../tools/epicTaskTools";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
-import { googleTools } from "../../../tools/googleTools";
 import getMcpTools from "../../../mcpClient";
 
 // Cap the orchestrator's tool-call chain per chat turn. This is the EPIC
@@ -160,11 +160,14 @@ export async function epicCallModelNode(
     EditAgentNotesTool(agentId),
     SaveEpisodicMemoryTool(agentId, userId, threadId),
     RecallEpisodicMemoryTool(agentId),
+    ListGoogleWorkspaceGrantsTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
-    // Google tools — per-agent, per-subject-user grants in agent_user_scopes
-    // gate each call. See googleTools.ts / authz.ts.
-    ...(agentId ? googleTools(agentId) : []),
+    // Google Workspace (Gmail / Calendar / Drive) tools are not bound here —
+    // they live only on the `google_workspace_agent` system agent. Delegate via
+    // `delegate_to_deep_agent`, passing the subject user's EMAIL (resolved via
+    // list_google_workspace_grants). The agent-workspace folder tools above
+    // (workspace_*) are a separate concern.
     // Epic workflow tools (always on for epic agents)
     CreateEpicPlanTool(state.userId, agentId),
     ExecuteEpicTaskTool({

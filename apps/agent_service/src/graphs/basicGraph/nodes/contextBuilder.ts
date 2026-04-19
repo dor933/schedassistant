@@ -39,6 +39,41 @@ async function loadAgentNameSection(agentId: AgentId): Promise<string> {
 }
 
 /**
+ * Loads the admin-authored free-text `organizations.summary` and renders it
+ * as a top-of-prompt section shared by every agent in the org. This gives
+ * every agent common grounding about who it's working for (company / team /
+ * product context) so individual agent definitions don't have to repeat it.
+ *
+ * Returns "" when no summary is set — the section is simply skipped.
+ */
+export async function loadOrganizationSummarySection(
+  organizationId: string | null,
+): Promise<string> {
+  if (!organizationId) return "";
+  try {
+    const org = await Organization.findByPk(organizationId, {
+      attributes: ["summary"],
+    });
+    const text = org?.summary?.trim();
+    if (!text) return "";
+    return [
+      "## About this organization",
+      "Shared context about the company / team you work for. " +
+        "Every agent in this organization sees this — use it as common grounding " +
+        "for any question about who \"we\" are.",
+      "",
+      text,
+      "",
+    ].join("\n");
+  } catch (err) {
+    logger.warn("Organization summary section skipped", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return "";
+  }
+}
+
+/**
  * Looks up the organization's currently active web-search system agent and
  * renders a section telling this agent to route *all* web searches to it.
  * Exactly one web-search agent is active per org (enforced by the
@@ -80,6 +115,82 @@ async function loadWebSearchAgentSection(
     return lines.join("\n");
   } catch (err) {
     logger.warn("Web search agent section skipped", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return "";
+  }
+}
+
+/**
+ * Loads the "dedicated Google Workspace agent" section for the prompt. Every
+ * org gets exactly one `google_workspace_agent` seeded at registration; it is
+ * the single point through which Gmail / Calendar / Drive operations are
+ * performed. Primary agents never carry the google_* tools themselves — they
+ * must delegate to this agent via `delegate_to_deep_agent`.
+ *
+ * NOTE: "Google Workspace" here refers to Google's SaaS suite (Gmail, Google
+ * Calendar, Google Drive). It is unrelated to each agent's *workspace folder*
+ * (.md/.txt scratch files) which the `workspace_*` tools manage.
+ *
+ * Permission inheritance: the Google Workspace agent performs the action, but
+ * the `AgentUserScope` check is keyed to the *calling* primary's agent id, so
+ * the primary's grants are what gate access — no new scope sharing needed.
+ */
+export async function loadGoogleWorkspaceAgentSection(
+  organizationId: string | null,
+): Promise<string> {
+  if (!organizationId) return "";
+  try {
+    const agent = await Agent.findOne({
+      where: {
+        organizationId,
+        slug: "google_workspace_agent",
+        type: "system",
+      },
+      attributes: ["id", "slug", "agentName", "description"],
+    });
+    if (!agent) return "";
+
+    const label = agent.agentName?.trim() || agent.slug || "Google Workspace Agent";
+    const lines: string[] = [];
+    lines.push("## Google Workspace (Gmail / Calendar / Drive) — dedicated system agent");
+    lines.push(
+      `This organization has **one** dedicated system agent for Google Workspace ` +
+        `operations — i.e. Google's SaaS suite: Gmail, Google Calendar, Google Drive. ` +
+        `That agent is **${label}** (slug: \`${agent.slug}\`). Every Gmail / Calendar / ` +
+        "Drive action — reading events, creating events, listing or reading Drive files, " +
+        "writing Drive files, listing inbox messages, sending email — MUST be routed to " +
+        "this agent via `delegate_to_deep_agent`. Do NOT attempt Google Workspace calls " +
+        "yourself (you don't have the tools), and do NOT delegate these tasks to any " +
+        "other system agent — it is always this one.\n\n" +
+        "**This is different from your own agent workspace folder.** The `workspace_list_files`, " +
+        "`workspace_read_file`, `workspace_write_file`, etc. tools manage a private folder of " +
+        "scratch .md/.txt files — that is the agent workspace, not Google Workspace. Never " +
+        "confuse the two.\n\n" +
+        "**Before delegating**, call `list_google_workspace_grants` to see which users you " +
+        "are permitted to act on and which scopes you hold per user. Pick the correct email " +
+        "from that list — never guess an email or use an internal user id.\n\n" +
+        "When delegating, include in plain language:\n" +
+        "1. **The subject user's email address** (from `list_google_workspace_grants`) — " +
+        "this is what the Google Workspace agent will pass to the Google API via " +
+        "domain-wide delegation.\n" +
+        "2. **What operation** to perform (read events, create event, list inbox, send " +
+        "email, etc.) and the relevant details (date range, recipient, file name, " +
+        "message body, etc.).\n\n" +
+        "The Google Workspace agent is the specialist — it translates the email + operation " +
+        "into the actual Google API call. You just hand off intent.\n\n" +
+        "Permissions are inherited from you — the Google Workspace agent authorizes each call " +
+        "against YOUR grants (agent_user_scopes), not its own. If the user has not granted " +
+        "you access to the requested scope, the delegation will return an authorization error.",
+    );
+    if (agent.description?.trim()) {
+      lines.push("");
+      lines.push(`> ${agent.description.trim()}`);
+    }
+    lines.push("");
+    return lines.join("\n");
+  } catch (err) {
+    logger.warn("Google Workspace agent section skipped", {
       error: err instanceof Error ? err.message : String(err),
     });
     return "";
@@ -225,7 +336,12 @@ export async function buildContext(
 
   const agentNameSection = await loadAgentNameSection(agentId);
 
-  const webSearchAgentSection = await loadWebSearchAgentSection(agentOrganizationId);
+  const [webSearchAgentSection, organizationSummarySection, googleWorkspaceAgentSection] =
+    await Promise.all([
+      loadWebSearchAgentSection(agentOrganizationId),
+      loadOrganizationSummarySection(agentOrganizationId),
+      loadGoogleWorkspaceAgentSection(agentOrganizationId),
+    ]);
 
   // ── 4b. Recent roundtable summaries this agent participated in ──
   const roundtableSummaries = await loadRecentRoundtableSummaries(agentId, { limit: 2 });
@@ -240,6 +356,8 @@ export async function buildContext(
     agentHasLinkedSkills,
     agentNameSection,
     webSearchAgentSection,
+    googleWorkspaceAgentSection,
+    organizationSummarySection,
     coreMemory,
     checkpointLog.body,
     conversationLog.body,
@@ -496,6 +614,8 @@ function formatSystemPrompt(
   agentHasLinkedSkills: boolean,
   agentNameSection: string,
   webSearchAgentSection: string,
+  googleWorkspaceAgentSection: string,
+  organizationSummarySection: string,
   coreMemory: string,
   checkpointLogBody: string,
   conversationLogBody: string,
@@ -511,6 +631,12 @@ function formatSystemPrompt(
     agentNameSection + "\n\n" +
     `You are a ${roleLabel}.\n`,
   );
+
+  const orgSummaryTrim = organizationSummarySection.trim();
+  if (orgSummaryTrim.length > 0) {
+    sections.push(orgSummaryTrim);
+    sections.push("");
+  }
 
   // Determine the agent's behavioral role from characteristics.
   // "orchestrator" (default) gets full delegation rules + hard gate.
@@ -573,6 +699,12 @@ function formatSystemPrompt(
   const webSearchTrim = webSearchAgentSection.trim();
   if (webSearchTrim.length > 0) {
     sections.push(webSearchTrim);
+    sections.push("");
+  }
+
+  const googleWorkspaceTrim = googleWorkspaceAgentSection.trim();
+  if (googleWorkspaceTrim.length > 0) {
+    sections.push(googleWorkspaceTrim);
     sections.push("");
   }
 

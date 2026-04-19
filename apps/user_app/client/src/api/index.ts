@@ -115,6 +115,8 @@ export interface RegisterData {
   organization: {
     name: string;
     logo?: string;
+    /** Admin-authored free-text summary — prepended to every agent's system prompt. */
+    summary?: string;
   };
   admin?: {
     userName: string;
@@ -547,6 +549,13 @@ export interface AdminWebSearchCandidate {
   modelSlug: string | null;
 }
 
+export interface AdminOrganization {
+  id: string;
+  name: string;
+  /** Always a string — empty when the admin hasn't filled it in. */
+  summary: string;
+}
+
 export interface AdminWebSearchStatus {
   activeChoice: WebSearchChoice;
   activeAgentId: string;
@@ -792,6 +801,15 @@ export const admin = {
   deleteCronJob: (id: string) =>
     request<{ deleted: boolean }>(`/admin/cron-jobs/${id}`, {
       method: "DELETE",
+    }),
+
+  // ── Organization (free-text summary injected into every system prompt) ─
+  getOrganization: () =>
+    request<AdminOrganization>("/admin/organization"),
+  setOrganizationSummary: (summary: string) =>
+    request<AdminOrganization>("/admin/organization/summary", {
+      method: "PATCH",
+      body: JSON.stringify({ summary }),
     }),
 
   // ── Web search agent (per-org active pick) ─────────────────────────────
