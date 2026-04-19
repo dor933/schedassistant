@@ -186,8 +186,18 @@ export default function AdminPage() {
 
   const [roles, setRoles] = useState<AdminRole[]>([]);
   const [models, setModels] = useState<ConversationModelInfo[]>([]);
-  const [vendors, setVendors] = useState<
-    { id: string; name: string; slug: string; hasApiKey: boolean }[]
+  // Per-org vendor API keys — only populated for super_admin; regular admins
+  // never see the keys card. `hasApiKey` on each entry drives the
+  // Configured/Missing pill in the UI.
+  const [vendorApiKeys, setVendorApiKeys] = useState<
+    {
+      vendorId: string;
+      vendorName: string;
+      vendorSlug: string;
+      hasApiKey: boolean;
+      masked: string | null;
+      updatedAt: string | null;
+    }[]
   >([]);
   const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
   const [webSearchStatus, setWebSearchStatus] =
@@ -287,30 +297,42 @@ export default function AdminPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [u, a, g, m, v, r, mcp, sk, tl, proj, ws] = await Promise.all([
+      // Vendor API keys are super_admin-only. Use .catch(() => []) so regular
+      // admins don't surface the 403 as a page-level error.
+      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
         admin.getModels(),
-        admin.getVendors(),
         admin.getRoles(),
         admin.getMcpServers(),
         admin.getSkills().catch(() => [] as AdminSkill[]),
         admin.getTools().catch(() => [] as AdminTool[]),
         admin.getProjects().catch(() => [] as AdminProject[]),
         admin.getWebSearchAgent().catch(() => null),
+        admin.getVendorApiKeys().catch(
+          () =>
+            [] as {
+              vendorId: string;
+              vendorName: string;
+              vendorSlug: string;
+              hasApiKey: boolean;
+              masked: string | null;
+              updatedAt: string | null;
+            }[],
+        ),
       ]);
       setUsers(u);
       setAgents(a);
       setGroups(g);
       setModels(m);
-      setVendors(v);
       setRoles(r);
       setMcpServers(mcp);
       setSkills(sk);
       setTools(tl);
       setProjects(proj);
       setWebSearchStatus(ws);
+      setVendorApiKeys(vak);
       // System agents are delegated to by primary agents — they never own a
       // group / roundtable themselves. External agents are roundtable-only.
       if (!newGroupAgentId) {
@@ -1612,42 +1634,15 @@ export default function AdminPage() {
             )}
           </div>
 
-          {/* Vendor API Keys — read-only status; credentials are platform-wide
-              and rotated out-of-band. */}
-          <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
-            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm">
-                <KeyRound className="h-4 w-4" />
-              </div>
-              API Keys
-              <span className="ml-1 text-[10px] font-normal text-gray-400">(platform credentials — rotated out-of-band)</span>
-            </h2>
-
-            <div className="grid w-full min-w-0 grid-cols-1 gap-3 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
-              {vendors.map((v) => (
-                <div
-                  key={v.id}
-                  className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200"
-                >
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600">
-                      <VendorIcon slug={v.slug} />
-                    </div>
-                    <span className="min-w-0 truncate text-sm font-semibold text-gray-900">{v.name}</span>
-                    {v.hasApiKey ? (
-                      <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
-                        Configured
-                      </span>
-                    ) : (
-                      <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
-                        Missing
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          {/* Vendor API Keys — per-org. Super-admin only: these credentials
+              belong to THIS organization and are used by all agents in it. */}
+          {user?.role === "super_admin" && (
+            <VendorApiKeysCard
+              vendorApiKeys={vendorApiKeys}
+              reload={reload}
+              setError={setError}
+            />
+          )}
 
           {/* MCP Servers — platform-wide registry, read-only in the UI.
               Mutations happen out-of-band via direct DB (see mcpServers.controller.ts). */}
@@ -2172,5 +2167,198 @@ export default function AdminPage() {
       </Stack>
       </Container>
     </Stack>
+  );
+}
+
+// ── Vendor API Keys (super_admin only, per-org) ──────────────────────────────
+
+interface VendorApiKeyEntry {
+  vendorId: string;
+  vendorName: string;
+  vendorSlug: string;
+  hasApiKey: boolean;
+  masked: string | null;
+  updatedAt: string | null;
+}
+
+/**
+ * Per-organization vendor API keys card. The endpoints are gated by
+ * `requireSuperAdmin` and the server pulls the orgId from the JWT, so this
+ * card never has the power to touch another org's credentials regardless of
+ * what the client sends.
+ */
+function VendorApiKeysCard({
+  vendorApiKeys,
+  reload,
+  setError,
+}: {
+  vendorApiKeys: VendorApiKeyEntry[];
+  reload: () => Promise<void>;
+  setError: (msg: string) => void;
+}) {
+  return (
+    <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+      <h2 className="mb-2 flex items-center gap-2.5 text-sm font-bold text-gray-900">
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm">
+          <KeyRound className="h-4 w-4" />
+        </div>
+        API Keys
+        <span className="ml-1 text-[10px] font-normal text-gray-400">
+          (your organization&apos;s vendor credentials)
+        </span>
+      </h2>
+      <p className="mb-5 text-xs text-gray-500">
+        These keys are used by every agent in your organization when it calls
+        the corresponding vendor. Keys are stored server-side — the raw value
+        is never sent back to the browser; rotate by entering a new key and
+        saving.
+      </p>
+
+      <div className="grid w-full min-w-0 grid-cols-1 gap-3 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
+        {vendorApiKeys.map((v) => (
+          <VendorApiKeyRow
+            key={v.vendorId}
+            entry={v}
+            reload={reload}
+            setError={setError}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function VendorApiKeyRow({
+  entry,
+  reload,
+  setError,
+}: {
+  entry: VendorApiKeyEntry;
+  reload: () => Promise<void>;
+  setError: (msg: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function handleSave() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setError("API key cannot be empty. Use Remove to clear it.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await admin.setVendorApiKey(entry.vendorId, trimmed);
+      setDraft("");
+      setEditing(false);
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to save key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete() {
+    // Single-step delete is fine here — the key can always be re-entered, and
+    // the only consequence of an accidental click is that agents using this
+    // vendor will surface a clear "your org has not configured an API key for
+    // …" error on the next call, prompting a re-set.
+    setBusy(true);
+    try {
+      await admin.deleteVendorApiKey(entry.vendorId);
+      setDraft("");
+      setEditing(false);
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to remove key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600">
+          <VendorIcon slug={entry.vendorSlug} />
+        </div>
+        <span className="min-w-0 truncate text-sm font-semibold text-gray-900">
+          {entry.vendorName}
+        </span>
+        {entry.hasApiKey ? (
+          <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+            Configured
+          </span>
+        ) : (
+          <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
+            Missing
+          </span>
+        )}
+      </div>
+
+      {entry.hasApiKey && entry.masked && (
+        <div className="mt-2 font-mono text-[11px] text-gray-500">{entry.masked}</div>
+      )}
+
+      {!editing ? (
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            <Pencil className="h-3 w-3" />
+            {entry.hasApiKey ? "Replace" : "Set key"}
+          </button>
+          {entry.hasApiKey && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleDelete}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              Remove
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          <input
+            type="password"
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Paste new API key"
+            className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || !draft.trim()}
+              onClick={handleSave}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+              Save
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setEditing(false);
+                setDraft("");
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+            >
+              <X className="h-3 w-3" />
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

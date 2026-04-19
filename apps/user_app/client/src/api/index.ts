@@ -640,10 +640,40 @@ export const admin = {
       method: "DELETE",
     }),
   getVendors: () =>
-    request<{ id: string; name: string; slug: string; hasApiKey: boolean }[]>(
-      "/admin/vendors",
-    ),
+    request<{ id: string; name: string; slug: string }[]>("/admin/vendors"),
   getModels: () => request<ConversationModelInfo[]>("/admin/models"),
+
+  // ── Per-org vendor API keys (super_admin only) ────────────────────────────
+  // Keys are scoped to the caller's organization — the backend pulls the
+  // organizationId from the JWT, so these endpoints can never touch another
+  // org's credentials regardless of what the client sends.
+  getVendorApiKeys: () =>
+    request<
+      {
+        vendorId: string;
+        vendorName: string;
+        vendorSlug: string;
+        hasApiKey: boolean;
+        masked: string | null;
+        updatedAt: string | null;
+      }[]
+    >("/admin/vendor-api-keys"),
+  setVendorApiKey: (vendorId: string, apiKey: string) =>
+    request<{
+      vendorId: string;
+      vendorName: string;
+      vendorSlug: string;
+      hasApiKey: boolean;
+      masked: string;
+    }>(`/admin/vendor-api-keys/${vendorId}`, {
+      method: "PUT",
+      body: JSON.stringify({ apiKey }),
+    }),
+  deleteVendorApiKey: (vendorId: string) =>
+    request<{ vendorId: string; vendorName: string; vendorSlug: string; hasApiKey: false }>(
+      `/admin/vendor-api-keys/${vendorId}`,
+      { method: "DELETE" },
+    ),
 
   // ── Projects & Repositories ───────────────────────────────────────────────
   getProjects: () => request<AdminProject[]>("/admin/projects"),

@@ -5,7 +5,10 @@ import { APP_URL_PREFIX } from "../constants";
 
 /**
  * Platform-admin dashboard: CRUD for the platform-wide catalogs the tenant
- * API can no longer mutate (MCP servers, skills, models, vendor API keys).
+ * API can no longer mutate (MCP servers, skills, models). Vendor API keys
+ * live PER ORGANIZATION now and are managed from each org's super-admin UI
+ * (see AdminPage's Vendor API keys section) — not from here — so one org
+ * can never see or rotate another org's credentials.
  *
  * This page is intentionally self-contained — no AuthContext, no AppShell,
  * no shared `admin` API object — because it runs under a disjoint auth
@@ -67,7 +70,6 @@ interface PlatformVendor {
   id: string;
   name: string;
   slug: string;
-  hasApiKey: boolean;
 }
 
 interface MeResponse {
@@ -174,7 +176,6 @@ export default function PlatformAdminPage() {
       <div className="mx-auto flex max-w-5xl flex-col gap-8 px-6 py-8">
         <McpServersSection servers={mcpServers} refresh={refresh} />
         <SkillsSection skills={skills} refresh={refresh} />
-        <VendorsSection vendors={vendors} refresh={refresh} />
         <ModelsSection models={models} vendors={vendors} refresh={refresh} />
       </div>
     </main>
@@ -654,91 +655,6 @@ function SkillRow({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Vendors (API keys) ─────────────────────────────────────────────────────
-
-function VendorsSection({
-  vendors,
-  refresh,
-}: {
-  vendors: PlatformVendor[];
-  refresh: () => Promise<void>;
-}) {
-  return (
-    <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5">
-      <div className="mb-4">
-        <h2 className="text-lg font-semibold">Vendor API keys</h2>
-        <p className="text-xs text-slate-400">
-          Keys are stored encrypted server-side; the plaintext is never read back.
-          Leave blank and save to clear.
-        </p>
-      </div>
-      <div className="space-y-2">
-        {vendors.map((v) => (
-          <VendorRow key={v.id} vendor={v} refresh={refresh} />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function VendorRow({
-  vendor,
-  refresh,
-}: {
-  vendor: PlatformVendor;
-  refresh: () => Promise<void>;
-}) {
-  const [apiKey, setApiKey] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  async function handleSave() {
-    setErr("");
-    setBusy(true);
-    try {
-      await platformRequest(`/vendors/${vendor.id}/api-key`, {
-        method: "PATCH",
-        body: JSON.stringify({ apiKey }),
-      });
-      setApiKey("");
-      await refresh();
-    } catch (e: any) {
-      setErr(e?.message ?? "Failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-700 bg-slate-800/40 p-3">
-      <div className="min-w-0">
-        <div className="text-sm font-semibold">{vendor.name}</div>
-        <div className="text-xs text-slate-400">
-          {vendor.slug} · {vendor.hasApiKey ? "key set" : "no key"}
-        </div>
-        {err && <div className="mt-1 text-xs text-red-300">{err}</div>}
-      </div>
-      <div className="flex items-center gap-2">
-        <input
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="new key (blank = clear)"
-          className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs"
-        />
-        <button
-          onClick={handleSave}
-          disabled={busy}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-amber-400 disabled:opacity-60"
-        >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-          Save
-        </button>
-      </div>
     </div>
   );
 }
