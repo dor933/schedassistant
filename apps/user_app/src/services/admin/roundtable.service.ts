@@ -115,6 +115,7 @@ export class RoundtableService {
 
   async create(
     userId: UserId,
+    organizationId: string,
     topic: string,
     agentIds: string[],
     maxTurnsPerAgent: number = 5,
@@ -129,8 +130,10 @@ export class RoundtableService {
       throw Object.assign(new Error("At least 2 agents are required"), { status: 400 });
     }
 
+    // Scope the lookup by org so a caller can't pull in agents belonging to
+    // a different tenant just by sending their UUIDs in the body.
     const agents = await Agent.findAll({
-      where: { id: agentIds },
+      where: { id: agentIds, organizationId },
       attributes: ["id", "type", "definition", "agentName"],
     });
     if (agents.length !== agentIds.length) {

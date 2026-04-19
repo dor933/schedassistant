@@ -5,9 +5,7 @@
     COPY package.json tsconfig.base.json ./
     COPY packages/ ./packages/
     COPY apps/agent_service/ ./apps/agent_service/
-    # Migration 20240101000008 seeds agents from ../../../apps/coreInstructions.json → /app/apps/coreInstructions.json
-    COPY apps/core_instructions/projectManager.json ./apps/core_instructions/projectManager.json
-    
+
     RUN npm install --no-package-lock
     RUN npm run build --workspace=@scheduling-agent/types
     RUN npm run build --workspace=@scheduling-agent/database

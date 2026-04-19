@@ -54,7 +54,7 @@ export class AgentsService {
       groupCountByAgent[r.agentId] = Number(r.cnt);
     }
 
-    const editableIds = await this.getEditableAgentIds(callerId, callerRole);
+    const editableIds = await this.getEditableAgentIds(callerId, callerRole, organizationId);
 
     // Fetch ALL MCP server assignments (including inactive) for all agents
     const mcpLinks = await AgentAvailableMcpServer.findAll({
@@ -295,7 +295,7 @@ export class AgentsService {
       );
     }
 
-    const editableIds = await this.getEditableAgentIds(callerId, callerRole);
+    const editableIds = await this.getEditableAgentIds(callerId, callerRole, callerOrgId);
     if (!editableIds.has(agent.id)) {
       throw Object.assign(
         new Error("You do not have permission to edit this agent."),
@@ -464,9 +464,16 @@ export class AgentsService {
   async getEditableAgentIds(
     userId: UserId,
     role: string,
+    organizationId: string,
   ): Promise<Set<string>> {
+    // super_admin gets every agent *inside their own org* — the bypass is
+    // role-elevation within a tenant, not a cross-tenant platform privilege.
+    // Cross-org maintenance happens out-of-band (direct DB), not via this API.
     if (role === "super_admin") {
-      const allAgents = await Agent.findAll({ attributes: ["id"] });
+      const allAgents = await Agent.findAll({
+        where: { organizationId },
+        attributes: ["id"],
+      });
       return new Set(allAgents.map((a) => a.id));
     }
 

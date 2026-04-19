@@ -42,6 +42,7 @@ export class RoundtableController {
 
       const result = await this.service.create(
         req.user!.userId,
+        req.user!.organizationId,
         req.body.topic,
         req.body.agentIds,
         req.body.maxTurnsPerAgent,

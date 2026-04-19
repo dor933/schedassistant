@@ -1,10 +1,5 @@
 "use strict";
 
-const fs = require("fs");
-const path = require("path");
-
-const DEFAULT_AGENT_ID = "00000000-0000-4000-a000-000000000001";
-
 /** @type {import('sequelize-cli').Migration} */
 module.exports = {
   async up(queryInterface, Sequelize) {
@@ -124,34 +119,6 @@ module.exports = {
     await queryInterface.addIndex("agents", ["type"], {
       name: "agents_type",
     });
-
-    // Seed the default primary agent
-    const corePath = path.join(__dirname, "../../../apps/core_instructions/projectManager.json");
-    const raw = JSON.parse(fs.readFileSync(corePath, "utf8"));
-    const { description, core_description, characteristics } = raw;
-    const charsJson = JSON.stringify(
-      characteristics != null && typeof characteristics === "object"
-        ? characteristics
-        : {},
-    );
-
-    await queryInterface.sequelize.query(
-      `INSERT INTO agents (id, type, definition, core_instructions, characteristics, active_thread_id, created_at, updated_at)
-       VALUES (CAST(:id AS uuid), 'primary', :def, :core, CAST(:chars AS jsonb), NULL, NOW(), NOW())
-       ON CONFLICT (id) DO UPDATE SET
-         definition = EXCLUDED.definition,
-         core_instructions = EXCLUDED.core_instructions,
-         characteristics = EXCLUDED.characteristics,
-         updated_at = NOW()`,
-      {
-        replacements: {
-          id: DEFAULT_AGENT_ID,
-          def: description,
-          core: core_description,
-          chars: charsJson,
-        },
-      },
-    );
   },
 
   async down(queryInterface, _Sequelize) {

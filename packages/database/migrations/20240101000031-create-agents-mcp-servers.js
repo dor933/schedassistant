@@ -48,16 +48,6 @@ module.exports = {
     await queryInterface.addIndex("agent_available_mcp_servers", ["mcp_server_id"], {
       name: "agent_available_mcp_servers_mcp_server_id",
     });
-
-    // Seed: link the default primary agent to all MCP servers except massive_market_data
-    const DEFAULT_AGENT_ID = "00000000-0000-4000-a000-000000000001";
-    await queryInterface.sequelize.query(
-      `INSERT INTO agent_available_mcp_servers (agent_id, mcp_server_id, active, created_at)
-       SELECT :agentId, id, true, NOW() FROM mcp_servers
-       WHERE name != 'massive_market_data'
-       ON CONFLICT DO NOTHING`,
-      { replacements: { agentId: DEFAULT_AGENT_ID } },
-    );
   },
 
   async down(queryInterface, _Sequelize) {

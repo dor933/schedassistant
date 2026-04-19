@@ -32,11 +32,13 @@ import {
 
 /**
  * Role assigned to the user who creates a new tenant via the onboarding
- * wizard. `super_admin` — not plain `admin` — so the first person to
- * provision an org always has the most-privileged role. Seeded in
- * migration 20240101000024.
+ * wizard. Plain `admin` — top privilege *within their org*. `super_admin`
+ * is intentionally reserved for platform-wide operators seeded out-of-band
+ * (migration 20240101000024 / 20240101000026), because several query paths
+ * treat `super_admin` as "bypass org scoping" and using it here leaks
+ * agents across tenants.
  */
-const SUPER_ADMIN_ROLE_ID = "00000000-0000-4000-c000-000000000003";
+const ADMIN_ROLE_ID = "00000000-0000-4000-c000-000000000001";
 const WORKSPACES_ROOT = path.join(process.env.DATA_DIR || "/app/data", "workspaces");
 
 function slugifyOrg(name: string): string {
@@ -465,7 +467,7 @@ export class AuthService {
           password: adminSpec.kind === "password" ? adminSpec.passwordHash : null,
           authProvider: adminSpec.kind === "google" ? "google" : "local",
           externalSub: adminSpec.kind === "google" ? adminSpec.externalSub : null,
-          roleId: SUPER_ADMIN_ROLE_ID,
+          roleId: ADMIN_ROLE_ID,
           organizationId: org.id,
           // The onboarding wizard already plays the cinematic launch
           // animation. Stamp now so their next login doesn't replay it.
@@ -546,7 +548,7 @@ export class AuthService {
     const token = signToken({
       userId: adminUser.id,
       displayName: adminUser.displayName,
-      role: "super_admin",
+      role: "admin",
       organizationId: org.id,
     });
 
@@ -558,7 +560,7 @@ export class AuthService {
         id: adminUser.id,
         displayName: adminUser.displayName,
         userIdentity: adminUser.userIdentity,
-        role: "super_admin",
+        role: "admin",
       },
       organization: {
         id: org.id,
