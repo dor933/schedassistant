@@ -1,12 +1,22 @@
 "use strict";
 
 /**
- * Assigns gh-cli skill to the Epic Orchestrator and updates epic-task-workflow.
+ * Originally: linked the `gh-cli` skill to the global Epic Orchestrator
+ * (migration 0059's agent row) AND updated the `epic-task-workflow` skill's
+ * body to reflect auto-created PRs. The global Epic Orchestrator was removed
+ * — each org provisions its own via `orgAgentSeeder.ts`, which already links
+ * `gh-cli` — so the agent-specific INSERT/DELETE here would either FK-fail
+ * or target a row that no longer exists.
+ *
+ * The skill-text UPDATE, however, still matters: the `epic-task-workflow`
+ * skill is a global row that all per-org Epic Orchestrators reference.
+ * Keep only that UPDATE so the skill body is corrected on fresh installs
+ * too (the skill is seeded earlier in the migration chain by 0049-ish —
+ * REPLACE on a string that isn't present is a no-op, so this is safe even
+ * if the skill text has since been further edited).
  *
  * @type {import('sequelize-cli').Migration}
  */
-
-const AGENT_ID = "00000000-0000-4000-a000-000000000100";
 
 const OLD_PR_SECTION = `### Between stages — Creating the Pull Request
 - After all tasks in a stage complete, **you must create a PR** for that stage.
@@ -30,28 +40,6 @@ module.exports = {
   async up(queryInterface) {
     const now = new Date();
 
-    // 1. Add the consolidated gh-cli skill
-    await queryInterface.sequelize.query(
-      `INSERT INTO agent_available_skills (agent_id, skill_id, active, created_at)
-       SELECT :agentId, s.id, true, :now
-       FROM skills s
-       WHERE s.slug = 'gh-cli'
-         AND NOT EXISTS (
-           SELECT 1 FROM agent_available_skills
-           WHERE agent_id = :agentId AND skill_id = s.id
-         )`,
-      { replacements: { agentId: AGENT_ID, now } },
-    );
-
-    // 2. Remove the old mcp-git-cli-bash skill (superseded by gh-cli)
-    await queryInterface.sequelize.query(
-      `DELETE FROM agent_available_skills
-       WHERE agent_id = :agentId
-         AND skill_id IN (SELECT id FROM skills WHERE slug = 'mcp-git-cli-bash')`,
-      { replacements: { agentId: AGENT_ID } },
-    ).catch(() => {});
-
-    // 3. Update the epic-task-workflow skill text — PR is now auto-created
     await queryInterface.sequelize.query(
       `UPDATE skills
        SET skill_text = REPLACE(skill_text, :oldSection, :newSection),
@@ -63,25 +51,6 @@ module.exports = {
 
   async down(queryInterface) {
     const now = new Date();
-
-    await queryInterface.sequelize.query(
-      `DELETE FROM agent_available_skills
-       WHERE agent_id = :agentId
-         AND skill_id IN (SELECT id FROM skills WHERE slug = 'gh-cli')`,
-      { replacements: { agentId: AGENT_ID } },
-    ).catch(() => {});
-
-    await queryInterface.sequelize.query(
-      `INSERT INTO agent_available_skills (agent_id, skill_id, active, created_at)
-       SELECT :agentId, s.id, true, :now
-       FROM skills s
-       WHERE s.slug = 'mcp-git-cli-bash'
-         AND NOT EXISTS (
-           SELECT 1 FROM agent_available_skills
-           WHERE agent_id = :agentId AND skill_id = s.id
-         )`,
-      { replacements: { agentId: AGENT_ID, now } },
-    );
 
     await queryInterface.sequelize.query(
       `UPDATE skills
