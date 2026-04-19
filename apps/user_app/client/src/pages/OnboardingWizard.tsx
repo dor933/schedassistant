@@ -40,6 +40,10 @@ import {
   type RegisterData,
 } from "../api";
 import { GOOGLE_CLIENT_ID } from "../constants";
+import {
+  registerGoogleIdentity,
+  renderGoogleButton,
+} from "../lib/googleIdentity";
 import { userNameSchema } from "../validation";
 import { VendorIcon } from "../components/VendorModelBadge";
 import LaunchAnimation from "../components/LaunchAnimation";
@@ -225,57 +229,48 @@ export default function OnboardingWizard() {
       .finally(() => setModelsLoading(false));
   }, []);
 
-  // Mount the Google Identity Services button on step 0 when the admin has
-  // not yet completed a bootstrap. Runs every time step becomes 0 AND we
-  // still need to sign in — so coming back from step 1 doesn't re-prompt
-  // if a ticket is already in hand.
+  // Mount the GIS button on step 0 while the admin still needs to sign in.
+  // GIS initialization is centralised in `lib/googleIdentity` so navigating
+  // between the login page and this wizard doesn't call `gsi.initialize()`
+  // repeatedly — repeated init silently swaps the callback and the popup
+  // stops opening. Here we only (re-)subscribe our callback + re-render the
+  // button into the slot whenever step/ticket changes.
   useEffect(() => {
     if (step !== 0) return;
     if (!GOOGLE_CLIENT_ID) return;
     if (googleTicket) return;
     let cancelled = false;
 
-    const tryRender = () => {
-      if (cancelled) return;
-      const gsi = window.google?.accounts?.id;
-      if (!gsi || !googleButtonRef.current) {
-        window.setTimeout(tryRender, 100);
-        return;
+    const unsubscribe = registerGoogleIdentity(async (resp) => {
+      setGoogleError("");
+      setGoogleSigningIn(true);
+      try {
+        const result = await googleBootstrap(resp.credential);
+        if (cancelled) return;
+        // Ticket is unverified at this point — the DNS TXT check hasn't
+        // happened yet. We DON'T auto-advance; the admin still has to
+        // publish the record and hit "Check now" to earn a verified
+        // ticket before step 1 unlocks.
+        setGoogleTicket(result.ticket);
+        setGoogleIdentity(result.identity);
+        setTxtRecord(result.txtRecord);
+        setDomainVerified(false);
+        setVerifyError("");
+        setSignInMethod("google");
+        // Prefill org name from hd, only if admin hasn't typed anything.
+        setOrgName((prev) => (prev ? prev : orgNameFromDomain(result.identity.hd)));
+      } catch (err: unknown) {
+        if (cancelled) return;
+        setGoogleError(
+          err instanceof Error ? err.message : "Google sign-in failed.",
+        );
+      } finally {
+        if (!cancelled) setGoogleSigningIn(false);
       }
-      gsi.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: async (resp) => {
-          setGoogleError("");
-          setGoogleSigningIn(true);
-          try {
-            const result = await googleBootstrap(resp.credential);
-            if (cancelled) return;
-            // Ticket is unverified at this point — the DNS TXT check hasn't
-            // happened yet. We DON'T auto-advance; the admin still has to
-            // publish the record and hit "Check now" to earn a verified
-            // ticket before step 1 unlocks.
-            setGoogleTicket(result.ticket);
-            setGoogleIdentity(result.identity);
-            setTxtRecord(result.txtRecord);
-            setDomainVerified(false);
-            setVerifyError("");
-            setSignInMethod("google");
-            // Prefill org name from hd, only if admin hasn't typed anything.
-            setOrgName((prev) => (prev ? prev : orgNameFromDomain(result.identity.hd)));
-          } catch (err: unknown) {
-            if (cancelled) return;
-            setGoogleError(
-              err instanceof Error ? err.message : "Google sign-in failed.",
-            );
-          } finally {
-            if (!cancelled) setGoogleSigningIn(false);
-          }
-        },
-        ux_mode: "popup",
-      });
-      // Clear then re-render so step re-visits replace the button cleanly.
-      googleButtonRef.current.innerHTML = "";
-      gsi.renderButton(googleButtonRef.current, {
+    });
+
+    if (googleButtonRef.current) {
+      renderGoogleButton(googleButtonRef.current, {
         type: "standard",
         theme: "filled_blue",
         size: "large",
@@ -284,11 +279,11 @@ export default function OnboardingWizard() {
         logo_alignment: "left",
         width: 320,
       });
-    };
+    }
 
-    tryRender();
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [step, googleTicket]);
 

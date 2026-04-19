@@ -5,17 +5,13 @@ import Stack from "@mui/material/Stack";
 import Container from "@mui/material/Container";
 import { useAuth } from "../context/AuthContext";
 import { GOOGLE_CLIENT_ID } from "../constants";
+import {
+  registerGoogleIdentity,
+  renderGoogleButton,
+} from "../lib/googleIdentity";
 import { Loader2, Eye, EyeOff, Sparkles } from "lucide-react";
 import logo from "../assets/logo.svg";
 import LaunchAnimation from "../components/LaunchAnimation";
-
-/**
- * Shape of the payload Google Identity Services hands to the callback — we
- * only care about `credential` (the id token we POST to /auth/google).
- */
-interface GoogleCredentialResponse {
-  credential: string;
-}
 
 declare global {
   interface Window {
@@ -24,7 +20,7 @@ declare global {
         id: {
           initialize(config: {
             client_id: string;
-            callback: (resp: GoogleCredentialResponse) => void;
+            callback: (resp: { credential: string }) => void;
             auto_select?: boolean;
             ux_mode?: "popup" | "redirect";
           }): void;
@@ -32,6 +28,7 @@ declare global {
             parent: HTMLElement,
             options: Record<string, unknown>,
           ): void;
+          cancel(): void;
         };
       };
     };
@@ -73,43 +70,32 @@ export default function LoginPage() {
     }
   }
 
-  // Mount the Google Identity Services button. The GIS script is loaded from
-  // index.html; we poll briefly for window.google since the script is async.
-  // When no client id is configured the button is skipped entirely so dev
-  // deployments without Google SSO don't see a broken widget.
+  // Register the GIS callback and render the sign-in button. GIS init is
+  // centralised in `lib/googleIdentity` so navigating between this page and
+  // the onboarding wizard doesn't call `gsi.initialize()` repeatedly —
+  // repeated init silently clobbers the previous callback and the popup
+  // stops opening.
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID) return;
-    let cancelled = false;
-
-    const tryRender = () => {
-      if (cancelled) return;
-      const gsi = window.google?.accounts?.id;
-      if (!gsi || !googleButtonRef.current) {
-        window.setTimeout(tryRender, 100);
-        return;
+    const unsubscribe = registerGoogleIdentity(async (resp) => {
+      setError("");
+      setSubmitting(true);
+      try {
+        const result = await loginWithGoogle(resp.credential);
+        if (result.isFirstLogin) {
+          // Hold the session in AuthContext's pending slot and let the
+          // launch animation run. Activation + redirect happens in the
+          // animation's onComplete.
+          setWelcomeOrg(result.organization ?? { name: "your organization", logo: null });
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Google sign-in failed");
+      } finally {
+        setSubmitting(false);
       }
-      gsi.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: async (resp) => {
-          setError("");
-          setSubmitting(true);
-          try {
-            const result = await loginWithGoogle(resp.credential);
-            if (result.isFirstLogin) {
-              // Hold the session in AuthContext's pending slot and let the
-              // launch animation run. Activation + redirect happens in the
-              // animation's onComplete.
-              setWelcomeOrg(result.organization ?? { name: "your organization", logo: null });
-            }
-          } catch (err: unknown) {
-            setError(err instanceof Error ? err.message : "Google sign-in failed");
-          } finally {
-            setSubmitting(false);
-          }
-        },
-        ux_mode: "popup",
-      });
-      gsi.renderButton(googleButtonRef.current, {
+    });
+    if (googleButtonRef.current) {
+      renderGoogleButton(googleButtonRef.current, {
         type: "standard",
         theme: "outline",
         size: "large",
@@ -118,12 +104,8 @@ export default function LoginPage() {
         logo_alignment: "left",
         width: 336,
       });
-    };
-
-    tryRender();
-    return () => {
-      cancelled = true;
-    };
+    }
+    return unsubscribe;
   }, [loginWithGoogle]);
 
   const inputClass =
