@@ -49,14 +49,16 @@ module.exports = {
   async up(queryInterface, _Sequelize) {
     // 1. Migrate any legacy `workspace_agent` rows from earlier iterations of
     // this migration (renamed to `google_workspace_agent` to disambiguate
-    // from the agent workspace folder concept).
+    // from the agent workspace folder concept). Also flip is_locked to false
+    // so admins can change the model that runs this agent.
     await queryInterface.sequelize.query(
       `UPDATE agents
           SET slug = 'google_workspace_agent',
               agent_name = 'Google Workspace Agent',
               description = :description,
               instructions = :instructions,
-              tool_config = '{"useGoogleWorkspaceTools": true, "locked": true}'::jsonb,
+              tool_config = '{"useGoogleWorkspaceTools": true}'::jsonb,
+              is_locked = false,
               updated_at = NOW()
         WHERE slug = 'workspace_agent'
           AND type = 'system'`,
@@ -89,8 +91,8 @@ module.exports = {
          :instructions,
          'claude-sonnet-4-6',
          CAST(:modelId AS uuid),
-         '{"useGoogleWorkspaceTools": true, "locked": true}'::jsonb,
-         true,
+         '{"useGoogleWorkspaceTools": true}'::jsonb,
+         false,
          o.id,
          NOW(),
          NOW()
