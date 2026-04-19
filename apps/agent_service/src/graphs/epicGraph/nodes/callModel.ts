@@ -45,6 +45,7 @@ import {
   parseContinuationMarker,
 } from "../../../tools/epicTaskTools";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
+import { googleTools } from "../../../tools/googleTools";
 import getMcpTools from "../../../mcpClient";
 
 // Cap the orchestrator's tool-call chain per chat turn. This is the EPIC
@@ -172,6 +173,9 @@ export async function epicCallModelNode(
     RecallEpisodicMemoryTool(agentId),
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
+    // Google tools — per-agent, per-subject-user grants in agent_user_scopes
+    // gate each call. See googleTools.ts / authz.ts.
+    ...(agentId ? googleTools(agentId) : []),
     // Epic workflow tools (always on for epic agents)
     CreateEpicPlanTool(state.userId, agentId),
     ExecuteEpicTaskTool({

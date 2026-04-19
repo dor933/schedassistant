@@ -55,6 +55,7 @@ import { VendorIcon } from "../components/VendorModelBadge";
 import UserCard from "../components/UserCard";
 import AgentCard from "../components/AgentCard";
 import ModelSelector from "../components/ModelSelector";
+import GooglePermissionsSection from "../components/GooglePermissionsSection";
 
 export function stringifyAgentCharacteristics(
   c: Record<string, unknown> | null | undefined,
@@ -1522,6 +1523,12 @@ export default function AdminPage() {
                 )}
               </div>
             </div>
+
+            {/* Google Permissions — super_admin only (server also enforces).
+                Grants calendar/drive/gmail operations per-(agent, subject user, scope). */}
+            {user?.role === "super_admin" && (
+              <GooglePermissionsSection agents={agents} />
+            )}
 
             {/* Dedicated Web Search Agent (pick Gemini or Brave — only one active) */}
             <div className="mb-4">

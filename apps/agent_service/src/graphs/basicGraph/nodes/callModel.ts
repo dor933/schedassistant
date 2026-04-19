@@ -35,6 +35,7 @@ import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
+import { googleTools } from "../../../tools/googleTools";
 import getMcpTools from "../../../mcpClient";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
@@ -299,6 +300,12 @@ export async function callModelNode(
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
     ...mcpTools,
+    // Google tools — every agent gets the surface; each call is gated by
+    // agent_user_scopes grants in resolveScopedSubject. Permissions are
+    // per-(agentId, subjectUserId, scope) so there's no harm exposing the
+    // tools broadly — absence of grants means the tool returns a deny
+    // message instead of acting.
+    ...(agentId ? googleTools(agentId) : []),
   ];
 
   // Configurable tools — gated by agent_available_tools assignments

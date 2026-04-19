@@ -20,6 +20,7 @@ import { workspaceTools, type WorkspaceWriteRecorder } from "../tools/workspaceT
 import { loadActiveToolSlugs } from "../tools/resolveAgentTools";
 import { QueryDatabaseTool } from "../tools/queryDatabaseTool";
 import { ConsultAgentTool } from "../tools/consultAgentTool";
+import { googleTools } from "../tools/googleTools";
 import { ListSystemAgentsTool } from "../tools/listSystemAgentsTool";
 import { ListAgentsTool } from "../tools/listAgentsTool";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
@@ -326,7 +327,19 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           if (has("list_agents")) configurableTools.push(ListAgentsTool(executorAgent.id));
           if (has("list_system_agents")) configurableTools.push(ListSystemAgentsTool(executorAgent.id));
 
-          const allTools = [...mcpTools, ...skillTools, ...wsTools, ...configurableTools];
+          // Google tools — executor/system agents do NOT own scope grants.
+          // They inherit from the caller, so we key the permission check to
+          // callerAgentId, not executorAgent.id. If the caller lacks the
+          // grant, the tool returns a deny message at invocation time.
+          const googleAgentTools = googleTools(callerAgentId);
+
+          const allTools = [
+            ...mcpTools,
+            ...skillTools,
+            ...wsTools,
+            ...configurableTools,
+            ...googleAgentTools,
+          ];
 
           logger.info("DeepAgent: creating agent", {
             delegationId,

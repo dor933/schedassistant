@@ -33,3 +33,4 @@ export { RoundtableUser } from "./models/RoundtableUser";
 export { RoundtableMessage } from "./models/RoundtableMessage";
 export { Notification } from "./models/Notification";
 export { AgentCronJob } from "./models/AgentCronJob";
+export { AgentUserScope } from "./models/AgentUserScope";

@@ -877,7 +877,46 @@ export const admin = {
       method: "POST",
       body: JSON.stringify({ content }),
     }),
+
+  // ── Agent ↔ user Google scope grants (super_admin only) ──────────────────
+  /** Users in the caller's org who have signed in with Google. */
+  getGoogleUsers: () =>
+    request<
+      { id: number; displayName: string | null; userName: string; lastLoginAt: string | null }[]
+    >("/admin/google-users"),
+  /** All scope grants for one agent, grouped by subject user. */
+  getAgentUserScopes: (agentId: string) =>
+    request<{ subjectUserId: number; scopes: GoogleScope[] }[]>(
+      `/admin/agents/${agentId}/user-scopes`,
+    ),
+  grantAgentUserScope: (agentId: string, subjectUserId: number, scope: GoogleScope) =>
+    request<{ id: string }>(`/admin/agents/${agentId}/user-scopes`, {
+      method: "POST",
+      body: JSON.stringify({ subjectUserId, scope }),
+    }),
+  revokeAgentUserScope: (agentId: string, subjectUserId: number, scope: GoogleScope) =>
+    request<{ removed: number }>(`/admin/agents/${agentId}/user-scopes`, {
+      method: "DELETE",
+      body: JSON.stringify({ subjectUserId, scope }),
+    }),
 };
+
+export type GoogleScope =
+  | "calendar.read"
+  | "calendar.write"
+  | "drive.read"
+  | "drive.write"
+  | "gmail.read"
+  | "gmail.send";
+
+export const ALL_GOOGLE_SCOPES: GoogleScope[] = [
+  "calendar.read",
+  "calendar.write",
+  "drive.read",
+  "drive.write",
+  "gmail.read",
+  "gmail.send",
+];
 
 // ── Roundtable types ──────────────────────────────────────────────────────
 

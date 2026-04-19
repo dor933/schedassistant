@@ -557,6 +557,37 @@ export interface AgentCronJobAttributes {
   updatedAt: Date;
 }
 
+// ─── Agent ↔ User Google Scopes ─────────────────────────────────────────────
+
+export type AgentUserScopeId = string;
+
+/**
+ * Closed set of Google operations that can be granted to an agent on a
+ * subject user's data. Kept in sync with the CHECK constraint in
+ * migration 20240101000090-create-agent-user-scopes.
+ */
+export type GoogleScope =
+  | "calendar.read"
+  | "calendar.write"
+  | "drive.read"
+  | "drive.write"
+  | "gmail.read"
+  | "gmail.send";
+
+export interface AgentUserScopeAttributes {
+  id: AgentUserScopeId;
+  agentId: AgentId;
+  /** The user whose Google data the agent may act on. */
+  subjectUserId: UserId;
+  organizationId: OrganizationId;
+  scope: GoogleScope;
+  /** Admin who issued the grant; null if the grantor was deleted. */
+  grantedByUserId: UserId | null;
+  grantedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ─── Validation (Zod schemas) ───────────────────────────────────────────────
 
 export {

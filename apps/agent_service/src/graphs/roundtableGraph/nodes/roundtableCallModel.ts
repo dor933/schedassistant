@@ -30,6 +30,7 @@ import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
+import { googleTools } from "../../../tools/googleTools";
 import getMcpTools from "../../../mcpClient";
 
 const MAX_TOOL_ROUNDS = 15;
@@ -221,6 +222,8 @@ export async function roundtableCallModelNode(
     ...workspaceTools(agentId),
     ...agentSkillTools(agentId),
     ...mcpTools,
+    // Google tools — call-time permission check per (agentId, subjectUserId, scope).
+    ...(agentId ? googleTools(agentId) : []),
   ];
 
   // Configurable tools — gated by agent_available_tools
