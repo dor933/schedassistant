@@ -1,5 +1,4 @@
 import { RunnableConfig } from "@langchain/core/runnables";
-import { Op } from "sequelize";
 import { Agent, AgentAvailableSkill, User } from "@scheduling-agent/database";
 import type {
   AssembledContext,
@@ -26,29 +25,6 @@ import { logger } from "../../../logger";
 /** Epic orchestrator uses fewer messages to keep context focused. */
 const EPIC_CONVERSATION_MESSAGE_LIMIT = 15;
 const EPIC_CHECKPOINT_MESSAGE_LIMIT = 15;
-
-/** Seeded executive accounts — only name and role, no full profiles. */
-const GRAHAMY_EXECUTIVE_USER_NAMES = ["dor", "dan", "maor"] as const;
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-
-async function loadMinimalExecutivesSection(): Promise<string> {
-  try {
-    const users = await User.findAll({
-      where: { userName: { [Op.in]: [...GRAHAMY_EXECUTIVE_USER_NAMES] } },
-      attributes: ["id", "userName", "displayName"],
-    });
-    if (users.length === 0) return "";
-
-    const lines = users.map((u) => {
-      const label = u.displayName?.trim() || u.userName;
-      return `- **${label}** (userId: ${u.id})`;
-    });
-    return ["## Company executives", ...lines, ""].join("\n");
-  } catch {
-    return "";
-  }
-}
 
 // ─── Epic Context Builder ───────────────────────────────────────────────────
 
@@ -150,10 +126,7 @@ export async function buildEpicContext(
   // ── 6b. Recent roundtable summaries ──
   const roundtableSummaries = await loadRecentRoundtableSummaries(agentId, { limit: 1 });
 
-  // ── 7. Executives (minimal) ──
-  const executivesSection = await loadMinimalExecutivesSection();
-
-  // ── 8. Assemble system prompt ──
+  // ── 7. Assemble system prompt ──
   const systemPrompt = formatEpicSystemPrompt({
     agentName,
     agentDefinition,
@@ -162,7 +135,6 @@ export async function buildEpicContext(
     agentNotes,
     agentWorkspacePath,
     agentHasLinkedSkills,
-    executivesSection,
     coreMemory,
     checkpointLogBody: checkpointLog.body,
     conversationLogBody: conversationLog.body,
@@ -228,7 +200,6 @@ function formatEpicSystemPrompt(opts: {
   agentNotes: string | null;
   agentWorkspacePath: string | null;
   agentHasLinkedSkills: boolean;
-  executivesSection: string;
   coreMemory: string;
   checkpointLogBody: string;
   conversationLogBody: string;
@@ -347,13 +318,6 @@ function formatEpicSystemPrompt(opts: {
       "- `add_agent_skill` / `edit_agent_skill` — create or update skills\n\n" +
       "**Always load the Epic Task Workflow skill before planning or executing an epic.**",
     );
-    sections.push("");
-  }
-
-  // ── Executives (minimal) ──
-  const execTrim = opts.executivesSection.trim();
-  if (execTrim.length > 0) {
-    sections.push(execTrim);
     sections.push("");
   }
 

@@ -5,9 +5,9 @@ import { logger } from "../../logger";
 export class UsersController {
   private usersService = new UsersService();
 
-  getAll = async (_req: Request, res: Response) => {
+  getAll = async (req: Request, res: Response) => {
     try {
-      const users = await this.usersService.getAll();
+      const users = await this.usersService.getAll(req.user!.organizationId);
       return res.json(users);
     } catch (err: any) {
       logger.error("GET /users error:", err);
@@ -21,6 +21,7 @@ export class UsersController {
         Number(req.params.id),
         req.user!.role,
         req.user!.userId,
+        req.user!.organizationId,
         { displayName: req.body.displayName, userIdentity: req.body.userIdentity, roleId: req.body.roleId },
       );
       return res.json(user);

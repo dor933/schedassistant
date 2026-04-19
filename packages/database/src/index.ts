@@ -34,3 +34,4 @@ export { RoundtableMessage } from "./models/RoundtableMessage";
 export { Notification } from "./models/Notification";
 export { AgentCronJob } from "./models/AgentCronJob";
 export { AgentUserScope } from "./models/AgentUserScope";
+export { PlatformAdmin } from "./models/PlatformAdmin";

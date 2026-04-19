@@ -32,13 +32,14 @@ import {
 
 /**
  * Role assigned to the user who creates a new tenant via the onboarding
- * wizard. Plain `admin` — top privilege *within their org*. `super_admin`
- * is intentionally reserved for platform-wide operators seeded out-of-band
- * (migration 20240101000024 / 20240101000026), because several query paths
- * treat `super_admin` as "bypass org scoping" and using it here leaks
- * agents across tenants.
+ * wizard. `super_admin` = maximum privilege *within their own org* — it is
+ * NOT a cross-tenant bypass. Every query that filters by `organizationId`
+ * keeps that filter for super_admins too; the role only affects
+ * intra-tenant capabilities (edit every agent's core_instructions, change
+ * other users' roles, etc.). Cross-tenant maintenance happens out-of-band
+ * via direct DB access, not via this API.
  */
-const ADMIN_ROLE_ID = "00000000-0000-4000-c000-000000000001";
+const SUPER_ADMIN_ROLE_ID = "00000000-0000-4000-c000-000000000003";
 const WORKSPACES_ROOT = path.join(process.env.DATA_DIR || "/app/data", "workspaces");
 
 function slugifyOrg(name: string): string {
@@ -467,7 +468,7 @@ export class AuthService {
           password: adminSpec.kind === "password" ? adminSpec.passwordHash : null,
           authProvider: adminSpec.kind === "google" ? "google" : "local",
           externalSub: adminSpec.kind === "google" ? adminSpec.externalSub : null,
-          roleId: ADMIN_ROLE_ID,
+          roleId: SUPER_ADMIN_ROLE_ID,
           organizationId: org.id,
           // The onboarding wizard already plays the cinematic launch
           // animation. Stamp now so their next login doesn't replay it.
@@ -548,7 +549,7 @@ export class AuthService {
     const token = signToken({
       userId: adminUser.id,
       displayName: adminUser.displayName,
-      role: "admin",
+      role: "super_admin",
       organizationId: org.id,
     });
 
@@ -560,7 +561,7 @@ export class AuthService {
         id: adminUser.id,
         displayName: adminUser.displayName,
         userIdentity: adminUser.userIdentity,
-        role: "admin",
+        role: "super_admin",
       },
       organization: {
         id: org.id,

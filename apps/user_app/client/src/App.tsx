@@ -5,6 +5,8 @@ import OnboardingWizard from "./pages/OnboardingWizard";
 import ChatPage from "./pages/ChatPage";
 import AdminPage from "./pages/AdminPage";
 import RoundtablePage from "./pages/RoundtablePage";
+import PlatformAdminLoginPage from "./pages/PlatformAdminLoginPage";
+import PlatformAdminPage from "./pages/PlatformAdminPage";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -66,6 +68,14 @@ export default function App() {
           </ProtectedRoute>
         }
       />
+      {/*
+       * Platform-admin routes are intentionally OUTSIDE ProtectedRoute —
+       * that gate checks tenant AuthContext (`user`), which platform admins
+       * never populate. PlatformAdminPage manages its own token check and
+       * redirects to /platform-admin/login when absent.
+       */}
+      <Route path="/platform-admin/login" element={<PlatformAdminLoginPage />} />
+      <Route path="/platform-admin" element={<PlatformAdminPage />} />
       <Route
         path="/*"
         element={

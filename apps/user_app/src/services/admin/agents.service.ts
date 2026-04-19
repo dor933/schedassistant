@@ -24,10 +24,10 @@ const WORKSPACES_ROOT = path.join(process.env.DATA_DIR || "/app/data", "workspac
 
 export class AgentsService {
   async getAll(callerId: UserId, callerRole: string, organizationId: string) {
-    // super_admin still sees everything; all other roles are scoped to their org.
-    const where = callerRole === "super_admin" ? {} : { organizationId };
+    // Every role — including super_admin — is scoped to its own org. The
+    // super_admin role is a tenant-internal elevation, not a platform bypass.
     const agents = await Agent.findAll({
-      where,
+      where: { organizationId },
       attributes: [
         "id",
         "type",
@@ -279,14 +279,13 @@ export class AgentsService {
       toolLinks?: { toolId: number; active: boolean }[];
     },
   ) {
-    const agent = await Agent.findByPk(agentId);
+    // Scope the lookup by org so cross-tenant reads are impossible — no role
+    // (including super_admin) can reach agents in another org through this API.
+    const agent = await Agent.findOne({
+      where: { id: agentId, organizationId: callerOrgId },
+    });
     if (!agent)
       throw Object.assign(new Error("Agent not found."), { status: 404 });
-
-    // Cross-org edits blocked (super_admin is the one exception).
-    if (callerRole !== "super_admin" && agent.organizationId !== callerOrgId) {
-      throw Object.assign(new Error("Agent not found."), { status: 404 });
-    }
 
     if (agent.isLocked) {
       throw Object.assign(

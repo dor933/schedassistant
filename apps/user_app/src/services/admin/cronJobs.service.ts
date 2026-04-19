@@ -152,16 +152,15 @@ export class CronJobsService {
 
   private async assertAgentAccess(
     agentId: string,
-    callerRole: string,
+    _callerRole: string,
     callerOrgId: string,
   ) {
-    const agent = await Agent.findByPk(agentId, {
+    // Super_admin is org-scoped too — no cross-tenant access through this API.
+    const agent = await Agent.findOne({
+      where: { id: agentId, organizationId: callerOrgId },
       attributes: ["id", "organizationId", "isLocked"],
     });
     if (!agent) throw notFound("Agent not found.");
-    if (callerRole !== "super_admin" && agent.organizationId !== callerOrgId) {
-      throw notFound("Agent not found.");
-    }
     return agent;
   }
 

@@ -10,6 +10,7 @@ import { sessionsRouter } from "./routes/sessions.routes";
 import { notificationsRouter } from "./routes/notifications.routes";
 import { inAppNotificationsRouter } from "./routes/inAppNotifications.routes";
 import { adminRouter } from "./routes/admin/index";
+import { platformRouter } from "./routes/platform.routes";
 import { attachSocketIO } from "./sockets/server/socketServer";
 import { connectToAgentService } from "./sockets/client/socketClient";
 import { logger } from "./logger";
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
   app.use("/api/notifications", notificationsRouter);
   app.use("/api/in-app-notifications", inAppNotificationsRouter);
   app.use("/api/admin", adminRouter);
+  app.use("/api/platform", platformRouter);
 
   const clientDist = path.join(__dirname, "..", "client", "dist");
   app.use(express.static(clientDist));

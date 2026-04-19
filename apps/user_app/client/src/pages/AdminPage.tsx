@@ -19,7 +19,6 @@ import {
   Trash2,
   Save,
   X,
-  HelpCircle,
   Loader2,
   CheckCircle2,
   KeyRound,
@@ -73,99 +72,6 @@ export function formatUserIdentityPreview(
   } catch {
     return String(identity);
   }
-}
-
-// ─── Vendor picker (compact custom dropdown with vendor icon) ────────────────
-
-function VendorPicker({
-  vendors,
-  value,
-  onChange,
-  placeholder = "Select vendor...",
-}: {
-  vendors: { id: string; name: string; slug: string }[];
-  value: string;
-  onChange: (id: string) => void;
-  placeholder?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  const selected = vendors.find((v) => v.id === value) ?? null;
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-2.5 text-left text-sm transition-all duration-200 hover:border-indigo-300 hover:bg-white focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10"
-      >
-        {selected ? (
-          <>
-            <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-gray-200/80 bg-white text-gray-600">
-              <VendorIcon slug={selected.slug} />
-            </span>
-            <span className="flex-1 truncate font-medium text-gray-800">{selected.name}</span>
-          </>
-        ) : (
-          <>
-            <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-dashed border-gray-300 text-gray-300">
-              <Cpu className="h-3 w-3" />
-            </span>
-            <span className="flex-1 truncate text-gray-400">{placeholder}</span>
-          </>
-        )}
-        <ChevronDown
-          className={`h-4 w-4 flex-shrink-0 text-gray-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-        />
-      </button>
-      {open && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-full animate-scale-in rounded-2xl border border-gray-200/80 bg-white/95 p-1.5 shadow-glass-lg backdrop-blur-xl">
-          {vendors.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-gray-400">No vendors available</p>
-          ) : (
-            vendors.map((v) => {
-              const isSelected = v.id === value;
-              return (
-                <button
-                  key={v.id}
-                  type="button"
-                  onClick={() => {
-                    onChange(v.id);
-                    setOpen(false);
-                  }}
-                  className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-sm transition-colors ${
-                    isSelected ? "bg-indigo-50 ring-1 ring-indigo-100" : "hover:bg-gray-50"
-                  }`}
-                >
-                  <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border border-gray-200/80 bg-gray-50 text-gray-600">
-                    <VendorIcon slug={v.slug} />
-                  </span>
-                  <span
-                    className={`flex-1 truncate ${
-                      isSelected ? "font-semibold text-indigo-700" : "text-gray-800"
-                    }`}
-                  >
-                    {v.name}
-                  </span>
-                  {isSelected && <CheckCircle2 className="h-4 w-4 text-indigo-500" />}
-                </button>
-              );
-            })
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 // ─── Branch picker (compact custom dropdown with git branch icon) ────────────
@@ -283,9 +189,6 @@ export default function AdminPage() {
   const [vendors, setVendors] = useState<
     { id: string; name: string; slug: string; hasApiKey: boolean }[]
   >([]);
-  const [vendorApiKeys, setVendorApiKeys] = useState<Record<string, string>>({});
-  const [savingKeyVendorId, setSavingKeyVendorId] = useState<string | null>(null);
-
   const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
   const [webSearchStatus, setWebSearchStatus] =
     useState<AdminWebSearchStatus | null>(null);
@@ -304,27 +207,12 @@ export default function AdminPage() {
   const [newGroupAgentId, setNewGroupAgentId] = useState("");
   const [newGroupMembers, setNewGroupMembers] = useState<number[]>([]);
   const [addMemberUserId, setAddMemberUserId] = useState("");
-  const [newModelVendorId, setNewModelVendorId] = useState("");
-  const [newModelName, setNewModelName] = useState("");
-  const [newModelSlug, setNewModelSlug] = useState("");
   const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
 
   const [tools, setTools] = useState<AdminTool[]>([]);
   const [skills, setSkills] = useState<AdminSkill[]>([]);
-  const [newSkillName, setNewSkillName] = useState("");
-  const [newSkillSlug, setNewSkillSlug] = useState("");
-  const [newSkillDescription, setNewSkillDescription] = useState("");
-  const [newSkillText, setNewSkillText] = useState("");
-  const [creatingSkill, setCreatingSkill] = useState(false);
-  const [deletingSkillId, setDeletingSkillId] = useState<number | null>(null);
-  const [editingSkillId, setEditingSkillId] = useState<number | null>(null);
-  const [editSkillName, setEditSkillName] = useState("");
-  const [editSkillSlug, setEditSkillSlug] = useState("");
-  const [editSkillDescription, setEditSkillDescription] = useState("");
-  const [editSkillText, setEditSkillText] = useState("");
-  const [savingSkillId, setSavingSkillId] = useState<number | null>(null);
 
   // ── Epic Orchestrator: Projects & Repositories ──
   const [projects, setProjects] = useState<AdminProject[]>([]);
@@ -387,18 +275,6 @@ export default function AdminPage() {
   const [loadingBranches, setLoadingBranches] = useState(false);
   const [settingBranch, setSettingBranch] = useState(false);
 
-  const [newMcpName, setNewMcpName] = useState("");
-  const [newMcpTransport, setNewMcpTransport] = useState("stdio");
-  const [newMcpCommand, setNewMcpCommand] = useState("");
-  const [newMcpArgs, setNewMcpArgs] = useState("");
-  const [newMcpEnv, setNewMcpEnv] = useState("");
-  const [creatingMcp, setCreatingMcp] = useState(false);
-  const [editingMcpId, setEditingMcpId] = useState<number | null>(null);
-  const [editMcpTransport, setEditMcpTransport] = useState("stdio");
-  const [editMcpCommand, setEditMcpCommand] = useState("");
-  const [editMcpArgs, setEditMcpArgs] = useState("");
-  const [editMcpEnv, setEditMcpEnv] = useState("");
-  const [savingMcpId, setSavingMcpId] = useState<number | null>(null);
 
   /** Show error toast (replaces old inline banner) */
   function setError(msg: string) {
@@ -441,7 +317,6 @@ export default function AdminPage() {
         const firstPrimary = a.find((x) => x.type === "primary");
         if (firstPrimary) setNewGroupAgentId(firstPrimary.id);
       }
-      if (v.length > 0 && !newModelVendorId) setNewModelVendorId(v[0].id);
     } catch {
       setError("Failed to load data.");
     }
@@ -581,194 +456,6 @@ export default function AdminPage() {
     }
   }
 
-  async function handleCreateMcpServer() {
-    if (!newMcpName.trim() || !newMcpCommand.trim()) return;
-
-    // Parse args: comma-separated string to array
-    const args = newMcpArgs.trim()
-      ? newMcpArgs.split(",").map((a) => a.trim()).filter(Boolean)
-      : [];
-
-    // Parse env: optional JSON object
-    let env: Record<string, string> | undefined;
-    if (newMcpEnv.trim()) {
-      try {
-        const parsed = JSON.parse(newMcpEnv.trim());
-        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-          setError("Environment must be a JSON object.");
-          return;
-        }
-        env = parsed as Record<string, string>;
-      } catch {
-        setError("Invalid JSON in environment variables.");
-        return;
-      }
-    }
-
-    setError("");
-    setCreatingMcp(true);
-    try {
-      await admin.createMcpServer({
-        name: newMcpName.trim(),
-        transport: newMcpTransport.trim() || "stdio",
-        command: newMcpCommand.trim(),
-        args,
-        env,
-      });
-      setNewMcpName("");
-      setNewMcpTransport("stdio");
-      setNewMcpCommand("");
-      setNewMcpArgs("");
-      setNewMcpEnv("");
-      flash("MCP server created.");
-      await reload();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setCreatingMcp(false);
-    }
-  }
-
-  function mcpHumanReadableLaunch(command: string, argsCsv: string): string {
-    const args = argsCsv.trim()
-      ? argsCsv.split(",").map((a) => a.trim()).filter(Boolean)
-      : [];
-    const quote = (a: string) => (/[\s"'\\]/.test(a) ? JSON.stringify(a) : a);
-    return [command.trim(), ...args.map(quote)].filter(Boolean).join(" ");
-  }
-
-  function openMcpEdit(s: AdminMcpServer) {
-    setEditingMcpId(s.id);
-    setEditMcpTransport(s.transport || "stdio");
-    setEditMcpCommand(s.command);
-    setEditMcpArgs(s.args.length > 0 ? s.args.join(", ") : "");
-    setEditMcpEnv(
-      s.env && typeof s.env === "object" && Object.keys(s.env).length > 0
-        ? JSON.stringify(s.env, null, 2)
-        : "",
-    );
-    setError("");
-  }
-
-  async function handleSaveMcpEdit() {
-    if (editingMcpId == null || !editMcpCommand.trim()) return;
-
-    let env: Record<string, string> | null = null;
-    if (editMcpEnv.trim()) {
-      try {
-        const parsed = JSON.parse(editMcpEnv.trim());
-        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-          setError("Environment must be a JSON object.");
-          return;
-        }
-        const obj = parsed as Record<string, string>;
-        env = Object.keys(obj).length > 0 ? obj : null;
-      } catch {
-        setError("Invalid JSON in environment variables.");
-        return;
-      }
-    }
-
-    const args = editMcpArgs.trim()
-      ? editMcpArgs.split(",").map((a) => a.trim()).filter(Boolean)
-      : [];
-
-    setError("");
-    setSavingMcpId(editingMcpId);
-    try {
-      const { launchSummary } = await admin.updateMcpServer(editingMcpId, {
-        transport: editMcpTransport.trim() || "stdio",
-        command: editMcpCommand.trim(),
-        args,
-        env,
-      });
-      setEditingMcpId(null);
-      flash(
-        `MCP server updated. Effective launch: ${launchSummary.humanReadable}. ` +
-          "Restart agent_service so running agents reload MCP connections.",
-      );
-      await reload();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSavingMcpId(null);
-    }
-  }
-
-  async function handleCreateSkill() {
-    if (!newSkillName.trim() || !newSkillText.trim()) return;
-    setError("");
-    setCreatingSkill(true);
-    try {
-      await admin.createSkill({
-        name: newSkillName.trim(),
-        skillText: newSkillText.trim(),
-        slug: newSkillSlug.trim() || undefined,
-        description: newSkillDescription.trim() || undefined,
-      });
-      setNewSkillName("");
-      setNewSkillSlug("");
-      setNewSkillDescription("");
-      setNewSkillText("");
-      flash("Skill created.");
-      await reload();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setCreatingSkill(false);
-    }
-  }
-
-  async function handleSaveSkillEdit() {
-    if (editingSkillId == null) return;
-    if (!editSkillName.trim() || !editSkillText.trim()) {
-      setError("Name and skill text are required.");
-      return;
-    }
-    setError("");
-    setSavingSkillId(editingSkillId);
-    try {
-      await admin.updateSkill(editingSkillId, {
-        name: editSkillName.trim(),
-        skillText: editSkillText.trim(),
-        slug: editSkillSlug.trim() || null,
-        description: editSkillDescription.trim() || null,
-      });
-      setEditingSkillId(null);
-      flash("Skill updated.");
-      await reload();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSavingSkillId(null);
-    }
-  }
-
-  async function handleDeleteSkill(id: number) {
-    if (!window.confirm("Delete this skill? It will be unlinked from all agents.")) return;
-    setDeletingSkillId(id);
-    setError("");
-    try {
-      await admin.deleteSkill(id);
-      if (editingSkillId === id) setEditingSkillId(null);
-      flash("Skill deleted.");
-      await reload();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setDeletingSkillId(null);
-    }
-  }
-
-  function openSkillEdit(skill: AdminSkill) {
-    setEditingSkillId(skill.id);
-    setEditSkillName(skill.name);
-    setEditSkillSlug(skill.slug ?? "");
-    setEditSkillDescription(skill.description ?? "");
-    setEditSkillText(skill.skillText);
-    setError("");
-  }
-
   function toggleGroupMember(userId: number) {
     setNewGroupMembers((prev) =>
       prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId],
@@ -818,52 +505,6 @@ export default function AdminPage() {
     }
   }
 
-  async function handleCreateModel() {
-    if (!newModelVendorId || !newModelName.trim() || !newModelSlug.trim())
-      return;
-    setError("");
-    try {
-      await admin.createModel({
-        vendorId: newModelVendorId,
-        name: newModelName.trim(),
-        slug: newModelSlug.trim(),
-      });
-      setNewModelName("");
-      setNewModelSlug("");
-      flash("Model created.");
-      await reload();
-    } catch (err: any) {
-      setError(err.message);
-    }
-  }
-
-  async function handleDeleteModel(id: string) {
-    setError("");
-    try {
-      await admin.deleteModel(id);
-      flash("Model deleted.");
-      await reload();
-    } catch (err: any) {
-      setError(err.message);
-    }
-  }
-
-  async function handleSaveApiKey(vendorId: string) {
-    const key = vendorApiKeys[vendorId];
-    if (!key?.trim()) return;
-    setSavingKeyVendorId(vendorId);
-    setError("");
-    try {
-      await admin.setVendorApiKey(vendorId, key.trim());
-      setVendorApiKeys((prev) => ({ ...prev, [vendorId]: "" }));
-      flash("API key saved.");
-      await reload();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setSavingKeyVendorId(null);
-    }
-  }
 
   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null);
 
@@ -1971,13 +1612,15 @@ export default function AdminPage() {
             )}
           </div>
 
-          {/* API Keys */}
+          {/* Vendor API Keys — read-only status; credentials are platform-wide
+              and rotated out-of-band. */}
           <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm">
                 <KeyRound className="h-4 w-4" />
               </div>
               API Keys
+              <span className="ml-1 text-[10px] font-normal text-gray-400">(platform credentials — rotated out-of-band)</span>
             </h2>
 
             <div className="grid w-full min-w-0 grid-cols-1 gap-3 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
@@ -1986,7 +1629,7 @@ export default function AdminPage() {
                   key={v.id}
                   className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200"
                 >
-                  <div className="mb-3 flex min-w-0 items-center gap-2.5">
+                  <div className="flex min-w-0 items-center gap-2.5">
                     <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600">
                       <VendorIcon slug={v.slug} />
                     </div>
@@ -2001,34 +1644,13 @@ export default function AdminPage() {
                       </span>
                     )}
                   </div>
-                  <div className="flex gap-2">
-                    <input
-                      type="password"
-                      value={vendorApiKeys[v.id] ?? ""}
-                      onChange={(e) =>
-                        setVendorApiKeys((prev) => ({ ...prev, [v.id]: e.target.value }))
-                      }
-                      placeholder={v.hasApiKey ? "Enter new key to replace" : "Enter API key"}
-                      className="flex-1 min-w-0 rounded-xl border border-gray-200 bg-gray-50/80 px-3 py-2 text-xs font-mono transition-all duration-200 focus:border-indigo-300 focus:bg-white focus:outline-none focus:ring-4 focus:ring-indigo-500/10"
-                    />
-                    <button
-                      onClick={() => handleSaveApiKey(v.id)}
-                      disabled={!vendorApiKeys[v.id]?.trim() || savingKeyVendorId === v.id}
-                      className="flex-shrink-0 inline-flex items-center gap-1 rounded-xl bg-indigo-500 px-3 py-2 text-xs font-medium text-white shadow-sm transition hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      {savingKeyVendorId === v.id ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Save className="h-3.5 w-3.5" />
-                      )}
-                    </button>
-                  </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* MCP Servers — super_admin only */}
+          {/* MCP Servers — platform-wide registry, read-only in the UI.
+              Mutations happen out-of-band via direct DB (see mcpServers.controller.ts). */}
           {user?.role === "super_admin" && (
           <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
@@ -2039,260 +1661,30 @@ export default function AdminPage() {
               <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
                 {mcpServers.length}
               </span>
+              <span className="ml-1 text-[10px] font-normal text-gray-400">(platform registry — managed out-of-band)</span>
             </h2>
 
-            {/* Create form */}
-            <div className="mb-5 space-y-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Add new server</p>
-              <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
-                {/* Name */}
-                <div className="group">
-                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-                    Name
-                    <span className="relative cursor-help">
-                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                        <strong>Name</strong> is a unique identifier for this server. It appears when assigning servers to agents (e.g. "bash", "github", "fetch").
-                      </span>
-                    </span>
-                  </label>
-                  <input
-                    type="text"
-                    value={newMcpName}
-                    onChange={(e) => setNewMcpName(e.target.value)}
-                    placeholder='e.g. "bash"'
-                    className={inputClass}
-                  />
-                </div>
-
-                {/* Transport */}
-                <div className="group">
-                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-                    Transport
-                    <span className="relative cursor-help">
-                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                        <strong>Transport</strong> defines how the agent communicates with the server. <strong>stdio</strong> launches a local process; <strong>sse</strong> connects to a remote HTTP endpoint.
-                      </span>
-                    </span>
-                  </label>
-                  <select
-                    value={newMcpTransport}
-                    onChange={(e) => setNewMcpTransport(e.target.value)}
-                    className={inputClass}
-                  >
-                    <option value="stdio">stdio</option>
-                    <option value="sse">sse</option>
-                  </select>
-                </div>
-
-                {/* Command */}
-                <div className="group">
-                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-                    Command
-                    <span className="relative cursor-help">
-                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-60 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                        <strong>Command</strong> is the executable used to start the MCP server process (e.g. <code className="rounded bg-gray-100 px-1">npx</code>, <code className="rounded bg-gray-100 px-1">uvx</code>, <code className="rounded bg-gray-100 px-1">node</code>).
-                      </span>
-                    </span>
-                  </label>
-                  <input
-                    type="text"
-                    value={newMcpCommand}
-                    onChange={(e) => setNewMcpCommand(e.target.value)}
-                    placeholder='e.g. "npx" or "uvx"'
-                    className={inputClass + " font-mono text-xs"}
-                  />
-                </div>
-
-                {/* Args */}
-                <div className="group">
-                  <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-                    Arguments
-                    <span className="relative cursor-help">
-                      <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                      <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                        <strong>Arguments</strong> are passed to the command as a list. Enter them separated by commas. For example: <code className="rounded bg-gray-100 px-1">-y, mcp-shell</code>
-                      </span>
-                    </span>
-                  </label>
-                  <input
-                    type="text"
-                    value={newMcpArgs}
-                    onChange={(e) => setNewMcpArgs(e.target.value)}
-                    placeholder='Comma-separated, e.g. "-y, mcp-shell"'
-                    className={inputClass + " font-mono text-xs"}
-                  />
-                </div>
-              </div>
-
-              {/* Env — full width */}
-              <div className="group relative">
-                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-                  Environment Variables (optional)
-                  <span className="cursor-help">
-                    <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                  </span>
-                </label>
-                <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 max-w-[calc(100vw-3rem)] rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                  <strong>Environment variables</strong> are passed to the server process as a JSON object. Use <code className="rounded bg-gray-100 px-1">{`{{VAR_NAME}}`}</code> syntax to reference host environment variables at runtime. Leave empty if none are needed.
-                </span>
-                <textarea
-                  value={newMcpEnv}
-                  onChange={(e) => setNewMcpEnv(e.target.value)}
-                  placeholder={'{\n  "API_KEY": "{{MY_ENV_VAR}}"\n}'}
-                  rows={3}
-                  className={inputClass + " font-mono text-xs resize-y"}
-                />
-              </div>
-
-              <button
-                onClick={handleCreateMcpServer}
-                disabled={!newMcpName.trim() || !newMcpCommand.trim() || creatingMcp}
-                className={btnPrimary}
-              >
-                {creatingMcp ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Plus className="h-4 w-4" />
-                )}
-                {creatingMcp ? "Creating..." : "Add MCP Server"}
-              </button>
-            </div>
-
-            {/* Existing servers list */}
+            {/* Existing servers list (read-only — registry is platform-wide) */}
             <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
               {mcpServers.map((s) => (
                 <div
                   key={s.id}
-                  className={`min-w-0 rounded-xl border border-gray-200/60 bg-white p-3.5 shadow-glass transition-all duration-200 hover:shadow-md ${
-                    editingMcpId === s.id ? "col-span-full" : ""
-                  }`}
+                  className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-3.5 shadow-glass transition-all duration-200 hover:shadow-md"
                 >
-                  {editingMcpId === s.id ? (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-purple-100 text-violet-600">
-                            <Terminal className="h-4 w-4" />
-                          </div>
-                          <div className="min-w-0">
-                            <p className="text-sm font-semibold text-gray-900 truncate">{s.name}</p>
-                            <p className="text-[10px] text-gray-400">Name cannot be changed here.</p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setEditingMcpId(null)}
-                          className="flex-shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
-                          title="Cancel"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                        <div>
-                          <label className="mb-1 block text-[10px] font-medium text-gray-500">Transport</label>
-                          <select
-                            value={editMcpTransport}
-                            onChange={(e) => setEditMcpTransport(e.target.value)}
-                            className={inputClass}
-                          >
-                            <option value="stdio">stdio</option>
-                            <option value="sse">sse</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[10px] font-medium text-gray-500">Command</label>
-                          <input
-                            type="text"
-                            value={editMcpCommand}
-                            onChange={(e) => setEditMcpCommand(e.target.value)}
-                            className={inputClass + " font-mono text-xs"}
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-[10px] font-medium text-gray-500">
-                          Arguments (comma-separated)
-                        </label>
-                        <input
-                          type="text"
-                          value={editMcpArgs}
-                          onChange={(e) => setEditMcpArgs(e.target.value)}
-                          placeholder='e.g. "-y, mcp-shell"'
-                          className={inputClass + " font-mono text-xs"}
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-[10px] font-medium text-gray-500">
-                          Environment (JSON object, optional)
-                        </label>
-                        <textarea
-                          value={editMcpEnv}
-                          onChange={(e) => setEditMcpEnv(e.target.value)}
-                          rows={3}
-                          className={inputClass + " font-mono text-xs resize-y"}
-                          placeholder={'{\n  "KEY": "{{HOST_ENV_VAR}}"\n}'}
-                        />
-                      </div>
-                      <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-[11px] text-indigo-900">
-                        <p className="font-semibold text-indigo-800">Preview after save</p>
-                        <p className="mt-1 font-mono break-all text-indigo-950/90">
-                          {mcpHumanReadableLaunch(editMcpCommand, editMcpArgs) || "(empty command)"}
-                        </p>
-                        <p className="mt-1.5 text-[10px] text-indigo-700/80">
-                          agent_service runs: <span className="font-mono">argv[0]</span> = command, then each argument in order. DB env merges with the container process env when the MCP child starts.
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={handleSaveMcpEdit}
-                          disabled={!editMcpCommand.trim() || savingMcpId === s.id}
-                          className={btnPrimary}
-                        >
-                          {savingMcpId === s.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Save className="h-4 w-4" />
-                          )}
-                          Save changes
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingMcpId(null)}
-                          className="inline-flex items-center gap-2 rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-                        >
-                          Cancel
-                        </button>
-                      </div>
+                  <div className="flex min-w-0 items-start gap-3">
+                    <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-purple-100 text-violet-600">
+                      <Terminal className="h-4 w-4" />
                     </div>
-                  ) : (
-                    <div className="flex min-w-0 items-start gap-3">
-                      <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-purple-100 text-violet-600">
-                        <Terminal className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold text-gray-900 truncate">{s.name}</p>
-                        <p className="mt-0.5 font-mono text-[10px] text-gray-400 break-all">
-                          {s.command} {s.args.join(" ")}
-                        </p>
-                        <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-semibold text-violet-500 uppercase">
-                          {s.transport}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => openMcpEdit(s)}
-                        className="flex-shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-violet-50 hover:text-violet-600"
-                        title="Edit command, arguments, transport, env"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-gray-900 truncate">{s.name}</p>
+                      <p className="mt-0.5 font-mono text-[10px] text-gray-400 break-all">
+                        {s.command} {s.args.join(" ")}
+                      </p>
+                      <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-semibold text-violet-500 uppercase">
+                        {s.transport}
+                      </span>
                     </div>
-                  )}
+                  </div>
                 </div>
               ))}
               {mcpServers.length === 0 && (
@@ -2304,7 +1696,7 @@ export default function AdminPage() {
           </div>
           )}
 
-          {/* Skills library — super_admin only */}
+          {/* Skills library — platform-wide catalog, read-only in the UI. */}
           {user?.role === "super_admin" && (
           <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
@@ -2315,104 +1707,8 @@ export default function AdminPage() {
               <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
                 {skills.length}
               </span>
-              <span className="ml-1 text-[10px] font-normal text-gray-400">(reusable instructions for agents)</span>
+              <span className="ml-1 text-[10px] font-normal text-gray-400">(platform catalog — managed out-of-band)</span>
             </h2>
-
-            <div className="mb-5 space-y-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Add new skill</p>
-              <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
-                <input
-                  type="text"
-                  value={newSkillName}
-                  onChange={(e) => setNewSkillName(e.target.value)}
-                  placeholder="Display name"
-                  className={inputClass}
-                />
-                <input
-                  type="text"
-                  value={newSkillSlug}
-                  onChange={(e) => setNewSkillSlug(e.target.value)}
-                  placeholder="Optional unique slug"
-                  className={inputClass + " font-mono text-xs"}
-                />
-              </div>
-              <input
-                type="text"
-                value={newSkillDescription}
-                onChange={(e) => setNewSkillDescription(e.target.value)}
-                placeholder="Optional short description (shown in lists)"
-                className={inputClass}
-              />
-              <textarea
-                value={newSkillText}
-                onChange={(e) => setNewSkillText(e.target.value)}
-                placeholder="Full skill body — procedural instructions the agent can load via tools"
-                rows={5}
-                className={inputClass + " resize-y font-mono text-xs"}
-              />
-              <button
-                type="button"
-                onClick={handleCreateSkill}
-                disabled={!newSkillName.trim() || !newSkillText.trim() || creatingSkill}
-                className={btnPrimary}
-              >
-                {creatingSkill ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                {creatingSkill ? "Creating..." : "Create skill"}
-              </button>
-            </div>
-
-            {editingSkillId != null && (
-              <div className="mb-5 space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/40 p-4">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-600">Edit skill</p>
-                <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))]">
-                  <input
-                    type="text"
-                    value={editSkillName}
-                    onChange={(e) => setEditSkillName(e.target.value)}
-                    placeholder="Display name"
-                    className={inputClass}
-                  />
-                  <input
-                    type="text"
-                    value={editSkillSlug}
-                    onChange={(e) => setEditSkillSlug(e.target.value)}
-                    placeholder="Slug (optional)"
-                    className={inputClass + " font-mono text-xs"}
-                  />
-                </div>
-                <input
-                  type="text"
-                  value={editSkillDescription}
-                  onChange={(e) => setEditSkillDescription(e.target.value)}
-                  placeholder="Description (optional)"
-                  className={inputClass}
-                />
-                <textarea
-                  value={editSkillText}
-                  onChange={(e) => setEditSkillText(e.target.value)}
-                  rows={6}
-                  className={inputClass + " resize-y font-mono text-xs"}
-                />
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={handleSaveSkillEdit}
-                    disabled={savingSkillId != null}
-                    className={btnPrimary}
-                  >
-                    {savingSkillId != null ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditingSkillId(null)}
-                    className="inline-flex items-center gap-2 rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
 
             <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))]">
               {skills.map((sk) => (
@@ -2420,40 +1716,11 @@ export default function AdminPage() {
                   key={sk.id}
                   className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-3.5 shadow-glass"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-gray-900 truncate">{sk.name}</p>
-                      {sk.slug && (
-                        <p className="font-mono text-[10px] text-gray-400 truncate">{sk.slug}</p>
-                      )}
-                    </div>
-                    <div className="flex shrink-0 gap-1">
-                      {!sk.locked && (
-                      <button
-                        type="button"
-                        onClick={() => openSkillEdit(sk)}
-                        className="rounded-lg p-1.5 text-gray-400 hover:bg-indigo-50 hover:text-indigo-600"
-                        title="Edit"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      )}
-                      {!sk.locked && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSkill(sk.id)}
-                        disabled={deletingSkillId === sk.id}
-                        className="rounded-lg p-1.5 text-gray-300 hover:bg-red-50 hover:text-red-500 disabled:opacity-50"
-                        title="Delete"
-                      >
-                        {deletingSkillId === sk.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-3.5 w-3.5" />
-                        )}
-                      </button>
-                      )}
-                    </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 truncate">{sk.name}</p>
+                    {sk.slug && (
+                      <p className="font-mono text-[10px] text-gray-400 truncate">{sk.slug}</p>
+                    )}
                   </div>
                   {sk.description && (
                     <p className="mt-1.5 text-[11px] text-gray-500 line-clamp-2">{sk.description}</p>
@@ -2470,7 +1737,7 @@ export default function AdminPage() {
               ))}
               {skills.length === 0 && (
                 <p className="col-span-full py-6 text-center text-xs text-gray-400">
-                  No skills yet. Create one above, then assign it to agents.
+                  No skills configured.
                 </p>
               )}
             </div>
@@ -2480,7 +1747,7 @@ export default function AdminPage() {
 
           {/* Models */}
           <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
-            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
+            <h2 className="mb-1 flex items-center gap-2.5 text-sm font-bold text-gray-900">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-pink-500 to-rose-600 text-white shadow-sm">
                 <Cpu className="h-4 w-4" />
               </div>
@@ -2489,84 +1756,15 @@ export default function AdminPage() {
                 {models.length}
               </span>
             </h2>
-
-            <div className="mb-5 grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(4,minmax(0,1fr))] [&>*]:min-w-0">
-              <div className="flex flex-col">
-                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-                  Vendor
-                </label>
-                <VendorPicker
-                  vendors={vendors.filter((v) => v.slug !== "google")}
-                  value={newModelVendorId}
-                  onChange={setNewModelVendorId}
-                />
-              </div>
-              <div className="group flex flex-col">
-                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-                  Display name
-                  <span className="relative cursor-help">
-                    <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                    <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-56 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Name</strong> is what users see in the UI (e.g.
-                      "GPT-4o Mini", "Claude Sonnet 4.6").
-                    </span>
-                  </span>
-                </label>
-                <input
-                  type="text"
-                  value={newModelName}
-                  onChange={(e) => setNewModelName(e.target.value)}
-                  placeholder="e.g. GPT-4o Mini"
-                  className={inputClass}
-                />
-              </div>
-              <div className="group flex flex-col">
-                <label className="mb-1 flex items-center gap-1 text-[10px] font-medium text-gray-500">
-                  API slug
-                  <span className="relative cursor-help">
-                    <HelpCircle className="h-3 w-3 text-gray-300 transition hover:text-gray-500" />
-                    <span className="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-gray-200/80 bg-white/95 p-3 text-[11px] text-gray-600 opacity-0 shadow-glass-lg backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <strong>Slug</strong> is the exact model ID sent to the
-                      vendor API (e.g. "gpt-4o-mini", "claude-sonnet-4-6").
-                      Must be unique and match the provider's model identifier.
-                    </span>
-                  </span>
-                </label>
-                <input
-                  type="text"
-                  value={newModelSlug}
-                  onChange={(e) => setNewModelSlug(e.target.value)}
-                  placeholder="e.g. gpt-4o-mini"
-                  className={inputClass + " font-mono text-xs"}
-                />
-              </div>
-              <div className="flex flex-col">
-                <label
-                  aria-hidden="true"
-                  className="mb-1 select-none text-[10px] font-medium text-transparent"
-                >
-                  &nbsp;
-                </label>
-                <button
-                  onClick={handleCreateModel}
-                  disabled={
-                    !newModelVendorId ||
-                    !newModelName.trim() ||
-                    !newModelSlug.trim()
-                  }
-                  className={btnPrimary + " justify-center"}
-                >
-                  <Plus className="h-4 w-4" />
-                  Add Model
-                </button>
-              </div>
-            </div>
+            <p className="mb-5 text-[11px] text-gray-400">
+              (platform catalog — managed out-of-band)
+            </p>
 
             <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
               {models.map((m) => (
                 <div
                   key={m.id}
-                  className="flex min-w-0 items-center gap-2.5 sm:gap-3 rounded-xl border border-gray-200/60 bg-white p-3 sm:p-3.5 shadow-glass transition-all duration-200 hover:shadow-md"
+                  className="flex min-w-0 items-center gap-2.5 sm:gap-3 rounded-xl border border-gray-200/60 bg-white p-3 sm:p-3.5 shadow-glass"
                 >
                   <div className="flex h-8 w-8 sm:h-9 sm:w-9 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600">
                     <VendorIcon slug={m.vendor?.slug ?? ""} />
@@ -2582,15 +1780,13 @@ export default function AdminPage() {
                   <span className="hidden sm:inline rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
                     {m.vendor?.name ?? "?"}
                   </span>
-                  <button
-                    onClick={() => handleDeleteModel(m.id)}
-                    className="flex-shrink-0 rounded-xl p-1.5 text-gray-300 transition hover:bg-red-50 hover:text-red-500"
-                    title="Delete model"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
                 </div>
               ))}
+              {models.length === 0 && (
+                <p className="col-span-full py-6 text-center text-xs text-gray-400">
+                  No models configured.
+                </p>
+              )}
             </div>
           </div>
 

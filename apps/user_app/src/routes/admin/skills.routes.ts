@@ -1,13 +1,12 @@
 import { Router } from "express";
 import { SkillsController } from "../../controllers/admin/skills.controller";
-import { requireSuperAdmin } from "../../middlewares/requireSuperAdmin";
 
 const router = Router();
 const controller = new SkillsController();
 
+// Skills are a platform-wide catalog (no `organizationId`). Since `super_admin`
+// is now tenant-scoped, mutations happen out-of-band via direct DB access —
+// see the mcpServers pattern for rationale.
 router.get("/", controller.getAll);
-router.post("/", requireSuperAdmin, controller.create);
-router.patch("/:id", requireSuperAdmin, controller.update);
-router.delete("/:id", requireSuperAdmin, controller.remove);
 
 export { router as skillsRouter };

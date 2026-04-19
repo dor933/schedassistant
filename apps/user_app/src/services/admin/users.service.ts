@@ -4,8 +4,9 @@ import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 
 export class UsersService {
-  async getAll() {
+  async getAll(organizationId: string) {
     const users = await User.findAll({
+      where: { organizationId },
       attributes: ["id", "displayName", "userIdentity", "roleId", "createdAt"],
       order: [["created_at", "DESC"]],
     });
@@ -25,9 +26,11 @@ export class UsersService {
     targetId: UserId,
     callerRole: string,
     callerId: UserId,
+    callerOrgId: string,
     data: { displayName?: string; userIdentity?: Record<string, unknown>; roleId?: string },
   ) {
-    const user = await User.findByPk(targetId);
+    // Scope by org — super_admin is still tenant-bound.
+    const user = await User.findOne({ where: { id: targetId, organizationId: callerOrgId } });
     if (!user) throw Object.assign(new Error("User not found."), { status: 404 });
 
     let targetRoleName = "user";

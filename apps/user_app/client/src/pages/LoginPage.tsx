@@ -264,6 +264,22 @@ export default function LoginPage() {
               Create your organization
             </button>
           </Box>
+
+          {/*
+           * Platform-admin sign-in is a separate auth surface from tenant
+           * login. Deliberately understated (small text link, no icon) so
+           * tenant users don't try it by mistake — only the person holding
+           * the platform credentials should care that it exists.
+           */}
+          <Box className="mt-6 text-center">
+            <button
+              type="button"
+              onClick={() => navigate("/platform-admin/login")}
+              className="text-xs text-gray-400 underline-offset-4 transition hover:text-gray-600 hover:underline"
+            >
+              Global admin login
+            </button>
+          </Box>
         </Stack>
       </Container>
     </Stack>

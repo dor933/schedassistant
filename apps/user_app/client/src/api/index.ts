@@ -464,20 +464,6 @@ export interface AdminMcpServer {
   env?: Record<string, string> | null;
 }
 
-export interface AdminMcpServerLaunchSummary {
-  transport: string;
-  executable: string;
-  arguments: string[];
-  argv: string[];
-  humanReadable: string;
-  envNote: string;
-}
-
-export interface AdminMcpServerUpdateResponse {
-  server: AdminMcpServer;
-  launchSummary: AdminMcpServerLaunchSummary;
-}
-
 export interface AdminTool {
   id: number;
   name: string;
@@ -575,56 +561,7 @@ export const admin = {
   getUsers: () => request<AdminUser[]>("/admin/users"),
   getAgents: () => request<AdminAgent[]>("/admin/agents"),
   getMcpServers: () => request<AdminMcpServer[]>("/admin/mcp-servers"),
-  createMcpServer: (data: {
-    name: string;
-    transport: string;
-    command: string;
-    args: string[];
-    env?: Record<string, string>;
-  }) =>
-    request<AdminMcpServer>("/admin/mcp-servers", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  updateMcpServer: (
-    id: number,
-    data: {
-      args?: string[];
-      command?: string;
-      transport?: string;
-      env?: Record<string, string> | null;
-    },
-  ) =>
-    request<AdminMcpServerUpdateResponse>(`/admin/mcp-servers/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
   getSkills: () => request<AdminSkill[]>("/admin/skills"),
-  createSkill: (data: {
-    name: string;
-    skillText: string;
-    slug?: string;
-    description?: string;
-  }) =>
-    request<AdminSkill>("/admin/skills", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  updateSkill: (
-    id: number,
-    data: {
-      name?: string;
-      skillText?: string;
-      slug?: string | null;
-      description?: string | null;
-    },
-  ) =>
-    request<AdminSkill>(`/admin/skills/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
-  deleteSkill: (id: number) =>
-    request<{ deleted: boolean }>(`/admin/skills/${id}`, { method: "DELETE" }),
   getTools: () =>
     request<AdminTool[]>("/admin/tools"),
   createAgent: (data: {
@@ -706,19 +643,7 @@ export const admin = {
     request<{ id: string; name: string; slug: string; hasApiKey: boolean }[]>(
       "/admin/vendors",
     ),
-  setVendorApiKey: (vendorId: string, apiKey: string) =>
-    request<{ id: string; name: string; slug: string; hasApiKey: boolean }>(
-      `/admin/vendors/${vendorId}/api-key`,
-      { method: "PATCH", body: JSON.stringify({ apiKey }) },
-    ),
   getModels: () => request<ConversationModelInfo[]>("/admin/models"),
-  createModel: (data: { vendorId: string; name: string; slug: string }) =>
-    request<ConversationModelInfo>("/admin/models", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  deleteModel: (id: string) =>
-    request<{ deleted: boolean }>(`/admin/models/${id}`, { method: "DELETE" }),
 
   // ── Projects & Repositories ───────────────────────────────────────────────
   getProjects: () => request<AdminProject[]>("/admin/projects"),

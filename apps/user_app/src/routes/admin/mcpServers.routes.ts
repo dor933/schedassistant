@@ -4,8 +4,9 @@ import { McpServersController } from "../../controllers/admin/mcpServers.control
 const router = Router();
 const controller = new McpServersController();
 
+// MCP server mutations are intentionally omitted — the registry is a
+// platform-wide resource managed out-of-band via direct DB access.
+// See `mcpServers.controller.ts` for rationale.
 router.get("/", controller.getAll);
-router.post("/", controller.create);
-router.patch("/:id", controller.update);
 
 export { router as mcpServersRouter };
