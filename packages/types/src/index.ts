@@ -299,7 +299,6 @@ export interface UserAttributes {
   id: UserId;
   /** Unique login handle — for SSO users this is the email; for local users, lowercase alphanumeric + underscores. */
   userName: string;
-  externalRef?: string | null;
   displayName?: string | null;
   userIdentity?: UserIdentity | null;
   password?: string | null;

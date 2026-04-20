@@ -46,8 +46,6 @@ export class RoundtableController {
         req.body.topic,
         req.body.agentIds,
         req.body.maxTurnsPerAgent,
-        req.body.groupId,
-        req.body.singleChatId,
         participantUserIds,
       );
       return res.status(201).json(result);

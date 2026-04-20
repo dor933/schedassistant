@@ -7,7 +7,6 @@ type UserCreationAttributes = Optional<
   | "id"
   | "createdAt"
   | "updatedAt"
-  | "externalRef"
   | "displayName"
   | "userIdentity"
   | "password"
@@ -25,7 +24,6 @@ class User
 {
   declare id: number;
   declare userName: string;
-  declare externalRef: string | null;
   declare displayName: string | null;
   declare userIdentity: UserIdentity | null;
   declare password: string | null;
@@ -50,12 +48,6 @@ User.init(
       allowNull: false,
       unique: true,
       field: "user_name",
-    },
-    externalRef: {
-      type: DataTypes.STRING,
-      unique: true,
-      allowNull: true,
-      field: "external_ref",
     },
     displayName: {
       type: DataTypes.STRING,

@@ -23,6 +23,4 @@ export type RoundtableTurnJobData = {
   agentId: string;
   roundNumber: number;
   userId: number;
-  groupId: string | null;
-  singleChatId: string | null;
 };

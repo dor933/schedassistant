@@ -147,7 +147,14 @@ export function RecallEpisodicMemoryTool(agentId: AgentId) {
           return "No relevant episodic memories found for that query.";
         }
 
-        return chunks.map((c, i) => `[${i + 1}] ${c}`).join("\n\n");
+        // Include thread_id so the agent can follow up with `get_thread_summary`
+        // when a chunk hints at a past session/roundtable but lacks detail.
+        return chunks
+          .map(
+            (c, i) =>
+              `[${i + 1}] (thread_id: ${c.threadId}, ${c.createdAt.toISOString().slice(0, 10)})\n${c.content}`,
+          )
+          .join("\n\n");
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error("recall_episodic_memory failed", {

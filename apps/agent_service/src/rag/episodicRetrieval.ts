@@ -40,12 +40,18 @@ const CANDIDATE_MULTIPLIER = 3;
  * @param topK           - Number of chunks to return (default 5).
  * @param options        - Optional filters for repo/project scoping.
  */
+export interface EpisodicMemoryHit {
+  content: string;
+  threadId: string;
+  createdAt: Date;
+}
+
 export async function retrieveEpisodicMemory(
   agentId: AgentId | null,
   embedding: number[],
   topK = 5,
   options?: { repositoryId?: string; projectId?: string },
-): Promise<string[]> {
+): Promise<EpisodicMemoryHit[]> {
   if (!agentId) {
     return [];
   }
@@ -85,8 +91,10 @@ export async function retrieveEpisodicMemory(
       replacements.halfLife = MEMORY_HALF_LIFE_DAYS;
 
       query = `
-        SELECT content FROM (
+        SELECT content, thread_id AS "threadId", created_at AS "createdAt" FROM (
           SELECT ep.content,
+                 ep.thread_id,
+                 ep.created_at,
                  (1.0 - (ep.embedding <=> :embedding::vector))
                    * exp(
                        -1.0
@@ -104,19 +112,25 @@ export async function retrieveEpisodicMemory(
     } else {
       // No decay — pure similarity ranking
       query = `
-        SELECT ep.content
+        SELECT ep.content,
+               ep.thread_id AS "threadId",
+               ep.created_at AS "createdAt"
         FROM   episodic_memory ep
         WHERE  ${conditions.join(" AND ")}
         ORDER  BY ep.embedding <=> :embedding::vector
         LIMIT  :topK`;
     }
 
-    const rows = await sequelize.query<{ content: string }>(query, {
+    const rows = await sequelize.query<EpisodicMemoryHit>(query, {
       replacements,
       type: QueryTypes.SELECT,
     });
 
-    return rows.map((r) => r.content);
+    return rows.map((r) => ({
+      content: r.content,
+      threadId: r.threadId,
+      createdAt: r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt),
+    }));
   } catch (err) {
     logger.error("Episodic memory retrieval failed", { agentId, error: String(err) });
     return [];

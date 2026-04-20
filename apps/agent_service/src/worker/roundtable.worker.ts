@@ -53,8 +53,6 @@ export function startRoundtableWorker(
         agentId,
         roundNumber,
         userId,
-        groupId,
-        singleChatId,
       } = job.data;
 
       logger.info("Roundtable: processing turn", {
@@ -138,12 +136,14 @@ export function startRoundtableWorker(
           // Ensure the LangGraph session exists for this thread
           await ensureSession(threadId, null, { agentId });
 
-          // Emit typing indicator
+          // Emit typing indicator. Roundtables aren't scoped to a single chat
+          // or group — the UI subscribes on `roundtableId`/`threadId` — so both
+          // chat scope fields are null here.
           emitAgentTyping({
             threadId,
             userId,
-            groupId,
-            singleChatId,
+            groupId: null,
+            singleChatId: null,
           });
 
           const modelSlug = await resolveModelSlug(agentId);
@@ -171,8 +171,8 @@ export function startRoundtableWorker(
             {
               userId,
               threadId,
-              groupId,
-              singleChatId,
+              groupId: null,
+              singleChatId: null,
               agentId,
               modelSlug,
               userInput: turnInstruction,
@@ -278,8 +278,6 @@ export function startRoundtableWorker(
             agentId: nextAgentInRound.agentId,
             roundNumber,
             userId,
-            groupId,
-            singleChatId,
           });
 
           logger.info("Roundtable: enqueued next agent in round", {
@@ -329,8 +327,6 @@ export function startRoundtableWorker(
             roundtableAgents,
             completedRoundNumber: roundNumber,
             userId,
-            groupId,
-            singleChatId,
             io,
           });
         }
@@ -398,8 +394,6 @@ async function advanceRoundOrComplete(params: {
   roundtableAgents: RoundtableAgent[];
   completedRoundNumber: number;
   userId: number;
-  groupId: string | null;
-  singleChatId: string | null;
   io: IO;
 }): Promise<void> {
   const {
@@ -407,8 +401,6 @@ async function advanceRoundOrComplete(params: {
     roundtableAgents,
     completedRoundNumber,
     userId,
-    groupId,
-    singleChatId,
     io,
   } = params;
 
@@ -466,8 +458,6 @@ async function advanceRoundOrComplete(params: {
     agentId: firstAgent.agentId,
     roundNumber: nextRound,
     userId,
-    groupId,
-    singleChatId,
   });
 
   logger.info("Roundtable: starting next round", {
@@ -652,8 +642,6 @@ export async function submitRoundtableUserTurn(
     roundtableAgents,
     completedRoundNumber: roundNumber,
     userId,
-    groupId: roundtable.groupId,
-    singleChatId: roundtable.singleChatId,
     io,
   });
 

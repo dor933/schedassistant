@@ -18,8 +18,6 @@ export interface RoundtableAttributes {
   currentAgentOrderIndex: number;
   /** When true, the creating user is a participant and gets the last turn of each round. */
   includeUser: boolean;
-  groupId: string | null;
-  singleChatId: string | null;
   threadId: string;
   createdBy: UserId;
   /** Final roundtable summary — written once when status transitions to "completed". */
@@ -54,8 +52,6 @@ class Roundtable
   declare currentRound: number;
   declare currentAgentOrderIndex: number;
   declare includeUser: boolean;
-  declare groupId: string | null;
-  declare singleChatId: string | null;
   declare threadId: string;
   declare createdBy: UserId;
   declare summary: string | null;
@@ -103,16 +99,6 @@ Roundtable.init(
       allowNull: false,
       defaultValue: false,
       field: "include_user",
-    },
-    groupId: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      field: "group_id",
-    },
-    singleChatId: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      field: "single_chat_id",
     },
     threadId: {
       type: DataTypes.UUID,

@@ -34,6 +34,7 @@ import { workspaceTools } from "../../../tools/workspaceTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
+import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
@@ -285,6 +286,7 @@ export async function callModelNode(
     EditAgentNotesTool(agentId),
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
+    GetThreadSummaryTool(agentId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...workspaceTools(agentId),

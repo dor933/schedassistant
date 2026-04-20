@@ -13,7 +13,7 @@ const router = Router();
  */
 router.post("/start", async (req: Request, res: Response) => {
   try {
-    const { roundtableId, agentId, userId, groupId, singleChatId } = req.body;
+    const { roundtableId, agentId, userId } = req.body;
 
     if (!roundtableId || !agentId || !userId) {
       return res.status(400).json({ error: "Missing roundtableId, agentId, or userId" });
@@ -24,8 +24,6 @@ router.post("/start", async (req: Request, res: Response) => {
       agentId,
       roundNumber: 0,
       userId,
-      groupId: groupId ?? null,
-      singleChatId: singleChatId ?? null,
     });
 
     logger.info("Roundtable start: first turn enqueued", { roundtableId, agentId });

@@ -33,6 +33,7 @@ import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
 import { DelegateWebSearchTool } from "../../../tools/delegateToDeepAgentTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
+import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
 import {
   ListProjectsTool,
   ListRepositoriesTool,
@@ -161,6 +162,7 @@ export async function epicCallModelNode(
     EditAgentNotesTool(agentId),
     SaveEpisodicMemoryTool(agentId, userId, threadId),
     RecallEpisodicMemoryTool(agentId),
+    GetThreadSummaryTool(agentId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...workspaceTools(agentId),
