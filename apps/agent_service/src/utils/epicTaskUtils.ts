@@ -2006,6 +2006,50 @@ export function parseContinuationMarker(text: string): EpicContinuationPayload |
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+const RETRY_EPIC_TASK_HINT =
+  `If fixes are needed, call \`execute_epic_task\` with \`mode='retry'\` and provide **specific feedback** referencing the diff lines that need to change.`;
+
+/**
+ * Footer for completed task reports: only tell the orchestrator to "proceed to the next task"
+ * when {@link getReadyTasks} is non-empty. When a stage just finished, the stage moves to
+ * `pr_pending` and there are no ready tasks — the next stage must not run until PR approval.
+ */
+async function formatReviewActionForCompletedTask(taskId: string): Promise<string> {
+  const task = await AgentTask.findByPk(taskId, {
+    include: [{ model: TaskStage, as: "stage" }],
+  });
+  const stage = (task as { stage?: TaskStage } | null)?.stage;
+  const epicId = stage?.epicTaskId;
+  if (!epicId) {
+    return `\n**Action:** If the changes are correct, proceed when appropriate. ${RETRY_EPIC_TASK_HINT}`;
+  }
+
+  const readyTasks = await getReadyTasks(epicId);
+  if (readyTasks.length > 0) {
+    return (
+      `\n**Action:** If the changes are correct, proceed to the next task. ${RETRY_EPIC_TASK_HINT}`
+    );
+  }
+
+  const stageRow = await TaskStage.findByPk(stage.id);
+  if (stageRow?.status === ("pr_pending" as TaskStageStatus)) {
+    return (
+      `\n**Action:** **This stage is complete** and is **waiting for PR approval** — do **not** call ` +
+      `\`execute_epic_task\` to start the next stage until this PR is approved (or handled via \`approve_stage\` / your workflow). ` +
+      `Tell the user the stage is blocked on review. ${RETRY_EPIC_TASK_HINT}`
+    );
+  }
+
+  const epic = await EpicTask.findByPk(epicId);
+  if (epic?.status === ("completed" as EpicTaskStatus)) {
+    return `\n**Action:** This epic is finished — there are no more tasks.`;
+  }
+
+  return (
+    `\n**Action:** No task is currently in the ready queue. Use \`get_epic_status\` to see the epic state (e.g. waiting on PR approval). ${RETRY_EPIC_TASK_HINT}`
+  );
+}
+
 export async function formatExecutionResult(execution: any, taskId: string): Promise<string> {
   const status = execution.status;
   const meta = execution.metadata ?? {};
@@ -2069,8 +2113,7 @@ export async function formatExecutionResult(execution: any, taskId: string): Pro
     result += `- [ ] No obvious issues: hardcoded values, removed important code, missing imports\n`;
     result += `- [ ] Naming conventions and code style are consistent with the codebase\n`;
 
-    result += `\n**Action:** If the changes are correct, proceed to the next task. `;
-    result += `If fixes are needed, call \`execute_epic_task\` with \`mode='retry'\` and provide **specific feedback** referencing the diff lines that need to change.`;
+    result += await formatReviewActionForCompletedTask(taskId);
   } else if (status === "failed") {
     result += `\n## Error\n`;
     result += `\`\`\`\n${execution.error ?? "Unknown error"}\n\`\`\`\n`;

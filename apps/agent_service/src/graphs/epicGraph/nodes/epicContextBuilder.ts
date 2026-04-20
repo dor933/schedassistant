@@ -317,8 +317,8 @@ function formatEpicSystemPrompt(opts: {
     "1. Load your Epic Task Workflow skill (`list_agent_skills` → `get_agent_skill`)\n" +
     "2. Use `list_projects` (and `list_repositories`) to identify the target project and repos\n" +
     "3. Follow the skill procedure exactly: clarify scope → plan epic → execute tasks → review diffs → report\n" +
-    "4. After each task, provide a progress update. The system auto-continues to the next task.\n" +
-    "5. Between stages, wait for PR approval before proceeding.",
+    "4. After each task, provide a progress update. The system may auto-continue only while another task in the **same stage** is ready — not across a stage boundary.\n" +
+    "5. Between stages, wait for PR approval before running tasks in the next stage.",
   );
   sections.push("");
 
