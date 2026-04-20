@@ -1,5 +1,11 @@
+import bcrypt from "bcrypt";
 import { User, Role } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
+import {
+  userNameSchema,
+  passwordSchema,
+  displayNameSchema,
+} from "@scheduling-agent/types";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 
@@ -20,6 +26,86 @@ export class UsersService {
       roleId: u.roleId,
       createdAt: u.createdAt,
     }));
+  }
+
+  /**
+   * Provisions a new local (password-auth) user inside the caller's
+   * organization. Runs independently of the tenant's auth-provider mix — an
+   * org whose admin signed in via Google SSO can still hold local users;
+   * `organization_id` is opaque to `auth_provider`. Gated to super_admin at
+   * the controller, but this layer re-enforces so future API surfaces inherit
+   * the guard automatically.
+   */
+  async create(
+    callerRole: string,
+    callerId: UserId,
+    callerOrgId: string,
+    data: {
+      userName: string;
+      displayName: string;
+      password: string;
+      roleId?: string | null;
+    },
+  ) {
+    if (callerRole !== "super_admin") {
+      throw Object.assign(
+        new Error("Only super admins can create users."),
+        { status: 403 },
+      );
+    }
+
+    const userName = userNameSchema.parse(data.userName);
+    const displayName = displayNameSchema.parse(data.displayName);
+    const password = passwordSchema.parse(data.password);
+
+    // Username is globally unique (matches the same check on registerOrganization).
+    const existing = await User.findOne({ where: { userName } });
+    if (existing) {
+      throw Object.assign(new Error("Username is already taken."), { status: 409 });
+    }
+
+    let roleId: string | null = null;
+    if (data.roleId) {
+      // Validate roleId exists. Allow assigning any role from the global role
+      // table — super_admin is the highest privilege and can grant anything,
+      // matching the `update()` branch that already lets super_admin swap roles.
+      const role = await Role.findByPk(data.roleId, { attributes: ["id"] });
+      if (!role) {
+        throw Object.assign(new Error("Role not found."), { status: 400 });
+      }
+      roleId = role.id;
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const user = await User.create({
+      userName,
+      displayName,
+      password: passwordHash,
+      authProvider: "local",
+      externalSub: null,
+      organizationId: callerOrgId,
+      roleId,
+      // lastLoginAt left null so the welcome animation fires on first sign-in.
+    });
+
+    this.broadcast(
+      "user_created",
+      `User "${user.displayName || user.userName}" created`,
+      { userId: user.id },
+      callerId,
+    );
+
+    const roles = await Role.findAll({ attributes: ["id", "name"] });
+    const roleMap = Object.fromEntries(roles.map((r) => [r.id, r.name]));
+    return {
+      id: user.id,
+      displayName: user.displayName,
+      userIdentity: user.userIdentity,
+      role: user.roleId ? roleMap[user.roleId] ?? "user" : "user",
+      roleId: user.roleId,
+      createdAt: user.createdAt,
+    };
   }
 
   async update(

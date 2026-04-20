@@ -616,6 +616,16 @@ export const admin = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
+  createUser: (data: {
+    userName: string;
+    displayName: string;
+    password: string;
+    roleId?: string | null;
+  }) =>
+    request<AdminUser>("/admin/users", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   updateUser: (
     id: number,
     data: {

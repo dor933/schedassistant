@@ -15,6 +15,31 @@ export class UsersController {
     }
   };
 
+  create = async (req: Request, res: Response) => {
+    try {
+      const user = await this.usersService.create(
+        req.user!.role,
+        req.user!.userId,
+        req.user!.organizationId,
+        {
+          userName: req.body.userName,
+          displayName: req.body.displayName,
+          password: req.body.password,
+          roleId: req.body.roleId ?? null,
+        },
+      );
+      return res.status(201).json(user);
+    } catch (err: any) {
+      if (err?.issues) {
+        // Zod error — surface the first message so the UI can render it.
+        return res.status(400).json({ error: err.issues[0]?.message ?? "Invalid input." });
+      }
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      logger.error("POST /users error:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  };
+
   update = async (req: Request, res: Response) => {
     try {
       const user = await this.usersService.update(

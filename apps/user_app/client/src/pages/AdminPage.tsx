@@ -230,6 +230,14 @@ export default function AdminPage() {
   const [newGroupAgentId, setNewGroupAgentId] = useState("");
   const [newGroupMembers, setNewGroupMembers] = useState<number[]>([]);
   const [addMemberUserId, setAddMemberUserId] = useState("");
+  // ── New local user form (super_admin only) ──────────────────────────
+  const [addUserOpen, setAddUserOpen] = useState(false);
+  const [newUserUserName, setNewUserUserName] = useState("");
+  const [newUserDisplayName, setNewUserDisplayName] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
+  const [newUserRoleId, setNewUserRoleId] = useState<string>("");
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [newUserError, setNewUserError] = useState<string | null>(null);
   const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingGroupName, setEditingGroupName] = useState("");
@@ -613,6 +621,34 @@ export default function AdminPage() {
       setGroupMembers(m);
     } catch (err: any) {
       setError(err.message);
+    }
+  }
+
+  async function handleCreateUser() {
+    setNewUserError(null);
+    if (!newUserUserName.trim() || !newUserDisplayName.trim() || !newUserPassword) {
+      setNewUserError("Username, display name, and password are required.");
+      return;
+    }
+    setCreatingUser(true);
+    try {
+      await admin.createUser({
+        userName: newUserUserName.trim(),
+        displayName: newUserDisplayName.trim(),
+        password: newUserPassword,
+        roleId: newUserRoleId || null,
+      });
+      setNewUserUserName("");
+      setNewUserDisplayName("");
+      setNewUserPassword("");
+      setNewUserRoleId("");
+      setAddUserOpen(false);
+      flash("User created.");
+      await reload();
+    } catch (err: any) {
+      setNewUserError(err?.message ?? "Failed to create user.");
+    } finally {
+      setCreatingUser(false);
     }
   }
 
@@ -1399,7 +1435,87 @@ export default function AdminPage() {
               <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
                 {users.length}
               </span>
+              {user?.role === "super_admin" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddUserOpen((v) => !v);
+                    setNewUserError(null);
+                  }}
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100"
+                >
+                  {addUserOpen ? <X className="h-3.5 w-3.5" /> : <UserPlus className="h-3.5 w-3.5" />}
+                  {addUserOpen ? "Cancel" : "Add user"}
+                </button>
+              )}
             </h2>
+
+            {user?.role === "super_admin" && addUserOpen && (
+              <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2">
+                <p className="text-[11px] text-gray-500">
+                  Creates a local (password-auth) user in this organization.
+                  Works on tenants bootstrapped via Google Workspace too — the
+                  new user signs in with username + password at the login page.
+                </p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <input
+                    type="text"
+                    placeholder="Username (letters, digits, underscores)"
+                    value={newUserUserName}
+                    onChange={(e) => setNewUserUserName(e.target.value)}
+                    autoComplete="off"
+                    className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Display name"
+                    value={newUserDisplayName}
+                    onChange={(e) => setNewUserDisplayName(e.target.value)}
+                    autoComplete="off"
+                    className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                  />
+                  <input
+                    type="password"
+                    placeholder="Password (min 8, mixed case + digit + symbol)"
+                    value={newUserPassword}
+                    onChange={(e) => setNewUserPassword(e.target.value)}
+                    autoComplete="new-password"
+                    className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-900 placeholder-gray-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                  />
+                  <select
+                    value={newUserRoleId}
+                    onChange={(e) => setNewUserRoleId(e.target.value)}
+                    className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-900 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                  >
+                    <option value="">Default role (user)</option>
+                    {roles.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {newUserError && (
+                  <p className="text-[11px] text-red-600">{newUserError}</p>
+                )}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleCreateUser}
+                    disabled={creatingUser}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+                  >
+                    {creatingUser ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Plus className="h-3.5 w-3.5" />
+                    )}
+                    Create user
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="max-h-[280px] overflow-y-auto space-y-2.5">
               {users.map((u) => (
                 <UserCard key={u.id} u={u} roles={roles} currentUserRole={user?.role ?? "user"} onSaved={reload} />
