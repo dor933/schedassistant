@@ -22,6 +22,7 @@ import { logger } from "../../../logger";
 import {
   loadOrganizationSummarySection,
   loadGoogleWorkspaceAgentSection,
+  loadLibrarySection,
 } from "../../basicGraph/nodes/contextBuilder";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -91,6 +92,7 @@ export async function buildEpicContext(
     loadOrganizationSummarySection(agentOrganizationId),
     loadGoogleWorkspaceAgentSection(agentOrganizationId),
   ]);
+  const librarySection = loadLibrarySection();
 
   // ── 1. User identity (minimal) ──
   let userIdentity: UserIdentity | null = null;
@@ -151,6 +153,7 @@ export async function buildEpicContext(
     agentHasLinkedSkills,
     organizationSummarySection,
     googleWorkspaceAgentSection,
+    librarySection,
     coreMemory,
     checkpointLogBody: checkpointLog.body,
     conversationLogBody: conversationLog.body,
@@ -218,6 +221,7 @@ function formatEpicSystemPrompt(opts: {
   agentHasLinkedSkills: boolean;
   organizationSummarySection: string;
   googleWorkspaceAgentSection: string;
+  librarySection: string;
   coreMemory: string;
   checkpointLogBody: string;
   conversationLogBody: string;
@@ -238,6 +242,13 @@ function formatEpicSystemPrompt(opts: {
   const orgSummaryTrim = opts.organizationSummarySection.trim();
   if (orgSummaryTrim.length > 0) {
     sections.push(orgSummaryTrim);
+    sections.push("");
+  }
+
+  // ── Shared organisation library (admin-uploaded reference docs) ──
+  const libraryTrim = opts.librarySection.trim();
+  if (libraryTrim.length > 0) {
+    sections.push(libraryTrim);
     sections.push("");
   }
 

@@ -33,6 +33,9 @@ import {
   Globe,
   Search,
   Building2,
+  BookOpen,
+  Upload,
+  FileText,
 } from "lucide-react";
 import {
   admin,
@@ -51,6 +54,7 @@ import {
   type ConversationModelInfo,
   type WebSearchChoice,
   type AdminOrganization,
+  type LibraryFile,
 } from "../api";
 import { VendorIcon } from "../components/VendorModelBadge";
 import UserCard from "../components/UserCard";
@@ -184,6 +188,10 @@ export default function AdminPage() {
   const [organization, setOrganization] = useState<AdminOrganization | null>(null);
   const [orgSummaryDraft, setOrgSummaryDraft] = useState("");
   const [savingOrgSummary, setSavingOrgSummary] = useState(false);
+  const [libraryFiles, setLibraryFiles] = useState<LibraryFile[]>([]);
+  const [uploadingLibraryFile, setUploadingLibraryFile] = useState(false);
+  const [deletingLibraryFile, setDeletingLibraryFile] = useState<string | null>(null);
+  const libraryFileInputRef = useRef<HTMLInputElement | null>(null);
   const [agents, setAgents] = useState<AdminAgent[]>([]);
   const [groups, setGroups] = useState<AdminGroup[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<AdminGroup | null>(null);
@@ -304,7 +312,7 @@ export default function AdminPage() {
     try {
       // Vendor API keys are super_admin-only. Use .catch(() => []) so regular
       // admins don't surface the 403 as a page-level error.
-      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak, org] = await Promise.all([
+      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak, org, lib] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
@@ -327,6 +335,7 @@ export default function AdminPage() {
             }[],
         ),
         admin.getOrganization().catch(() => null),
+        admin.getLibraryFiles().catch(() => ({ files: [] as LibraryFile[] })),
       ]);
       setUsers(u);
       if (org) {
@@ -343,6 +352,7 @@ export default function AdminPage() {
       setProjects(proj);
       setWebSearchStatus(ws);
       setVendorApiKeys(vak);
+      setLibraryFiles(lib.files ?? []);
       // System agents are delegated to by primary agents — they never own a
       // group / roundtable themselves. External agents are roundtable-only.
       if (!newGroupAgentId) {
@@ -372,6 +382,45 @@ export default function AdminPage() {
       setSavingOrgSummary(false);
     }
   }, [orgSummaryDraft, savingOrgSummary, toast]);
+
+  const handleUploadLibraryFile = useCallback(
+    async (file: File) => {
+      if (uploadingLibraryFile) return;
+      setUploadingLibraryFile(true);
+      try {
+        await admin.uploadLibraryFile(file);
+        const next = await admin.getLibraryFiles();
+        setLibraryFiles(next.files ?? []);
+        toast(`Uploaded "${file.name}" to the library.`, "success");
+      } catch (e: any) {
+        toast(e?.message ?? "Failed to upload library file.", "error");
+      } finally {
+        setUploadingLibraryFile(false);
+        if (libraryFileInputRef.current) {
+          libraryFileInputRef.current.value = "";
+        }
+      }
+    },
+    [toast, uploadingLibraryFile],
+  );
+
+  const handleDeleteLibraryFile = useCallback(
+    async (fileName: string) => {
+      if (deletingLibraryFile) return;
+      if (!window.confirm(`Remove "${fileName}" from the shared library?`)) return;
+      setDeletingLibraryFile(fileName);
+      try {
+        await admin.deleteLibraryFile(fileName);
+        setLibraryFiles((prev) => prev.filter((f) => f.fileName !== fileName));
+        toast(`Deleted "${fileName}" from the library.`, "success");
+      } catch (e: any) {
+        toast(e?.message ?? "Failed to delete library file.", "error");
+      } finally {
+        setDeletingLibraryFile(null);
+      }
+    },
+    [deletingLibraryFile, toast],
+  );
 
   const handleSwitchWebSearchAgent = useCallback(
     async (choice: WebSearchChoice) => {
@@ -1422,6 +1471,100 @@ export default function AdminPage() {
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Shared library — admin-uploaded reference docs every agent can read */}
+          <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+            <h2 className="mb-2 flex items-center gap-2.5 text-sm font-bold text-gray-900">
+              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-fuchsia-600 text-white shadow-sm">
+                <BookOpen className="h-4 w-4" />
+              </div>
+              Shared library
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+                {libraryFiles.length}
+              </span>
+            </h2>
+            <p className="mb-3 text-xs text-gray-500">
+              Reference documents shared by every agent in this organisation. Every agent
+              can read library files as part of its core data via <code>list_library_files</code>
+              and <code>read_library_file</code>. Upload the docs you want every agent to consult
+              — policies, product briefs, domain cheat-sheets, standards, etc. Max 25 MB per file.
+            </p>
+
+            <input
+              ref={libraryFileInputRef}
+              type="file"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleUploadLibraryFile(file);
+              }}
+            />
+            <div className="mb-4 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => libraryFileInputRef.current?.click()}
+                disabled={uploadingLibraryFile}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-purple-500 to-fuchsia-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:from-purple-600 hover:to-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {uploadingLibraryFile ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Uploading…
+                  </>
+                ) : (
+                  <>
+                    <Upload className="h-3.5 w-3.5" />
+                    Upload document
+                  </>
+                )}
+              </button>
+            </div>
+
+            {libraryFiles.length === 0 ? (
+              <p className="py-2 text-xs text-gray-400">
+                No documents uploaded yet. Add one so your agents can reference it in every conversation.
+              </p>
+            ) : (
+              <ul className="divide-y divide-gray-100 rounded-xl border border-gray-200 bg-white">
+                {libraryFiles.map((f) => {
+                  const kb = Math.max(1, Math.round(f.size / 1024));
+                  const updated = new Date(f.updatedAt).toLocaleString();
+                  const isDeleting = deletingLibraryFile === f.fileName;
+                  return (
+                    <li
+                      key={f.fileName}
+                      className="flex items-center gap-3 px-3 py-2.5"
+                    >
+                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-purple-50 text-purple-600">
+                        <FileText className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-gray-900">
+                          {f.fileName}
+                        </div>
+                        <div className="text-[11px] text-gray-400">
+                          {kb} KB · updated {updated}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteLibraryFile(f.fileName)}
+                        disabled={isDeleting}
+                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isDeleting ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                        Delete
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
 
           {/* Groups */}

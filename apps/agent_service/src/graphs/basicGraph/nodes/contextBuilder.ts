@@ -1,5 +1,6 @@
 import { RunnableConfig } from "@langchain/core/runnables";
 import { Op } from "sequelize";
+import { listLibraryFiles } from "../../../services/library.service";
 import {
   Agent,
   GroupMember,
@@ -198,6 +199,61 @@ export async function loadGoogleWorkspaceAgentSection(
 }
 
 /**
+ * Renders a system-prompt section describing the shared organisation library —
+ * a flat folder of admin-curated reference documents (policies, standards,
+ * product briefs, domain cheat-sheets, etc.) that every agent in every
+ * conversation can read. Lists the current file inventory so agents know
+ * what's available without having to call `list_library_files` first.
+ *
+ * The library sits alongside each agent's per-agent core data (definition,
+ * core instructions, notes, workspace, skills) and is shared across all
+ * agents in the org — reads are safe and encouraged whenever a query might
+ * benefit from that reference material.
+ */
+export function loadLibrarySection(): string {
+  let files: ReturnType<typeof listLibraryFiles> = [];
+  try {
+    files = listLibraryFiles();
+  } catch (err) {
+    logger.warn("Library section skipped", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return "";
+  }
+
+  const lines: string[] = [];
+  lines.push("## Shared organisation library (part of your core data)");
+  lines.push(
+    "There is a **shared library** of reference documents uploaded by the " +
+      "organisation's admins. It lives alongside your per-agent core data " +
+      "(your definition, core instructions, notes, workspace, skills) and is " +
+      "**shared by every agent in this organisation** — any document here is " +
+      "also readable by your peers. Treat it as common, authoritative " +
+      "reference material: company policies, product briefs, standards, " +
+      "domain cheat-sheets, anything an admin decided every agent should be " +
+      "able to consult.\n\n" +
+      "Read from the library whenever a user question, delegation brief, or " +
+      "planning step might benefit from that reference context. Use " +
+      "`list_library_files` to discover what is available and " +
+      "`read_library_file` to load a specific document by its file name. " +
+      "You do NOT upload or delete library files — that is an admin-only " +
+      "action performed from the admin UI.",
+  );
+  if (files.length === 0) {
+    lines.push("");
+    lines.push("_No library files have been uploaded yet._");
+  } else {
+    lines.push("");
+    lines.push("### Current library files");
+    for (const f of files) {
+      lines.push(`- \`${f.fileName}\` (${f.size} bytes)`);
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
+/**
  * Builds the complete LLM context for one conversation turn.
  *
  * This function is designed to be called from a LangGraph node (or as a
@@ -345,6 +401,7 @@ export async function buildContext(
       loadOrganizationSummarySection(agentOrganizationId),
       loadGoogleWorkspaceAgentSection(agentOrganizationId),
     ]);
+  const librarySection = loadLibrarySection();
 
   // ── 4b. Recent roundtable summaries this agent participated in ──
   const roundtableSummaries = await loadRecentRoundtableSummaries(agentId, { limit: 2 });
@@ -361,6 +418,7 @@ export async function buildContext(
     webSearchAgentSection,
     googleWorkspaceAgentSection,
     organizationSummarySection,
+    librarySection,
     coreMemory,
     checkpointLog.body,
     conversationLog.body,
@@ -619,6 +677,7 @@ function formatSystemPrompt(
   webSearchAgentSection: string,
   googleWorkspaceAgentSection: string,
   organizationSummarySection: string,
+  librarySection: string,
   coreMemory: string,
   checkpointLogBody: string,
   conversationLogBody: string,
@@ -638,6 +697,12 @@ function formatSystemPrompt(
   const orgSummaryTrim = organizationSummarySection.trim();
   if (orgSummaryTrim.length > 0) {
     sections.push(orgSummaryTrim);
+    sections.push("");
+  }
+
+  const libraryTrim = librarySection.trim();
+  if (libraryTrim.length > 0) {
+    sections.push(libraryTrim);
     sections.push("");
   }
 

@@ -28,6 +28,7 @@ import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "..
 import { ListCronJobsTool } from "../../../tools/listCronJobsTool";
 import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
+import { libraryTools } from "../../../tools/libraryTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
@@ -164,6 +165,7 @@ export async function epicCallModelNode(
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...workspaceTools(agentId),
+    ...libraryTools(),
     ...agentSkillTools(agentId),
     // Google Workspace (Gmail / Calendar / Drive) tools are not bound here —
     // they live only on the `google_workspace_agent` system agent. Delegate via

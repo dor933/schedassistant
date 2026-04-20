@@ -53,6 +53,17 @@ async function main(): Promise<void> {
   await sequelize.authenticate();
   logger.info("Database connection OK");
 
+  // 1a. Ensure the shared library directory exists. Admins upload reference
+  // docs here via /api/library; every agent can read them as common context.
+  try {
+    const dataDir = process.env.DATA_DIR ?? "/app/data";
+    const libraryDir = `${dataDir}/library`;
+    fs.mkdirSync(libraryDir, { recursive: true });
+    logger.info("Library directory ready", { path: libraryDir });
+  } catch (err) {
+    logger.warn("Failed to ensure library directory", { error: String(err) });
+  }
+
   // 1b. Ensure workspace directories exist for all agents.
   try {
     const agents = await Agent.findAll({ attributes: ["id", "workspacePath"] });

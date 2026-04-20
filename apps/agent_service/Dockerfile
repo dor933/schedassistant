@@ -33,7 +33,7 @@
     RUN git config --global user.email "agent@sched-assist.dev" && \
         git config --global user.name "Sched Assist Agent" && \
         git config --global safe.directory '*'
-    RUN mkdir -p /app/data
+    RUN mkdir -p /app/data /app/data/library
     # Pre-create the Claude CLI home directory with agent ownership so that when
     # Docker initializes the `agent_claude_home` named volume on first mount, it
     # inherits agent:agent ownership from the image. Without this, the fresh

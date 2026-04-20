@@ -556,6 +556,12 @@ export interface AdminOrganization {
   summary: string;
 }
 
+export interface LibraryFile {
+  fileName: string;
+  size: number;
+  updatedAt: string;
+}
+
 export interface AdminWebSearchStatus {
   activeChoice: WebSearchChoice;
   activeAgentId: string;
@@ -811,6 +817,30 @@ export const admin = {
       method: "PATCH",
       body: JSON.stringify({ summary }),
     }),
+
+  // ── Shared organisation library (admin-uploaded reference docs) ────────
+  getLibraryFiles: () =>
+    request<{ files: LibraryFile[] }>("/admin/library"),
+  uploadLibraryFile: async (file: File): Promise<LibraryFile> => {
+    const token = getToken();
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(`${BASE}/admin/library`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? `Upload failed (${res.status})`);
+    }
+    return res.json() as Promise<LibraryFile>;
+  },
+  deleteLibraryFile: (fileName: string) =>
+    request<{ deleted: boolean }>(
+      `/admin/library/${encodeURIComponent(fileName)}`,
+      { method: "DELETE" },
+    ),
 
   // ── Web search agent (per-org active pick) ─────────────────────────────
   getWebSearchAgent: () =>

@@ -18,6 +18,7 @@ import { agentChatQueue } from "../queues/agentChat.bull";
 import { getMcpToolsByServerIds } from "../mcpClient";
 import { systemAgentSkillTools } from "../tools/skillsTools";
 import { workspaceTools, type WorkspaceWriteRecorder } from "../tools/workspaceTools";
+import { libraryTools } from "../tools/libraryTools";
 import { loadActiveToolSlugs } from "../tools/resolveAgentTools";
 import { QueryDatabaseTool } from "../tools/queryDatabaseTool";
 import { ConsultAgentTool } from "../tools/consultAgentTool";
@@ -369,6 +370,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             ...mcpTools,
             ...skillTools,
             ...wsTools,
+            ...libraryTools(),
             ...configurableTools,
             ...googleAgentTools,
             ...tavilyTools,

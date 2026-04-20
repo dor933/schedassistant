@@ -5,6 +5,7 @@ import { logger } from "../../../logger";
 import {
   loadOrganizationSummarySection,
   loadGoogleWorkspaceAgentSection,
+  loadLibrarySection,
 } from "../../basicGraph/nodes/contextBuilder";
 
 /**
@@ -71,6 +72,10 @@ export async function roundtableContextBuilderNode(
     ]);
     if (orgSummarySection.trim().length > 0) {
       sections.push(orgSummarySection);
+    }
+    const librarySection = loadLibrarySection();
+    if (librarySection.trim().length > 0) {
+      sections.push(librarySection);
     }
     if (googleWorkspaceAgentSection.trim().length > 0) {
       sections.push(googleWorkspaceAgentSection);

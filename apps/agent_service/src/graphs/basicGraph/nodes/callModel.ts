@@ -31,6 +31,7 @@ import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "..
 import { ListCronJobsTool } from "../../../tools/listCronJobsTool";
 import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
 import { workspaceTools } from "../../../tools/workspaceTools";
+import { libraryTools } from "../../../tools/libraryTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
@@ -288,6 +289,7 @@ export async function callModelNode(
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...workspaceTools(agentId),
+    ...libraryTools(),
     ...agentSkillTools(agentId),
     ...mcpTools,
     // Google Workspace tools (Gmail / Calendar / Drive) are NOT bound to
