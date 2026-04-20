@@ -8,10 +8,6 @@
  * - Creates `notifications` table for in-app alerts (roundtable invites, turn prompts,
  *   completion). Includes JSONB data payload and optional deep link.
  *
- * Backfill: existing roundtables that had include_user=true get a single
- * roundtable_users row for their creator so the multi-user code path can
- * uniformly read from roundtable_users instead of branching on include_user.
- *
  * @type {import('sequelize-cli').Migration}
  */
 module.exports = {
@@ -50,17 +46,6 @@ module.exports = {
       unique: true,
       name: "roundtable_users_roundtable_user_unique",
     });
-
-    // Backfill existing single-user roundtables
-    await queryInterface.sequelize.query(`
-      INSERT INTO roundtable_users (id, roundtable_id, user_id, turn_order, turns_completed, created_at)
-      SELECT gen_random_uuid(), r.id, r.created_by, 0, 0, CURRENT_TIMESTAMP
-      FROM roundtables r
-      WHERE r.include_user = true
-        AND NOT EXISTS (
-          SELECT 1 FROM roundtable_users ru WHERE ru.roundtable_id = r.id
-        )
-    `);
 
     // notifications
     await queryInterface.createTable("notifications", {
