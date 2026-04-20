@@ -5,7 +5,8 @@
  * - Epic task tools (plan, execute, status, review)
  * - Project/repository listing
  * - Agent notes, workspace, skills
- * - NO delegation/consultation tools (the epic agent doesn't delegate to others)
+ * - Optional: list_system_agents + delegate_to_deep_agent (same as primary orchestrators)
+ *   for codebase exploration; epic coding still runs via epic task tools.
  */
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogle } from "@langchain/google";
@@ -32,7 +33,10 @@ import { libraryTools } from "../../../tools/libraryTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
-import { DelegateWebSearchTool } from "../../../tools/delegateToDeepAgentTool";
+import {
+  DelegateToDeepAgentTool,
+} from "../../../tools/delegateToDeepAgentTool";
+import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
 import {
@@ -196,8 +200,10 @@ export async function epicCallModelNode(
     tools.push(ListAgentsTool(agentId));
   if (has("consult_agent"))
     tools.push(ConsultAgentTool(agentId, state.userId, state.groupId, state.singleChatId));
+  if (has("list_system_agents"))
+    tools.push(ListSystemAgentsTool(agentId));
   if (has("delegate_to_deep_agent"))
-    tools.push(DelegateWebSearchTool(agentId, state.userId, state.groupId, state.singleChatId));
+    tools.push(DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId));
   if (has("list_projects"))
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))

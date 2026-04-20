@@ -117,11 +117,15 @@ function runClaudeArchitecture(cwd: string, prompt: string): string {
   const stderr = (result.stderr ?? "").trim();
 
   if (result.status !== 0) {
+    // Surface stdout too — the Claude CLI prints auth/config errors there,
+    // not on stderr, so logging only stderr hides the real cause.
     logger.error("runClaudeArchitecture: non-zero exit", {
       code: result.status,
+      stdout: stdout.slice(0, 2000),
       stderr: stderr.slice(0, 2000),
     });
-    throw new Error(`claude exited with code ${result.status}: ${stderr || "(no output)"}`);
+    const detail = stderr || stdout || "(no output)";
+    throw new Error(`claude exited with code ${result.status}: ${detail}`);
   }
   return stdout;
 }
