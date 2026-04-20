@@ -211,8 +211,8 @@ export default function OnboardingWizard() {
   const [models, setModels] = useState<ConversationModelInfo[]>([]);
   const [modelsLoading, setModelsLoading] = useState(true);
 
-  // Step 4 — Web search agent choice (Gemini is the default)
-  const [webSearchChoice, setWebSearchChoice] = useState<WebSearchChoice>("gemini");
+  // Step 4 — Web search agent choice (Tavily is the recommended default)
+  const [webSearchChoice, setWebSearchChoice] = useState<WebSearchChoice>("tavily");
 
   // Step 5 — admin account (password path only)
   const [adminUserName, setAdminUserName] = useState("");
@@ -1227,20 +1227,22 @@ export default function OnboardingWizard() {
                 <Stack spacing={2}>
                   {[
                     {
-                      key: "gemini" as const,
-                      title: "Gemini (Google Search)",
-                      icon: <Globe className="h-5 w-5 text-indigo-100" />,
-                      subtitle: "Default · powered by Google's built-in web grounding",
-                      blurb:
-                        "Uses Gemini's built-in Google Search tool — no extra API keys required.",
-                    },
-                    {
                       key: "tavily" as const,
                       title: "Tavily Search",
                       icon: <Search className="h-5 w-5 text-emerald-200" />,
                       subtitle: "AI-native · powered by the Tavily search API",
                       blurb:
                         "Uses the @langchain/tavily tool (native LangChain, no MCP subprocess). Requires TAVILY_API_KEY in the environment.",
+                      recommended: true,
+                    },
+                    {
+                      key: "gemini" as const,
+                      title: "Gemini (Google Search)",
+                      icon: <Globe className="h-5 w-5 text-indigo-100" />,
+                      subtitle: "Powered by Google's built-in web grounding",
+                      blurb:
+                        "Uses Gemini's built-in Google Search tool — no extra API keys required.",
+                      recommended: false,
                     },
                   ].map((opt) => {
                     const selected = webSearchChoice === opt.key;
@@ -1277,6 +1279,11 @@ export default function OnboardingWizard() {
                               <Box className="text-sm font-semibold text-indigo-50">
                                 {opt.title}
                               </Box>
+                              {opt.recommended && (
+                                <Box className="rounded-full border border-emerald-300/40 bg-emerald-400/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-200">
+                                  Recommended
+                                </Box>
+                              )}
                               {selected && (
                                 <CheckCircle2 className="h-4 w-4 text-emerald-300" />
                               )}
