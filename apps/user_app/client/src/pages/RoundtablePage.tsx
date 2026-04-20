@@ -504,6 +504,8 @@ function RoundtableDetailView({ id }: { id: string }) {
   const [secondsLeft, setSecondsLeft] = useState<number>(0);
   const userDraftRef = useRef("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const prevMsgCountRef = useRef(0);
 
   const fetchData = useCallback(async () => {
     try {
@@ -631,7 +633,11 @@ function RoundtableDetailView({ id }: { id: string }) {
   }, [id]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messages.length > 0 && messages.length >= prevMsgCountRef.current) {
+      const c = scrollContainerRef.current;
+      if (c) c.scrollTo({ top: c.scrollHeight, behavior: "smooth" });
+    }
+    prevMsgCountRef.current = messages.length;
   }, [messages]);
 
   const handleStop = async () => {
@@ -739,7 +745,7 @@ function RoundtableDetailView({ id }: { id: string }) {
     data.status === "waiting_for_user";
 
   return (
-    <div className="space-bg relative flex h-screen flex-col">
+    <div className="space-bg relative flex h-[100dvh] flex-col overflow-hidden">
       <SpaceAmbient />
 
       {/* Header */}
@@ -806,7 +812,7 @@ function RoundtableDetailView({ id }: { id: string }) {
       </header>
 
       {/* Messages */}
-      <div className="relative z-10 flex-1 overflow-y-auto dark-scroll">
+      <div ref={scrollContainerRef} className="relative z-10 flex-1 overflow-y-auto dark-scroll">
         <div className="mx-auto max-w-5xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
           {data.summary && (
             <div className="glass-panel-elevated animate-slide-up overflow-hidden rounded-2xl">
