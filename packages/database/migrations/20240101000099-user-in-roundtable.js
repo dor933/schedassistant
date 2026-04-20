@@ -12,13 +12,14 @@
  * @type {import('sequelize-cli').Migration}
  */
 module.exports = {
-  async up(queryInterface, Sequelize) {
-    // include_user on roundtables
-    await queryInterface.addColumn("roundtables", "include_user", {
-      type: Sequelize.BOOLEAN,
-      allowNull: false,
-      defaultValue: false,
-    });
+  async up(queryInterface) {
+    // Every DDL below uses IF [NOT] EXISTS so this migration can rerun cleanly
+    // on a database where an earlier attempt applied some of the steps.
+
+    await queryInterface.sequelize.query(
+      `ALTER TABLE roundtables
+       ADD COLUMN IF NOT EXISTS include_user BOOLEAN NOT NULL DEFAULT false`,
+    );
 
     // Widen roundtables.status enum to include waiting_for_user
     await queryInterface.sequelize.query(
@@ -29,34 +30,34 @@ module.exports = {
        CHECK (status IN ('pending', 'running', 'waiting_for_user', 'completed', 'failed'))`,
     );
 
-    // agent_id becomes nullable
-    await queryInterface.changeColumn("roundtable_messages", "agent_id", {
-      type: Sequelize.UUID,
-      allowNull: true,
-      references: { model: "agents", key: "id" },
-      onUpdate: "CASCADE",
-      onDelete: "CASCADE",
-    });
+    // agent_id becomes nullable (no-op if already nullable)
+    await queryInterface.sequelize.query(
+      `ALTER TABLE roundtable_messages ALTER COLUMN agent_id DROP NOT NULL`,
+    );
 
     // user_id (nullable FK to users.id)
-    await queryInterface.addColumn("roundtable_messages", "user_id", {
-      type: Sequelize.INTEGER,
-      allowNull: true,
-      references: { model: "users", key: "id" },
-      onUpdate: "CASCADE",
-      onDelete: "SET NULL",
-    });
+    await queryInterface.sequelize.query(
+      `ALTER TABLE roundtable_messages
+       ADD COLUMN IF NOT EXISTS user_id INTEGER
+       REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL`,
+    );
 
-    // Exactly one of (agent_id, user_id) must be set
+    // Exactly one of (agent_id, user_id) must be set — drop first so a rerun
+    // replaces any stale constraint definition.
+    await queryInterface.sequelize.query(
+      `ALTER TABLE roundtable_messages
+       DROP CONSTRAINT IF EXISTS roundtable_messages_author_xor_check`,
+    );
     await queryInterface.sequelize.query(
       `ALTER TABLE roundtable_messages
        ADD CONSTRAINT roundtable_messages_author_xor_check
        CHECK ((agent_id IS NOT NULL) <> (user_id IS NOT NULL))`,
     );
 
-    await queryInterface.addIndex("roundtable_messages", ["user_id"], {
-      name: "roundtable_messages_user_id",
-    });
+    await queryInterface.sequelize.query(
+      `CREATE INDEX IF NOT EXISTS roundtable_messages_user_id
+       ON roundtable_messages (user_id)`,
+    );
   },
 
   async down(queryInterface, Sequelize) {
