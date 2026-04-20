@@ -860,8 +860,6 @@ export const admin = {
     topic: string;
     agentIds: string[];
     maxTurnsPerAgent?: number;
-    groupId?: string | null;
-    singleChatId?: string | null;
     /** Legacy flag — kept for back-compat, prefer `participantUserIds`. */
     includeUser?: boolean;
     /** User IDs (any number of them) that should participate with their own turn. */

@@ -119,8 +119,6 @@ export class RoundtableService {
     topic: string,
     agentIds: string[],
     maxTurnsPerAgent: number = 5,
-    groupId?: string | null,
-    singleChatId?: string | null,
     participantUserIds: UserId[] = [],
   ) {
     if (!topic?.trim()) {
@@ -184,8 +182,6 @@ export class RoundtableService {
       threadId,
       createdBy: userId,
       includeUser: hasUsers,
-      groupId: groupId ?? null,
-      singleChatId: singleChatId ?? null,
     });
 
     for (let i = 0; i < agentIds.length; i++) {
@@ -235,8 +231,6 @@ export class RoundtableService {
           roundtableId: roundtable.id,
           agentId: firstAgentId,
           userId,
-          groupId: groupId ?? null,
-          singleChatId: singleChatId ?? null,
           includeUser: hasUsers,
         }),
       });

@@ -90,21 +90,15 @@ module.exports = {
       { replacements: { id: DEFAULT_ORG_ID } },
     );
 
-    // 5. Enforce NOT NULL.
-    await queryInterface.changeColumn("users", "organization_id", {
-      type: Sequelize.UUID,
-      allowNull: false,
-      references: { model: "organizations", key: "id" },
-      onUpdate: "CASCADE",
-      onDelete: "RESTRICT",
-    });
-    await queryInterface.changeColumn("agents", "organization_id", {
-      type: Sequelize.UUID,
-      allowNull: false,
-      references: { model: "organizations", key: "id" },
-      onUpdate: "CASCADE",
-      onDelete: "RESTRICT",
-    });
+    // 5. Enforce NOT NULL. Use a raw ALTER rather than changeColumn() — passing
+    //    `references` to changeColumn() makes Sequelize add a *second* FK
+    //    constraint on the same column instead of modifying the existing one.
+    await queryInterface.sequelize.query(
+      `ALTER TABLE users ALTER COLUMN organization_id SET NOT NULL`,
+    );
+    await queryInterface.sequelize.query(
+      `ALTER TABLE agents ALTER COLUMN organization_id SET NOT NULL`,
+    );
 
     await queryInterface.addIndex("users", ["organization_id"], {
       name: "users_organization_id",

@@ -124,7 +124,10 @@ export async function buildEpicContext(
     try {
       const embedder = await getEmbedderForAgent(agentId);
       const queryEmbedding = await embedder.embedText(userInput);
-      episodicSnippets = await retrieveEpisodicMemory(agentId, queryEmbedding);
+      const hits = await retrieveEpisodicMemory(agentId, queryEmbedding);
+      episodicSnippets = hits.map(
+        (h) => `(thread_id: ${h.threadId}) ${h.content}`,
+      );
     } catch (err) {
       logger.warn("Episodic memory skipped for epic agent", {
         threadId,
@@ -408,7 +411,10 @@ function formatEpicSystemPrompt(opts: {
     sections.push("## Relevant past context (from vector store)");
     sections.push(
       "Auto-retrieved knowledge chunks from previous executions, scoped to relevant repositories and projects. " +
-      "If you need more context on a specific repo, pattern, or past decision, use `recall_episodic_memory` with a targeted query.",
+      "Each snippet is prefixed with its originating `thread_id` — if a snippet references a past " +
+      "session or roundtable but lacks detail, call `get_thread_summary` with that thread_id to " +
+      "pull the full saved summary. " +
+      "If you need more context on a different repo, pattern, or decision, use `recall_episodic_memory` with a targeted query.",
     );
     for (const snippet of opts.episodicSnippets) {
       sections.push(`- ${snippet}`);

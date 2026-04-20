@@ -10,11 +10,6 @@ module.exports = {
         autoIncrement: true,
         allowNull: false,
       },
-      external_ref: {
-        type: Sequelize.STRING,
-        unique: true,
-        allowNull: true,
-      },
       display_name: {
         type: Sequelize.STRING,
         allowNull: true,

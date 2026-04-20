@@ -376,7 +376,12 @@ export async function buildContext(
     try {
       const embedder = await getEmbedderForAgent(agentId);
       const queryEmbedding = await embedder.embedText(userInput);
-      episodicSnippets = await retrieveEpisodicMemory(agentId, queryEmbedding);
+      const hits = await retrieveEpisodicMemory(agentId, queryEmbedding);
+      // Prefix with thread_id so the agent can follow up via `get_thread_summary`
+      // if a snippet references a past session/roundtable but lacks detail.
+      episodicSnippets = hits.map(
+        (h) => `(thread_id: ${h.threadId}) ${h.content}`,
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.warn("Episodic memory skipped (OpenAI embedding failed or missing org key)", {
@@ -947,7 +952,10 @@ function formatSystemPrompt(
     sections.push("## Relevant past context");
     sections.push(
       "Auto-retrieved from your long-term memory based on the user's latest message. " +
-      "If you need more context on a specific topic, use `recall_episodic_memory` with a targeted query.",
+      "Each snippet is prefixed with its originating `thread_id` — if a snippet hints at a past " +
+      "session or roundtable but lacks detail, call `get_thread_summary` with that thread_id to " +
+      "pull the full saved summary. " +
+      "If you need more context on a different topic, use `recall_episodic_memory` with a targeted query.",
     );
     for (const snippet of episodicSnippets) {
       sections.push(`- ${snippet}`);

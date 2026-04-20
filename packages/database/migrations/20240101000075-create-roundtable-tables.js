@@ -35,14 +35,6 @@ module.exports = {
         allowNull: false,
         defaultValue: 0,
       },
-      group_id: {
-        type: Sequelize.UUID,
-        allowNull: true,
-      },
-      single_chat_id: {
-        type: Sequelize.UUID,
-        allowNull: true,
-      },
       thread_id: {
         type: Sequelize.UUID,
         allowNull: false,
