@@ -342,7 +342,6 @@ export default function SessionSidebar({
                     cursor: "pointer",
                     background: "transparent",
                     border: 0,
-                    color: "inherit",
                   }}
                 >
                   <VendorChatIcon model={g.model} isActive={isActive} />
