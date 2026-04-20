@@ -25,6 +25,10 @@ import type {
   PrStatus,
 } from "@scheduling-agent/types";
 import { logger } from "../logger";
+import {
+  buildArchitectureOverviewPrompt,
+  MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
+} from "../services/architectureOverviewPrompt";
 
 // The agent_service container runs as root, but Claude CLI (and gh) must run
 // as the non-root `agent` user via `su-exec`. `su-exec` inherits env unchanged,
@@ -966,29 +970,20 @@ async function generateArchitectureOverview(
   cwd: string,
 ): Promise<void> {
   const currentOverview = repo.architectureOverview?.trim() || "(none)";
-
-  const prompt =
-    "Analyze this repository's current structure and produce a concise architecture overview. " +
-    "Include: top-level folder tree (depth 2), major components and their responsibilities, " +
-    "key patterns (e.g. MVC, monorepo, microservices), and entry points. " +
-    "Be factual — only describe what exists now.\n\n" +
-    "Current stored overview (may be outdated):\n" +
-    currentOverview + "\n\n" +
-    "Output ONLY the updated architecture overview text — no preamble, no markdown fences, " +
-    "no explanation. Keep it under 2000 characters.";
+  const prompt = buildArchitectureOverviewPrompt(currentOverview);
 
   try {
     const cliResult = spawnSync("su-exec", [
       "agent", "claude",
       "-p", prompt,
       "--dangerously-skip-permissions",
-      "--max-turns", "10",
+      "--max-turns", "35",
     ], {
       cwd,
       env: agentSpawnEnv(),
       encoding: "utf-8",
-      timeout: 120_000,
-      maxBuffer: 2 * 1024 * 1024,
+      timeout: 600_000,
+      maxBuffer: 8 * 1024 * 1024,
     });
     if (cliResult.error) throw cliResult.error;
     if (cliResult.status !== 0) {
@@ -996,14 +991,18 @@ async function generateArchitectureOverview(
     }
     const result = (cliResult.stdout ?? "").trim();
 
-    if (result && result.length > 20 && result.length < 5000) {
+    if (result && result.length > 20) {
+      const stored =
+        result.length > MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS
+          ? result.slice(0, MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS)
+          : result;
       const previous = repo.architectureOverview;
-      await repo.update({ architectureOverview: result });
+      await repo.update({ architectureOverview: stored });
       logger.info("generateArchitectureOverview: updated architecture overview", {
         repoId: repo.id,
         repoName: repo.name,
         previousLength: previous?.length ?? 0,
-        newLength: result.length,
+        newLength: stored.length,
       });
     }
   } catch (err) {

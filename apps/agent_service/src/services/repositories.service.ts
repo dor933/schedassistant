@@ -3,6 +3,10 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
 import path from "path";
 import { Project, Repository } from "@scheduling-agent/database";
 import { logger } from "../logger";
+import {
+  buildArchitectureOverviewPrompt,
+  MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
+} from "./architectureOverviewPrompt";
 
 // ─── Env configuration ──────────────────────────────────────────────────────
 
@@ -96,7 +100,7 @@ function runClaudeArchitecture(cwd: string, prompt: string): string {
     "agent", "claude",
     "-p", prompt,
     "--dangerously-skip-permissions",
-    "--max-turns", "10",
+    "--max-turns", "35",
   ], {
     cwd,
     // HOME must be pinned to the `agent` user's home so claude writes its
@@ -104,8 +108,8 @@ function runClaudeArchitecture(cwd: string, prompt: string): string {
     // inheriting HOME=/root from the root-owned agent_service process.
     env: { ...process.env, HOME: "/home/agent" },
     encoding: "utf-8",
-    timeout: 300_000,
-    maxBuffer: 4 * 1024 * 1024,
+    timeout: 600_000,
+    maxBuffer: 8 * 1024 * 1024,
   });
 
   if (result.error) {
@@ -674,15 +678,7 @@ export class RepositoriesService {
     }
 
     const currentOverview = repo.architectureOverview?.trim() || "(none)";
-    const prompt =
-      "Analyze this repository's current structure and produce a concise architecture overview. " +
-      "Include: top-level folder tree (depth 2), major components and their responsibilities, " +
-      "key patterns (e.g. MVC, monorepo, microservices), and entry points. " +
-      "Be factual — only describe what exists now.\n\n" +
-      "Current stored overview (may be outdated):\n" +
-      currentOverview + "\n\n" +
-      "Output ONLY the updated architecture overview text — no preamble, no markdown fences, " +
-      "no explanation. Keep it under 2000 characters.";
+    const prompt = buildArchitectureOverviewPrompt(currentOverview);
 
     try {
       const result = runClaudeArchitecture(repo.localPath, prompt);
@@ -691,7 +687,10 @@ export class RepositoriesService {
         throw new RepoServiceError(500, "Claude returned an empty or too-short architecture overview.");
       }
 
-      const overview = result.length > 5000 ? result.slice(0, 5000) : result;
+      const overview =
+        result.length > MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS
+          ? result.slice(0, MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS)
+          : result;
       await repo.update({ architectureOverview: overview });
       logger.info("Architecture generated", { repoId });
       return repo.toJSON();
