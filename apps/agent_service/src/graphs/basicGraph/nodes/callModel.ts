@@ -30,8 +30,6 @@ import { DelegateToDeepAgentTool } from "../../../tools/delegateToDeepAgentTool"
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
 import { ListCronJobsTool } from "../../../tools/listCronJobsTool";
 import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
-import { workspaceTools } from "../../../tools/workspaceTools";
-import { libraryTools } from "../../../tools/libraryTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
@@ -290,16 +288,15 @@ export async function callModelNode(
     GetThreadSummaryTool(agentId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
-    ...workspaceTools(agentId),
-    ...libraryTools(),
     ...agentSkillTools(agentId),
     ...mcpTools,
     // Google Workspace tools (Gmail / Calendar / Drive) are NOT bound to
     // primary agents — they live only on the `google_workspace_agent` system
     // agent. Primary agents must delegate those ops via `delegate_to_deep_agent`,
     // passing the subject user's EMAIL (resolved via list_google_workspace_grants).
-    // (Note: this is distinct from the agent's own workspace folder, which the
-    // `workspace_*` tools above manage.)
+    // Workspace + org-library access now ride on the filesystem MCP (see
+    // `dev-in-house-workspace` / `dev-in-house-library-mcp` skills) — no
+    // dedicated tool bindings here.
   ];
 
   // Configurable tools — gated by agent_available_tools assignments

@@ -7,6 +7,7 @@ import {
   loadGoogleWorkspaceAgentSection,
   loadLibrarySection,
 } from "../../basicGraph/nodes/contextBuilder";
+import { hasFilesystemMcp } from "../../../tools/hasFilesystemMcp";
 
 /**
  * LangGraph node: assembles the system prompt for a roundtable agent turn.
@@ -66,14 +67,14 @@ export async function roundtableContextBuilderNode(
     sections.push(`# You are ${displayName}\n`);
 
     // ── Organization summary + workspace agent (shared grounding) ──
-    const [orgSummarySection, googleWorkspaceAgentSection] = await Promise.all([
+    const [orgSummarySection, googleWorkspaceAgentSection, librarySection] = await Promise.all([
       loadOrganizationSummarySection(agentOrganizationId),
       loadGoogleWorkspaceAgentSection(agentOrganizationId),
+      loadLibrarySection(agentId),
     ]);
     if (orgSummarySection.trim().length > 0) {
       sections.push(orgSummarySection);
     }
-    const librarySection = loadLibrarySection();
     if (librarySection.trim().length > 0) {
       sections.push(librarySection);
     }
@@ -157,12 +158,13 @@ export async function roundtableContextBuilderNode(
     }
 
     // ── Workspace ───────────────────────────────────────────────────────
-    if (agentWorkspacePath) {
+    if (agentWorkspacePath && (await hasFilesystemMcp(agentId))) {
       sections.push("## Workspace");
       sections.push(
-        "You have a persistent workspace folder for `.md` and `.txt` files.\n" +
-        "Tools: `workspace_list_files`, `workspace_read_file`, `workspace_write_file`, " +
-        "`workspace_edit_file`, `workspace_delete_file`.",
+        `Your persistent workspace lives at \`${agentWorkspacePath}\`. Access it via the ` +
+        "**filesystem MCP** (server `filesystem`, rooted at `/app/data`): `list_directory`, " +
+        "`read_text_file`, `write_file`, `edit_file`, `search_files`. Always use the absolute " +
+        "path above as the prefix.",
       );
       sections.push("");
     }

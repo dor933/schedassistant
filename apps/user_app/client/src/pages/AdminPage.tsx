@@ -1601,9 +1601,10 @@ export default function AdminPage() {
               </span>
             </h2>
             <p className="mb-3 text-xs text-gray-500">
-              Reference documents shared by every agent in this organisation. Every agent
-              can read library files as part of its core data via <code>list_library_files</code>
-              and <code>read_library_file</code>. Upload the docs you want every agent to consult
+              Reference documents shared by every agent in this organisation. Agents with the
+              <code>filesystem</code> MCP attached can read library files directly from
+              <code>/app/data/library</code> via <code>list_directory</code> and
+              <code>read_text_file</code>. Upload the docs you want every agent to consult
               — policies, product briefs, domain cheat-sheets, standards, etc. Max 25 MB per file.
             </p>
 
