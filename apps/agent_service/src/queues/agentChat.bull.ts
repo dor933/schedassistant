@@ -32,6 +32,16 @@ export type AgentChatJobData = {
   agentId?: string | null;
   /** When false in a group chat, the message is stored but the agent does not respond. */
   mentionsAgent?: boolean;
+  /**
+   * Optional user-uploaded text file. Worker writes it into the target
+   * agent's workspace with a version-suffix collision policy and wraps the
+   * human message so the LLM can read the contents.
+   */
+  attachment?: {
+    fileName: string;
+    /** UTF-8 contents — we only accept .md / .txt at the upload boundary. */
+    content: string;
+  };
 };
 
 /** JSON-serializable result returned to the HTTP client after the job completes. */

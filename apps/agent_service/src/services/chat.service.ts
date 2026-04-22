@@ -11,6 +11,7 @@ export class ChatService {
     singleChatId?: string;
     agentId?: string;
     mentionsAgent?: boolean;
+    attachment?: { fileName: string; content: string };
   }): Promise<string> {
     const queue = getAgentChatQueue();
     const requestId = data.requestId ?? crypto.randomUUID();
@@ -26,6 +27,7 @@ export class ChatService {
       ...(data.mentionsAgent != null
         ? { mentionsAgent: data.mentionsAgent }
         : {}),
+      ...(data.attachment ? { attachment: data.attachment } : {}),
     } satisfies AgentChatJobData);
 
     return requestId;

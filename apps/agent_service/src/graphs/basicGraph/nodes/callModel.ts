@@ -38,6 +38,7 @@ import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
+import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 
@@ -319,6 +320,8 @@ export async function callModelNode(
     tools.push(ListRepositoriesTool());
   if (has("query_database"))
     tools.push(QueryDatabaseTool());
+  if (has("send_file_to_user"))
+    tools.push(SendFileToUserTool(agentId));
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),
   );

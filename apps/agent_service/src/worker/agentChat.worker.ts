@@ -18,6 +18,8 @@ import { Group, SingleChat, Agent, DeepAgentDelegation } from "@scheduling-agent
 import { EPIC_ORCHESTRATOR_DEFINITION } from "../constants/epicAgent";
 import { isEpicExecutionRequest } from "../utils/epicDetection";
 import { isEpicOrchestratorBusy } from "../utils/epicBusyCheck";
+import { saveUserAttachmentToAgentWorkspace } from "../tools/workspaceTools";
+import { buildAttachmentUrl } from "../tools/sendFileTool";
 import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
@@ -49,13 +51,14 @@ export function startAgentChatWorker(
     async (job) => {
       const {
         userId,
-        message,
+        message: rawMessage,
         groupId,
         singleChatId,
         agentId,
         requestId,
         mentionsAgent,
         displayName,
+        attachment,
       } = job.data;
 
       // Resolve agentId for lock scoping — all conversations sharing
@@ -73,6 +76,73 @@ export function startAgentChatWorker(
       if (!resolvedAgentId) {
         throw new Error("agent_chat job: cannot resolve agentId for lock");
       }
+
+      // ── User attachment: save into agent workspace, build two views ──
+      // `graphMessage` is what the LLM sees (raw typed text + file contents).
+      // `storedContent` is what we persist to conversation_messages and what
+      // the chat UI renders — a clickable attachment chip plus the typed
+      // message. The file lands in the agent's workspace so subsequent turns
+      // can read it via `workspace_read_file` and the UI can download it via
+      // the signed attachment URL.
+      let graphMessage = rawMessage ?? "";
+      let storedContent = rawMessage ?? "";
+      if (attachment?.fileName && attachment?.content) {
+        try {
+          const saved = await saveUserAttachmentToAgentWorkspace(
+            resolvedAgentId,
+            attachment.fileName,
+            attachment.content,
+          );
+          const trimmed = (rawMessage ?? "").trim();
+
+          // ALWAYS wrap the graph message with file contents once we've saved
+          // the file — the agent's awareness of the attachment must not depend
+          // on whether URL signing succeeds.
+          graphMessage =
+            `📎 The user attached a file. It has been saved to your workspace as ` +
+            `\`${saved.savedFileName}\` — you can re-read it later with ` +
+            `workspace_read_file. File contents are below.\n\n` +
+            `--- BEGIN ${saved.savedFileName} ---\n${attachment.content}\n--- END ${saved.savedFileName} ---` +
+            (trimmed ? `\n\n${rawMessage}` : "");
+
+          // Try to build a signed download URL for the UI chip. If signing is
+          // misconfigured (e.g. ATTACHMENT_SIGNING_SECRET unset), fall back to
+          // a plain-text marker — the agent still sees the contents, the user
+          // just loses the clickable download until the secret is configured.
+          let chipMarkdown: string;
+          try {
+            const url = buildAttachmentUrl(
+              resolvedAgentId,
+              saved.savedFileName,
+            );
+            chipMarkdown = `[📎 ${saved.savedFileName}](${url})`;
+          } catch (urlErr: any) {
+            logger.warn(
+              "Attachment URL signing failed; storing plain-text marker",
+              {
+                requestId,
+                agentId: resolvedAgentId,
+                fileName: saved.savedFileName,
+                error: urlErr?.message,
+              },
+            );
+            chipMarkdown = `📎 ${saved.savedFileName}`;
+          }
+          storedContent = trimmed
+            ? `${chipMarkdown}\n\n${rawMessage}`
+            : chipMarkdown;
+        } catch (err: any) {
+          logger.error("Attachment save failed, dropping attachment", {
+            requestId,
+            agentId: resolvedAgentId,
+            fileName: attachment.fileName,
+            error: err?.message,
+          });
+          // Fall through without an attachment — the typed message still
+          // goes to the agent.
+        }
+      }
+      const message = graphMessage;
 
       const lockKey = `agent:thread:${resolvedAgentId}`;
 
@@ -151,7 +221,7 @@ export function startAgentChatWorker(
               singleChatId: singleChatId ?? null,
               threadId,
               role: "user",
-              content: message,
+              content: storedContent,
               senderName: displayName,
               requestId,
             });
@@ -211,7 +281,7 @@ export function startAgentChatWorker(
               singleChatId: singleChatId ?? null,
               threadId,
               role: "user",
-              content: message,
+              content: storedContent,
               senderName: displayName,
               requestId,
             });
@@ -236,7 +306,7 @@ export function startAgentChatWorker(
               singleChatId: singleChatId ?? null,
               threadId,
               role: "user",
-              content: message,
+              content: storedContent,
               senderName: displayName,
               requestId,
             });
@@ -295,7 +365,7 @@ export function startAgentChatWorker(
               singleChatId: singleChatId ?? null,
               threadId,
               role: "user",
-              content: message,
+              content: storedContent,
               senderName: displayName,
               requestId,
             });
@@ -481,7 +551,7 @@ export function startAgentChatWorker(
             singleChatId: singleChatId ?? null,
             threadId,
             role: "user",
-            content: message,
+            content: storedContent,
             senderName: displayName,
             requestId,
           });

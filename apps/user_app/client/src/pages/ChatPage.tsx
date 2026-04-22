@@ -699,7 +699,7 @@ export default function ChatPage() {
   }
 
   const handleSend = useCallback(
-    async (text: string) => {
+    async (text: string, attachment?: File) => {
       if (!activeConv) return;
 
       if (!activeSession) {
@@ -709,7 +709,7 @@ export default function ChatPage() {
               ? { groupId: activeConv.id }
               : { singleChatId: activeConv.id };
           await createSession({
-            title: text.slice(0, 60),
+            title: text.slice(0, 60) || attachment?.name || "",
             ...scope,
           });
           const list = await getSessions(scope);
@@ -719,15 +719,24 @@ export default function ChatPage() {
         }
       }
 
-      await doSend(text);
+      await doSend(text, attachment);
     },
     [activeConv, activeSession],
   );
 
-  async function doSend(text: string) {
+  async function doSend(text: string, attachment?: File) {
+    // Optimistic user bubble — the server persists a properly signed
+    // attachment markdown link once it saves the file, so on the next
+    // history load this placeholder gets replaced by the real chip. For
+    // the in-memory view we show a plain-text marker (no signed URL yet).
+    const optimisticContent = attachment
+      ? text
+        ? `📎 ${attachment.name}\n\n${text}`
+        : `📎 ${attachment.name}`
+      : text;
     const userMsg: Message = {
       role: "user",
-      content: text,
+      content: optimisticContent,
       _absIndex: totalMessages,
     };
     setTotalMessages((t) => t + 1);
@@ -756,7 +765,7 @@ export default function ChatPage() {
 
     if (isGroup && !mentionsAgent) {
       try {
-        await sendMessage(text, requestId, scope);
+        await sendMessage(text, requestId, scope, attachment);
       } catch {
         // stored silently
       } finally {
@@ -770,7 +779,7 @@ export default function ChatPage() {
     });
 
     try {
-      await sendMessage(text, requestId, scope);
+      await sendMessage(text, requestId, scope, attachment);
       const p = await replyPromise;
       // Only append the reply if the user is still viewing the same conversation.
       // If they switched away, the reply is already persisted in conversation_messages

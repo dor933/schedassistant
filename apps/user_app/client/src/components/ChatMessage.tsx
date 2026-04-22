@@ -1,9 +1,101 @@
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
-import { User, AlertTriangle } from "lucide-react";
+import { User, AlertTriangle, Paperclip, Download } from "lucide-react";
 import Markdown from "react-markdown";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { VendorIcon } from "./VendorModelBadge";
+
+/**
+ * Attachment URLs emitted by the `send_file_to_user` agent tool (and, in PR 2,
+ * by the user-upload path) look like `/claw/api/attachments?...`. We detect
+ * them and render a styled chip instead of a plain hyperlink.
+ */
+const ATTACHMENT_HREF_PREFIX = "/claw/api/attachments";
+
+function isAttachmentHref(href: string | undefined): href is string {
+  if (!href) return false;
+  return href.startsWith(ATTACHMENT_HREF_PREFIX);
+}
+
+function extractAttachmentFileName(
+  href: string,
+  fallback: string,
+): string {
+  try {
+    const qs = href.split("?")[1];
+    if (qs) {
+      const params = new URLSearchParams(qs);
+      const f = params.get("f");
+      if (f) return f;
+    }
+  } catch {
+    // fall through
+  }
+  return fallback;
+}
+
+function AttachmentChip({ href, label }: { href: string; label: string }) {
+  const fileName = extractAttachmentFileName(href, label);
+  return (
+    <Box
+      component="a"
+      href={href}
+      download={fileName}
+      // `download` alone is honoured because the server sets
+      // Content-Disposition: attachment. Opens a download in a new nav
+      // without navigating the SPA away.
+      className="inline-flex items-center gap-2 rounded-xl border border-indigo-400/30 bg-indigo-500/10 backdrop-blur-sm transition-colors hover:bg-indigo-500/20 hover:border-indigo-400/50 no-underline"
+      sx={{
+        px: 1.25,
+        py: 0.75,
+        my: 0.5,
+        textDecoration: "none",
+        maxWidth: "100%",
+        minWidth: 0,
+        color: "rgb(199 210 254)",
+      }}
+    >
+      <Paperclip className="h-4 w-4 flex-shrink-0 text-indigo-300" />
+      <Box
+        component="span"
+        className="text-sm font-medium text-indigo-100"
+        sx={{
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          minWidth: 0,
+        }}
+      >
+        {fileName}
+      </Box>
+      <Download className="h-3.5 w-3.5 flex-shrink-0 text-indigo-300/80" />
+    </Box>
+  );
+}
+
+/** Text content of a markdown link — reduces `children` to a flat string fallback. */
+function childrenToString(children: unknown): string {
+  if (typeof children === "string") return children;
+  if (typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(childrenToString).join("");
+  return "";
+}
+
+const markdownComponents: Components = {
+  a: ({ href, children, ...props }) => {
+    if (isAttachmentHref(href)) {
+      return (
+        <AttachmentChip href={href} label={childrenToString(children)} />
+      );
+    }
+    return (
+      <a href={href} target="_blank" rel="noreferrer" {...props}>
+        {children}
+      </a>
+    );
+  },
+};
 
 const vendorAvatarColors: Record<string, string> = {
   openai: "bg-emerald-500/15 text-emerald-300 ring-emerald-400/30",
@@ -95,12 +187,14 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
       );
     }
     return (
-      <Box 
-        dir="auto" 
-        className={className} 
+      <Box
+        dir="auto"
+        className={className}
         sx={{ overflowWrap: "break-word", wordBreak: "break-word", minWidth: 0, textAlign: "start" }}
       >
-        <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+        <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          {content}
+        </Markdown>
       </Box>
     );
   };

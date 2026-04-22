@@ -215,6 +215,51 @@ export function WorkspaceDeleteFileTool(agentId: string, recorder?: WorkspaceWri
 }
 
 /**
+ * Saves a user-uploaded attachment into the agent's workspace with a
+ * version-suffix collision policy: `notes.md` → `notes-2.md` → `notes-3.md`.
+ * Returns the final file name actually written (callers need it to build the
+ * attachment URL and the conversation message).
+ *
+ * Shares `resolveWorkspace` / `ensureDir` / `safePath` / `hasAllowedExt` with
+ * the agent-facing workspace tools so the constraints stay in lockstep
+ * (`.md`/`.txt` only, no path traversal).
+ */
+export async function saveUserAttachmentToAgentWorkspace(
+  agentId: string,
+  originalName: string,
+  content: string,
+): Promise<{ savedFileName: string; workspacePath: string }> {
+  const workspace = await resolveWorkspace(agentId);
+  if (!workspace) {
+    throw new Error("Workspace not configured for this agent.");
+  }
+  ensureDir(workspace);
+
+  const baseName = path.basename(String(originalName).trim());
+  if (!baseName || baseName === "." || baseName === "..") {
+    throw new Error("Invalid file name.");
+  }
+  const ext = path.extname(baseName).toLowerCase();
+  if (!ALLOWED_EXT.has(ext)) {
+    throw new Error(`Only ${[...ALLOWED_EXT].join(", ")} files are supported.`);
+  }
+  const stem = baseName.slice(0, baseName.length - ext.length);
+
+  let candidate = baseName;
+  let n = 2;
+  while (fs.existsSync(path.join(workspace, candidate))) {
+    candidate = `${stem}-${n}${ext}`;
+    n += 1;
+  }
+
+  const filePath = safePath(workspace, candidate);
+  if (!filePath) throw new Error("Invalid file path.");
+
+  fs.writeFileSync(filePath, content, "utf-8");
+  return { savedFileName: candidate, workspacePath: workspace };
+}
+
+/**
  * Convenience: returns all workspace tools for an agent.
  *
  * The optional `recorder` is used when a system/executor agent writes to a

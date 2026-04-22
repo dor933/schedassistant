@@ -15,10 +15,13 @@ export class ChatController {
       requestId,
       mentionsAgent,
       displayName,
+      attachment,
     } = req.body;
 
-    if (!userId || !message) {
-      return res.status(400).json({ error: "userId and message are required." });
+    if (!userId || (!message && !attachment)) {
+      return res
+        .status(400)
+        .json({ error: "userId and message (or attachment) are required." });
     }
     if (!groupId && !singleChatId) {
       return res
@@ -26,16 +29,34 @@ export class ChatController {
         .json({ error: "groupId or singleChatId is required." });
     }
 
+    // Validate attachment shape if present.
+    let validatedAttachment:
+      | { fileName: string; content: string }
+      | undefined;
+    if (attachment != null) {
+      const fileName =
+        typeof attachment?.fileName === "string" ? attachment.fileName : "";
+      const content =
+        typeof attachment?.content === "string" ? attachment.content : "";
+      if (!fileName || !content) {
+        return res.status(400).json({
+          error: "attachment must include non-empty fileName and content.",
+        });
+      }
+      validatedAttachment = { fileName, content };
+    }
+
     try {
       const resolvedRequestId = await chatService.enqueueChat({
         userId,
-        message,
+        message: message ?? "",
         requestId,
         displayName,
         groupId,
         singleChatId,
         agentId,
         mentionsAgent,
+        ...(validatedAttachment ? { attachment: validatedAttachment } : {}),
       });
 
       return res.status(202).json({

@@ -344,19 +344,30 @@ export async function sendMessage(
     agentId?: string;
     mentionsAgent?: boolean;
   },
+  attachment?: File,
 ): Promise<ChatAccepted> {
   const token = getToken();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE}/chat`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
+  let body: BodyInit;
+  if (attachment) {
+    // multipart/form-data — the server accepts the upload via multer and
+    // forwards the contents to agent_service.
+    const form = new FormData();
+    form.append("message", message);
+    form.append("requestId", requestId);
+    if (scope?.groupId) form.append("groupId", scope.groupId);
+    if (scope?.singleChatId) form.append("singleChatId", scope.singleChatId);
+    if (scope?.agentId) form.append("agentId", scope.agentId);
+    if (scope?.mentionsAgent != null)
+      form.append("mentionsAgent", String(scope.mentionsAgent));
+    form.append("file", attachment, attachment.name);
+    body = form;
+    // Don't set Content-Type — the browser adds the multipart boundary.
+  } else {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify({
       message,
       requestId,
       ...(scope?.groupId ? { groupId: scope.groupId } : {}),
@@ -365,8 +376,10 @@ export async function sendMessage(
       ...(scope?.mentionsAgent != null
         ? { mentionsAgent: scope.mentionsAgent }
         : {}),
-    }),
-  });
+    });
+  }
+
+  const res = await fetch(`${BASE}/chat`, { method: "POST", headers, body });
 
   if (res.status === 202) {
     return res.json() as Promise<ChatAccepted>;

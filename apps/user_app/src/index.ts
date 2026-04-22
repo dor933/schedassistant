@@ -6,6 +6,7 @@ import path from "path";
 import { sequelize } from "@scheduling-agent/database";
 import { authRouter } from "./routes/auth.routes";
 import { chatRouter } from "./routes/chat.routes";
+import { attachmentsRouter } from "./routes/attachments.routes";
 import { sessionsRouter } from "./routes/sessions.routes";
 import { notificationsRouter } from "./routes/notifications.routes";
 import { inAppNotificationsRouter } from "./routes/inAppNotifications.routes";
@@ -48,6 +49,7 @@ async function main(): Promise<void> {
 
   app.use("/api/auth", authRouter);
   app.use("/api/chat", chatRouter);
+  app.use("/api/attachments", attachmentsRouter);
   app.use("/api/sessions", sessionsRouter);
   app.use("/api/notifications", notificationsRouter);
   app.use("/api/in-app-notifications", inAppNotificationsRouter);

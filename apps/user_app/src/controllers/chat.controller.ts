@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { Request, Response } from "express";
 import { ChatService } from "../services/chat.service";
 import { logger } from "../logger";
@@ -12,21 +13,56 @@ function parseRequestId(raw: unknown): string | null {
     : null;
 }
 
+const ATTACHMENT_ALLOWED_EXT = new Set([".md", ".txt"]);
+/** Matches the router's multer limit; mirrored here to reject before proxying. */
+const ATTACHMENT_MAX_BYTES = 2 * 1024 * 1024;
+
+function coerceBool(v: unknown): boolean | undefined {
+  if (typeof v === "boolean") return v;
+  if (v === "true") return true;
+  if (v === "false") return false;
+  return undefined;
+}
+
 export class ChatController {
   private chatService = new ChatService();
 
   send = (req: Request, res: Response) => {
-    const { message, groupId, singleChatId, agentId, mentionsAgent } =
-      req.body;
+    const { message, groupId, singleChatId, agentId } = req.body;
+    const mentionsAgent = coerceBool(req.body.mentionsAgent);
     const userId = req.user!.userId;
 
-    if (!message) {
-      res.status(400).json({ error: "message is required." });
+    const uploaded = (req as any).file as
+      | { originalname: string; buffer: Buffer; size: number; mimetype?: string }
+      | undefined;
+
+    if (!message && !uploaded) {
+      res.status(400).json({ error: "message or file is required." });
       return;
     }
     if (!groupId && !singleChatId) {
       res.status(400).json({ error: "groupId or singleChatId is required." });
       return;
+    }
+
+    let attachment: { fileName: string; content: string } | undefined;
+    if (uploaded) {
+      const ext = path.extname(uploaded.originalname).toLowerCase();
+      if (!ATTACHMENT_ALLOWED_EXT.has(ext)) {
+        res.status(400).json({
+          error: `Only ${[...ATTACHMENT_ALLOWED_EXT].join(", ")} files are supported.`,
+        });
+        return;
+      }
+      if (uploaded.size > ATTACHMENT_MAX_BYTES) {
+        res.status(400).json({ error: "File exceeds 2 MB limit." });
+        return;
+      }
+      const fileName = path.basename(uploaded.originalname);
+      attachment = {
+        fileName,
+        content: uploaded.buffer.toString("utf-8"),
+      };
     }
 
     const requestId = parseRequestId(req.body.requestId) ?? randomUUID();
@@ -37,6 +73,7 @@ export class ChatController {
       groupId,
       singleChatId,
       mentionsAgent,
+      hasAttachment: !!attachment,
     });
 
     if (groupId) {
@@ -45,7 +82,7 @@ export class ChatController {
           groupId,
           userId,
           String(req.user!.displayName ?? userId),
-          message,
+          message ?? "",
           requestId,
         )
         .catch((err) =>
@@ -59,13 +96,14 @@ export class ChatController {
     void this.chatService.proxyToAgentService(
       {
         userId,
-        message,
+        message: message ?? "",
         requestId,
         displayName: req.user!.displayName ?? userId,
         ...(groupId ? { groupId } : {}),
         ...(singleChatId ? { singleChatId } : {}),
         ...(agentId ? { agentId } : {}),
         ...(mentionsAgent != null ? { mentionsAgent } : {}),
+        ...(attachment ? { attachment } : {}),
       },
       userId,
       requestId,
