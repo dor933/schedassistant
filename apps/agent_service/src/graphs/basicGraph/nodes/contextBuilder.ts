@@ -1,6 +1,7 @@
 import { RunnableConfig } from "@langchain/core/runnables";
 import { Op } from "sequelize";
-import { listLibraryFiles } from "../../../services/library.service";
+import { getLibraryPath, listLibraryFiles } from "../../../services/library.service";
+import { hasFilesystemMcp } from "../../../tools/hasFilesystemMcp";
 import {
   Agent,
   GroupMember,
@@ -130,8 +131,8 @@ async function loadWebSearchAgentSection(
  * must delegate to this agent via `delegate_to_deep_agent`.
  *
  * NOTE: "Google Workspace" here refers to Google's SaaS suite (Gmail, Google
- * Calendar, Google Drive). It is unrelated to each agent's *workspace folder*
- * (.md/.txt scratch files) which the `workspace_*` tools manage.
+ * Calendar, Google Drive). It is unrelated to each agent's *own workspace
+ * folder* on disk (accessed via the filesystem MCP when attached).
  *
  * Permission inheritance: the Google Workspace agent performs the action, but
  * the `AgentUserScope` check is keyed to the *calling* primary's agent id, so
@@ -164,10 +165,9 @@ export async function loadGoogleWorkspaceAgentSection(
         "this agent via `delegate_to_deep_agent`. Do NOT attempt Google Workspace calls " +
         "yourself (you don't have the tools), and do NOT delegate these tasks to any " +
         "other system agent — it is always this one.\n\n" +
-        "**This is different from your own agent workspace folder.** The `workspace_list_files`, " +
-        "`workspace_read_file`, `workspace_write_file`, etc. tools manage a private folder of " +
-        "scratch .md/.txt files — that is the agent workspace, not Google Workspace. Never " +
-        "confuse the two.\n\n" +
+        "**This is different from your own agent workspace folder.** Your workspace is a directory " +
+        "on disk accessed via the filesystem MCP (separate section above) — that is the agent " +
+        "workspace, not Google Workspace. Never confuse the two.\n\n" +
         "**Before delegating**, call `list_google_workspace_grants` to see which users you " +
         "are permitted to act on and which scopes you hold per user. Pick the correct email " +
         "from that list — never guess an email or use an internal user id.\n\n" +
@@ -201,16 +201,18 @@ export async function loadGoogleWorkspaceAgentSection(
 /**
  * Renders a system-prompt section describing the shared organisation library —
  * a flat folder of admin-curated reference documents (policies, standards,
- * product briefs, domain cheat-sheets, etc.) that every agent in every
- * conversation can read. Lists the current file inventory so agents know
- * what's available without having to call `list_library_files` first.
+ * product briefs, domain cheat-sheets, etc.) that every agent in the org can
+ * read via the filesystem MCP. Lists the current file inventory so agents know
+ * what's available before walking the directory.
  *
- * The library sits alongside each agent's per-agent core data (definition,
- * core instructions, notes, workspace, skills) and is shared across all
- * agents in the org — reads are safe and encouraged whenever a query might
- * benefit from that reference material.
+ * Returns "" when the agent does not have the filesystem MCP server attached —
+ * there is no way for such an agent to act on the guidance, so injecting it
+ * would only add noise.
  */
-export function loadLibrarySection(): string {
+export async function loadLibrarySection(agentId: AgentId | null): Promise<string> {
+  if (!agentId) return "";
+  if (!(await hasFilesystemMcp(agentId))) return "";
+
   let files: ReturnType<typeof listLibraryFiles> = [];
   try {
     files = listLibraryFiles();
@@ -221,23 +223,22 @@ export function loadLibrarySection(): string {
     return "";
   }
 
+  const libraryPath = getLibraryPath();
   const lines: string[] = [];
-  lines.push("## Shared organisation library (part of your core data)");
+  lines.push("## Shared organisation library");
   lines.push(
-    "There is a **shared library** of reference documents uploaded by the " +
-      "organisation's admins. It lives alongside your per-agent core data " +
-      "(your definition, core instructions, notes, workspace, skills) and is " +
-      "**shared by every agent in this organisation** — any document here is " +
-      "also readable by your peers. Treat it as common, authoritative " +
-      "reference material: company policies, product briefs, standards, " +
-      "domain cheat-sheets, anything an admin decided every agent should be " +
-      "able to consult.\n\n" +
-      "Read from the library whenever a user question, delegation brief, or " +
-      "planning step might benefit from that reference context. Use " +
-      "`list_library_files` to discover what is available and " +
-      "`read_library_file` to load a specific document by its file name. " +
-      "You do NOT upload or delete library files — that is an admin-only " +
-      "action performed from the admin UI.",
+    "Your organisation maintains a **shared library** of reference documents " +
+      "uploaded by admins — policies, product briefs, standards, domain " +
+      "cheat-sheets, anything every agent in the org should be able to " +
+      "consult. It is read-only from your side; admins manage contents from " +
+      "the admin UI.\n\n" +
+      `**Path:** \`${libraryPath}\` (flat directory, original filenames)\n\n` +
+      "Access it through the **filesystem MCP** (server name `filesystem`, " +
+      "rooted at `/app/data`). Use `list_directory` on the path above to " +
+      "browse, and `read_text_file` to read a specific document. Consult the " +
+      "library whenever a question touches org-specific policies, " +
+      "terminology, or procedures. Never `write_file`, `edit_file`, " +
+      "`move_file`, or delete anything under this path — admins own it.",
   );
   if (files.length === 0) {
     lines.push("");
@@ -400,13 +401,19 @@ export async function buildContext(
 
   const agentNameSection = await loadAgentNameSection(agentId);
 
-  const [webSearchAgentSection, organizationSummarySection, googleWorkspaceAgentSection] =
-    await Promise.all([
-      loadWebSearchAgentSection(agentOrganizationId),
-      loadOrganizationSummarySection(agentOrganizationId),
-      loadGoogleWorkspaceAgentSection(agentOrganizationId),
-    ]);
-  const librarySection = loadLibrarySection();
+  const [
+    webSearchAgentSection,
+    organizationSummarySection,
+    googleWorkspaceAgentSection,
+    librarySection,
+    agentHasFilesystemMcp,
+  ] = await Promise.all([
+    loadWebSearchAgentSection(agentOrganizationId),
+    loadOrganizationSummarySection(agentOrganizationId),
+    loadGoogleWorkspaceAgentSection(agentOrganizationId),
+    loadLibrarySection(agentId),
+    hasFilesystemMcp(agentId),
+  ]);
 
   // ── 4b. Recent roundtable summaries this agent participated in ──
   const roundtableSummaries = await loadRecentRoundtableSummaries(agentId, { limit: 2 });
@@ -418,6 +425,7 @@ export async function buildContext(
     agentCharacteristics,
     agentNotes,
     agentWorkspacePath,
+    agentHasFilesystemMcp,
     agentHasLinkedSkills,
     agentNameSection,
     webSearchAgentSection,
@@ -677,6 +685,7 @@ function formatSystemPrompt(
   agentCharacteristics: Record<string, unknown> | null,
   agentNotes: string | null,
   agentWorkspacePath: string | null,
+  agentHasFilesystemMcp: boolean,
   agentHasLinkedSkills: boolean,
   agentNameSection: string,
   webSearchAgentSection: string,
@@ -839,25 +848,21 @@ function formatSystemPrompt(
     sections.push("");
   }
 
-  if (agentWorkspacePath) {
+  if (agentWorkspacePath && agentHasFilesystemMcp) {
     sections.push("## Workspace");
     sections.push(
-      "You have a persistent workspace folder where you can store, read, and edit `.md` and `.txt` files. " +
-      "These files persist across all conversations.\n\n" +
-      "Available tools:\n" +
-      "- `workspace_list_files` — list all files in your workspace\n" +
-      "- `workspace_read_file` — read a file's content\n" +
-      "- `workspace_write_file` — create or overwrite a file\n" +
-      "- `workspace_edit_file` — replace a specific text snippet in a file\n" +
-      "- `workspace_delete_file` — delete a file\n\n" +
+      `Your persistent workspace lives at \`${agentWorkspacePath}\`. Files here survive across all ` +
+      `conversations. Use the **filesystem MCP** (server name \`filesystem\`, rooted at \`/app/data\`) ` +
+      `for every workspace action: \`list_directory\`, \`read_text_file\`, \`write_file\`, \`edit_file\`, ` +
+      `\`search_files\`, \`create_directory\`, \`move_file\`. Always use the absolute path above as the ` +
+      `prefix — never a relative path.\n\n` +
       "Use your workspace for persistent documents, plans, research, templates, or any information " +
       "you want to retain and build upon over time.\n\n" +
-      "**Shared with executor/system agents you delegate to.** When you delegate a task to a system agent " +
-      "(via `delegate_to_deep_agent`, `delegate_web_search`, etc.), that agent writes into **this same " +
-      "workspace folder** on your behalf — system agents do not have their own workspaces. After a " +
-      "delegation result comes back, check the `Workspace writes` section in the result message (and run " +
-      "`workspace_list_files` if needed) to see what files the executor left for you, then " +
-      "`workspace_read_file` to inspect them.",
+      "**Shared with executor/system agents you delegate to.** When you delegate a task via " +
+      "`delegate_to_deep_agent` (or similar), the executor agent does not have its own workspace — it " +
+      "writes into **this same directory** on your behalf. After the delegation result comes back, " +
+      "check the `## Workspace writes` section at the end of the executor's reply to see what it " +
+      "changed, then `read_text_file` to inspect any new or modified files.",
     );
     sections.push("");
   }

@@ -17,8 +17,8 @@ import {
 import { agentChatQueue } from "../queues/agentChat.bull";
 import { getMcpToolsByServerIds } from "../mcpClient";
 import { systemAgentSkillTools } from "../tools/skillsTools";
-import { workspaceTools, type WorkspaceWriteRecorder } from "../tools/workspaceTools";
-import { libraryTools } from "../tools/libraryTools";
+import { hasFilesystemMcp } from "../tools/hasFilesystemMcp";
+import { getLibraryPath } from "../services/library.service";
 import { loadActiveToolSlugs } from "../tools/resolveAgentTools";
 import { QueryDatabaseTool } from "../tools/queryDatabaseTool";
 import { ConsultAgentTool } from "../tools/consultAgentTool";
@@ -239,8 +239,9 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         // or Google Workspace (Gmail / Calendar / Drive) tools. The Google
         // Workspace tools are bound ONLY to the dedicated
         // `google_workspace_agent` system agent
-        // (toolConfig.useGoogleWorkspaceTools). Unrelated to the *agent
-        // workspace folder* tools injected below via `workspaceTools()`.
+        // (toolConfig.useGoogleWorkspaceTools). Durable workspace/library
+        // reads and writes ride on the filesystem MCP when the executor has
+        // it attached — no dedicated workspace tools are injected here.
         const tc = executorAgent.toolConfig as Record<string, unknown> | null;
         const useGoogleSearch = !!tc?.googleSearch;
         const useTavily = !!tc?.useTavily;
@@ -259,11 +260,6 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         const threadId = crypto.randomUUID();
 
         let resultText: string;
-
-        // Captures durable writes the executor performs in the caller's
-        // shared workspace — reported back in the delegation result so the
-        // caller agent knows what changed in its workspace folder.
-        const workspaceWrites: { action: "write" | "edit" | "delete"; fileName: string }[] = [];
 
         if (useGoogleSearch) {
           // ── Google Search agent: invoke the model directly with grounding ──
@@ -333,13 +329,28 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
 
           const skillTools = systemAgentSkillTools(executorAgent.id);
 
-          // Recorder surfaces durable workspace writes back to the caller.
-          const writeRecorder: WorkspaceWriteRecorder = {
-            record: (action, fileName) => {
-              workspaceWrites.push({ action, fileName });
-            },
-          };
-          const wsTools = workspaceTools(callerAgentId, writeRecorder);
+          // Does the executor have the filesystem MCP attached? Drives
+          // whether we include the durable workspace / library guidance in
+          // the prompt — with no filesystem MCP the executor has no way to
+          // read or write the caller's workspace, so there is nothing
+          // meaningful to tell it about those paths.
+          const executorHasFilesystemMcp = mcpServerIds.length > 0
+            ? await hasFilesystemMcp(executorAgent.id)
+            : false;
+
+          // Caller's persistent workspace directory — the executor, when it
+          // has filesystem MCP access, writes durable artifacts there so the
+          // calling orchestrator can pick them up. System executor agents
+          // have no workspace of their own (workspace_path is NULL per
+          // migration 20240101000084); they always act on the caller's
+          // directory. If the caller has none, we fall back to no section.
+          let callerWorkspacePath: string | null = null;
+          if (executorHasFilesystemMcp && callerAgentId) {
+            const callerAgent = await Agent.findByPk(callerAgentId, {
+              attributes: ["id", "workspacePath"],
+            });
+            callerWorkspacePath = callerAgent?.workspacePath ?? null;
+          }
 
           // Load configurable tools gated by agent_available_tools (same as callModel)
           const activeSlugs = await loadActiveToolSlugs(executorAgent.id);
@@ -357,7 +368,6 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           // NOT own scope grants themselves; they inherit from the caller, so
           // we key the permission check to callerAgentId. If the caller lacks
           // the grant, the tool returns a deny message at invocation time.
-          // (Distinct from the agent-workspace-folder tools in `wsTools`.)
           const googleAgentTools = useGoogleWorkspaceTools ? googleTools(callerAgentId) : [];
 
           // Tavily web-search tool — injected for the dedicated Tavily-backed
@@ -369,8 +379,6 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           const allTools = [
             ...mcpTools,
             ...skillTools,
-            ...wsTools,
-            ...libraryTools(),
             ...configurableTools,
             ...googleAgentTools,
             ...tavilyTools,
@@ -383,6 +391,43 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             threadId,
             toolCount: allTools.length,
           });
+
+          // Workspace + library guidance — only emitted when this executor
+          // has the filesystem MCP attached and the caller actually has a
+          // workspace directory. Without filesystem MCP the executor has no
+          // tools to honour this guidance; without a caller workspace there
+          // is nowhere for it to write.
+          const libraryPath = getLibraryPath();
+          const workspaceSection = executorHasFilesystemMcp && callerWorkspacePath
+            ? (
+                `## Caller workspace + org library (filesystem MCP)\n` +
+                `You have the filesystem MCP attached, rooted at \`/app/data\`. Use its tools ` +
+                `(\`read_text_file\`, \`write_file\`, \`edit_file\`, \`list_directory\`, \`search_files\`, ` +
+                `\`create_directory\`, \`move_file\`) for all durable reads and writes.\n\n` +
+                `- **CALLER_WORKSPACE_PATH = \`${callerWorkspacePath}\`** — the orchestrator that delegated to you ` +
+                `owns this directory. You do not have a workspace of your own. Write any durable artifacts (plans, ` +
+                `findings, briefs) here so the orchestrator can read them. **Orient first**: \`list_directory\` on ` +
+                `this path before you start, and \`read_text_file\` anything that looks relevant to your task — the ` +
+                `orchestrator or prior specialists may have left context.\n` +
+                `- **LIBRARY_PATH = \`${libraryPath}\`** — read-only org-wide reference documents curated by admins. ` +
+                `Consult before answering questions about internal policies, terminology, or procedures. Never write ` +
+                `or delete anything under this path.\n\n` +
+                `### Required: self-report workspace writes\n` +
+                `At the very end of your final response to the orchestrator, include a top-level section titled ` +
+                `exactly \`## Workspace writes\` listing every file you created, edited, moved, or deleted under ` +
+                `\`CALLER_WORKSPACE_PATH\`. One bullet per file (path relative to that directory) with a one-line ` +
+                `summary of what it contains or why you changed it. If you made no workspace changes, include the ` +
+                `section with a single bullet \`- (none)\`. The orchestrator relies on this to know what changed.\n\n`
+              )
+            : executorHasFilesystemMcp
+              ? (
+                  `## Org library (filesystem MCP)\n` +
+                  `You have the filesystem MCP attached. The admin-curated org library lives at ` +
+                  `\`${libraryPath}\` — read-only. Use \`list_directory\` / \`read_text_file\` to consult it when a ` +
+                  `question touches org-specific policies or terminology. No caller workspace was provided for this ` +
+                  `delegation, so there is no directory to write durable artifacts into — return findings inline.\n\n`
+                )
+              : "";
 
           // Create the deep agent with the deepagents library
           const checkpointer = new MemorySaver();
@@ -400,38 +445,12 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
               `- Use your tools (MCP servers, file operations, etc.) to gather real data and produce real results\n` +
               `- Structure your response clearly with sections\n` +
               `- Include all relevant findings, data, and reasoning\n\n` +
-              `## Storage Tiers — read carefully, they are NOT interchangeable\n` +
-              `You have access to TWO distinct file storage systems. Using the wrong one will either lose your work ` +
-              `or pollute a shared space. Understand the difference before writing anything.\n\n` +
-              `### Tier 1 — Ephemeral task scratchpad (\`read_file\` / \`write_file\` / \`edit_file\`)\n` +
-              `- A virtual filesystem that exists ONLY for the duration of this single task.\n` +
-              `- Everything here is DESTROYED when this task ends. The next time you are invoked, it will be empty.\n` +
-              `- Use it for: intermediate notes, draft sections, raw tool output you want to process, working memory ` +
-              `that helps you think through THIS task.\n` +
-              `- Do NOT put anything here that you (or the orchestrator) will need later. It will be gone.\n\n` +
-              `### Tier 2 — Shared persistent workspace (\`workspace_list_files\` / \`workspace_read_file\` / ` +
-              `\`workspace_write_file\` / \`workspace_edit_file\` / \`workspace_delete_file\`)\n` +
-              `- A real folder on disk that belongs to the orchestrator agent who delegated this task to you.\n` +
-              `- Files here PERSIST across tasks and are SHARED with the calling orchestrator. The orchestrator ` +
-              `can read what you write, and you can read what the orchestrator (or previous specialists it called) wrote.\n` +
-              `- Only \`.md\` and \`.txt\` files are allowed.\n` +
-              `- Use it for: durable findings the orchestrator needs to keep, research results worth preserving ` +
-              `across future tasks, briefs/plans the orchestrator can refer back to, cross-task context.\n` +
-              `- Because this space is shared, treat it like a team drive, not a private scratchpad: use clear, ` +
-              `descriptive filenames, do not overwrite files you did not create unless you are deliberately updating them, ` +
-              `and never put throwaway drafts here.\n\n` +
-              `### Required workflow for every task\n` +
-              `1. **Start by orienting:** call \`workspace_list_files\` before doing anything else. If any files look ` +
-              `relevant to the current task, read them with \`workspace_read_file\` — they may contain context, prior ` +
-              `research, or instructions from the orchestrator that change how you should approach the task.\n` +
-              `2. **Do your work:** use Tier 1 (\`write_file\`/\`edit_file\`) freely for scratch and intermediate reasoning.\n` +
-              `3. **Finish by persisting what matters:** if your task produced findings, conclusions, or artifacts that ` +
-              `the orchestrator or future tasks will benefit from, save them to Tier 2 with \`workspace_write_file\` ` +
-              `using a clear filename. Do not save ephemeral scratch here.\n` +
-              `4. **Announce every workspace write:** in your final response, include a short "Workspace writes" ` +
-              `section listing every file you created, edited, or deleted in the orchestrator's workspace (with a ` +
-              `one-line note on what it contains). The orchestrator needs to know what changed in its workspace ` +
-              `so it can inspect or reference those files later.`,
+              `${workspaceSection}` +
+              `## Ephemeral scratchpad\n` +
+              `\`read_file\` / \`write_file\` / \`edit_file\` (no path prefix) target a virtual in-memory filesystem ` +
+              `scoped to this single task — it vanishes when the task ends. Use it for intermediate notes and raw ` +
+              `tool output you want to process. Do NOT put anything here that you or the orchestrator will need ` +
+              `later.`,
             checkpointer,
           });
 
@@ -505,27 +524,11 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           threadId,
         });
 
-        // Build a summary of durable writes the executor made to the caller's
-        // workspace — the caller must be told what changed so it can inspect.
-        const dedupedWrites = (() => {
-          const seen = new Map<string, "write" | "edit" | "delete">();
-          for (const w of workspaceWrites) {
-            // later actions win (e.g. write then edit → edit)
-            seen.set(w.fileName, w.action);
-          }
-          return [...seen.entries()].map(([fileName, action]) => ({ fileName, action }));
-        })();
-
-        const workspaceWritesSection = dedupedWrites.length === 0
-          ? ""
-          : "\n\n## Workspace writes (to your shared workspace folder)\n" +
-            "The executor agent persisted the following files in your workspace. " +
-            "Use `workspace_read_file` to inspect them:\n" +
-            dedupedWrites
-              .map((w) => `- **${w.action}** \`${w.fileName}\``)
-              .join("\n");
-
         // In syncMode the caller is blocking via waitUntilFinished — skip the callback.
+        // Note: when the executor has filesystem MCP + a caller workspace, its
+        // own final message already includes a `## Workspace writes` section
+        // per the system prompt, so the caller sees what changed without a
+        // server-side recorder.
         if (!job.data.syncMode) {
           const label = executorAgent.agentName || executorAgent.definition || executorAgentId;
           const callbackResult = truncateResult(resultText);
@@ -535,8 +538,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
               `[Executor Agent Result — Delegation ${delegationId}]\n` +
               `Executor: ${label} (${executorAgentId})\n` +
               `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
-              `## Result\n${callbackResult}` +
-              workspaceWritesSection,
+              `## Result\n${callbackResult}`,
             requestId: `delegation-${delegationId}`,
             groupId: groupId ?? null,
             singleChatId: singleChatId ?? null,
@@ -548,7 +550,6 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           logger.info("DeepAgent: enqueued delegation_result callback", {
             delegationId,
             callerAgentId,
-            workspaceWriteCount: dedupedWrites.length,
           });
         }
 

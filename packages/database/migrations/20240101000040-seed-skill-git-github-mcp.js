@@ -278,16 +278,16 @@ Not a substitute for repo files — see \`mcp-filesystem-repo\` / \`dev-in-house
   // ─── In-house: workspace vs skill library (split) — chat agents only ───
   {
     slug: "dev-in-house-workspace",
-    name: "Agent workspace (.md / .txt)",
-    description: "workspace_list_files, workspace_read_file, workspace_write_file, workspace_edit_file, workspace_delete_file.",
-    skillText: `# Workspace tools
+    name: "Agent workspace (filesystem MCP)",
+    description: "Persistent .md / .txt workspace served by the filesystem MCP (rooted at /app/data).",
+    skillText: `# Agent workspace
 
-Private **.md** and **.txt** for this agent (not the product repo):
+Private persistent scratchpad served by the **filesystem MCP** (server \`filesystem\`, rooted at \`/app/data\`). Use the absolute workspace path announced in your system prompt.
 
-- \`workspace_list_files\`, \`workspace_read_file\`, \`workspace_write_file\`, \`workspace_edit_file\`, \`workspace_delete_file\`
+- \`list_directory\`, \`read_text_file\`, \`write_file\`, \`edit_file\`, \`search_files\`
 
 ## Related
-- Stored skill playbooks → \`dev-in-house-skill-library\`.
+- Shared library reads → \`dev-in-house-library-mcp\`.
 - Repo source → \`mcp-filesystem-repo\`.`,
   },
   {

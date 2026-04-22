@@ -46,16 +46,35 @@ export const WEB_SEARCH_AGENT_ID_TAVILY = "00000000-0000-4000-a000-000000000201"
 export type WebSearchChoice = "gemini" | "tavily";
 
 /**
- * Skills that are always auto-assigned to every agent and never appear in the
- * admin UI. They describe the in-house tools (agent notes, workspace, skill
- * library) that are hardcoded into every call. Admins cannot attach or detach
- * them; agents always have access.
+ * Skills that every agent always has available and that never appear in the
+ * admin UI — admins cannot attach or detach them.
+ *
+ * The union (`AUTO_ASSIGNED_SKILL_SLUGS`) is what the admin skills list is
+ * filtered against, so all auto-assigned slugs regardless of tier must be in
+ * it. Runtime surfacing is finer-grained: `CORE_AUTO_ASSIGNED_SKILL_SLUGS`
+ * is injected for every agent, while `FILESYSTEM_MCP_SKILL_SLUGS` is only
+ * injected for agents that actually have the filesystem MCP server attached
+ * (checked via `hasFilesystemMcp`). Agents without it get no workspace/library
+ * guidance at all — they have no filesystem tools to act on it anyway.
  */
-export const AUTO_ASSIGNED_SKILL_SLUGS: readonly string[] = [
+export const CORE_AUTO_ASSIGNED_SKILL_SLUGS: readonly string[] = [
   "dev-in-house-agent-notes",
-  "dev-in-house-workspace",
   "dev-in-house-skill-library",
 ];
+export const FILESYSTEM_MCP_SKILL_SLUGS: readonly string[] = [
+  "dev-in-house-workspace",
+  "dev-in-house-library-mcp",
+];
+export const AUTO_ASSIGNED_SKILL_SLUGS: readonly string[] = [
+  ...CORE_AUTO_ASSIGNED_SKILL_SLUGS,
+  ...FILESYSTEM_MCP_SKILL_SLUGS,
+];
+export const CORE_AUTO_ASSIGNED_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
+  CORE_AUTO_ASSIGNED_SKILL_SLUGS,
+);
+export const FILESYSTEM_MCP_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
+  FILESYSTEM_MCP_SKILL_SLUGS,
+);
 export const AUTO_ASSIGNED_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
   AUTO_ASSIGNED_SKILL_SLUGS,
 );

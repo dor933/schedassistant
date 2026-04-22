@@ -28,8 +28,6 @@ import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
 import { ListCronJobsTool } from "../../../tools/listCronJobsTool";
 import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
-import { workspaceTools } from "../../../tools/workspaceTools";
-import { libraryTools } from "../../../tools/libraryTools";
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
@@ -170,14 +168,13 @@ export async function epicCallModelNode(
     GetThreadSummaryTool(agentId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
-    ...workspaceTools(agentId),
-    ...libraryTools(),
     ...agentSkillTools(agentId),
     // Google Workspace (Gmail / Calendar / Drive) tools are not bound here —
     // they live only on the `google_workspace_agent` system agent. Delegate via
     // `delegate_to_deep_agent`, passing the subject user's EMAIL (resolved via
-    // list_google_workspace_grants). The agent-workspace folder tools above
-    // (workspace_*) are a separate concern.
+    // list_google_workspace_grants).
+    // Workspace + org-library access now ride on the filesystem MCP (see
+    // `dev-in-house-workspace` / `dev-in-house-library-mcp` skills).
     // Epic workflow tools (always on for epic agents)
     CreateEpicPlanTool(state.userId, agentId),
     ExecuteEpicTaskTool({

@@ -2,7 +2,26 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { sequelize, Skill, AgentAvailableSkill } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 import { z } from "zod";
-import { AUTO_ASSIGNED_SKILL_SLUGS } from "@scheduling-agent/types";
+import {
+  CORE_AUTO_ASSIGNED_SKILL_SLUGS,
+  FILESYSTEM_MCP_SKILL_SLUGS,
+} from "@scheduling-agent/types";
+import { hasFilesystemMcp } from "./hasFilesystemMcp";
+
+/**
+ * Returns the auto-assigned skill slugs actually visible to this agent:
+ * always the core set, plus the filesystem-MCP subset when the agent has the
+ * filesystem MCP server attached. Agents without filesystem MCP never see
+ * workspace/library skill rows — they have no filesystem tools to act on
+ * those instructions.
+ */
+async function autoSlugsForAgent(agentId: string): Promise<string[]> {
+  const slugs: string[] = [...CORE_AUTO_ASSIGNED_SKILL_SLUGS];
+  if (await hasFilesystemMcp(agentId)) {
+    slugs.push(...FILESYSTEM_MCP_SKILL_SLUGS);
+  }
+  return slugs;
+}
 
 const addSkillSchema = z.object({
   name: z.string().min(1).describe("Short display name for the skill"),
@@ -132,6 +151,7 @@ export function AddAgentSkillTool(agentId: string) {
 export function ListAgentSkillsTool(agentId: string) {
   return tool(
     async () => {
+      const autoSlugs = await autoSlugsForAgent(agentId);
       const [rows, autoSkills] = await Promise.all([
         AgentAvailableSkill.findAll({
           where: { agentId, active: true },
@@ -144,11 +164,13 @@ export function ListAgentSkillsTool(agentId: string) {
           ],
           order: [["createdAt", "DESC"]],
         }),
-        Skill.findAll({
-          where: { slug: { [Op.in]: [...AUTO_ASSIGNED_SKILL_SLUGS] } },
-          attributes: ["id", "name", "slug", "description"],
-          order: [["name", "ASC"]],
-        }),
+        autoSlugs.length === 0
+          ? Promise.resolve([])
+          : Skill.findAll({
+              where: { slug: { [Op.in]: autoSlugs } },
+              attributes: ["id", "name", "slug", "description"],
+              order: [["name", "ASC"]],
+            }),
       ]);
 
       const byId = new Map<number, { id: number; name: string; slug: string | null; description: string | null }>();
@@ -195,15 +217,20 @@ export function GetAgentSkillTool(agentId: string) {
       });
       let s: Skill | null = row ? ((row.get("skill") as Skill | null) ?? null) : null;
       if (!s) {
-        // Auto-assigned skills are accessible to every agent regardless of linking.
-        const autoSkill = await Skill.findOne({
-          where: {
-            id: skill_id,
-            slug: { [Op.in]: [...AUTO_ASSIGNED_SKILL_SLUGS] },
-          },
-          attributes: ["id", "name", "slug", "description", "skillText"],
-        });
-        s = autoSkill;
+        // Auto-assigned skills are accessible to every agent regardless of
+        // linking. Filesystem-MCP skills are only accessible when the agent
+        // actually has the filesystem MCP attached.
+        const autoSlugs = await autoSlugsForAgent(agentId);
+        if (autoSlugs.length > 0) {
+          const autoSkill = await Skill.findOne({
+            where: {
+              id: skill_id,
+              slug: { [Op.in]: autoSlugs },
+            },
+            attributes: ["id", "name", "slug", "description", "skillText"],
+          });
+          s = autoSkill;
+        }
       }
       if (!s) {
         return `No skill with id ${skill_id} is linked to this agent. Use list_agent_skills to see valid ids.`;

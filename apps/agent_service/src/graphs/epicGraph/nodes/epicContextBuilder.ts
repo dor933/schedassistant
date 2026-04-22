@@ -24,6 +24,7 @@ import {
   loadGoogleWorkspaceAgentSection,
   loadLibrarySection,
 } from "../../basicGraph/nodes/contextBuilder";
+import { hasFilesystemMcp } from "../../../tools/hasFilesystemMcp";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -88,11 +89,12 @@ export async function buildEpicContext(
   }
 
   // ── 0b. Organization summary + Google Workspace agent blurbs ──
-  const [organizationSummarySection, googleWorkspaceAgentSection] = await Promise.all([
+  const [organizationSummarySection, googleWorkspaceAgentSection, librarySection, agentHasFilesystemMcp] = await Promise.all([
     loadOrganizationSummarySection(agentOrganizationId),
     loadGoogleWorkspaceAgentSection(agentOrganizationId),
+    loadLibrarySection(agentId),
+    hasFilesystemMcp(agentId),
   ]);
-  const librarySection = loadLibrarySection();
 
   // ── 1. User identity (minimal) ──
   let userIdentity: UserIdentity | null = null;
@@ -153,6 +155,7 @@ export async function buildEpicContext(
     agentCharacteristics,
     agentNotes,
     agentWorkspacePath,
+    agentHasFilesystemMcp,
     agentHasLinkedSkills,
     organizationSummarySection,
     googleWorkspaceAgentSection,
@@ -221,6 +224,7 @@ function formatEpicSystemPrompt(opts: {
   agentCharacteristics: Record<string, unknown> | null;
   agentNotes: string | null;
   agentWorkspacePath: string | null;
+  agentHasFilesystemMcp: boolean;
   agentHasLinkedSkills: boolean;
   organizationSummarySection: string;
   googleWorkspaceAgentSection: string;
@@ -366,12 +370,13 @@ function formatEpicSystemPrompt(opts: {
   }
 
   // ── Workspace ──
-  if (opts.agentWorkspacePath) {
+  if (opts.agentWorkspacePath && opts.agentHasFilesystemMcp) {
     sections.push("## Workspace");
     sections.push(
-      "You have a persistent workspace folder for `.md` and `.txt` files. " +
-      "Use `workspace_list_files`, `workspace_read_file`, `workspace_write_file`, " +
-      "`workspace_edit_file`, `workspace_delete_file`.",
+      `Your persistent workspace lives at \`${opts.agentWorkspacePath}\`. Access it via the ` +
+      "**filesystem MCP** (server `filesystem`, rooted at `/app/data`): `list_directory`, " +
+      "`read_text_file`, `write_file`, `edit_file`, `search_files`. Always use the absolute " +
+      "path above as the prefix.",
     );
     sections.push("");
   }
