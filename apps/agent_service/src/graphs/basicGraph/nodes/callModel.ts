@@ -273,17 +273,16 @@ export async function callModelNode(
   const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
   // Load MCP tools assigned to this agent via agent_available_mcp_servers.
-  // When this thread has a session workspace, wrap the filesystem MCP write
-  // tools so successful writes inside the per-thread folder are appended to
-  // the per-thread ledger and folded back into state after each tool round.
+  // The wrapper is applied unconditionally — it enforces the .md/.txt
+  // write-extension policy on every filesystem MCP write, and additionally
+  // captures writes inside the per-thread session folder into the ledger
+  // when one exists for this thread.
   const rawMcpTools = agentId ? await getMcpTools(agentId) : [];
-  const mcpTools = state.sessionWorkspacePath
-    ? instrumentFsWriteTools(rawMcpTools, {
-        threadId,
-        sessionWorkspacePath: state.sessionWorkspacePath,
-        source: "primary_agent",
-      })
-    : rawMcpTools;
+  const mcpTools = instrumentFsWriteTools(rawMcpTools, {
+    threadId,
+    sessionWorkspacePath: state.sessionWorkspacePath ?? undefined,
+    source: "primary_agent",
+  });
 
   // Load configurable tool slugs from agent_available_tools.
   // null = no assignments exist yet → include all for backward compatibility.

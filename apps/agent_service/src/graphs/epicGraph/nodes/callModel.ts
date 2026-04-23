@@ -157,18 +157,16 @@ export async function epicCallModelNode(
   const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
   // Load MCP tools assigned to this agent (bash, filesystem servers).
-  // When this thread has a session workspace, wrap the filesystem MCP
-  // write tools so successful writes inside the per-thread folder are
-  // captured into the per-thread ledger and folded back into state on
-  // each return path.
+  // The wrapper is applied unconditionally — it enforces the .md/.txt
+  // write-extension policy on every filesystem MCP write, and additionally
+  // captures writes inside the per-thread session folder into the ledger
+  // when one exists for this thread.
   const rawMcpTools = await getMcpTools(agentId);
-  const mcpTools = state.sessionWorkspacePath
-    ? instrumentFsWriteTools(rawMcpTools, {
-        threadId,
-        sessionWorkspacePath: state.sessionWorkspacePath,
-        source: "epic_orchestrator",
-      })
-    : rawMcpTools;
+  const mcpTools = instrumentFsWriteTools(rawMcpTools, {
+    threadId,
+    sessionWorkspacePath: state.sessionWorkspacePath ?? undefined,
+    source: "epic_orchestrator",
+  });
 
   const activeSlugs = await loadActiveToolSlugs(agentId);
   const has = (slug: string) => activeSlugs.has(slug);

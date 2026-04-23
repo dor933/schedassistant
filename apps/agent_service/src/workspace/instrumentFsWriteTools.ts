@@ -3,7 +3,12 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { logger } from "../logger";
-import { recordSessionFileWrite, statBytes } from "./sessionWorkspace";
+import {
+  recordSessionFileWrite,
+  statBytes,
+  isWriteAllowedExtension,
+  rejectExtensionMessage,
+} from "./sessionWorkspace";
 
 /**
  * Tool names exposed by the filesystem MCP server that mutate files we want
@@ -20,26 +25,42 @@ const WRITE_TOOL_NAMES = new Set(["write_file", "edit_file", "move_file"]);
  * Per-call binding telling the wrapper which thread + workspace these tool
  * invocations belong to. Created fresh inside `callModelNode` and the deep
  * agent worker — never cached, since it closes over the thread id.
+ *
+ * `threadId` and `sessionWorkspacePath` are optional: when both are present
+ * the wrapper records writes inside the per-thread folder into the ledger;
+ * when either is missing only the extension gate fires (the wrapper is
+ * applied unconditionally to enforce the .md/.txt write policy).
  */
 export interface FsInstrumentationContext {
-  /** The thread whose ledger should receive recorded writes. */
-  threadId: string;
-  /** Absolute path to the session workspace folder for this thread. */
-  sessionWorkspacePath: string;
+  /** The thread whose ledger should receive recorded writes (when set). */
+  threadId?: string;
+  /** Absolute path to the session workspace folder for this thread (when set). */
+  sessionWorkspacePath?: string;
   /** Provenance tag attached to recorded entries (e.g. "primary_agent"). */
   source: string;
 }
 
 /**
- * Wraps the filesystem MCP write tools so that any successful write whose
- * resolved path lies inside `sessionWorkspacePath` is appended to the
- * per-thread ledger. Tools whose names are not in `WRITE_TOOL_NAMES` and any
- * write that lands outside the session workspace are passed through verbatim.
+ * Wraps the filesystem MCP write tools to do two things:
  *
- * The wrapper does NOT change tool semantics — it returns whatever the
- * underlying tool returned, only adding a side-effecting ledger push when the
- * call succeeded. A failure to record (e.g. stat failure) is logged but never
- * propagated to the LLM.
+ *  1. **Extension gate (always on).** Reject any write whose target path
+ *     doesn't end in an allowed extension (.md/.txt — see
+ *     `ALLOWED_WRITE_EXTENSIONS`). The rejection returns a friendly message
+ *     to the LLM without invoking the underlying tool, so the agent can fix
+ *     the extension and retry without polluting the disk with stray formats.
+ *
+ *  2. **Per-thread manifest capture (when ctx has session workspace).** Any
+ *     successful write whose resolved path lies inside `sessionWorkspacePath`
+ *     is appended to the per-thread ledger so it flows into the session
+ *     summary's file manifest.
+ *
+ * Tools whose names are not in `WRITE_TOOL_NAMES` are returned verbatim.
+ * Successful writes outside the session workspace pass through untracked.
+ *
+ * The wrapper does NOT otherwise change tool semantics — for an allowed
+ * extension it returns whatever the underlying tool returned, only adding a
+ * side-effecting ledger push when applicable. A failure to record (e.g. stat
+ * failure) is logged but never propagated to the LLM.
  */
 export function instrumentFsWriteTools(
   tools: StructuredToolInterface[],
@@ -57,19 +78,32 @@ function wrapWriteTool(
 ): StructuredToolInterface {
   return tool(
     async (args: unknown) => {
+      // Extension gate first — reject before we touch disk so the LLM gets
+      // a clean error message and can retry with a .md/.txt path.
+      const writtenPath = extractWrittenPath(underlying.name, args);
+      if (writtenPath && !isWriteAllowedExtension(writtenPath)) {
+        return rejectExtensionMessage(writtenPath);
+      }
+
       const result = await underlying.invoke(args as never);
 
-      try {
-        const writtenPath = extractWrittenPath(underlying.name, args);
-        if (writtenPath) {
-          await maybeRecordWrite(writtenPath, ctx, underlying.name);
+      // Manifest capture only fires when both the threadId and the per-thread
+      // session workspace are bound — otherwise the wrapper is acting purely
+      // as the extension gate.
+      if (ctx.threadId && ctx.sessionWorkspacePath && writtenPath) {
+        try {
+          await maybeRecordWrite(
+            writtenPath,
+            { threadId: ctx.threadId, sessionWorkspacePath: ctx.sessionWorkspacePath, source: ctx.source },
+            underlying.name,
+          );
+        } catch (err) {
+          logger.warn("FS-write instrumentation failed (non-fatal)", {
+            tool: underlying.name,
+            threadId: ctx.threadId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
-      } catch (err) {
-        logger.warn("FS-write instrumentation failed (non-fatal)", {
-          tool: underlying.name,
-          threadId: ctx.threadId,
-          error: err instanceof Error ? err.message : String(err),
-        });
       }
 
       return result;
@@ -108,7 +142,7 @@ function extractWrittenPath(toolName: string, args: unknown): string | null {
 
 async function maybeRecordWrite(
   writtenPath: string,
-  ctx: FsInstrumentationContext,
+  ctx: { threadId: string; sessionWorkspacePath: string; source: string },
   toolName: string,
 ): Promise<void> {
   const root = path.resolve(ctx.sessionWorkspacePath);

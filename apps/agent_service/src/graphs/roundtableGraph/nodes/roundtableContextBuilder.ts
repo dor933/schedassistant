@@ -163,16 +163,27 @@ export async function roundtableContextBuilderNode(
 
     // ── Workspace ───────────────────────────────────────────────────────
     if (agentWorkspacePath && (await hasFilesystemMcp(agentId))) {
+      const sessionFolder = state.threadId
+        ? `${agentWorkspacePath}/threads/${state.threadId}`
+        : null;
       sections.push("## Workspace");
       sections.push(
         `Your persistent workspace lives at \`${agentWorkspacePath}\`. Access it via the ` +
         "**filesystem MCP** (server `filesystem`, rooted at `/app/data`): `list_directory`, " +
         "`read_text_file`, `write_file`, `edit_file`, `search_files`. Always use the absolute " +
         "path above as the prefix.\n\n" +
-        "**Per-thread session folder.** This roundtable thread has its own subfolder at " +
-        `\`${agentWorkspacePath}/threads/<this_thread_id>/\`. Write any durable contributions ` +
-        "(notes, drafts, position briefs) into that folder so they're captured into the session " +
-        "manifest and recoverable later via `read_session_file` and `get_thread_summary`.",
+        "**Allowed file formats — writes are restricted to `.md` and `.txt` only.** Other " +
+        "extensions are rejected before they hit disk.\n\n" +
+        (sessionFolder
+          ? (
+              `**Per-thread session folder.** This roundtable thread has its own subfolder at ` +
+              `**\`${sessionFolder}/\`**. Write any durable contributions (notes, drafts, position ` +
+              `briefs) into that exact path — e.g. \`write_file("${sessionFolder}/my_notes.md", "...")\` — ` +
+              `so they're captured into the session manifest and recoverable later via ` +
+              `\`read_session_file\` and \`get_thread_summary\`. Writes outside this folder are saved ` +
+              `but won't appear in the per-thread manifest.`
+            )
+          : ""),
       );
       sections.push("");
     }

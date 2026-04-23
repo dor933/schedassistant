@@ -443,6 +443,7 @@ export async function buildContext(
     recentSessionSummaries,
     groupMemberIdentities,
     roundtableSummaries,
+    threadId,
   );
 
   return {
@@ -726,6 +727,7 @@ function formatSystemPrompt(
   recentSummaries: SessionSummary[],
   groupMembers: GroupMemberContextProfile[] | null,
   roundtableSummaries: RecentRoundtableSummary[] = [],
+  threadId: string = "",
 ): string {
   const sections: string[] = [];
 
@@ -857,6 +859,9 @@ function formatSystemPrompt(
   }
 
   if (agentWorkspacePath && agentHasFilesystemMcp) {
+    const sessionFolder = threadId
+      ? `${agentWorkspacePath}/threads/${threadId}`
+      : null;
     sections.push("## Workspace");
     sections.push(
       `Your persistent workspace lives at \`${agentWorkspacePath}\`. Files here survive across all ` +
@@ -864,16 +869,30 @@ function formatSystemPrompt(
       `for every workspace action: \`list_directory\`, \`read_text_file\`, \`write_file\`, \`edit_file\`, ` +
       `\`search_files\`, \`create_directory\`, \`move_file\`. Always use the absolute path above as the ` +
       `prefix — never a relative path.\n\n` +
+      "**Allowed file formats — writes are restricted to `.md` and `.txt` only.** " +
+      "Any other extension (.json, .csv, .pdf, .xlsx, …) is rejected by the system before it touches " +
+      "disk. If you need to capture structured data, render it as Markdown (tables, fenced code blocks, " +
+      "front-matter) inside a `.md` file — the system handles format conversion later when sending " +
+      "files to users.\n\n" +
       "Use your workspace for persistent documents, plans, research, templates, or any information " +
       "you want to retain and build upon over time.\n\n" +
-      "**Per-thread session folder.** Each conversation has its own subfolder at " +
-      `\`${agentWorkspacePath}/threads/<this_thread_id>/\`, created for you automatically. ` +
-      "**Write content-rich, durable artifacts (plans, briefs, large analyses, research dumps) " +
-      "inside this folder, not at the workspace root.** Writes here are captured into the session " +
-      "manifest, summarised when the thread closes, and indexed for vector retrieval — so a future " +
-      "you can recover them via the cascade `recall_episodic_memory` → `get_thread_summary` → " +
-      "`read_session_file`. Writes outside this folder are still saved but won't appear in the " +
-      "per-thread manifest.\n\n" +
+      (sessionFolder
+        ? (
+            `**Per-thread session folder — write durable artifacts here, NOT at the workspace root.**\n` +
+            `This conversation's session folder is **\`${sessionFolder}/\`** (already created — you can ` +
+            `\`list_directory\` it immediately). Every file you produce that contains content worth keeping ` +
+            `(captured library docs, plans, briefs, analyses, research dumps, anything you might want to ` +
+            `re-read later) **MUST be written under this exact absolute path**, e.g. ` +
+            `\`write_file("${sessionFolder}/library_capture.md", "...")\`. Writes here are automatically ` +
+            `captured into the session manifest, summarised when the thread closes, and indexed for vector ` +
+            `retrieval — so a future you can recover them via \`recall_episodic_memory\` → ` +
+            `\`get_thread_summary\` → \`read_session_file\`. Writes anywhere else under \`${agentWorkspacePath}\` ` +
+            `are still saved on disk but **will NOT appear in the per-thread manifest** and therefore won't ` +
+            `surface in future sessions. When the user asks you to "save X to your workspace", interpret ` +
+            `that as "save X under the per-thread session folder above" unless they explicitly name a ` +
+            `different path.\n\n`
+          )
+        : "") +
       "**Shared with executor/system agents you delegate to.** When you delegate a task via " +
       "`delegate_to_deep_agent` (or similar), the executor agent does not have its own workspace — it " +
       "writes into **this same directory** on your behalf, and its writes inside the per-thread folder " +

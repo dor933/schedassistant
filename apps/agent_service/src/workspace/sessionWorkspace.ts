@@ -152,3 +152,45 @@ export async function statBytes(absPath: string): Promise<number> {
     return 0;
   }
 }
+
+// ─── Write-extension allow-list ───────────────────────────────────────────
+
+/**
+ * Extensions an agent is allowed to write to disk. Restricting writes to
+ * plain-text formats keeps the artifact pipeline simple — files in these
+ * formats can be sent to and received from users without format-specific
+ * conversion logic. Any other extension (.json, .csv, .pdf, .xlsx, etc.)
+ * is rejected at the tool layer; if a downstream consumer needs another
+ * format, the conversion happens at send time, not at write time.
+ *
+ * Comparisons are case-insensitive.
+ */
+export const ALLOWED_WRITE_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".md",
+  ".txt",
+]);
+
+/**
+ * Returns true when the given path ends in an allowed write extension.
+ * Files with no extension or with disallowed extensions return false.
+ */
+export function isWriteAllowedExtension(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  return ALLOWED_WRITE_EXTENSIONS.has(ext);
+}
+
+/**
+ * Friendly rejection message returned to the LLM when it tries to write a
+ * disallowed extension. Names the extension it tried so the model can
+ * correct itself, and explains the policy briefly so it doesn't retry the
+ * same way.
+ */
+export function rejectExtensionMessage(filePath: string): string {
+  const ext = path.extname(filePath) || "(no extension)";
+  const allowed = [...ALLOWED_WRITE_EXTENSIONS].join(", ");
+  return (
+    `Refused to write "${filePath}": only ${allowed} files may be written ` +
+    `(got "${ext}"). Save the content as a .md or .txt file instead — the ` +
+    `system handles format conversion later when delivering files to users.`
+  );
+}

@@ -46,6 +46,8 @@ import {
   ensureSessionWorkspace,
   recordSessionFileWrite,
   statBytes,
+  isWriteAllowedExtension,
+  rejectExtensionMessage,
 } from "../workspace/sessionWorkspace";
 
 /** Max time a deep agent invocation can run before being aborted (ms). */
@@ -84,9 +86,42 @@ class ReadOnlyFilesystemBackend extends FilesystemBackend {
 }
 
 /**
- * Variant of `FilesystemBackend` that captures successful writes inside the
- * caller's per-thread session workspace into the same per-thread ledger that
- * the basic / epic / roundtable graphs use (see `workspace/sessionWorkspace.ts`).
+ * Variant of `FilesystemBackend` that enforces the .md/.txt write-extension
+ * policy. Both `write` and `edit` reject any path whose extension isn't in
+ * `ALLOWED_WRITE_EXTENSIONS` with the same friendly error string the MCP
+ * wrapper uses, so the LLM gets identical feedback whichever code path it
+ * happens to take.
+ *
+ * Used directly when the deep agent runs without a callerThreadId (no
+ * per-thread folder to capture into); subclassed by
+ * `InstrumentedFilesystemBackend` when manifest capture also applies.
+ */
+class RestrictedExtensionFilesystemBackend extends FilesystemBackend {
+  async write(filePath: string, content: string): Promise<WriteResult> {
+    if (!isWriteAllowedExtension(filePath)) {
+      return { error: rejectExtensionMessage(filePath) };
+    }
+    return super.write(filePath, content);
+  }
+
+  async edit(
+    filePath: string,
+    oldString: string,
+    newString: string,
+    replaceAll?: boolean,
+  ): Promise<EditResult> {
+    if (!isWriteAllowedExtension(filePath)) {
+      return { error: rejectExtensionMessage(filePath) };
+    }
+    return super.edit(filePath, oldString, newString, replaceAll);
+  }
+}
+
+/**
+ * Variant of `RestrictedExtensionFilesystemBackend` that ALSO captures
+ * successful writes inside the caller's per-thread session workspace into
+ * the same per-thread ledger that the basic / epic / roundtable graphs use
+ * (see `workspace/sessionWorkspace.ts`).
  *
  * Writes outside the per-thread folder pass through silently — the deep agent
  * still owns the whole caller workspace (it needs to read existing artifacts
@@ -96,7 +131,7 @@ class ReadOnlyFilesystemBackend extends FilesystemBackend {
  * `instrumentFsWriteTools` provided before the merge moved deep-agent file IO
  * off MCP and onto the deepagents built-in backend.
  */
-class InstrumentedFilesystemBackend extends FilesystemBackend {
+class InstrumentedFilesystemBackend extends RestrictedExtensionFilesystemBackend {
   private readonly _rootDir: string;
   private readonly _threadId: string;
   private readonly _sessionWorkspacePath: string;
@@ -546,6 +581,10 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                 `pre-bound to the caller's workspace directory. You do NOT need (and will not be told) the on-disk ` +
                 `path of that directory; from your point of view, the workspace IS your filesystem root. Writes ` +
                 `persist across tasks; the orchestrator that delegated to you reads the same directory.\n\n` +
+                `- **Allowed file formats — writes are restricted to \`.md\` and \`.txt\` only.** Any other ` +
+                `extension (.json, .csv, .pdf, .xlsx, …) is rejected by the backend before it touches disk. ` +
+                `Render structured data as Markdown (tables, fenced code blocks, front-matter) inside a ` +
+                `\`.md\` file when you need it.\n` +
                 `- **Paths — use bare or root-relative names only**: pass \`notes.md\` or \`/notes.md\`. Both ` +
                 `resolve to the workspace root. Subdirectories work the same way: \`reports/q1.md\` or ` +
                 `\`/reports/q1.md\`.\n` +
@@ -586,8 +625,9 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           // the default filesystem through `InstrumentedFilesystemBackend` so
           // writes inside `/threads/<callerThreadId>/` flow into the
           // per-thread session manifest. Without `callerThreadId` we still
-          // mount the workspace, just without instrumentation — same
-          // behaviour as before manifest capture existed.
+          // mount the workspace via `RestrictedExtensionFilesystemBackend`
+          // so the .md/.txt write-extension policy still fires, just without
+          // manifest capture.
           const defaultBackend = callerWorkspacePath
             ? (callerThreadId && callerSessionWorkspacePath
                 ? new InstrumentedFilesystemBackend({
@@ -597,7 +637,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                     sessionWorkspacePath: callerSessionWorkspacePath,
                     source: `deep_agent:${executorAgentId}`,
                   })
-                : new FilesystemBackend({
+                : new RestrictedExtensionFilesystemBackend({
                     rootDir: callerWorkspacePath,
                     virtualMode: true,
                   }))

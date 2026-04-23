@@ -170,6 +170,7 @@ export async function buildEpicContext(
     episodicSnippets,
     recentSummaries: recentSessionSummaries,
     roundtableSummaries,
+    threadId,
   });
 
   return {
@@ -258,6 +259,7 @@ function formatEpicSystemPrompt(opts: {
   episodicSnippets: string[];
   recentSummaries: SessionSummary[];
   roundtableSummaries: RecentRoundtableSummary[];
+  threadId: string;
 }): string {
   const sections: string[] = [];
 
@@ -394,19 +396,31 @@ function formatEpicSystemPrompt(opts: {
 
   // ── Workspace ──
   if (opts.agentWorkspacePath && opts.agentHasFilesystemMcp) {
+    const sessionFolder = opts.threadId
+      ? `${opts.agentWorkspacePath}/threads/${opts.threadId}`
+      : null;
     sections.push("## Workspace");
     sections.push(
       `Your persistent workspace lives at \`${opts.agentWorkspacePath}\`. Access it via the ` +
       "**filesystem MCP** (server `filesystem`, rooted at `/app/data`): `list_directory`, " +
       "`read_text_file`, `write_file`, `edit_file`, `search_files`. Always use the absolute " +
       "path above as the prefix.\n\n" +
-      "**Per-thread session folder.** Each conversation has its own subfolder at " +
-      `\`${opts.agentWorkspacePath}/threads/<this_thread_id>/\`, created automatically. ` +
-      "Write content-rich, durable artifacts (epic plans, audit reports, large analyses) into " +
-      "this folder — writes here are captured into the session manifest, summarised, and indexed " +
-      "for vector retrieval, so a future epic run can recover them via `recall_episodic_memory` → " +
-      "`get_thread_summary` → `read_session_file`. Writes outside this folder are still saved but " +
-      "won't appear in the per-thread manifest.",
+      "**Allowed file formats — writes are restricted to `.md` and `.txt` only.** Other " +
+      "extensions are rejected before they hit disk. Render structured data as Markdown " +
+      "(tables, fenced code blocks) inside a `.md` file when you need it.\n\n" +
+      (sessionFolder
+        ? (
+            `**Per-thread session folder — write durable artifacts here, NOT at the workspace root.**\n` +
+            `This conversation's session folder is **\`${sessionFolder}/\`** (already created). ` +
+            `Every durable artifact (epic plans, audit reports, large analyses) **MUST be written under ` +
+            `this exact absolute path**, e.g. \`write_file("${sessionFolder}/epic_plan.md", "...")\`. ` +
+            `Writes here are captured into the session manifest, summarised, and indexed for vector ` +
+            `retrieval — so a future epic run can recover them via \`recall_episodic_memory\` → ` +
+            `\`get_thread_summary\` → \`read_session_file\`. Writes anywhere else under ` +
+            `\`${opts.agentWorkspacePath}\` are still saved but **will NOT appear in the per-thread ` +
+            `manifest** and won't surface in future sessions.`
+          )
+        : ""),
     );
     sections.push("");
   }

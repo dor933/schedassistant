@@ -194,18 +194,16 @@ export async function roundtableCallModelNode(
 
   const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
-  // Wrap filesystem MCP write tools when this thread has a session
-  // workspace, so writes by the roundtable agent inside the per-thread
-  // folder are captured into the per-thread ledger and folded into state
-  // on each return.
+  // Wrap filesystem MCP write tools unconditionally — this enforces the
+  // .md/.txt write-extension policy on every write, and additionally
+  // captures writes inside the per-thread session folder into the ledger
+  // when one exists for this thread.
   const rawMcpTools = agentId ? await getMcpTools(agentId) : [];
-  const mcpTools = state.sessionWorkspacePath
-    ? instrumentFsWriteTools(rawMcpTools, {
-        threadId,
-        sessionWorkspacePath: state.sessionWorkspacePath,
-        source: "roundtable_agent",
-      })
-    : rawMcpTools;
+  const mcpTools = instrumentFsWriteTools(rawMcpTools, {
+    threadId,
+    sessionWorkspacePath: state.sessionWorkspacePath ?? undefined,
+    source: "roundtable_agent",
+  });
 
   const activeSlugs = await loadActiveToolSlugs(agentId);
   const has = (slug: string) => activeSlugs.has(slug);
