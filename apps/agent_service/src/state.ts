@@ -1,6 +1,8 @@
 import { Annotation } from "@langchain/langgraph";
 import type { BaseMessage } from "@langchain/core/messages";
-import { AgentId, UserId, UserIdentity } from "@scheduling-agent/types";
+import { AgentId, SessionFileEntry, UserId, UserIdentity } from "@scheduling-agent/types";
+
+import { mergeSessionFilesByPath } from "./workspace/sessionWorkspace";
 
 /**
  * LangGraph state annotation for conversational agents (any specialization).
@@ -92,6 +94,31 @@ export const AgentAnnotation = Annotation.Root({
   } | null>({
     reducer: (_state, update) => update,
     default: () => null,
+  }),
+
+  /**
+   * Absolute path to this thread's per-thread workspace folder
+   * (`<agent.workspacePath>/threads/<threadId>/`). Set by the context builder
+   * when the thread first runs through a graph; null when the agent has no
+   * workspace (e.g. system agents, agents without filesystem MCP).
+   *
+   * Used by FS-write instrumentation to know which writes belong to this
+   * session, and by `read_session_file` to scope reads.
+   */
+  sessionWorkspacePath: Annotation<string | null>({
+    reducer: (state, update) => (update !== undefined ? update : state),
+    default: () => null,
+  }),
+
+  /**
+   * Files written or modified during this session under `sessionWorkspacePath`.
+   * Populated by draining the per-thread ledger inside the call-model node
+   * after each tool round; consumed by `sessionSummarizationNode` when the
+   * thread is summarised. Reducer merges by path so the latest write wins.
+   */
+  sessionFiles: Annotation<SessionFileEntry[]>({
+    reducer: mergeSessionFilesByPath,
+    default: () => [],
   }),
 
   /** Roundtable ID when this turn is part of a multi-agent roundtable. */

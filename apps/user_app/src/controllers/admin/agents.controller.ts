@@ -65,6 +65,7 @@ export class AgentsController {
           skillLinks: req.body.skillLinks,
           toolIds: req.body.toolIds,
           toolLinks: req.body.toolLinks,
+          owningPrimaryAgentId: req.body.owningPrimaryAgentId,
         },
       );
       return res.json(agent);

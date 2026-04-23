@@ -143,6 +143,14 @@ export interface AgentAttributes {
   toolConfig: Record<string, unknown> | null;
   /** Constant user identity for system agents — scopes memory and context. */
   userId: UserId | null;
+  /**
+   * The primary agent this system agent is locked to. NULL = shared / org-wide
+   * (the legacy default — any primary in the org may discover and delegate
+   * to it). Non-NULL = private specialist; only the named primary agent may
+   * see it in `list_system_agents` or call it via `delegate_to_deep_agent`.
+   * Schema-enforced as nullable only for system rows.
+   */
+  owningPrimaryAgentId: AgentId | null;
 
   // ── Shared fields ──
   /** Display name of the agent. */
@@ -247,6 +255,29 @@ export interface GroupMemberAttributes {
 
 // ─── Agent Sessions ──────────────────────────────────────────────────────────
 
+/**
+ * One file produced or modified inside a thread's per-thread session workspace
+ * (`<agent.workspacePath>/threads/<threadId>/`). Captured by the FS-write
+ * instrumentation during the session, then enriched with an LLM-written
+ * `summary` when the session is summarised.
+ */
+export interface SessionFileEntry {
+  /** Path relative to the per-thread workspace root, e.g. "research/pricing_brief.md". */
+  path: string;
+  /** Bytes at the most recent write (best-effort; lets retrieval detect drift). */
+  bytes: number;
+  /** ISO timestamp of the most recent write within this session. */
+  updatedAt: string;
+  /** What wrote it — e.g. "deep_agent:<executor_id>", "primary_agent". */
+  source?: string;
+  /**
+   * 2–4 sentence content summary written by `sessionSummarizationNode` so the
+   * agent can decide whether to read the file before fetching it. Absent
+   * during a live session; populated when the summary is persisted.
+   */
+  summary?: string;
+}
+
 /** Shape of the `summary` JSONB column on `threads`. */
 export interface SessionSummary {
   text: string;
@@ -255,6 +286,14 @@ export interface SessionSummary {
   tokenCount?: number;
   /** How confident the summarizer was that key facts are accurately captured. */
   confidence?: "high" | "medium" | "low";
+  /** Absolute path to this thread's session workspace folder when one was created. */
+  workspacePath?: string;
+  /**
+   * Files written or modified during the session. Empty array means the
+   * instrumentation ran but nothing was written; absent means the session
+   * had no workspace at all.
+   */
+  files?: SessionFileEntry[];
 }
 
 /** Attributes exposed by the `Thread` Sequelize model (`threads` table). */
@@ -277,11 +316,29 @@ export interface ThreadAttributes {
 
 // ─── Episodic Memory ─────────────────────────────────────────────────────────
 
+/**
+ * What kind of episodic chunk this row holds. Used as a metadata hint, not a
+ * separate index/namespace — default retrieval ranks all kinds together.
+ *  - "conversation" (default, also implied when absent): a slice of dialogue.
+ *  - "file_summary": describes a file written into a session workspace; the
+ *    `sessionFilePath` field gives the file's path relative to the per-thread
+ *    workspace root so an agent can call `read_session_file` to fetch it.
+ */
+export type EpisodicChunkKind = "conversation" | "file_summary";
+
 /** Metadata stored alongside each episodic chunk. */
 export interface EpisodicChunkMetadata {
   threadId?: string;
   chunkIndex?: number;
   summarizedAt?: string;
+  /** What this chunk is — see EpisodicChunkKind. Absent = "conversation". */
+  kind?: EpisodicChunkKind;
+  /**
+   * For chunks with `kind === "file_summary"`: the file's path relative to
+   * the per-thread workspace root, so retrieval can resolve it back to a
+   * concrete file under `<agent.workspacePath>/threads/<threadId>/`.
+   */
+  sessionFilePath?: string;
   [key: string]: unknown;
 }
 
@@ -376,6 +433,12 @@ export interface AssembledContext {
    */
   groupMemberIdentities: GroupMemberContextProfile[] | null;
   systemPrompt: string;
+  /**
+   * The agent's `workspacePath` (from `agents.workspace_path`), exposed here
+   * so the surrounding node can derive the per-thread session workspace
+   * without re-reading the agent row. `null` when the agent has no workspace.
+   */
+  agentWorkspacePath?: string | null;
 }
 
 // ─── Message Notifications ───────────────────────────────────────────────────

@@ -16,8 +16,15 @@ export interface EpisodicMemoryInsertOptions {
   projectId?: ProjectId | null;
   /** Provenance tag stored on metadata (e.g. "session_summarization", "agent_save"). */
   source?: string;
-  /** Extra metadata keys merged into the stored metadata JSONB. */
-  extraMetadata?: Record<string, unknown>;
+  /**
+   * Extra metadata keys merged into the stored metadata JSONB.
+   *  - Static object: same keys applied to every chunk in the batch.
+   *  - Function: called per chunk so each chunk can carry its own metadata
+   *    (e.g. a different `sessionFilePath` for each file-summary chunk).
+   */
+  extraMetadata?:
+    | Record<string, unknown>
+    | ((chunk: string, index: number) => Record<string, unknown>);
 }
 
 /**
@@ -45,6 +52,10 @@ export async function insertEpisodicMemoryChunks(
   // and optionally repository_id / project_id).
   for (let i = 0; i < chunks.length; i++) {
     const embedding = await embedChunk(chunks[i]);
+    const perChunkExtra =
+      typeof extraMetadata === "function"
+        ? extraMetadata(chunks[i], i)
+        : (extraMetadata ?? {});
 
     await EpisodicMemory.create({
       userId,
@@ -62,7 +73,7 @@ export async function insertEpisodicMemoryChunks(
         ...(source ? { source } : {}),
         ...(repositoryId ? { repositoryId } : {}),
         ...(projectId ? { projectId } : {}),
-        ...(extraMetadata ?? {}),
+        ...perChunkExtra,
       },
     });
   }

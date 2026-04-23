@@ -454,6 +454,13 @@ export interface AdminAgent {
   toolIds?: number[];
   /** All tool assignments with active status. */
   toolLinks: AgentToolLink[];
+  /**
+   * For system agents: the primary agent that owns (and may delegate to)
+   * this specialist. `null` means shared / org-wide — every primary in the
+   * org may discover and delegate to it. Always `null` for primary and
+   * external agents.
+   */
+  owningPrimaryAgentId: string | null;
   createdAt: string;
 }
 
@@ -610,6 +617,12 @@ export const admin = {
       skillLinks?: AgentSkillLink[];
       toolIds?: number[];
       toolLinks?: AgentToolLink[];
+      /**
+       * Owner of a system agent. `null` = shared / org-wide; UUID of a
+       * primary agent in the same org = private to that primary. Only
+       * accepted for system agents. Omit to leave unchanged.
+       */
+      owningPrimaryAgentId?: string | null;
     },
   ) =>
     request<AdminAgent>(`/admin/agents/${id}`, {

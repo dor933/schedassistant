@@ -24,6 +24,7 @@ type AgentCreationAttributes = Optional<
   | "userId"
   | "isLocked"
   | "organizationId"
+  | "owningPrimaryAgentId"
 >;
 
 class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements AgentAttributes {
@@ -46,6 +47,7 @@ class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements A
   declare workspacePath: string | null;
   declare isLocked: boolean;
   declare organizationId: string;
+  declare owningPrimaryAgentId: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -147,6 +149,14 @@ Agent.init(
       allowNull: false,
       field: "organization_id",
       references: { model: "organizations", key: "id" },
+    },
+    owningPrimaryAgentId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: "owning_primary_agent_id",
+      references: { model: "agents", key: "id" },
+      onUpdate: "CASCADE",
+      onDelete: "SET NULL",
     },
     createdAt: {
       type: DataTypes.DATE,

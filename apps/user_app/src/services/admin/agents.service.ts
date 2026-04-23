@@ -40,6 +40,7 @@ export class AgentsService {
         "modelId",
         "isLocked",
         "organizationId",
+        "owningPrimaryAgentId",
         "createdAt",
       ],
       order: [["created_at", "DESC"]],
@@ -277,6 +278,13 @@ export class AgentsService {
       skillLinks?: { skillId: number; active: boolean }[];
       toolIds?: number[];
       toolLinks?: { toolId: number; active: boolean }[];
+      /**
+       * Owner of a system agent. Pass `null` to mark it shared (org-wide,
+       * the legacy default) or the UUID of a primary agent in the same org
+       * to make it private to that primary. Only valid for system agents.
+       * Omit the field entirely to leave ownership unchanged.
+       */
+      owningPrimaryAgentId?: string | null;
     },
   ) {
     // Scope the lookup by org so cross-tenant reads are impossible — no role
@@ -324,6 +332,38 @@ export class AgentsService {
       if (data.modelId) await this.rejectGoogleModel(data.modelId);
       patch.modelId = data.modelId;
     }
+
+    // Ownership change. Mirrors the DB CHECK constraint and adds an
+    // explicit cross-org guard so the admin UI can't accidentally lock a
+    // system agent to a primary that lives in a different tenant.
+    if (data.owningPrimaryAgentId !== undefined) {
+      if (data.owningPrimaryAgentId !== null) {
+        if (agent.type !== "system") {
+          throw Object.assign(
+            new Error("Only system agents can have an owning primary agent."),
+            { status: 400 },
+          );
+        }
+        const owner = await Agent.findOne({
+          where: {
+            id: data.owningPrimaryAgentId,
+            type: "primary",
+            organizationId: callerOrgId,
+          },
+          attributes: ["id"],
+        });
+        if (!owner) {
+          throw Object.assign(
+            new Error(
+              "Owning primary agent not found in this organization, or is not a primary agent.",
+            ),
+            { status: 400 },
+          );
+        }
+      }
+      patch.owningPrimaryAgentId = data.owningPrimaryAgentId;
+    }
+
     await agent.update(patch);
 
     // Sync MCP server assignments if provided (new format takes precedence)

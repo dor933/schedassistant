@@ -24,16 +24,32 @@ export function ListSystemAgentsTool(callerAgentId: string) {
         return `Error: caller agent "${callerAgentId}" not found.`;
       }
 
+      // Ownership scoping: a system agent is visible to this caller when
+      // it is either shared (owningPrimaryAgentId IS NULL — the org-wide
+      // default that covers google_workspace_agent, the active web-search
+      // agent, and any unassigned specialist) OR explicitly owned by this
+      // caller. This stops e.g. the project-manager primary from discovering
+      // a DBA's private DB-execution specialist.
       const where: any = {
         type: "system",
         organizationId: callerAgent.organizationId,
+        [Op.and]: [
+          {
+            [Op.or]: [
+              { owningPrimaryAgentId: null },
+              { owningPrimaryAgentId: callerAgentId },
+            ],
+          },
+        ],
       };
       if (query) {
-        where[Op.or] = [
-          { agentName: { [Op.iLike]: `%${query}%` } },
-          { slug: { [Op.iLike]: `%${query}%` } },
-          { description: { [Op.iLike]: `%${query}%` } },
-        ];
+        (where[Op.and] as any[]).push({
+          [Op.or]: [
+            { agentName: { [Op.iLike]: `%${query}%` } },
+            { slug: { [Op.iLike]: `%${query}%` } },
+            { description: { [Op.iLike]: `%${query}%` } },
+          ],
+        });
       }
 
       const agents = await Agent.findAll({

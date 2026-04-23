@@ -26,6 +26,17 @@ export type DeepAgentJobData = {
   userId: number;
   groupId: string | null;
   singleChatId: string | null;
+  /**
+   * The caller's LangGraph thread id. The executor uses this — not its own
+   * fresh thread id — to scope writes into the caller's per-thread session
+   * workspace folder, so files end up where the caller will look for them
+   * (`<callerWorkspacePath>/threads/<callerThreadId>/`).
+   *
+   * Optional for backwards compatibility: when absent the executor still
+   * writes into the caller's workspace root but no per-thread manifest is
+   * captured — same behavior as before this field existed.
+   */
+  callerThreadId?: string | null;
   /** When true, the caller blocks via waitUntilFinished — skip the delegation_result callback. */
   syncMode?: boolean;
 };

@@ -21,6 +21,7 @@ export function SyncDelegateToDeepAgentTool(
   userId: number,
   groupId: string | null,
   singleChatId: string | null,
+  callerThreadId: string | null,
 ) {
   return tool(
     async (input) => {
@@ -31,6 +32,23 @@ export function SyncDelegateToDeepAgentTool(
       });
       if (!executorAgent) {
         return `Error: system agent with id "${systemAgentId}" not found. Use list_system_agents to see available executor agents.`;
+      }
+
+      // Ownership gate (mirrors DelegateToDeepAgentTool): a private specialist
+      // (owningPrimaryAgentId set) only accepts delegations from its owner.
+      // NULL owners are shared and pass through.
+      if (
+        executorAgent.owningPrimaryAgentId &&
+        executorAgent.owningPrimaryAgentId !== callerAgentId
+      ) {
+        const ownerLabel = executorAgent.owningPrimaryAgentId;
+        const execLabel =
+          executorAgent.agentName || executorAgent.definition || executorAgent.id;
+        return (
+          `Error: executor "${execLabel}" is a private specialist of primary agent ${ownerLabel}, ` +
+          `not yours. Pick a different executor (call list_system_agents to see only the agents ` +
+          `you are allowed to delegate to) or hand the request off to that primary instead.`
+        );
       }
 
       const delegation = await DeepAgentDelegation.create({
@@ -52,6 +70,7 @@ export function SyncDelegateToDeepAgentTool(
         userId,
         groupId,
         singleChatId,
+        callerThreadId,
         syncMode: true,
       });
 

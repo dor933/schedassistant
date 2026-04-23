@@ -25,6 +25,10 @@ import {
   loadLibrarySection,
 } from "../../basicGraph/nodes/contextBuilder";
 import { hasFilesystemMcp } from "../../../tools/hasFilesystemMcp";
+import {
+  resolveSessionWorkspacePath,
+  ensureSessionWorkspace,
+} from "../../../workspace/sessionWorkspace";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -178,6 +182,7 @@ export async function buildEpicContext(
     userIdentity,
     groupMemberIdentities: null,
     systemPrompt,
+    agentWorkspacePath,
   };
 }
 
@@ -194,6 +199,22 @@ export async function epicContextBuilderNode(
   try {
     const ctx = await buildEpicContext(state, config);
 
+    const sessionWorkspacePath = resolveSessionWorkspacePath(
+      ctx.agentWorkspacePath,
+      state.threadId,
+    );
+    if (sessionWorkspacePath) {
+      try {
+        await ensureSessionWorkspace(sessionWorkspacePath);
+      } catch (err) {
+        logger.warn("Failed to ensure epic session workspace folder", {
+          threadId: state.threadId,
+          sessionWorkspacePath,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     logger.info("Epic context assembled", {
       threadId: state.threadId,
       episodicCount: ctx.episodicSnippets.length,
@@ -201,11 +222,13 @@ export async function epicContextBuilderNode(
       checkpointLogCount: ctx.recentCheckpointMessageCount,
       conversationLogCount: ctx.recentConversationMessageCount,
       promptLen: ctx.systemPrompt.length,
+      sessionWorkspacePath,
     });
 
     return {
       systemPrompt: ctx.systemPrompt,
       contextAssembled: true,
+      sessionWorkspacePath,
     };
   } catch (err: unknown) {
     const message =
@@ -376,7 +399,14 @@ function formatEpicSystemPrompt(opts: {
       `Your persistent workspace lives at \`${opts.agentWorkspacePath}\`. Access it via the ` +
       "**filesystem MCP** (server `filesystem`, rooted at `/app/data`): `list_directory`, " +
       "`read_text_file`, `write_file`, `edit_file`, `search_files`. Always use the absolute " +
-      "path above as the prefix.",
+      "path above as the prefix.\n\n" +
+      "**Per-thread session folder.** Each conversation has its own subfolder at " +
+      `\`${opts.agentWorkspacePath}/threads/<this_thread_id>/\`, created automatically. ` +
+      "Write content-rich, durable artifacts (epic plans, audit reports, large analyses) into " +
+      "this folder — writes here are captured into the session manifest, summarised, and indexed " +
+      "for vector retrieval, so a future epic run can recover them via `recall_episodic_memory` → " +
+      "`get_thread_summary` → `read_session_file`. Writes outside this folder are still saved but " +
+      "won't appear in the per-thread manifest.",
     );
     sections.push("");
   }
@@ -440,7 +470,10 @@ function formatEpicSystemPrompt(opts: {
       "Auto-retrieved knowledge chunks from previous executions, scoped to relevant repositories and projects. " +
       "Each snippet is prefixed with its originating `thread_id` — if a snippet references a past " +
       "session or roundtable but lacks detail, call `get_thread_summary` with that thread_id to " +
-      "pull the full saved summary. " +
+      "pull the full saved summary, which also lists every file written into that session's " +
+      "workspace. If a manifest entry looks like it holds the answer (e.g. a saved plan, audit, " +
+      "or research brief), follow up with `read_session_file` (same thread_id + the file's path) " +
+      "to fetch the contents. " +
       "If you need more context on a different repo, pattern, or decision, use `recall_episodic_memory` with a targeted query.",
     );
     for (const snippet of opts.episodicSnippets) {
@@ -451,8 +484,10 @@ function formatEpicSystemPrompt(opts: {
     sections.push("## Long-term memory");
     sections.push(
       "No auto-retrieved memories matched this turn. If you need context from past executions " +
-      "(e.g. repo patterns, architectural decisions, task outcomes), use `recall_episodic_memory` " +
-      "with a descriptive query to search your long-term memory.",
+      "(e.g. repo patterns, architectural decisions, task outcomes), follow this cascade: " +
+      "first `recall_episodic_memory` with a descriptive query; if a hit references a past thread " +
+      "but lacks detail, `get_thread_summary` for the full text plus its file manifest; if a " +
+      "manifest file looks relevant, `read_session_file` to read it. Stop as soon as you have enough.",
     );
     sections.push("");
   }

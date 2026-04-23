@@ -11,12 +11,18 @@ import { logger } from "../logger";
  * Enqueues a long-running executor agent job and returns immediately.
  * The calling agent's turn ends — the executor agent runs in the background.
  * When the executor agent finishes, a delegation_result job re-invokes the caller.
+ *
+ * `callerThreadId` is forwarded so the executor can scope its filesystem
+ * writes to the caller's per-thread session workspace
+ * (`<callerWorkspacePath>/threads/<callerThreadId>/`) — see
+ * apps/agent_service/src/workspace/sessionWorkspace.ts.
  */
 export function DelegateToDeepAgentTool(
   callerAgentId: string,
   userId: number,
   groupId: string | null,
   singleChatId: string | null,
+  callerThreadId: string | null,
 ) {
   return tool(
     async (input) => {
@@ -43,6 +49,24 @@ export function DelegateToDeepAgentTool(
         );
       }
 
+      // Ownership gate: a system agent with a non-NULL owning_primary_agent_id
+      // is private to that owner. The caller can only delegate to it if they
+      // *are* the owner — otherwise the executor is out of scope. NULL
+      // owners are shared (org-wide) and pass this gate trivially.
+      if (
+        executorAgent.owningPrimaryAgentId &&
+        executorAgent.owningPrimaryAgentId !== callerAgentId
+      ) {
+        const ownerLabel = executorAgent.owningPrimaryAgentId;
+        const execLabel =
+          executorAgent.agentName || executorAgent.definition || executorAgent.id;
+        return (
+          `Error: executor "${execLabel}" is a private specialist of primary agent ${ownerLabel}, ` +
+          `not yours. Pick a different executor (call list_system_agents to see only the agents ` +
+          `you are allowed to delegate to) or hand the request off to that primary instead.`
+        );
+      }
+
       const delegation = await DeepAgentDelegation.create({
         callerAgentId,
         executorAgentId: executorAgent.id,
@@ -62,6 +86,7 @@ export function DelegateToDeepAgentTool(
         userId,
         groupId,
         singleChatId,
+        callerThreadId,
       });
 
       await linkDelegationToConsultation(callerAgentId, delegation.id);
@@ -122,6 +147,7 @@ export function DelegateWebSearchTool(
   userId: number,
   groupId: string | null,
   singleChatId: string | null,
+  callerThreadId: string | null,
 ) {
   return tool(
     async (input) => {
@@ -177,6 +203,7 @@ export function DelegateWebSearchTool(
         userId,
         groupId,
         singleChatId,
+        callerThreadId,
       });
 
       await linkDelegationToConsultation(callerAgentId, delegation.id);

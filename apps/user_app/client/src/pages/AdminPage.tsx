@@ -453,6 +453,28 @@ export default function AdminPage() {
     [toast, webSearchStatus, webSearchSwitching],
   );
 
+  // Re-assigns a system agent's owning primary agent (or clears it to make
+  // the system agent shared org-wide). The PATCH endpoint enforces that the
+  // owner is a primary in the same org and that the target is a system
+  // agent — we just hand off the chosen value.
+  const handleAssignSystemAgentOwner = useCallback(
+    async (systemAgentId: string, newOwnerId: string | null) => {
+      try {
+        await admin.updateAgent(systemAgentId, { owningPrimaryAgentId: newOwnerId });
+        await reload();
+        toast(
+          newOwnerId
+            ? "System agent locked to the selected primary."
+            : "System agent set to shared (org-wide).",
+          "success",
+        );
+      } catch (e: any) {
+        toast(e?.message ?? "Failed to update system agent owner.", "error");
+      }
+    },
+    [reload, toast],
+  );
+
   // Listen for admin changes from other admins and auto-refresh
   const reloadRef = useRef(reload);
   reloadRef.current = reload;
@@ -1316,6 +1338,95 @@ export default function AdminPage() {
                 )}
               </div>
             </div>
+
+            {/* System Agent Ownership — bind a system specialist to a single
+                primary agent so only that primary can discover and delegate
+                to it. "Shared (org-wide)" leaves it visible to every primary
+                in the org (the legacy default — keep this for cross-cutting
+                agents like google_workspace_agent or the active web-search
+                agent). Server enforces that the picked owner is a primary
+                in this org. */}
+            {agents.filter((a) => a.type === "system").length > 0 && (
+              <div className="mb-4">
+                <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+                  <Cpu className="h-3.5 w-3.5 text-emerald-500" />
+                  System Agent Ownership
+                  <span className="ml-1 text-[9px] font-normal normal-case text-gray-400">
+                    private specialists vs. shared org-wide agents
+                  </span>
+                </h3>
+                <p className="mb-2 text-[11px] text-gray-500">
+                  Assign each system agent to a single primary agent that owns it.
+                  Only that primary can list and delegate to an owned specialist.
+                  Choose <strong>Shared (org-wide)</strong> for cross-cutting agents
+                  every primary should be able to use.
+                </p>
+                <div className="overflow-hidden rounded-xl border border-gray-200/80 bg-white">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-gray-50 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                      <tr>
+                        <th className="px-3 py-2">System agent</th>
+                        <th className="px-3 py-2">Description</th>
+                        <th className="px-3 py-2 w-64">Owner</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {agents
+                        .filter((a) => a.type === "system")
+                        .map((sa) => {
+                          const ownerValue = sa.owningPrimaryAgentId ?? "";
+                          const label =
+                            sa.agentName?.trim() ||
+                            sa.definition?.trim() ||
+                            sa.id;
+                          return (
+                            <tr key={sa.id} className="hover:bg-gray-50/60">
+                              <td className="px-3 py-2 align-top">
+                                <div className="font-semibold text-gray-800">{label}</div>
+                                <div className="text-[10px] text-gray-400">{sa.id}</div>
+                              </td>
+                              <td className="px-3 py-2 align-top text-gray-600">
+                                {sa.description?.trim() || (
+                                  <span className="text-gray-400 italic">no description</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 align-top">
+                                <select
+                                  value={ownerValue}
+                                  disabled={sa.isLocked}
+                                  onChange={(e) =>
+                                    handleAssignSystemAgentOwner(
+                                      sa.id,
+                                      e.target.value === "" ? null : e.target.value,
+                                    )
+                                  }
+                                  className="w-full rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs focus:border-indigo-400 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400"
+                                >
+                                  <option value="">Shared (org-wide)</option>
+                                  {agents
+                                    .filter((p) => p.type === "primary")
+                                    .map((p) => (
+                                      <option key={p.id} value={p.id}>
+                                        {p.agentName?.trim() ||
+                                          p.definition?.trim() ||
+                                          p.id}
+                                      </option>
+                                    ))}
+                                </select>
+                                {sa.isLocked && (
+                                  <p className="mt-1 text-[10px] text-gray-400">
+                                    Locked agent — ownership cannot be changed here.
+                                  </p>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {/* Google Permissions — super_admin only (server also enforces).
                 Grants calendar/drive/gmail operations per-(agent, subject user, scope). */}

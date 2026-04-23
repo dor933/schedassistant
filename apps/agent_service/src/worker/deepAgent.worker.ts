@@ -33,6 +33,11 @@ import { ChatAnthropic } from "@langchain/anthropic";
 import { getRedisConfig } from "../redisClient";
 import { getLangfuseCallbackHandler, observeWithContext, flushLangfuse } from "../langfuse";
 import { logger } from "../logger";
+import {
+  resolveSessionWorkspacePath,
+  ensureSessionWorkspace,
+} from "../workspace/sessionWorkspace";
+import { instrumentFsWriteTools } from "../workspace/instrumentFsWriteTools";
 
 /** Max time a deep agent invocation can run before being aborted (ms). */
 const DEEP_AGENT_TIMEOUT_MS = Number(
@@ -201,6 +206,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         userId,
         groupId,
         singleChatId,
+        callerThreadId,
       } = job.data;
 
       logger.info("DeepAgent: processing job", {
@@ -316,7 +322,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           // Filter out collisions — the agent uses deepagents' built-ins for its
           // virtual workspace, and the remaining MCP tools for everything else.
           const DEEP_AGENT_BUILTIN_NAMES = new Set(["read_file", "write_file", "edit_file"]);
-          const mcpTools = rawMcpTools.filter((t: any) => {
+          const filteredMcpTools = rawMcpTools.filter((t: any) => {
             if (DEEP_AGENT_BUILTIN_NAMES.has(t.name)) {
               logger.warn("DeepAgent: skipping MCP tool that conflicts with built-in", {
                 tool: t.name,
@@ -351,6 +357,40 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             });
             callerWorkspacePath = callerAgent?.workspacePath ?? null;
           }
+
+          // Per-thread session workspace under the caller's workspace. Only
+          // populated when the caller passed its threadId AND the executor
+          // can actually write (filesystem MCP attached + caller has a
+          // workspace). FS-write instrumentation needs both to capture
+          // writes into the caller's per-thread manifest.
+          const callerSessionWorkspacePath = resolveSessionWorkspacePath(
+            callerWorkspacePath,
+            callerThreadId ?? null,
+          );
+          if (callerSessionWorkspacePath) {
+            try {
+              await ensureSessionWorkspace(callerSessionWorkspacePath);
+            } catch (err) {
+              logger.warn("DeepAgent: failed to ensure caller session workspace", {
+                delegationId,
+                callerSessionWorkspacePath,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+
+          // When the executor can write into a caller per-thread folder, wrap
+          // its filesystem MCP write tools so successful writes inside that
+          // folder are captured into the caller's per-thread ledger. The
+          // caller's call-model node will fold the ledger into its state
+          // when its turn resumes (via the delegation_result callback).
+          const mcpTools = callerSessionWorkspacePath && callerThreadId
+            ? instrumentFsWriteTools(filteredMcpTools, {
+                threadId: callerThreadId,
+                sessionWorkspacePath: callerSessionWorkspacePath,
+                source: `deep_agent:${executorAgentId}`,
+              })
+            : filteredMcpTools;
 
           // Load configurable tools gated by agent_available_tools (same as callModel)
           const activeSlugs = await loadActiveToolSlugs(executorAgent.id);
