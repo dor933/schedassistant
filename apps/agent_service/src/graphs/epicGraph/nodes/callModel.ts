@@ -48,6 +48,7 @@ import {
   ForceApproveStagePrTool,
   ApproveStageTool,
   RequestStageChangesTool,
+  CancelEpicTool,
   parseContinuationMarker,
 } from "../../../tools/epicTaskTools";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
@@ -189,6 +190,7 @@ export async function epicCallModelNode(
     ForceApproveStagePrTool(),
     ApproveStageTool(),
     RequestStageChangesTool(),
+    CancelEpicTool(),
     ...mcpTools,
   ];
 

@@ -1,12 +1,19 @@
 import crypto from "node:crypto";
 import { Worker } from "bullmq";
-import { createDeepAgent } from "deepagents";
+import {
+  createDeepAgent,
+  FilesystemBackend,
+  CompositeBackend,
+  type WriteResult,
+  type EditResult,
+} from "deepagents";
 import { MemorySaver } from "@langchain/langgraph";
 import {
   Agent,
   AgentAvailableMcpServer,
   DeepAgentDelegation,
   LLMModel,
+  McpServer,
 } from "@scheduling-agent/database";
 import { resolveOrgVendorByOrg } from "../services/resolveOrgVendor";
 import { loadOrganizationSummarySection } from "../graphs/basicGraph/nodes/contextBuilder";
@@ -17,7 +24,7 @@ import {
 import { agentChatQueue } from "../queues/agentChat.bull";
 import { getMcpToolsByServerIds } from "../mcpClient";
 import { systemAgentSkillTools } from "../tools/skillsTools";
-import { hasFilesystemMcp } from "../tools/hasFilesystemMcp";
+import { FILESYSTEM_MCP_NAME } from "../tools/hasFilesystemMcp";
 import { getLibraryPath } from "../services/library.service";
 import { loadActiveToolSlugs } from "../tools/resolveAgentTools";
 import { QueryDatabaseTool } from "../tools/queryDatabaseTool";
@@ -53,6 +60,21 @@ const DEEP_AGENT_MAX_RETRIES = Number(
 const MAX_RESULT_CHARS = Number(
   process.env.DEEP_AGENT_MAX_RESULT_CHARS ?? 15_000,
 );
+
+/**
+ * Read-only variant of `FilesystemBackend`. Used for the `/library` route of
+ * the deep agent's `CompositeBackend` — `write_file` and `edit_file` return a
+ * structured error instead of mutating disk, so admin-curated library docs
+ * cannot be modified by executor agents.
+ */
+class ReadOnlyFilesystemBackend extends FilesystemBackend {
+  async write(): Promise<WriteResult> {
+    return { error: "This path is read-only — writes and creates are not permitted here." };
+  }
+  async edit(): Promise<EditResult> {
+    return { error: "This path is read-only — edits are not permitted here." };
+  }
+}
 
 /**
  * Determines if an error is transient and worth retrying (rate limits, network).
@@ -301,51 +323,43 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                 : "The web search agent did not produce a response.";
         } else {
           // ── Standard deep agent path ──
-          // Load active MCP tools available to this executor agent
+          // Load active MCP tools available to this executor agent, EXCLUDING
+          // the filesystem MCP. Primary agents use that MCP directly, but deep
+          // agents must not: its `read_file` / `write_file` / `edit_file`
+          // tool names collide with deepagents' built-in virtual-FS tools,
+          // which silently routed writes to memory and caused ENOENT on
+          // subsequent `get_file_info` calls. The deep agent instead gets
+          // real-disk file access via a `FilesystemBackend` rooted at the
+          // caller's workspace (see `backend` below).
           const mcpLinks = await AgentAvailableMcpServer.findAll({
             where: { agentId: executorAgent.id, active: true },
             attributes: ["mcpServerId"],
           });
-          const mcpServerIds = mcpLinks.map((l) => l.mcpServerId);
-          const rawMcpTools = mcpServerIds.length > 0
+          const rawMcpServerIds = mcpLinks.map((l) => l.mcpServerId);
+          const fsMcpRow = rawMcpServerIds.length > 0
+            ? await McpServer.findOne({
+                where: { name: FILESYSTEM_MCP_NAME },
+                attributes: ["id"],
+              })
+            : null;
+          const mcpServerIds = fsMcpRow
+            ? rawMcpServerIds.filter((id) => id !== fsMcpRow.id)
+            : rawMcpServerIds;
+          const mcpTools = mcpServerIds.length > 0
             ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${executorAgentId}`)
             : [];
 
-          // deepagents has built-in tools: read_file, write_file, edit_file.
-          // MCP servers (especially filesystem) may expose tools with the same names.
-          // Filter out collisions — the agent uses deepagents' built-ins for its
-          // virtual workspace, and the remaining MCP tools for everything else.
-          const DEEP_AGENT_BUILTIN_NAMES = new Set(["read_file", "write_file", "edit_file"]);
-          const mcpTools = rawMcpTools.filter((t: any) => {
-            if (DEEP_AGENT_BUILTIN_NAMES.has(t.name)) {
-              logger.warn("DeepAgent: skipping MCP tool that conflicts with built-in", {
-                tool: t.name,
-                delegationId,
-              });
-              return false;
-            }
-            return true;
-          });
-
           const skillTools = systemAgentSkillTools(executorAgent.id);
 
-          // Does the executor have the filesystem MCP attached? Drives
-          // whether we include the durable workspace / library guidance in
-          // the prompt — with no filesystem MCP the executor has no way to
-          // read or write the caller's workspace, so there is nothing
-          // meaningful to tell it about those paths.
-          const executorHasFilesystemMcp = mcpServerIds.length > 0
-            ? await hasFilesystemMcp(executorAgent.id)
-            : false;
-
-          // Caller's persistent workspace directory — the executor, when it
-          // has filesystem MCP access, writes durable artifacts there so the
-          // calling orchestrator can pick them up. System executor agents
-          // have no workspace of their own (workspace_path is NULL per
+          // Caller's persistent workspace directory — the deep agent gets
+          // mounted here via its filesystem backend (below). System executor
+          // agents have no workspace of their own (workspace_path is NULL per
           // migration 20240101000084); they always act on the caller's
-          // directory. If the caller has none, we fall back to no section.
+          // directory. If the caller has none, the backend falls back to the
+          // default StateBackend (ephemeral in-memory) and file writes will
+          // not persist.
           let callerWorkspacePath: string | null = null;
-          if (executorHasFilesystemMcp && callerAgentId) {
+          if (callerAgentId) {
             const callerAgent = await Agent.findByPk(callerAgentId, {
               attributes: ["id", "workspacePath"],
             });
@@ -392,48 +406,73 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             toolCount: allTools.length,
           });
 
-          // Workspace + library guidance — only emitted when this executor
-          // has the filesystem MCP attached and the caller actually has a
-          // workspace directory. Without filesystem MCP the executor has no
-          // tools to honour this guidance; without a caller workspace there
-          // is nowhere for it to write.
-          const libraryPath = getLibraryPath();
-          const workspaceSection = executorHasFilesystemMcp && callerWorkspacePath
+          // Workspace + library guidance — emitted when the caller actually
+          // has a workspace directory. When set, we mount a `CompositeBackend`
+          // (below) whose default backend is the caller's workspace on disk,
+          // plus a read-only `/library/*` route to the admin-curated org
+          // library. All the deep agent's built-in file tools (`read_file` /
+          // `write_file` / `edit_file` / `ls` / `grep` / `glob`) operate
+          // against this backend — no virtual in-memory FS, no filesystem MCP.
+          const workspaceSection = callerWorkspacePath
             ? (
-                `## Caller workspace + org library (filesystem MCP)\n` +
-                `You have the filesystem MCP attached, rooted at \`/app/data\`. Use its tools ` +
-                `(\`read_text_file\`, \`write_file\`, \`edit_file\`, \`list_directory\`, \`search_files\`, ` +
-                `\`create_directory\`, \`move_file\`) for all durable reads and writes.\n\n` +
-                `- **CALLER_WORKSPACE_PATH = \`${callerWorkspacePath}\`** — the orchestrator that delegated to you ` +
-                `owns this directory. You do not have a workspace of your own. Write any durable artifacts (plans, ` +
-                `findings, briefs) here so the orchestrator can read them. **Orient first**: \`list_directory\` on ` +
-                `this path before you start, and \`read_text_file\` anything that looks relevant to your task — the ` +
-                `orchestrator or prior specialists may have left context.\n` +
-                `- **LIBRARY_PATH = \`${libraryPath}\`** — read-only org-wide reference documents curated by admins. ` +
-                `Consult before answering questions about internal policies, terminology, or procedures. Never write ` +
-                `or delete anything under this path.\n\n` +
+                `## Caller workspace (your sandboxed filesystem)\n` +
+                `Your file tools — \`read_file\`, \`write_file\`, \`edit_file\`, \`ls\`, \`grep\`, \`glob\` — are ` +
+                `pre-bound to the caller's workspace directory. You do NOT need (and will not be told) the on-disk ` +
+                `path of that directory; from your point of view, the workspace IS your filesystem root. Writes ` +
+                `persist across tasks; the orchestrator that delegated to you reads the same directory.\n\n` +
+                `- **Paths — use bare or root-relative names only**: pass \`notes.md\` or \`/notes.md\`. Both ` +
+                `resolve to the workspace root. Subdirectories work the same way: \`reports/q1.md\` or ` +
+                `\`/reports/q1.md\`.\n` +
+                `- **Never** prefix a path with anything that looks like a host directory (no \`/app/...\`, no ` +
+                `\`/home/...\`, no \`/workspaces/...\`, no \`/data/...\`). If the orchestrator's task message ` +
+                `mentions such a path, treat it as context and write/read using the bare filename relative to your ` +
+                `root. Doing otherwise will create a duplicated nested directory inside your workspace and the ` +
+                `file will not appear where the orchestrator expects.\n` +
+                `- Paths containing \`..\` are rejected.\n` +
+                `- **Orient first**: call \`ls\` on \`/\` before you start, and \`read_file\` anything that looks ` +
+                `relevant — the orchestrator or prior specialists may have left context.\n\n` +
+                `### Org library (\`/library/*\`, read-only)\n` +
+                `Admin-curated reference documents are mounted at the virtual path \`/library/\`. Use \`ls /library\` ` +
+                `to browse, \`read_file /library/<name>\` to read, and \`grep\` with \`path=/library\` to search. ` +
+                `Consult before answering questions about internal policies, terminology, or procedures. Writes and ` +
+                `edits under \`/library/*\` are rejected by the backend — do not attempt them.\n\n` +
                 `### Required: self-report workspace writes\n` +
                 `At the very end of your final response to the orchestrator, include a top-level section titled ` +
-                `exactly \`## Workspace writes\` listing every file you created, edited, moved, or deleted under ` +
-                `\`CALLER_WORKSPACE_PATH\`. One bullet per file (path relative to that directory) with a one-line ` +
-                `summary of what it contains or why you changed it. If you made no workspace changes, include the ` +
-                `section with a single bullet \`- (none)\`. The orchestrator relies on this to know what changed.\n\n`
+                `exactly \`## Workspace writes\` listing every file you created, edited, moved, or deleted outside ` +
+                `\`/library/\`. One bullet per file (path relative to the workspace root) with a one-line summary ` +
+                `of what it contains or why you changed it. If you made no workspace changes, include the section ` +
+                `with a single bullet \`- (none)\`. The orchestrator relies on this to know what changed.\n\n`
               )
-            : executorHasFilesystemMcp
-              ? (
-                  `## Org library (filesystem MCP)\n` +
-                  `You have the filesystem MCP attached. The admin-curated org library lives at ` +
-                  `\`${libraryPath}\` — read-only. Use \`list_directory\` / \`read_text_file\` to consult it when a ` +
-                  `question touches org-specific policies or terminology. No caller workspace was provided for this ` +
-                  `delegation, so there is no directory to write durable artifacts into — return findings inline.\n\n`
-                )
-              : "";
+            : "";
 
-          // Create the deep agent with the deepagents library
+          // Create the deep agent. When the caller has a workspace, mount a
+          // `CompositeBackend`: the default route is a sandboxed
+          // `FilesystemBackend` at the caller's workspace (virtualMode=true,
+          // so `..` traversal is rejected), and `/library/*` routes to a
+          // `ReadOnlyFilesystemBackend` at the org library. We deliberately
+          // do NOT attach the filesystem MCP (filtered above) — its
+          // `read_file` / `write_file` / `edit_file` tool names collide with
+          // the deepagents built-ins, which caused writes to land in memory
+          // and subsequent `get_file_info` calls to return ENOENT.
           const checkpointer = new MemorySaver();
+          const backend = callerWorkspacePath
+            ? new CompositeBackend(
+                new FilesystemBackend({
+                  rootDir: callerWorkspacePath,
+                  virtualMode: true,
+                }),
+                {
+                  "/library": new ReadOnlyFilesystemBackend({
+                    rootDir: getLibraryPath(),
+                    virtualMode: true,
+                  }),
+                },
+              )
+            : undefined;
           const agent = createDeepAgent({
             model: chatModel as any,
             tools: allTools as any[],
+            ...(backend ? { backend } : {}),
             systemPrompt:
               `${orgSummaryBlock}` +
               `You are ${executorAgent.agentName}, an executor agent — a specialist responsible for carrying out tasks ` +
@@ -445,12 +484,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
               `- Use your tools (MCP servers, file operations, etc.) to gather real data and produce real results\n` +
               `- Structure your response clearly with sections\n` +
               `- Include all relevant findings, data, and reasoning\n\n` +
-              `${workspaceSection}` +
-              `## Ephemeral scratchpad\n` +
-              `\`read_file\` / \`write_file\` / \`edit_file\` (no path prefix) target a virtual in-memory filesystem ` +
-              `scoped to this single task — it vanishes when the task ends. Use it for intermediate notes and raw ` +
-              `tool output you want to process. Do NOT put anything here that you or the orchestrator will need ` +
-              `later.`,
+              `${workspaceSection}`,
             checkpointer,
           });
 

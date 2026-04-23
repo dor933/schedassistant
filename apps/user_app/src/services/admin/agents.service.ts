@@ -159,7 +159,8 @@ export class AgentsService {
     // System agents do not get their own workspace — when they execute a
     // delegation they write into the caller's workspace folder instead.
     if (resolvedType !== "system") {
-      const workspacePath = path.join(WORKSPACES_ROOT, agent.definition || agent.id);
+      const workspaceFolderName = (agent.definition || agent.id).replace(/\s+/g, "_");
+      const workspacePath = path.join(WORKSPACES_ROOT, workspaceFolderName);
       try {
         fs.mkdirSync(workspacePath, { recursive: true });
         await agent.update({ workspacePath });
