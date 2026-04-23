@@ -538,7 +538,8 @@ export class AuthService {
       ...(epicOrchestrator ? [epicOrchestrator] : []),
     ];
     for (const agent of primaryAgentsNeedingWorkspace) {
-      const workspacePath = path.join(WORKSPACES_ROOT, agent.definition || agent.id);
+      const workspaceFolderName = (agent.definition || agent.id).replace(/\s+/g, "_");
+      const workspacePath = path.join(WORKSPACES_ROOT, workspaceFolderName);
       try {
         fs.mkdirSync(workspacePath, { recursive: true });
         await agent.update({ workspacePath });

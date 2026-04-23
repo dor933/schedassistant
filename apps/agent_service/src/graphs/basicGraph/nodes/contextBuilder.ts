@@ -30,6 +30,10 @@ import { formatUserIdentityForPrompt } from "../../../utils/formatUserIdentityFo
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import { AgentId } from "@scheduling-agent/types";
+import {
+  resolveSessionWorkspacePath,
+  ensureSessionWorkspace,
+} from "../../../workspace/sessionWorkspace";
 
 
 async function loadAgentNameSection(agentId: AgentId): Promise<string> {
@@ -451,6 +455,7 @@ export async function buildContext(
     userIdentity,
     groupMemberIdentities,
     systemPrompt,
+    agentWorkspacePath,
   };
 }
 
@@ -467,6 +472,26 @@ export async function contextBuilderNode(
   try {
     const ctx = await buildContext(state, config);
 
+    // Resolve + create the per-thread session workspace folder if this agent
+    // has a workspace at all. We do not gate on filesystem-MCP attachment here
+    // — the directory is cheap to create and the FS-write instrumentation is
+    // the one that decides whether to actually record writes into it.
+    const sessionWorkspacePath = resolveSessionWorkspacePath(
+      ctx.agentWorkspacePath,
+      state.threadId,
+    );
+    if (sessionWorkspacePath) {
+      try {
+        await ensureSessionWorkspace(sessionWorkspacePath);
+      } catch (err) {
+        logger.warn("Failed to ensure session workspace folder", {
+          threadId: state.threadId,
+          sessionWorkspacePath,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     logger.info("Context assembled", {
       threadId: state.threadId,
       hasAgentDef: !!ctx.agentCoreInstructions,
@@ -475,11 +500,13 @@ export async function contextBuilderNode(
       checkpointLogCount: ctx.recentCheckpointMessageCount,
       conversationLogCount: ctx.recentConversationMessageCount,
       promptLen: ctx.systemPrompt.length,
+      sessionWorkspacePath,
     });
 
     return {
       systemPrompt: ctx.systemPrompt,
       contextAssembled: true,
+      sessionWorkspacePath,
     };
   } catch (err: unknown) {
     const message =
@@ -801,32 +828,13 @@ function formatSystemPrompt(
   );
   sections.push("");
 
-  sections.push("## Honesty, accuracy & tool usage — MANDATORY rules");
+  sections.push("## Honesty");
   sections.push(
-    "These rules override any urge to be helpful. Violating them is worse than giving a disappointing answer.\n\n" +
-
-    "### Never fabricate actions or results\n" +
-    "- Only claim you did something if you actually invoked the corresponding tool **and** received a real result.\n" +
-    "- NEVER write text that looks like a tool call, tool result, function call, API response, or system message. " +
-    "Your tools are invoked through a structured mechanism — not through your message text.\n" +
-    "- If a tool call fails, errors out, or is unavailable — say so honestly. Do NOT invent a successful outcome.\n" +
-    "- If you are unsure whether a tool call went through, tell the user you are unsure rather than assuming success.\n\n" +
-
-    "### Never invent information you don't have\n" +
-    "- Do not make up data, statistics, dates, IDs, names, or any factual claims you cannot verify from your context or tool results.\n" +
-    "- If you don't know something, say \"I don't know\" or \"I don't have that information\".\n" +
-    "- If the user asks you to do something you cannot do with your available tools, explain what you can and cannot do — do not pretend.\n\n" +
-
-    "### Prefer honesty over user satisfaction\n" +
-    "- It is better to say \"I wasn't able to do that\" than to fabricate a result the user wants to hear.\n" +
-    "- It is better to say \"I'm not sure\" than to confidently state something you made up.\n" +
-    "- Never say \"Done!\" or \"Updated!\" unless you received confirmation from an actual tool result.\n" +
-    "- If a tool is repeatedly failing, tell the user clearly instead of retrying silently and pretending it worked.\n\n" +
-
-    "### Tool invocation\n" +
-    "- Always use the structured tool-calling mechanism. Never simulate, quote, or role-play tool interactions in your message text.\n" +
-    "- After invoking a tool, base your response strictly on the actual result returned — do not embellish, reinterpret, or add information that wasn't in the result.\n" +
-    "- If you need to call a tool but something prevents you (e.g. missing parameters, unknown ID), ask the user for the missing information.",
+    "- Only claim you did something if a tool actually returned a confirming result.\n" +
+    "- Never write text that mimics a tool call, tool result, function call, or API response — invoke tools through the structured mechanism.\n" +
+    "- If a tool fails or is unavailable, say so. Do not invent a successful outcome or retry silently while pretending it worked.\n" +
+    "- If you don't know something, say so. Do not fabricate data, IDs, dates, names, or paths.\n" +
+    "- Base every claim about external state on the actual tool result — do not embellish or extrapolate beyond what was returned.",
   );
   sections.push("");
 
@@ -858,11 +866,20 @@ function formatSystemPrompt(
       `prefix — never a relative path.\n\n` +
       "Use your workspace for persistent documents, plans, research, templates, or any information " +
       "you want to retain and build upon over time.\n\n" +
+      "**Per-thread session folder.** Each conversation has its own subfolder at " +
+      `\`${agentWorkspacePath}/threads/<this_thread_id>/\`, created for you automatically. ` +
+      "**Write content-rich, durable artifacts (plans, briefs, large analyses, research dumps) " +
+      "inside this folder, not at the workspace root.** Writes here are captured into the session " +
+      "manifest, summarised when the thread closes, and indexed for vector retrieval — so a future " +
+      "you can recover them via the cascade `recall_episodic_memory` → `get_thread_summary` → " +
+      "`read_session_file`. Writes outside this folder are still saved but won't appear in the " +
+      "per-thread manifest.\n\n" +
       "**Shared with executor/system agents you delegate to.** When you delegate a task via " +
       "`delegate_to_deep_agent` (or similar), the executor agent does not have its own workspace — it " +
-      "writes into **this same directory** on your behalf. After the delegation result comes back, " +
-      "check the `## Workspace writes` section at the end of the executor's reply to see what it " +
-      "changed, then `read_text_file` to inspect any new or modified files.",
+      "writes into **this same directory** on your behalf, and its writes inside the per-thread folder " +
+      "are captured the same way. After the delegation result comes back, check the `## Workspace writes` " +
+      "section at the end of the executor's reply to see what it changed, then `read_text_file` (or " +
+      "`read_session_file` for files inside the per-thread folder) to inspect them.",
     );
     sections.push("");
   }
@@ -959,7 +976,9 @@ function formatSystemPrompt(
       "Auto-retrieved from your long-term memory based on the user's latest message. " +
       "Each snippet is prefixed with its originating `thread_id` — if a snippet hints at a past " +
       "session or roundtable but lacks detail, call `get_thread_summary` with that thread_id to " +
-      "pull the full saved summary. " +
+      "pull the full saved summary, which also lists every file written into that session's " +
+      "workspace. If a manifest entry looks like it holds the answer, follow up with " +
+      "`read_session_file` (passing the same thread_id and the file's path) to fetch the contents. " +
       "If you need more context on a different topic, use `recall_episodic_memory` with a targeted query.",
     );
     for (const snippet of episodicSnippets) {
@@ -970,8 +989,11 @@ function formatSystemPrompt(
     sections.push("## Long-term memory");
     sections.push(
       "No auto-retrieved memories matched this turn. If you feel you're missing context " +
-      "(e.g. past decisions, repo-specific patterns, user preferences), use `recall_episodic_memory` " +
-      "with a descriptive query to search your long-term memory.",
+      "(e.g. past decisions, repo-specific patterns, user preferences), follow this cascade: " +
+      "first `recall_episodic_memory` with a descriptive query; if a hit references a past thread " +
+      "but lacks detail, `get_thread_summary` for the full text plus its file manifest; if a " +
+      "manifest file looks relevant, `read_session_file` to read it. Stop as soon as you have " +
+      "enough — you do not need to walk every step.",
     );
     sections.push("");
   }

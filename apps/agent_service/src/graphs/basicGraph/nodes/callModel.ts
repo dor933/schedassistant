@@ -34,11 +34,14 @@ import { agentSkillTools } from "../../../tools/skillsTools";
 import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
+import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
+import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
+import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 10;
@@ -270,7 +273,17 @@ export async function callModelNode(
   const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
   // Load MCP tools assigned to this agent via agent_available_mcp_servers.
-  const mcpTools = agentId ? await getMcpTools(agentId) : [];
+  // When this thread has a session workspace, wrap the filesystem MCP write
+  // tools so successful writes inside the per-thread folder are appended to
+  // the per-thread ledger and folded back into state after each tool round.
+  const rawMcpTools = agentId ? await getMcpTools(agentId) : [];
+  const mcpTools = state.sessionWorkspacePath
+    ? instrumentFsWriteTools(rawMcpTools, {
+        threadId,
+        sessionWorkspacePath: state.sessionWorkspacePath,
+        source: "primary_agent",
+      })
+    : rawMcpTools;
 
   // Load configurable tool slugs from agent_available_tools.
   // null = no assignments exist yet → include all for backward compatibility.
@@ -287,6 +300,7 @@ export async function callModelNode(
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
+    ReadSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),
@@ -308,7 +322,7 @@ export async function callModelNode(
   if (has("list_system_agents"))
     tools.push(ListSystemAgentsTool(agentId));
   if (has("delegate_to_deep_agent"))
-    tools.push(DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId));
+    tools.push(DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId, state.threadId));
   if (has("delegate_to_epic_orchestrator"))
     tools.push(DelegateToEpicOrchestratorTool(agentId, state.userId, state.groupId, state.singleChatId));
   if (has("list_projects"))
@@ -403,7 +417,10 @@ export async function callModelNode(
           modelName: vendor.modelName,
         };
         newMessages.push(response);
-        return { messages: newMessages };
+        const sessionFiles = drainSessionFileLedger(threadId);
+        return sessionFiles.length > 0
+          ? { messages: newMessages, sessionFiles }
+          : { messages: newMessages };
       }
 
       newMessages.push(response);
@@ -484,12 +501,18 @@ export async function callModelNode(
     }
 
     logger.warn("Tool loop stopped after max rounds", { maxRounds: MAX_TOOL_ROUNDS });
+    const sessionFilesAtLimit = drainSessionFileLedger(threadId);
     return {
       error: "The assistant requested too many tool calls in one turn. Please try again.",
+      ...(sessionFilesAtLimit.length > 0 ? { sessionFiles: sessionFilesAtLimit } : {}),
     };
   } catch (err) {
     const vendorText = rawVendorErrorText(err);
     logger.error("LLM invocation failed", { modelSlug, vendorSlug: vendor.vendorSlug, vendorError: vendorText });
-    return { error: vendorText };
+    const sessionFilesOnError = drainSessionFileLedger(threadId);
+    return {
+      error: vendorText,
+      ...(sessionFilesOnError.length > 0 ? { sessionFiles: sessionFilesOnError } : {}),
+    };
   }
 }

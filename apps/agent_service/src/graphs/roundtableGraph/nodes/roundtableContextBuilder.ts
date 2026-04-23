@@ -8,6 +8,10 @@ import {
   loadLibrarySection,
 } from "../../basicGraph/nodes/contextBuilder";
 import { hasFilesystemMcp } from "../../../tools/hasFilesystemMcp";
+import {
+  resolveSessionWorkspacePath,
+  ensureSessionWorkspace,
+} from "../../../workspace/sessionWorkspace";
 
 /**
  * LangGraph node: assembles the system prompt for a roundtable agent turn.
@@ -164,7 +168,11 @@ export async function roundtableContextBuilderNode(
         `Your persistent workspace lives at \`${agentWorkspacePath}\`. Access it via the ` +
         "**filesystem MCP** (server `filesystem`, rooted at `/app/data`): `list_directory`, " +
         "`read_text_file`, `write_file`, `edit_file`, `search_files`. Always use the absolute " +
-        "path above as the prefix.",
+        "path above as the prefix.\n\n" +
+        "**Per-thread session folder.** This roundtable thread has its own subfolder at " +
+        `\`${agentWorkspacePath}/threads/<this_thread_id>/\`. Write any durable contributions ` +
+        "(notes, drafts, position briefs) into that folder so they're captured into the session " +
+        "manifest and recoverable later via `read_session_file` and `get_thread_summary`.",
       );
       sections.push("");
     }
@@ -180,17 +188,35 @@ export async function roundtableContextBuilderNode(
 
     const systemPrompt = sections.join("\n");
 
+    const sessionWorkspacePath = resolveSessionWorkspacePath(
+      agentWorkspacePath,
+      state.threadId,
+    );
+    if (sessionWorkspacePath) {
+      try {
+        await ensureSessionWorkspace(sessionWorkspacePath);
+      } catch (err) {
+        logger.warn("Failed to ensure roundtable session workspace folder", {
+          threadId: state.threadId,
+          sessionWorkspacePath,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
     logger.info("Roundtable context assembled", {
       threadId: state.threadId,
       agentId,
       roundtableId: state.roundtableId,
       round: roundtableConfig?.roundNumber,
       promptLen: systemPrompt.length,
+      sessionWorkspacePath,
     });
 
     return {
       systemPrompt,
       contextAssembled: true,
+      sessionWorkspacePath,
     };
   } catch (err: unknown) {
     const message =

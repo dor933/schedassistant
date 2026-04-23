@@ -29,10 +29,13 @@ import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspac
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
+import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
+import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
+import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
 
 const MAX_TOOL_ROUNDS = 15;
 
@@ -191,7 +194,18 @@ export async function roundtableCallModelNode(
 
   const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
-  const mcpTools = agentId ? await getMcpTools(agentId) : [];
+  // Wrap filesystem MCP write tools when this thread has a session
+  // workspace, so writes by the roundtable agent inside the per-thread
+  // folder are captured into the per-thread ledger and folded into state
+  // on each return.
+  const rawMcpTools = agentId ? await getMcpTools(agentId) : [];
+  const mcpTools = state.sessionWorkspacePath
+    ? instrumentFsWriteTools(rawMcpTools, {
+        threadId,
+        sessionWorkspacePath: state.sessionWorkspacePath,
+        source: "roundtable_agent",
+      })
+    : rawMcpTools;
 
   const activeSlugs = await loadActiveToolSlugs(agentId);
   const has = (slug: string) => activeSlugs.has(slug);
@@ -206,6 +220,7 @@ export async function roundtableCallModelNode(
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
+    ReadSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),
@@ -226,7 +241,7 @@ export async function roundtableCallModelNode(
   if (has("list_system_agents"))
     tools.push(ListSystemAgentsTool(agentId));
   if (has("delegate_to_deep_agent"))
-    tools.push(SyncDelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId));
+    tools.push(SyncDelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId, state.threadId));
   if (has("list_projects"))
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))
@@ -326,7 +341,10 @@ export async function roundtableCallModelNode(
           modelName: vendor.modelName,
         };
         newMessages.push(response);
-        return { messages: newMessages };
+        const sessionFiles = drainSessionFileLedger(threadId);
+        return sessionFiles.length > 0
+          ? { messages: newMessages, sessionFiles }
+          : { messages: newMessages };
       }
 
       newMessages.push(response);
@@ -384,9 +402,11 @@ export async function roundtableCallModelNode(
     logger.warn("Roundtable: tool loop stopped after max rounds", {
       maxRounds: MAX_TOOL_ROUNDS,
     });
+    const sessionFilesAtLimit = drainSessionFileLedger(threadId);
     return {
       error:
         "The agent requested too many tool calls in one roundtable turn.",
+      ...(sessionFilesAtLimit.length > 0 ? { sessionFiles: sessionFilesAtLimit } : {}),
     };
   } catch (err) {
     const vendorText = rawVendorErrorText(err);
@@ -395,6 +415,10 @@ export async function roundtableCallModelNode(
       vendorSlug: vendor.vendorSlug,
       vendorError: vendorText,
     });
-    return { error: vendorText };
+    const sessionFilesOnError = drainSessionFileLedger(threadId);
+    return {
+      error: vendorText,
+      ...(sessionFilesOnError.length > 0 ? { sessionFiles: sessionFilesOnError } : {}),
+    };
   }
 }

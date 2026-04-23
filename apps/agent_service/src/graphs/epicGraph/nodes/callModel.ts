@@ -37,6 +37,7 @@ import {
 import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
+import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import {
   ListProjectsTool,
   ListRepositoriesTool,
@@ -53,6 +54,8 @@ import {
 } from "../../../tools/epicTaskTools";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
+import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
+import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
 
 // Cap the orchestrator's tool-call chain per chat turn. This is the EPIC
 // orchestrator, which legitimately chains many tool calls: setup checks
@@ -153,8 +156,19 @@ export async function epicCallModelNode(
 
   const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
-  // Load MCP tools assigned to this agent (bash, filesystem servers)
-  const mcpTools = await getMcpTools(agentId);
+  // Load MCP tools assigned to this agent (bash, filesystem servers).
+  // When this thread has a session workspace, wrap the filesystem MCP
+  // write tools so successful writes inside the per-thread folder are
+  // captured into the per-thread ledger and folded back into state on
+  // each return path.
+  const rawMcpTools = await getMcpTools(agentId);
+  const mcpTools = state.sessionWorkspacePath
+    ? instrumentFsWriteTools(rawMcpTools, {
+        threadId,
+        sessionWorkspacePath: state.sessionWorkspacePath,
+        source: "epic_orchestrator",
+      })
+    : rawMcpTools;
 
   const activeSlugs = await loadActiveToolSlugs(agentId);
   const has = (slug: string) => activeSlugs.has(slug);
@@ -167,6 +181,7 @@ export async function epicCallModelNode(
     SaveEpisodicMemoryTool(agentId, userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
+    ReadSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),
@@ -202,7 +217,7 @@ export async function epicCallModelNode(
   if (has("list_system_agents"))
     tools.push(ListSystemAgentsTool(agentId));
   if (has("delegate_to_deep_agent"))
-    tools.push(DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId));
+    tools.push(DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId, state.threadId));
   if (has("list_projects"))
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))
@@ -277,7 +292,10 @@ export async function epicCallModelNode(
           modelName: vendor.modelName,
         };
         newMessages.push(response);
-        return { messages: newMessages };
+        const sessionFiles = drainSessionFileLedger(threadId);
+        return sessionFiles.length > 0
+          ? { messages: newMessages, sessionFiles }
+          : { messages: newMessages };
       }
 
       newMessages.push(response);
@@ -344,16 +362,27 @@ export async function epicCallModelNode(
           };
           newMessages.push(wrapUpResponse);
 
-          return { messages: newMessages, epicContinuation: continuation };
+          const sessionFilesAtCont = drainSessionFileLedger(threadId);
+          return sessionFilesAtCont.length > 0
+            ? { messages: newMessages, epicContinuation: continuation, sessionFiles: sessionFilesAtCont }
+            : { messages: newMessages, epicContinuation: continuation };
         }
       }
     }
 
     logger.warn("Epic tool loop stopped after max rounds", { maxRounds: MAX_TOOL_ROUNDS });
-    return { error: "Too many tool calls in one turn." };
+    const sessionFilesAtLimit = drainSessionFileLedger(threadId);
+    return {
+      error: "Too many tool calls in one turn.",
+      ...(sessionFilesAtLimit.length > 0 ? { sessionFiles: sessionFilesAtLimit } : {}),
+    };
   } catch (err) {
     const vendorText = rawVendorErrorText(err);
     logger.error("Epic LLM invocation failed", { modelSlug, vendorSlug: vendor.vendorSlug, error: vendorText });
-    return { error: vendorText };
+    const sessionFilesOnError = drainSessionFileLedger(threadId);
+    return {
+      error: vendorText,
+      ...(sessionFilesOnError.length > 0 ? { sessionFiles: sessionFilesOnError } : {}),
+    };
   }
 }

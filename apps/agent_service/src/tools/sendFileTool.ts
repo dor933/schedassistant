@@ -80,6 +80,50 @@ export function buildAttachmentUrl(
   return `/claw/api/attachments?${params.toString()}`;
 }
 
+/**
+ * Saves a user-uploaded attachment into the agent's workspace directory.
+ * Uses direct `fs` access — agent_service runs in the same container as the
+ * `/app/data` volume that the filesystem MCP server exposes, so no MCP round-
+ * trip is needed for this server-side write.
+ *
+ * Applies a version-suffix collision policy: `notes.md` → `notes-2.md` → … (max 99).
+ */
+export async function saveUserAttachmentToAgentWorkspace(
+  agentId: string,
+  originalName: string,
+  content: string,
+): Promise<{ savedFileName: string }> {
+  const agent = await Agent.findByPk(agentId, { attributes: ["id", "workspacePath"] });
+  const workspace = agent?.workspacePath;
+  if (!workspace) {
+    throw new Error(`Agent ${agentId} has no workspace configured.`);
+  }
+
+  fs.mkdirSync(workspace, { recursive: true });
+
+  const safeName = path.basename(originalName.trim());
+  if (!safeName || safeName === "." || safeName === "..") {
+    throw new Error("Invalid attachment file name.");
+  }
+
+  const ext = path.extname(safeName);
+  const base = path.basename(safeName, ext);
+  let savedFileName = safeName;
+
+  for (let i = 2; i <= 99; i++) {
+    const full = path.resolve(workspace, savedFileName);
+    if (!full.startsWith(workspace + path.sep) && full !== workspace) {
+      throw new Error("Path traversal not allowed.");
+    }
+    if (!fs.existsSync(full)) break;
+    savedFileName = `${base}-${i}${ext}`;
+  }
+
+  const finalPath = path.resolve(workspace, savedFileName);
+  fs.writeFileSync(finalPath, content, "utf-8");
+  return { savedFileName };
+}
+
 export function SendFileToUserTool(agentId: string | null | undefined) {
   return tool(
     async (input) => {
@@ -111,7 +155,7 @@ export function SendFileToUserTool(agentId: string | null | undefined) {
       if (!fs.existsSync(full)) {
         return (
           `File "${fileName}" does not exist in your workspace. ` +
-          `Create it first with workspace_write_file, then call send_file_to_user again.`
+          `Write it first using the filesystem MCP \`write_file\` tool (with your full WORKSPACE_PATH as prefix), then call send_file_to_user again.`
         );
       }
 
@@ -137,7 +181,7 @@ export function SendFileToUserTool(agentId: string | null | undefined) {
           .string()
           .min(1)
           .describe(
-            "The file name in your workspace to send (e.g. 'report.md'). Must be .md or .txt.",
+            "The file name in your workspace to send (e.g. 'report.md'). Must be .md or .txt. Use the filesystem MCP write_file tool to create it first if it does not already exist.",
           ),
         caption: z
           .string()

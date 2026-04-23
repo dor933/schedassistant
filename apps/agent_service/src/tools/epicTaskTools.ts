@@ -1005,6 +1005,138 @@ export function ApproveStageTool() {
   );
 }
 
+// ─── Cancel Active Epic ─────────────────────────────────────────────────────
+
+/**
+ * Tool for the orchestrator to cancel the currently active epic.
+ * Marks the epic and all of its non-terminal stages/tasks as `cancelled`,
+ * freeing the singleton slot so a new epic can be created.
+ */
+export function CancelEpicTool() {
+  return tool(
+    async (input) => {
+      try {
+        const quote = input.userConfirmationQuote?.trim();
+        if (!quote || quote.length < 10) {
+          return (
+            `Error: cancel_epic requires 'userConfirmationQuote' — a verbatim ` +
+            `quote of the user's explicit authorization to cancel the active epic. ` +
+            `This tool must NEVER be called without clear user consent in the conversation.`
+          );
+        }
+
+        // Auto-resolve the active epic — singleton invariant.
+        const epic = await resolveActiveEpic();
+
+        const fullEpic = await getEpic(epic.id, {
+          includeStages: true,
+          includeTasks: true,
+        });
+        const stages = (((fullEpic as any)?.stages ?? []) as any[]);
+
+        const terminalStageStatuses: TaskStageStatus[] = ["completed", "cancelled", "failed"];
+        const terminalTaskStatuses: AgentTaskStatus[] = ["completed", "cancelled", "failed"];
+
+        const stageIdsToCancel: string[] = [];
+        const taskIdsToCancel: string[] = [];
+        let runningTaskCount = 0;
+
+        for (const stage of stages) {
+          if (!terminalStageStatuses.includes(stage.status as TaskStageStatus)) {
+            stageIdsToCancel.push(stage.id);
+          }
+          const tasks = (stage.tasks ?? []) as AgentTask[];
+          for (const task of tasks) {
+            if (task.status === ("in_progress" as AgentTaskStatus)) runningTaskCount++;
+            if (!terminalTaskStatuses.includes(task.status as AgentTaskStatus)) {
+              taskIdsToCancel.push(task.id);
+            }
+          }
+        }
+
+        if (taskIdsToCancel.length > 0) {
+          await AgentTask.update(
+            { status: "cancelled" as AgentTaskStatus },
+            { where: { id: taskIdsToCancel } },
+          );
+        }
+        if (stageIdsToCancel.length > 0) {
+          await TaskStage.update(
+            { status: "cancelled" as TaskStageStatus, completedAt: new Date() },
+            { where: { id: stageIdsToCancel } },
+          );
+        }
+
+        const cancelledAt = new Date();
+        const existingMeta = (epic.metadata ?? {}) as Record<string, unknown>;
+        await epic.update({
+          status: "cancelled",
+          completedAt: cancelledAt,
+          metadata: {
+            ...existingMeta,
+            cancelledAt: cancelledAt.toISOString(),
+            cancellationReason: input.reason ?? null,
+            cancellationAuthorization: quote,
+          },
+        });
+
+        logger.warn("Epic cancelled by orchestrator", {
+          epicId: epic.id,
+          epicTitle: epic.title,
+          userQuote: quote,
+          reason: input.reason ?? null,
+          cancelledStageCount: stageIdsToCancel.length,
+          cancelledTaskCount: taskIdsToCancel.length,
+          runningTaskCount,
+        });
+
+        let summary =
+          `Epic "${epic.title}" (ID: ${epic.id}) has been cancelled.\n` +
+          `Authorization: "${quote}"\n` +
+          (input.reason ? `Reason: ${input.reason}\n` : "") +
+          `\nCancelled ${stageIdsToCancel.length} stage(s) and ${taskIdsToCancel.length} task(s).\n`;
+
+        if (runningTaskCount > 0) {
+          summary +=
+            `\n⚠ ${runningTaskCount} task(s) were in_progress at cancellation time. ` +
+            `Any Claude CLI process that was already running will finish in the background, ` +
+            `but its results will no longer drive the epic forward.\n`;
+        }
+
+        summary +=
+          `\nThe singleton slot is now free — a new epic can be created with create_epic_plan.`;
+
+        return summary;
+      } catch (err: any) {
+        logger.error("CancelEpicTool: failed", { error: err.message });
+        return `Error cancelling epic: ${err.message}`;
+      }
+    },
+    {
+      name: "cancel_epic",
+      description:
+        "DESTRUCTIVE — cancels the currently active epic. Marks the epic and all non-terminal stages/tasks " +
+        "as 'cancelled', freeing the system-wide singleton slot so a new epic can be created. " +
+        "Targets the active epic (auto-resolved — no IDs needed). " +
+        "USE ONLY when the user has explicitly asked to stop, abort, or cancel the epic in THIS conversation. " +
+        "NEVER call this tool on your own initiative to 'recover' from errors or skip stuck tasks — " +
+        "prefer request_stage_changes or retry flows instead. " +
+        "The 'userConfirmationQuote' field is mandatory and must contain the verbatim user authorization.",
+      schema: z.object({
+        userConfirmationQuote: z.string().min(10).describe(
+          "Verbatim quote of the user's message authorizing the cancellation. " +
+          "Must be the actual text the user wrote in this conversation — not a paraphrase. " +
+          "Example: 'stop the current epic' or 'cancel this epic, I want to start over'.",
+        ),
+        reason: z.string().optional().describe(
+          "Optional short reason explaining why the epic is being cancelled. " +
+          "Stored on the epic's metadata for audit purposes.",
+        ),
+      }),
+    },
+  );
+}
+
 // ─── Request Changes on a Stage (chat-based, no webhook needed) ─────────────
 
 export function RequestStageChangesTool() {

@@ -5,9 +5,40 @@ import {
   Roundtable,
   Thread,
 } from "@scheduling-agent/database";
-import type { AgentId } from "@scheduling-agent/types";
+import type { AgentId, SessionFileEntry } from "@scheduling-agent/types";
 
 import { logger } from "../logger";
+
+/**
+ * Renders the per-thread session file manifest as a Markdown section so the
+ * agent can pick a candidate file (and its path) without making a separate
+ * vector search. Returns "" when the thread has no file manifest.
+ */
+function formatFilesSection(
+  files: SessionFileEntry[] | undefined,
+  threadId: string,
+): string {
+  if (!files || files.length === 0) return "";
+  const lines: string[] = [];
+  lines.push("");
+  lines.push("");
+  lines.push("### Files written during this session");
+  lines.push(
+    `Use \`read_session_file\` with \`threadId="${threadId}"\` and the path below ` +
+      "to read any of these.",
+  );
+  lines.push("");
+  for (const f of files) {
+    const meta = `${f.bytes} bytes, updated ${f.updatedAt}`;
+    const summary = f.summary?.trim();
+    if (summary) {
+      lines.push(`- \`${f.path}\` — ${summary}  _(${meta})_`);
+    } else {
+      lines.push(`- \`${f.path}\`  _(${meta})_`);
+    }
+  }
+  return lines.join("\n");
+}
 
 /**
  * Agent-invoked tool for fetching the canonical summary of a past thread or
@@ -80,8 +111,11 @@ export function GetThreadSummaryTool(agentId: AgentId | null) {
             meta.push(`${s.tokenCount} tokens`);
           if (s.confidence) meta.push(`confidence: ${s.confidence}`);
           const metaLine = meta.length > 0 ? `\n\n_${meta.join(" · ")}_` : "";
+
+          const filesSection = formatFilesSection(s.files, threadId);
+
           parts.push(
-            `## Session summary${when}\n\n${s.text}${metaLine}`,
+            `## Session summary${when}\n\n${s.text}${metaLine}${filesSection}`,
           );
         }
 
@@ -109,6 +143,9 @@ export function GetThreadSummaryTool(agentId: AgentId | null) {
         "Episodic memory chunks include their originating `thread_id` in metadata. If a retrieved " +
         "chunk isn't self-sufficient — e.g. it mentions 'the Q2 roadmap review' but lacks the " +
         "conclusions — call this tool with the chunk's thread_id to pull the full saved summary.\n\n" +
+        "When a thread produced files, the response also includes a 'Files written during this session' " +
+        "section with each file's path and a short content summary. If one of those files looks like it " +
+        "holds the detail you need, follow up with `read_session_file` to fetch its contents.\n\n" +
         "Returns whichever are available: the session-level summary (from `threads.summary`) and, " +
         "if the thread was a roundtable, the final roundtable summary as well. " +
         "Returns nothing useful if the thread has no saved summary or wasn't one of your conversations.",

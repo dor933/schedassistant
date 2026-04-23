@@ -18,8 +18,7 @@ import { Group, SingleChat, Agent, DeepAgentDelegation } from "@scheduling-agent
 import { EPIC_ORCHESTRATOR_DEFINITION } from "../constants/epicAgent";
 import { isEpicExecutionRequest } from "../utils/epicDetection";
 import { isEpicOrchestratorBusy } from "../utils/epicBusyCheck";
-import { saveUserAttachmentToAgentWorkspace } from "../tools/workspaceTools";
-import { buildAttachmentUrl } from "../tools/sendFileTool";
+import { saveUserAttachmentToAgentWorkspace, buildAttachmentUrl } from "../tools/sendFileTool";
 import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
@@ -100,8 +99,8 @@ export function startAgentChatWorker(
           // on whether URL signing succeeds.
           graphMessage =
             `📎 The user attached a file. It has been saved to your workspace as ` +
-            `\`${saved.savedFileName}\` — you can re-read it later with ` +
-            `workspace_read_file. File contents are below.\n\n` +
+            `\`${saved.savedFileName}\` — you can re-read it later with the filesystem MCP ` +
+            `\`read_text_file\` tool using your WORKSPACE_PATH prefix. File contents are below.\n\n` +
             `--- BEGIN ${saved.savedFileName} ---\n${attachment.content}\n--- END ${saved.savedFileName} ---` +
             (trimmed ? `\n\n${rawMessage}` : "");
 

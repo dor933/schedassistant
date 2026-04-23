@@ -56,7 +56,9 @@
       "Bash(86\")",
       "Bash(tar -xzf langchain-tavily-1.2.0.tgz)",
       "Bash(tail -c 100000 \"C:/Users/momi9/.claude/projects/C--Users-momi9-Dev-sched-assist-sched-assist-new/83fa7afd-3a0b-4cac-930d-e34918822b6e.jsonl\")",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(git log *)",
+      "Bash(git add *)"
     ]
   },
   "enableAllProjectMcpServers": true,
