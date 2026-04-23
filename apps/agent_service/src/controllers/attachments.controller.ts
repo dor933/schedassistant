@@ -41,11 +41,20 @@ export class AttachmentsController {
       return res.status(500).json({ error: "Signature verification failed." });
     }
 
-    const safeName = path.basename(fileName);
-    if (!safeName || safeName === "." || safeName === "..") {
+    // `fileName` is the HMAC-signed canonical path: either a bare filename at
+    // workspace root or a forward-slash-relative path under the workspace
+    // (e.g. "threads/<id>/foo.md"). Validate shape + traversal before fs use.
+    if (!fileName || fileName === "." || fileName === "..") {
       return res.status(400).json({ error: "Invalid file name." });
     }
-    const ext = path.extname(safeName).toLowerCase();
+    if (path.isAbsolute(fileName)) {
+      return res.status(400).json({ error: "Invalid file path." });
+    }
+    const displayName = path.posix.basename(fileName);
+    if (!displayName || displayName === "." || displayName === "..") {
+      return res.status(400).json({ error: "Invalid file name." });
+    }
+    const ext = path.extname(displayName).toLowerCase();
     if (!ALLOWED_EXT.has(ext)) {
       return res.status(400).json({ error: "Unsupported file type." });
     }
@@ -58,8 +67,12 @@ export class AttachmentsController {
       return res.status(404).json({ error: "Agent workspace not found." });
     }
 
-    const full = path.resolve(workspace, safeName);
-    if (!full.startsWith(workspace + path.sep) && full !== workspace) {
+    const workspaceAbs = path.resolve(workspace);
+    const full = path.resolve(workspaceAbs, fileName);
+    if (
+      !full.startsWith(workspaceAbs + path.sep) &&
+      full !== workspaceAbs
+    ) {
       return res.status(400).json({ error: "Invalid file path." });
     }
     if (!fs.existsSync(full)) {
@@ -74,7 +87,7 @@ export class AttachmentsController {
     res.setHeader("Content-Length", String(stat.size));
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="${encodeURIComponent(safeName)}"`,
+      `attachment; filename="${encodeURIComponent(displayName)}"`,
     );
     res.setHeader("Cache-Control", "private, no-store");
 
@@ -82,7 +95,7 @@ export class AttachmentsController {
       .on("error", (err) => {
         logger.error("Attachment stream error", {
           agentId,
-          fileName: safeName,
+          fileName,
           error: String(err),
         });
         if (!res.headersSent) res.status(500).end();

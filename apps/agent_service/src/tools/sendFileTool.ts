@@ -139,29 +139,58 @@ export function SendFileToUserTool(agentId: string | null | undefined) {
         return "Workspace not configured for this agent — cannot send files.";
       }
 
-      const fileName = path.basename(String(input.fileName).trim());
-      if (!fileName || fileName === "." || fileName === "..") {
+      const rawInput = String(input.fileName).trim();
+      if (!rawInput) {
         return "Invalid file name.";
       }
-      const ext = path.extname(fileName).toLowerCase();
+      // Normalize workspace-absolute paths (e.g. "/app/data/workspaces/DBA/threads/<id>/foo.md")
+      // into a path relative to the workspace root, so agents can pass either form.
+      const workspaceAbs = path.resolve(workspace);
+      let relativeName = rawInput.replace(/\\/g, "/");
+      const workspaceAbsFwd = workspaceAbs.replace(/\\/g, "/");
+      if (relativeName === workspaceAbsFwd) {
+        return "Invalid file name.";
+      }
+      if (relativeName.startsWith(workspaceAbsFwd + "/")) {
+        relativeName = relativeName.slice(workspaceAbsFwd.length + 1);
+      }
+      // Absolute paths outside the workspace are rejected.
+      if (path.isAbsolute(relativeName)) {
+        return "Invalid file name — path must be inside your workspace.";
+      }
+      if (!relativeName || relativeName === "." || relativeName === "..") {
+        return "Invalid file name.";
+      }
+      const base = path.posix.basename(relativeName);
+      if (!base || base === "." || base === "..") {
+        return "Invalid file name.";
+      }
+      const ext = path.extname(base).toLowerCase();
       if (!ALLOWED_EXT.has(ext)) {
         return `Only ${[...ALLOWED_EXT].join(", ")} files can be sent.`;
       }
 
-      const full = path.resolve(workspace, fileName);
-      if (!full.startsWith(workspace + path.sep) && full !== workspace) {
+      const full = path.resolve(workspaceAbs, relativeName);
+      if (
+        !full.startsWith(workspaceAbs + path.sep) &&
+        full !== workspaceAbs
+      ) {
         return "Invalid file name — path traversal is not allowed.";
       }
       if (!fs.existsSync(full)) {
         return (
-          `File "${fileName}" does not exist in your workspace. ` +
-          `Write it first using the filesystem MCP \`write_file\` tool (with your full WORKSPACE_PATH as prefix), then call send_file_to_user again.`
+          `File "${relativeName}" does not exist in your workspace. ` +
+          `Write it first using the filesystem MCP \`write_file\` tool (with your full WORKSPACE_PATH as prefix), then call send_file_to_user again. ` +
+          `Subpaths inside your workspace (e.g. "threads/<id>/file.md") are supported — pass the path relative to your workspace root.`
         );
       }
 
-      const url = buildAttachmentUrl(agentId, fileName);
+      // Canonical stored form is forward-slash relative path — keeps HMAC stable
+      // across OS boundaries and matches what the download endpoint resolves.
+      const canonicalName = relativeName.split(path.sep).join("/");
+      const url = buildAttachmentUrl(agentId, canonicalName);
       const caption = input.caption?.trim();
-      const markdown = `[📎 ${fileName}](${url})`;
+      const markdown = `[📎 ${base}](${url})`;
       const intro = caption ? `${caption}\n\n${markdown}` : markdown;
       return (
         `Attachment link ready. Include the following markdown verbatim in your ` +
@@ -175,13 +204,16 @@ export function SendFileToUserTool(agentId: string | null | undefined) {
         "Sends a file from your workspace to the user as a downloadable " +
         "attachment in the chat. The file must already exist in your " +
         "workspace (use workspace_write_file first). Only .md and .txt are " +
-        "supported. Returns markdown you must paste verbatim into your reply.",
+        "supported. Accepts either a bare filename at the workspace root or " +
+        "a path relative to the workspace root (e.g. 'threads/<id>/file.md'); " +
+        "an absolute path under your WORKSPACE_PATH is also accepted and will " +
+        "be normalized. Returns markdown you must paste verbatim into your reply.",
       schema: z.object({
         fileName: z
           .string()
           .min(1)
           .describe(
-            "The file name in your workspace to send (e.g. 'report.md'). Must be .md or .txt. Use the filesystem MCP write_file tool to create it first if it does not already exist.",
+            "File to send. Accepts (a) a bare filename in your workspace root (e.g. 'report.md'), (b) a path relative to your workspace root including subfolders (e.g. 'threads/<thread-id>/report.md'), or (c) a full absolute path under your WORKSPACE_PATH. Must resolve to a .md or .txt file. No `..` traversal.",
           ),
         caption: z
           .string()
