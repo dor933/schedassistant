@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import { Worker } from "bullmq";
 import {
   createDeepAgent,
@@ -40,6 +41,12 @@ import { ChatAnthropic } from "@langchain/anthropic";
 import { getRedisConfig } from "../redisClient";
 import { getLangfuseCallbackHandler, observeWithContext, flushLangfuse } from "../langfuse";
 import { logger } from "../logger";
+import {
+  resolveSessionWorkspacePath,
+  ensureSessionWorkspace,
+  recordSessionFileWrite,
+  statBytes,
+} from "../workspace/sessionWorkspace";
 
 /** Max time a deep agent invocation can run before being aborted (ms). */
 const DEEP_AGENT_TIMEOUT_MS = Number(
@@ -73,6 +80,90 @@ class ReadOnlyFilesystemBackend extends FilesystemBackend {
   }
   async edit(): Promise<EditResult> {
     return { error: "This path is read-only — edits are not permitted here." };
+  }
+}
+
+/**
+ * Variant of `FilesystemBackend` that captures successful writes inside the
+ * caller's per-thread session workspace into the same per-thread ledger that
+ * the basic / epic / roundtable graphs use (see `workspace/sessionWorkspace.ts`).
+ *
+ * Writes outside the per-thread folder pass through silently — the deep agent
+ * still owns the whole caller workspace (it needs to read existing artifacts
+ * at the root), but only writes inside `threads/<callerThreadId>/` flow into
+ * the session manifest and become discoverable by future sessions via the
+ * retrieval cascade. This restores the manifest-capture behaviour that
+ * `instrumentFsWriteTools` provided before the merge moved deep-agent file IO
+ * off MCP and onto the deepagents built-in backend.
+ */
+class InstrumentedFilesystemBackend extends FilesystemBackend {
+  private readonly _rootDir: string;
+  private readonly _threadId: string;
+  private readonly _sessionWorkspacePath: string;
+  private readonly _source: string;
+
+  constructor(options: {
+    rootDir: string;
+    virtualMode?: boolean;
+    maxFileSizeMb?: number;
+    threadId: string;
+    sessionWorkspacePath: string;
+    source: string;
+  }) {
+    super({
+      rootDir: options.rootDir,
+      virtualMode: options.virtualMode,
+      maxFileSizeMb: options.maxFileSizeMb,
+    });
+    this._rootDir = options.rootDir;
+    this._threadId = options.threadId;
+    this._sessionWorkspacePath = options.sessionWorkspacePath;
+    this._source = options.source;
+  }
+
+  async write(filePath: string, content: string): Promise<WriteResult> {
+    const result = await super.write(filePath, content);
+    if (!result.error) await this._maybeRecord(filePath, "write_file");
+    return result;
+  }
+
+  async edit(
+    filePath: string,
+    oldString: string,
+    newString: string,
+    replaceAll?: boolean,
+  ): Promise<EditResult> {
+    const result = await super.edit(filePath, oldString, newString, replaceAll);
+    if (!result.error) await this._maybeRecord(filePath, "edit_file");
+    return result;
+  }
+
+  private async _maybeRecord(virtualPath: string, toolName: string): Promise<void> {
+    try {
+      // Deep-agent paths are virtual under rootDir (`/foo.md`, `foo.md`,
+      // `/threads/abc/foo.md` all resolve to `<rootDir>/foo.md` etc.).
+      // Strip a leading `/` and resolve against the real rootDir to get
+      // the on-disk absolute path; then check if it's inside the per-thread
+      // folder. A path outside the per-thread folder is a write the agent
+      // chose to put at the workspace root — still a valid write, just not
+      // tracked in the manifest.
+      const cleaned = virtualPath.replace(/^\/+/, "");
+      const abs = path.resolve(this._rootDir, cleaned);
+      const rel = path.relative(this._sessionWorkspacePath, abs);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) return;
+      const bytes = await statBytes(abs);
+      recordSessionFileWrite(this._threadId, {
+        path: rel.split(path.sep).join("/"),
+        bytes,
+        updatedAt: new Date().toISOString(),
+        source: `${this._source}:${toolName}`,
+      });
+    } catch (err) {
+      logger.warn("Deep-agent FS write instrumentation failed (non-fatal)", {
+        threadId: this._threadId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }
 
@@ -223,6 +314,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
         userId,
         groupId,
         singleChatId,
+        callerThreadId,
       } = job.data;
 
       logger.info("DeepAgent: processing job", {
@@ -366,6 +458,28 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
             callerWorkspacePath = callerAgent?.workspacePath ?? null;
           }
 
+          // Caller's per-thread session workspace folder under
+          // `<callerWorkspacePath>/threads/<callerThreadId>/`. Only computed
+          // when both bits are present — without them, manifest capture is
+          // not possible (no scoping bucket and no thread to attribute to).
+          // The folder is ensured eagerly so the deep agent can `ls
+          // /threads/<id>` and find an existing place to drop files.
+          const callerSessionWorkspacePath = resolveSessionWorkspacePath(
+            callerWorkspacePath,
+            callerThreadId ?? null,
+          );
+          if (callerSessionWorkspacePath) {
+            try {
+              await ensureSessionWorkspace(callerSessionWorkspacePath);
+            } catch (err) {
+              logger.warn("DeepAgent: failed to ensure caller session workspace", {
+                delegationId,
+                callerSessionWorkspacePath,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+
           // Load configurable tools gated by agent_available_tools (same as callModel)
           const activeSlugs = await loadActiveToolSlugs(executorAgent.id);
           const has = (slug: string) => activeSlugs.has(slug);
@@ -413,6 +527,18 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           // library. All the deep agent's built-in file tools (`read_file` /
           // `write_file` / `edit_file` / `ls` / `grep` / `glob`) operate
           // against this backend — no virtual in-memory FS, no filesystem MCP.
+          const perThreadSection = callerThreadId
+            ? (
+                `\n### Per-thread session folder (\`/threads/${callerThreadId}/\`)\n` +
+                `A subfolder \`/threads/${callerThreadId}/\` exists at your workspace root for this ` +
+                `delegation's calling thread. **Write content-rich, durable artifacts (plans, briefs, large ` +
+                `analyses, research dumps) inside this folder, not at the workspace root.** Writes here are ` +
+                `captured into the caller's session manifest, summarised when the thread closes, and indexed ` +
+                `for vector retrieval — so a future session can recover them via \`recall_episodic_memory\` → ` +
+                `\`get_thread_summary\` → \`read_session_file\`. Writes elsewhere in the workspace are still ` +
+                `saved but won't appear in the per-thread manifest.\n`
+              )
+            : "";
           const workspaceSection = callerWorkspacePath
             ? (
                 `## Caller workspace (your sandboxed filesystem)\n` +
@@ -430,8 +556,9 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                 `file will not appear where the orchestrator expects.\n` +
                 `- Paths containing \`..\` are rejected.\n` +
                 `- **Orient first**: call \`ls\` on \`/\` before you start, and \`read_file\` anything that looks ` +
-                `relevant — the orchestrator or prior specialists may have left context.\n\n` +
-                `### Org library (\`/library/*\`, read-only)\n` +
+                `relevant — the orchestrator or prior specialists may have left context.\n` +
+                perThreadSection +
+                `\n### Org library (\`/library/*\`, read-only)\n` +
                 `Admin-curated reference documents are mounted at the virtual path \`/library/\`. Use \`ls /library\` ` +
                 `to browse, \`read_file /library/<name>\` to read, and \`grep\` with \`path=/library\` to search. ` +
                 `Consult before answering questions about internal policies, terminology, or procedures. Writes and ` +
@@ -455,19 +582,33 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
           // the deepagents built-ins, which caused writes to land in memory
           // and subsequent `get_file_info` calls to return ENOENT.
           const checkpointer = new MemorySaver();
-          const backend = callerWorkspacePath
-            ? new CompositeBackend(
-                new FilesystemBackend({
-                  rootDir: callerWorkspacePath,
+          // When the caller passed its threadId AND has a workspace, route
+          // the default filesystem through `InstrumentedFilesystemBackend` so
+          // writes inside `/threads/<callerThreadId>/` flow into the
+          // per-thread session manifest. Without `callerThreadId` we still
+          // mount the workspace, just without instrumentation — same
+          // behaviour as before manifest capture existed.
+          const defaultBackend = callerWorkspacePath
+            ? (callerThreadId && callerSessionWorkspacePath
+                ? new InstrumentedFilesystemBackend({
+                    rootDir: callerWorkspacePath,
+                    virtualMode: true,
+                    threadId: callerThreadId,
+                    sessionWorkspacePath: callerSessionWorkspacePath,
+                    source: `deep_agent:${executorAgentId}`,
+                  })
+                : new FilesystemBackend({
+                    rootDir: callerWorkspacePath,
+                    virtualMode: true,
+                  }))
+            : null;
+          const backend = defaultBackend
+            ? new CompositeBackend(defaultBackend, {
+                "/library": new ReadOnlyFilesystemBackend({
+                  rootDir: getLibraryPath(),
                   virtualMode: true,
                 }),
-                {
-                  "/library": new ReadOnlyFilesystemBackend({
-                    rootDir: getLibraryPath(),
-                    virtualMode: true,
-                  }),
-                },
-              )
+              })
             : undefined;
           const agent = createDeepAgent({
             model: chatModel as any,
