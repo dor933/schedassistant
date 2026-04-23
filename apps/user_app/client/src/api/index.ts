@@ -438,6 +438,13 @@ export type AgentType = "primary" | "system" | "external";
 export interface AdminAgent {
   id: string;
   type: AgentType;
+  /**
+   * Stable identifier used for system agents (`web_search`, `web_search_tavily`,
+   * `google_workspace_agent`, etc.). Null for primary agents. Used by the admin
+   * UI to recognise shared-by-design system agents whose ownership cannot be
+   * assigned to a single primary.
+   */
+  slug: string | null;
   definition: string;
   /** Optional display name (system prompt, @mention label in groups, list_agents). */
   agentName: string | null;

@@ -79,6 +79,29 @@ export const AUTO_ASSIGNED_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
   AUTO_ASSIGNED_SKILL_SLUGS,
 );
 
+/**
+ * System agents that are SHARED by design — every primary in the org needs
+ * to be able to delegate to them, so they cannot have an `owningPrimaryAgentId`.
+ * Both the admin UI (disables the owner select) and the server (rejects PATCH
+ * with a non-null owner) read from this list.
+ *
+ * Members:
+ *  - `google_workspace_agent` — single Gmail/Calendar/Drive specialist per org;
+ *    primary agents inherit grants and route through it.
+ *  - `web_search` — Gemini-grounded web search; org picks one active web-search
+ *    agent via `organizations.web_search_agent_id`, but BOTH candidates must
+ *    stay shared so any primary may end up routing to whichever is active.
+ *  - `web_search_tavily` — Tavily-backed alternative to the above.
+ */
+export const SHARED_SYSTEM_AGENT_SLUGS: readonly string[] = [
+  "google_workspace_agent",
+  "web_search",
+  "web_search_tavily",
+];
+export const SHARED_SYSTEM_AGENT_SLUG_SET: ReadonlySet<string> = new Set(
+  SHARED_SYSTEM_AGENT_SLUGS,
+);
+
 // ─── User ────────────────────────────────────────────────────────────────────
 
 /** Canonical user identifier (`users.id` — integer, auto-generated). */

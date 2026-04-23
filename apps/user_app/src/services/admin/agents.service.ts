@@ -18,7 +18,11 @@ import {
 import { Op, QueryTypes } from "sequelize";
 import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
-import { AUTO_ASSIGNED_SKILL_SLUGS, type UserId } from "@scheduling-agent/types";
+import {
+  AUTO_ASSIGNED_SKILL_SLUGS,
+  SHARED_SYSTEM_AGENT_SLUG_SET,
+  type UserId,
+} from "@scheduling-agent/types";
 
 const WORKSPACES_ROOT = path.join(process.env.DATA_DIR || "/app/data", "workspaces");
 
@@ -31,6 +35,7 @@ export class AgentsService {
       attributes: [
         "id",
         "type",
+        "slug",
         "definition",
         "agentName",
         "description",
@@ -342,6 +347,19 @@ export class AgentsService {
         if (agent.type !== "system") {
           throw Object.assign(
             new Error("Only system agents can have an owning primary agent."),
+            { status: 400 },
+          );
+        }
+        // Some system agents are shared by design (web search, Google
+        // Workspace) — every primary in the org must be able to delegate to
+        // them, so they can't be locked to a single owner. The admin UI
+        // disables the select for these too; this is the server-side
+        // backstop in case the request comes in via API or an out-of-date UI.
+        if (agent.slug && SHARED_SYSTEM_AGENT_SLUG_SET.has(agent.slug)) {
+          throw Object.assign(
+            new Error(
+              `System agent "${agent.slug}" is shared org-wide by design and cannot be assigned to a single primary agent.`,
+            ),
             { status: 400 },
           );
         }

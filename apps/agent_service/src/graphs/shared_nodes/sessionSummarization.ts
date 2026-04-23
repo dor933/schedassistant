@@ -69,20 +69,35 @@ const sessionSummarizationSchema = z.object({
 });
 
 /**
- * Resolves a summarization LLM using the agent's configured model, fetching
- * the API key from the agent's organization (not a global vendor key).
+ * Cheap, fast model per vendor used exclusively for session summarisation.
+ * Summarisation is a structured-output task with bounded scope and runs once
+ * per closed thread — paying for the agent's frontier chat model would be
+ * wasteful. We still bill the agent's organisation (same vendor key) so cost
+ * attribution stays correct, just on a much smaller model.
+ */
+const SUMMARIZATION_MODEL_BY_VENDOR: Record<string, string> = {
+  openai: "gpt-4o",
+  anthropic: "claude-haiku-4-5",
+  google: "gemini-2.0-flash",
+};
+
+/**
+ * Resolves a summarization LLM. Uses the agent's vendor (and the org's API
+ * key for that vendor) so billing stays with the right tenant, but pins the
+ * model to a cheap per-vendor default rather than the agent's own chat model.
  *
  * Deliberately NOT cached at module scope: API keys are per-org, and a cache
- * keyed only by model slug would leak one org's key into another org's call.
+ * keyed only by vendor would leak one org's key into another org's call.
  * The cost of re-resolving is a couple of indexed lookups per summarization.
  */
 async function getSummarizationLlm(agentId?: string | null): Promise<BaseChatModel> {
-  const modelSlug = await resolveModelSlug(agentId);
-
-  const vendor = await resolveOrgVendor(modelSlug, agentId ?? null);
+  // Resolve the agent's chat model only to discover its vendor + org key —
+  // we will not actually pass this slug to the chat constructor.
+  const agentChatSlug = await resolveModelSlug(agentId);
+  const vendor = await resolveOrgVendor(agentChatSlug, agentId ?? null);
   if (!vendor) {
     throw new Error(
-      `Cannot summarize session: unknown model "${modelSlug}" or agent has no organization`,
+      `Cannot summarize session: unknown model "${agentChatSlug}" or agent has no organization`,
     );
   }
   if (!vendor.apiKey) {
@@ -91,18 +106,23 @@ async function getSummarizationLlm(agentId?: string | null): Promise<BaseChatMod
     );
   }
 
+  const summarizationSlug = SUMMARIZATION_MODEL_BY_VENDOR[vendor.vendorSlug];
+  if (!summarizationSlug) {
+    throw new Error(`Unsupported vendor "${vendor.vendorSlug}" for session summarization`);
+  }
+
   switch (vendor.vendorSlug) {
     case "openai":
-      return new ChatOpenAI({ modelName: modelSlug, temperature: 0, apiKey: vendor.apiKey });
+      return new ChatOpenAI({ modelName: summarizationSlug, temperature: 0, apiKey: vendor.apiKey });
     case "anthropic":
       return new ChatAnthropic({
-        modelName: modelSlug,
+        modelName: summarizationSlug,
         temperature: 0,
         apiKey: vendor.apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
       });
     case "google":
-      return new ChatGoogle({ model: modelSlug, temperature: 0, apiKey: vendor.apiKey });
+      return new ChatGoogle({ model: summarizationSlug, temperature: 0, apiKey: vendor.apiKey });
     default:
       throw new Error(`Unsupported vendor "${vendor.vendorSlug}" for session summarization`);
   }

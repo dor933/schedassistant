@@ -430,6 +430,18 @@ export default function AdminPage() {
     [deletingLibraryFile, toast],
   );
 
+  // Slugs of system agents that are shared by design and cannot be assigned to
+  // a single primary agent (web search candidates + the dedicated Google
+  // Workspace agent). Mirrors `SHARED_SYSTEM_AGENT_SLUGS` in
+  // packages/types/src/index.ts — kept inline here to avoid pulling the types
+  // package into the Vite client bundle for three strings. Server enforces the
+  // same rule, this is purely a UX guard so the select stays disabled.
+  const SHARED_SYSTEM_AGENT_SLUGS = new Set([
+    "google_workspace_agent",
+    "web_search",
+    "web_search_tavily",
+  ]);
+
   const handleSwitchWebSearchAgent = useCallback(
     async (choice: WebSearchChoice) => {
       if (webSearchSwitching) return;
@@ -1379,6 +1391,13 @@ export default function AdminPage() {
                             sa.agentName?.trim() ||
                             sa.definition?.trim() ||
                             sa.id;
+                          // Web-search candidates (Gemini + Tavily) and the
+                          // Google Workspace agent are shared by design.
+                          // Server rejects ownership PATCH for them; we
+                          // mirror that here so the dropdown is inert.
+                          const isSharedByDesign =
+                            sa.slug !== null && SHARED_SYSTEM_AGENT_SLUGS.has(sa.slug);
+                          const selectDisabled = sa.isLocked || isSharedByDesign;
                           return (
                             <tr key={sa.id} className="hover:bg-gray-50/60">
                               <td className="px-3 py-2 align-top">
@@ -1393,7 +1412,7 @@ export default function AdminPage() {
                               <td className="px-3 py-2 align-top">
                                 <select
                                   value={ownerValue}
-                                  disabled={sa.isLocked}
+                                  disabled={selectDisabled}
                                   onChange={(e) =>
                                     handleAssignSystemAgentOwner(
                                       sa.id,
@@ -1402,7 +1421,9 @@ export default function AdminPage() {
                                   }
                                   className="w-full rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs focus:border-indigo-400 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400"
                                 >
-                                  <option value="">Shared (org-wide)</option>
+                                  <option value="">
+                                    {isSharedByDesign ? "Shared (org-wide, fixed)" : "Shared (org-wide)"}
+                                  </option>
                                   {agents
                                     .filter((p) => p.type === "primary")
                                     .map((p) => (
@@ -1413,7 +1434,12 @@ export default function AdminPage() {
                                       </option>
                                     ))}
                                 </select>
-                                {sa.isLocked && (
+                                {isSharedByDesign && (
+                                  <p className="mt-1 text-[10px] text-gray-400">
+                                    Shared by design — every primary in the org must be able to delegate to this agent.
+                                  </p>
+                                )}
+                                {!isSharedByDesign && sa.isLocked && (
                                   <p className="mt-1 text-[10px] text-gray-400">
                                     Locked agent — ownership cannot be changed here.
                                   </p>
