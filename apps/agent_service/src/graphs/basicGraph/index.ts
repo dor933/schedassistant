@@ -3,6 +3,7 @@ import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { AgentAnnotation, AgentState } from "../../state";
 import { summarizationGuardNode } from "../shared_nodes/summarizationGuard";
 import { sessionSummarizationNode } from "../shared_nodes/sessionSummarization";
+import { inboundMessageSpillNode } from "../shared_nodes/inboundMessageSpill";
 import { contextBuilderNode } from "./nodes/contextBuilder";
 import { callModelNode } from "./nodes/callModel";
 
@@ -15,18 +16,20 @@ function routeAfterGuard(state: AgentState): string {
 
 // ─── Graph definition ────────────────────────────────────────────────────────
 //
-//  START → summarizationGuard
+//  START → inboundMessageSpill → summarizationGuard
 //            ├── (thresholds exceeded) → sessionSummarization → assembleContext → callModel → END
 //            └── (normal)              → assembleContext → callModel → END
 //
 
 const workflow = new StateGraph(AgentAnnotation)
+  .addNode("inboundMessageSpill", inboundMessageSpillNode)
   .addNode("summarizationGuard", summarizationGuardNode)
   .addNode("sessionSummarization", sessionSummarizationNode)
   .addNode("assembleContext", contextBuilderNode)
   .addNode("callModel", callModelNode)
 
-  .addEdge(START, "summarizationGuard")
+  .addEdge(START, "inboundMessageSpill")
+  .addEdge("inboundMessageSpill", "summarizationGuard")
 
   .addConditionalEdges("summarizationGuard", routeAfterGuard, {
     sessionSummarization: "sessionSummarization",
