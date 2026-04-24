@@ -39,6 +39,7 @@ import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
 import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
+import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import {
   ListProjectsTool,
   ListRepositoriesTool,
@@ -186,6 +187,7 @@ export async function epicCallModelNode(
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
     ReadSessionFileTool(agentId, threadId),
+    GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),

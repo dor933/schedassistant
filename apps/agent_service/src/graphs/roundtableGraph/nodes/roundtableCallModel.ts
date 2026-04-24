@@ -31,6 +31,7 @@ import { agentSkillTools } from "../../../tools/skillsTools";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
 import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
+import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
@@ -221,6 +222,7 @@ export async function roundtableCallModelNode(
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
     ReadSessionFileTool(agentId, threadId),
+    GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),

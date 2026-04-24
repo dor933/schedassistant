@@ -14,6 +14,12 @@ import { resolveSessionFilePath } from "../workspace/sessionWorkspace";
 /** Hard cap on bytes returned to the LLM — prevents a huge file from blowing context. */
 const MAX_READ_BYTES = Number(process.env.READ_SESSION_FILE_MAX_BYTES ?? 50_000);
 
+/** Default number of lines returned when the caller passes `offset` but no `limit`. */
+const DEFAULT_LIMIT_LINES = Number(process.env.READ_SESSION_FILE_DEFAULT_LINES ?? 500);
+
+/** Absolute cap on lines per call, regardless of what the LLM asks for. */
+const MAX_LIMIT_LINES = Number(process.env.READ_SESSION_FILE_MAX_LINES ?? 2_000);
+
 /**
  * Agent-invoked tool for reading a file from this agent's per-thread session
  * workspace (`<agent.workspacePath>/threads/<threadId>/`).
@@ -109,19 +115,60 @@ export function ReadSessionFileTool(
           throw err;
         }
 
-        // 5. Truncate over-long reads so a single file can't blow the LLM's
-        // context window. The agent is told explicitly that truncation
-        // happened so it can ask for a narrower slice if needed.
-        if (content.length > MAX_READ_BYTES) {
-          const head = content.slice(0, MAX_READ_BYTES);
+        // 5. Line-based pagination. When the caller passes `offset` or `limit`
+        // we slice by line number; otherwise we fall back to byte-capped read
+        // of the whole file (historical behavior). Line slicing is done on the
+        // full file in memory — session files are small enough (.md / .txt
+        // artifacts) that this is fine; for truly huge reads the byte cap
+        // below still applies as a safety net.
+        const offset = Math.max(0, Math.floor(input.offset ?? 0));
+        const requestedLimit = input.limit != null
+          ? Math.max(1, Math.floor(input.limit))
+          : DEFAULT_LIMIT_LINES;
+        const limit = Math.min(requestedLimit, MAX_LIMIT_LINES);
+        const paginated = offset > 0 || input.limit != null;
+
+        if (paginated) {
+          const lines = content.split(/\r?\n/);
+          const totalLines = lines.length;
+          if (offset >= totalLines) {
+            return (
+              `[threads/${targetThreadId}/${relativePath} — ${bytes} bytes, ` +
+              `${totalLines} lines total] offset ${offset} is past end of file.`
+            );
+          }
+          const end = Math.min(offset + limit, totalLines);
+          const slice = lines.slice(offset, end).join("\n");
+          const hasMore = end < totalLines;
+          const cappedSlice = slice.length > MAX_READ_BYTES
+            ? slice.slice(0, MAX_READ_BYTES) +
+              `\n\n[BYTE-CAP — returned ${MAX_READ_BYTES} of ${slice.length} bytes in this slice; lower \`limit\` for shorter output]`
+            : slice;
           return (
-            `[threads/${targetThreadId}/${relativePath} — ${bytes} bytes total, ` +
-            `showing first ${MAX_READ_BYTES}]\n\n${head}\n\n` +
-            `[TRUNCATED — ${bytes - MAX_READ_BYTES} bytes not shown]`
+            `[threads/${targetThreadId}/${relativePath} — lines ${offset}-${end - 1} of ${totalLines} ` +
+            `(${bytes} bytes total)${hasMore ? `, more available — call again with offset=${end}` : ", end of file"}]\n\n` +
+            cappedSlice
           );
         }
 
-        return `[threads/${targetThreadId}/${relativePath} — ${bytes} bytes]\n\n${content}`;
+        // Default path: return the whole file, byte-capped. The agent is told
+        // the total size + line count so it can switch to paginated reads if
+        // it needs to see past the cap.
+        const totalLines = content.split(/\r?\n/).length;
+        if (content.length > MAX_READ_BYTES) {
+          const head = content.slice(0, MAX_READ_BYTES);
+          return (
+            `[threads/${targetThreadId}/${relativePath} — ${bytes} bytes, ${totalLines} lines total, ` +
+            `showing first ${MAX_READ_BYTES} bytes]\n\n${head}\n\n` +
+            `[BYTE-CAP — ${bytes - MAX_READ_BYTES} bytes not shown. Call again with ` +
+            `\`offset\` (line number) and \`limit\` (max lines) to page through, or use ` +
+            `\`grep_session_file\` to search for a specific pattern.]`
+          );
+        }
+
+        return (
+          `[threads/${targetThreadId}/${relativePath} — ${bytes} bytes, ${totalLines} lines]\n\n${content}`
+        );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         logger.error("read_session_file failed", {
@@ -146,9 +193,13 @@ export function ReadSessionFileTool(
         "shown in episodic chunk metadata or the manifest.\n" +
         "  3. You can only read files from threads where you have at least one stored memory — " +
         "the tool enforces this.\n\n" +
-        "The tool returns the file contents (truncated if very large) with a header line naming " +
-        "the thread + path. If the file has been moved or deleted since summarisation, you will " +
-        "get the recorded summary back instead of an opaque error.",
+        "**Pagination.** For large files, pass `offset` (0-based line number to start at) and " +
+        "`limit` (max lines to return). Omit both to read the whole file (byte-capped — the " +
+        "header tells you if content was cut off and what the total size is). When you need " +
+        "to find a specific string instead of paging blindly, use `grep_session_file` first.\n\n" +
+        "The tool returns the file contents with a header line naming the thread + path + " +
+        "line range + total size. If the file has been moved or deleted since summarisation, " +
+        "you will get the recorded summary back instead of an opaque error.",
       schema: z.object({
         threadId: z
           .string()
@@ -163,6 +214,25 @@ export function ReadSessionFileTool(
           .describe(
             "Path of the file relative to the thread's session workspace folder " +
               "(e.g. \"research/pricing_brief.md\"). Must not traverse outside the folder.",
+          ),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe(
+            "0-based line number to start reading at. Omit to start from the beginning. " +
+              "Use this to page through a large file across multiple calls.",
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe(
+            `Maximum number of lines to return. Default ${DEFAULT_LIMIT_LINES} when ` +
+              `\`offset\` is set; capped at ${MAX_LIMIT_LINES}. Lower this if prior reads ` +
+              `returned very wide lines and hit the byte cap.`,
           ),
       }),
     },

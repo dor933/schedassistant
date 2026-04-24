@@ -239,10 +239,13 @@ export async function loadLibrarySection(agentId: AgentId | null): Promise<strin
       `**Path:** \`${libraryPath}\` (flat directory, original filenames)\n\n` +
       "Access it through the **filesystem MCP** (server name `filesystem`, " +
       "rooted at `/app/data`). Use `list_directory` on the path above to " +
-      "browse, and `read_text_file` to read a specific document. Consult the " +
-      "library whenever a question touches org-specific policies, " +
-      "terminology, or procedures. Never `write_file`, `edit_file`, " +
-      "`move_file`, or delete anything under this path — admins own it.",
+      "browse, and `read_text_file` to read a specific document — pass " +
+      "`head` (first N lines) or `tail` (last N lines) when a document is " +
+      "long and you only need the beginning or end, so you do not pull the " +
+      "whole file into context. Consult the library whenever a question " +
+      "touches org-specific policies, terminology, or procedures. Never " +
+      "`write_file`, `edit_file`, `move_file`, or delete anything under " +
+      "this path — admins own it.",
   );
   if (files.length === 0) {
     lines.push("");
@@ -869,6 +872,25 @@ function formatSystemPrompt(
       `for every workspace action: \`list_directory\`, \`read_text_file\`, \`write_file\`, \`edit_file\`, ` +
       `\`search_files\`, \`create_directory\`, \`move_file\`. Always use the absolute path above as the ` +
       `prefix — never a relative path.\n\n` +
+      "**Reading files — what each tool gives you.** You have two tool families for reading. " +
+      "Pick whichever fits the task; nothing restricts you to one or the other.\n" +
+      "- `read_text_file` (filesystem MCP) — reads any file under `/app/data` (library, " +
+      "workspace root, session folder, anywhere). Supports `head` (first N lines) or `tail` " +
+      "(last N lines) for long files; cannot combine both, cannot take middle slices.\n" +
+      "- `search_files` (filesystem MCP) — finds files by **filename** glob across the " +
+      "filesystem. Not a content grep.\n" +
+      "- `read_session_file` — reads files **inside a per-thread session folder**. Adds " +
+      "`offset` + `limit` for arbitrary line ranges (middle slices), cross-thread access to " +
+      "any past thread you have episodic memory from, and a graceful fallback to the manifest " +
+      "summary when a file has been moved or deleted.\n" +
+      "- `grep_session_file` — content search with line numbers **inside a session-folder " +
+      "file**. Returns matching lines (with context windows) so you can jump straight to the " +
+      "right section. The filesystem MCP has no equivalent.\n\n" +
+      "Rule of thumb: for canonical reference docs (library, long-form briefs) you often want " +
+      "the whole file, so `read_text_file` is usually fine. For session files (user pastes, " +
+      "captured research, working memory) you usually want to *locate* the relevant section " +
+      "with `grep_session_file` + `read_session_file` rather than pull the whole body — but " +
+      "nothing stops you from doing a full read when that's what you actually need.\n\n" +
       "**Allowed file formats — writes are restricted to `.md` and `.txt` only.** " +
       "Any other extension (.json, .csv, .pdf, .xlsx, …) is rejected by the system before it touches " +
       "disk. If you need to capture structured data, render it as Markdown (tables, fenced code blocks, " +

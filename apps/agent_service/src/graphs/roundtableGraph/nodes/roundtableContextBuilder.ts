@@ -172,6 +172,19 @@ export async function roundtableContextBuilderNode(
         "**filesystem MCP** (server `filesystem`, rooted at `/app/data`): `list_directory`, " +
         "`read_text_file`, `write_file`, `edit_file`, `search_files`. Always use the absolute " +
         "path above as the prefix.\n\n" +
+        "**Reading files — what each tool gives you.** Two tool families are available; pick " +
+        "whichever fits the task.\n" +
+        "- `read_text_file` (filesystem MCP) — any file under `/app/data`. Supports `head` " +
+        "(first N lines) or `tail` (last N lines); cannot combine both or take middle slices.\n" +
+        "- `search_files` (filesystem MCP) — filename glob. Not a content grep.\n" +
+        "- `read_session_file` — files **inside a per-thread session folder**. Adds `offset` " +
+        "+ `limit` for arbitrary line ranges, cross-thread access (past threads you " +
+        "participated in), and a manifest-summary fallback when a file is missing.\n" +
+        "- `grep_session_file` — content search with line numbers **inside a session-folder " +
+        "file**. The filesystem MCP has no equivalent.\n\n" +
+        "Rule of thumb: library / long references are usually read in full with " +
+        "`read_text_file`; session files are usually *located* with `grep_session_file` + " +
+        "`read_session_file` rather than pulled whole — but nothing forces this.\n\n" +
         "**Allowed file formats — writes are restricted to `.md` and `.txt` only.** Other " +
         "extensions are rejected before they hit disk.\n\n" +
         (sessionFolder

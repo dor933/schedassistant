@@ -36,6 +36,7 @@ import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrc
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
 import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
+import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
@@ -301,6 +302,7 @@ export async function callModelNode(
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
     ReadSessionFileTool(agentId, threadId),
+    GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),
