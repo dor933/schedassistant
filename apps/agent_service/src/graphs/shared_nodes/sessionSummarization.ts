@@ -13,6 +13,7 @@ import { logger } from "../../logger";
 import { Thread } from "@scheduling-agent/database";
 import { SessionSummary, SessionFileEntry } from "@scheduling-agent/types";
 import { resolveModelSlug } from "../../chat/modelResolution";
+import { anthropicBaseConfig } from "../../chat/anthropicContextManagement";
 import { resolveOrgVendor } from "../../services/resolveOrgVendor";
 
 /**
@@ -120,6 +121,7 @@ async function getSummarizationLlm(agentId?: string | null): Promise<BaseChatMod
         temperature: 0,
         apiKey: vendor.apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
+        ...anthropicBaseConfig(),
       });
     case "google":
       return new ChatGoogle({ model: summarizationSlug, temperature: 0, apiKey: vendor.apiKey });

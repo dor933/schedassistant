@@ -11,6 +11,7 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogle } from "@langchain/google";
 import { ChatAnthropic } from "@langchain/anthropic";
+import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
 import {
   SystemMessage,
   HumanMessage,
@@ -76,7 +77,12 @@ function getModel(modelSlug: string, vendorSlug: string, apiKey: string): BaseCh
     return new ChatOpenAI({ modelName: modelSlug, apiKey, temperature: 0.2 });
   }
   if (vendorSlug === "anthropic") {
-    return new ChatAnthropic({ modelName: modelSlug, apiKey, temperature: 0.2 });
+    return new ChatAnthropic({
+      modelName: modelSlug,
+      apiKey,
+      temperature: 0.2,
+      ...anthropicBaseConfig(),
+    });
   }
   if (vendorSlug === "google") {
     return new ChatGoogle({ model: modelSlug, apiKey, temperature: 0.2 });

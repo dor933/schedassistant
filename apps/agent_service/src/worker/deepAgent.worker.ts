@@ -38,6 +38,7 @@ import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogle } from "@langchain/google";
 import { ChatAnthropic } from "@langchain/anthropic";
+import { anthropicBaseConfig } from "../chat/anthropicContextManagement";
 import { getRedisConfig } from "../redisClient";
 import { getLangfuseCallbackHandler, observeWithContext, flushLangfuse } from "../langfuse";
 import { logger } from "../logger";
@@ -307,6 +308,7 @@ async function resolveModelForAgent(executorAgent: Agent) {
         temperature: 0.4,
         apiKey: vendor.apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
+        ...anthropicBaseConfig(),
       });
     case "openai":
       return new ChatOpenAI({ modelName: slug, temperature: 0.4, apiKey: vendor.apiKey });

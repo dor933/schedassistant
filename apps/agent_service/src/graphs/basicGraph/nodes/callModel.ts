@@ -18,6 +18,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { resolveModelSlug } from "../../../chat/modelResolution";
+import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
 import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
@@ -150,7 +151,7 @@ function getModel(modelSlug: string, vendorSlug: string, apiKey: string): BaseCh
         temperature: 0.4,
         apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
-
+        ...anthropicBaseConfig(),
       });
     case "google":
       return new ChatGoogle({ model: modelSlug, temperature: 0.4, apiKey });

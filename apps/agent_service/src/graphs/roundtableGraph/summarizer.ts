@@ -9,6 +9,7 @@ import {
   RoundtableMessage,
 } from "@scheduling-agent/database";
 import { resolveModelSlug } from "../../chat/modelResolution";
+import { anthropicBaseConfig } from "../../chat/anthropicContextManagement";
 import { resolveOrgVendor } from "../../services/resolveOrgVendor";
 import { logger } from "../../logger";
 
@@ -28,6 +29,7 @@ function getModel(
         ...(process.env.MERIDIAN_URL
           ? { anthropicApiUrl: process.env.MERIDIAN_URL }
           : {}),
+        ...anthropicBaseConfig(),
       });
     case "google":
       return new ChatGoogle({ model: modelSlug, temperature: 0.2, apiKey });
