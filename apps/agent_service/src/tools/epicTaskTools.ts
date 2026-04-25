@@ -1337,12 +1337,19 @@ export function RequestStageChangesTool() {
 // ─── Search past epic tasks by date ─────────────────────────────────────────
 
 /**
- * Lets the orchestrator answer "what did we work on last Tuesday?" — returns
- * a list of epic tasks whose `created_at` falls in the requested window
- * (inclusive). Either or both of `from`/`to` may be supplied; with neither,
- * defaults to the last 30 days. Returns id/title/description/status/createdAt
- * + a count of agent tasks attached, so the orchestrator can pick the right
- * one and follow up with `get_epic_task_summaries(epicId)`.
+ * General-purpose lookup of past epics by creation-date window. Returns the
+ * full epic description (untruncated) so the result is useful for multiple
+ * downstream paths, not just step 1 of the summaries pipeline:
+ *   - "what did we work on last Tuesday?" → tell the user, optionally fan
+ *     out summaries via `get_epic_task_summaries` + `send_file_to_user`.
+ *   - "create a new epic similar to the StocksScanner one we did last week"
+ *     → pull that epic's description and reuse it / reference it inside
+ *     `create_epic_plan` for the new epic.
+ *   - "remind me what was the scope of the auth refactor epic" → answer
+ *     directly from the description, no follow-up tool call needed.
+ *
+ * Either or both of `from`/`to` may be supplied; with neither, defaults to
+ * the last 30 days. Capped at 50 results, newest first.
  */
 export function SearchEpicTasksByDateTool() {
   return tool(
@@ -1417,18 +1424,25 @@ export function SearchEpicTasksByDateTool() {
             summary += `- **Completed:** ${epic.completedAt.toISOString()}\n`;
           }
           summary += `- **Tasks attached:** ${taskCount}\n`;
+          // Description is returned in full (no truncation) — the user might
+          // want to reuse the scope verbatim in a new epic, paraphrase it,
+          // or just be reminded of what was originally requested. Truncating
+          // makes that flow lossy. Each result is one description, capped at
+          // 50 results, so the worst-case payload is bounded.
           if (epic.description) {
-            const descPreview = epic.description.length > 240
-              ? epic.description.slice(0, 240) + "…"
-              : epic.description;
-            summary += `- **Description:** ${descPreview}\n`;
+            summary += `- **Description:**\n\n  > ${epic.description.replace(/\n/g, "\n  > ")}\n`;
           }
           summary += "\n";
         }
         summary +=
-          `Once you've identified the epic the user means, call ` +
-          `\`get_epic_task_summaries\` with its \`epicId\` to retrieve the per-task summary ` +
-          `files and deliver them via \`send_file_to_user\`.`;
+          `**Follow-up options once you've picked the epic the user means:**\n` +
+          `- To deliver the per-task summary files (markdown writeups for each task) — call ` +
+          `\`get_epic_task_summaries\` with the \`epicId\`, then \`send_file_to_user\` for each path.\n` +
+          `- To reuse the scope in a new epic — copy or paraphrase the description above into a ` +
+          `new \`create_epic_plan\` call, with whatever changes the user requested. Reference the ` +
+          `original epic by id in your reply so the user knows what you're building on.\n` +
+          `- To answer a direct question about scope or what was done — answer straight from the ` +
+          `description above; no further tool calls needed.`;
         return summary;
       } catch (err: any) {
         logger.error("SearchEpicTasksByDate: failed", { error: err.message });
@@ -1438,12 +1452,15 @@ export function SearchEpicTasksByDateTool() {
     {
       name: "search_epic_tasks_by_date",
       description:
-        "Search past epic tasks by creation date and return their id/title/description so you can " +
-        "identify which epic the user is asking about. Use this when the user references a past " +
-        "epic by time (\"what we did last week\", \"the planning we ran on Tuesday\", etc.) — " +
-        "results are paginated to 50, newest first. After the user confirms which epic they mean, " +
-        "call `get_epic_task_summaries` with that epic's id to fetch and deliver the saved per-task " +
-        "summary files.",
+        "General-purpose lookup of past epic tasks by creation date. Returns id, title, status, " +
+        "created/completed timestamps, attached-task count, and the full description for each match " +
+        "(up to 50 newest-first). Use this whenever the user references a past epic — by time, " +
+        "by topic, or by approximate description — and you need the original scope text or the id.\n\n" +
+        "Common follow-ups (the tool response also names them):\n" +
+        "- Deliver per-task summaries → `get_epic_task_summaries` + `send_file_to_user`.\n" +
+        "- Build a new epic that references / extends an old one → copy or paraphrase the returned " +
+        "description into a new `create_epic_plan` call.\n" +
+        "- Answer a scope question directly → use the returned description; no further tool call needed.",
       schema: z.object({
         from: z.string().optional().describe(
           "ISO 8601 lower bound for `created_at` (inclusive). Bare dates like '2026-04-22' are " +

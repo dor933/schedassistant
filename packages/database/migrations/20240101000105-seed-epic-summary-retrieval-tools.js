@@ -23,8 +23,10 @@ const TOOLS = [
     slug: "search_epic_tasks_by_date",
     category: "epic_retrieval",
     description:
-      "Search past epic tasks by creation-date window; returns id/title/description/status so you can " +
-      "identify which epic the user is asking about before fetching its summaries.",
+      "General-purpose lookup of past epic tasks by creation-date window. Returns id, title, status, " +
+      "timestamps, task count, and the full description per match. Use to find an epic to fetch " +
+      "summaries for, to reuse an old epic's scope in a new create_epic_plan, or to answer scope " +
+      "questions directly.",
   },
   {
     name: "Get Epic Task Summaries",

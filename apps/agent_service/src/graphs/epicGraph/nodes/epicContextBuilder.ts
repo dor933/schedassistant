@@ -569,34 +569,41 @@ function formatEpicSystemPrompt(opts: {
     sections.push("");
   }
 
-  // ── Retrieving past epic deliverables ──
-  // search_epic_tasks_by_date + get_epic_task_summaries + send_file_to_user
-  // form a tight retrieval pipeline. Each per-task summary is captured to
-  // `agent_tasks.summary_file_path` after every successful run (including
-  // retries — the column always points at the latest file, never a stale
-  // one in another thread's folder), so this works across chat threads.
-  sections.push("## Retrieving past epic deliverables");
+  // ── Retrieving past epic context ──
+  // `search_epic_tasks_by_date` is a general lookup; the other two tools
+  // (`get_epic_task_summaries`, `send_file_to_user`) are downstream paths
+  // ONE of several uses. Per-task summaries live at
+  // `agent_tasks.summary_file_path`, refreshed every successful run
+  // (including retries) so the path is always current.
+  sections.push("## Retrieving past epic context");
   sections.push(
-    "When the user references past work — \"what did we do last Tuesday?\", \"send me the plan from " +
-    "the StocksScanner epic\", \"the spec we wrote for X two weeks ago\" — use this three-step " +
-    "pipeline. **Do NOT rely on memory or the conversation log to answer these — the data is in the DB.**\n\n" +
+    "When the user references past work — by time, by topic, by approximate scope — **look it up " +
+    "in the DB; do NOT rely on memory or the conversation log to answer.** The starting point is " +
+    "always `search_epic_tasks_by_date`, then branch based on what the user actually wants.\n\n" +
 
-    "**Step 1 — Find the epic.** Call `search_epic_tasks_by_date` with `from`/`to` bracketing the " +
-    "user's reference (a single day → `from='2026-04-22', to='2026-04-22'`; a window → both bounds; " +
-    "\"recently\" → omit both, falls back to last 30 days). The tool returns up to 50 epics newest " +
-    "first with title, description, status, created_at, and task count. Show the user a short list, " +
-    "ask them to confirm which one if there's ambiguity.\n\n" +
+    "**Always start: find the epic.** Call `search_epic_tasks_by_date` with `from`/`to` bracketing " +
+    "the user's reference (a single day → `from='2026-04-22', to='2026-04-22'`; a window → both " +
+    "bounds; \"recently\" → omit both, falls back to last 30 days). The tool returns up to 50 epics " +
+    "newest first with title, status, timestamps, task count, and the **full description** of each. " +
+    "If multiple match, show the user a short list and ask them to confirm. Once the right epic is " +
+    "identified, branch on the user's actual request:\n\n" +
 
-    "**Step 2 — Fetch the per-task summaries.** Once the user confirms (or it's unambiguous), call " +
-    "`get_epic_task_summaries` with that epic's `id`. Returns each task's title + stage + status + " +
-    "absolute `summaryFilePath`. Tasks without a saved summary are also listed so you can tell the " +
-    "user honestly that not every task has one on file.\n\n" +
+    "**Path A — \"send me the deliverables / what did each task do?\"** Call " +
+    "`get_epic_task_summaries` with the `epicId`. Returns each task's title + stage + status + " +
+    "absolute `summaryFilePath` (NULLs included with a note). For each task with a summary, call " +
+    "`send_file_to_user` with that absolute path and paste the returned markdown chip verbatim in " +
+    "your reply. For multiple tasks, all chips in one reply with a `### Task X — <title>` label.\n\n" +
 
-    "**Step 3 — Deliver to the user.** For each task that has a `summaryFilePath`, call " +
-    "`send_file_to_user` with that exact absolute path (the tool accepts absolute paths inside the " +
-    "agent workspace and normalizes them). Paste the returned markdown chip verbatim in your reply. " +
-    "For multiple tasks, include all chips in the same reply with a one-line label per chip " +
-    "(\"### Task X — <title>\").\n\n" +
+    "**Path B — \"create a new epic similar to / referencing / extending the old one.\"** You " +
+    "already have the original epic's full description from the search result. Use it as the " +
+    "foundation for a new `create_epic_plan` call: paraphrase or copy the scope, layer on the " +
+    "user's new requirements, and mention the source epic's id in your reply so the user knows " +
+    "what you're building on. **Don't fabricate the old scope from memory — quote what the search " +
+    "actually returned.**\n\n" +
+
+    "**Path C — \"remind me what was in scope / what we decided.\"** Just answer from the " +
+    "description in the search result. No follow-up tool call needed. If the user wants more " +
+    "depth than the description provides, fall back to Path A to surface the per-task summaries.\n\n" +
 
     "**Tool gating reminder:** all three tools (`search_epic_tasks_by_date`, " +
     "`get_epic_task_summaries`, `send_file_to_user`) are admin-assigned per-agent. If a tool isn't " +
