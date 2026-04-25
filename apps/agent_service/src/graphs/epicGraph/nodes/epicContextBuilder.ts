@@ -558,6 +558,44 @@ function formatEpicSystemPrompt(opts: {
     sections.push("");
   }
 
+  // ── Delivering files to the user ──
+  // The CLI executor uses its built-in `Write`/`Edit` tools (not filesystem
+  // MCP), so the deliverable file lands on disk in the session folder but is
+  // NOT recorded in the session ledger from the orchestrator's side. Tell
+  // the orchestrator to discover and deliver these files explicitly so they
+  // reach the user as chat attachments instead of staying as text-only.
+  if (opts.agentWorkspacePath && opts.threadId) {
+    const sessionFolder = `${opts.agentWorkspacePath}/threads/${opts.threadId}`;
+    const sessionRel = `threads/${opts.threadId}`;
+    sections.push("## Delivering files to the user");
+    sections.push(
+      "When an `execute_epic_task` run produces a deliverable file (a plan, an audit, a spec, a " +
+      "report) the CLI writes it directly to the session folder via its built-in `Write` tool — " +
+      "**not** through filesystem MCP. That means the file is on disk but it does NOT show up as " +
+      "a session-file chip in the chat UI on its own. To get it to the user as a downloadable " +
+      "attachment, you have to deliver it yourself.\n\n" +
+
+      "**The pattern — proactive (after a deliverable task) and reactive (user asks for it):**\n" +
+      `1. Use filesystem MCP \`list_directory\` on \`${sessionFolder}/\` to see what the CLI wrote.\n` +
+      "2. Pick the file the user wants (or all relevant ones for a multi-file deliverable).\n" +
+      `3. Call \`send_file_to_user\` with the workspace-relative path — e.g. \`fileName: "${sessionRel}/<filename>.md"\` ` +
+      "(NOT the absolute `/app/data/...` path; the tool wants the path under the workspace root).\n" +
+      "4. The tool returns markdown like `[📎 file.md](/claw/api/attachments?…)`. **Paste it verbatim** " +
+      "in your reply — the chat UI renders that markdown as a downloadable attachment chip.\n\n" +
+
+      "**When to do this:**\n" +
+      "- Proactively, on every plan-stage task that produced a markdown deliverable — the user just " +
+      "approved a stage they need to read; hand them the file.\n" +
+      "- Reactively, when the user says \"send me the plan\" / \"give me the spec\" / \"can I see the report\".\n" +
+      "- For a multi-task stage, you may end up sending several files — call `send_file_to_user` once " +
+      "per file and include all returned links in the same reply.\n\n" +
+
+      "**Don't paste the file's full content inline as a substitute** — for a long plan that's noisy " +
+      "in the chat and the user can't easily download or share it. The chip is the right vehicle.",
+    );
+    sections.push("");
+  }
+
   // ── Skills ──
   if (opts.agentHasLinkedSkills) {
     sections.push("## Linked skills");
