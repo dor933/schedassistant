@@ -277,7 +277,34 @@ export async function prepareRetry(
   // The session already contains the original task description, the model's
   // prior turns, and the tool outputs, so the wording is second-person
   // ("you previously changed...") and does not restate the task.
-  let resumePrompt = feedback;
+  //
+  // Important — the prior turns may have ended with the model believing the
+  // task was complete. A gentle "fix the issues" wrapper is read as a
+  // follow-up question and the model summarizes prior work instead of
+  // re-executing it (root cause of the "CLI ignores the path" symptom on
+  // retries — see attempt #4 trace, 2026-04-25). The wrapper below makes the
+  // re-execution requirement explicit and forbids "summarize what I did" as
+  // a valid reply.
+  const directiveTail =
+    "\n## This is a re-execution, not a follow-up question\n" +
+    "The orchestrator rejected your previous outcome. **The task is NOT complete.** You must re-run " +
+    "the actual work via tool calls (write_file / edit / bash / etc.), not just describe, summarize, " +
+    "or apologize for what you did before.\n\n" +
+    "Concretely:\n" +
+    "- Treat anything the previous attempt claimed to deliver as **not delivered** until you have a " +
+    "fresh tool result confirming it in this turn.\n" +
+    "- If the feedback names a specific output path, file, or behavior, **call the corresponding tool " +
+    "again now** to produce it — even if you remember writing it before. Permissions or paths that " +
+    "previously failed may have been fixed since.\n" +
+    "- If a prior write fell back to an alternate location because the original target wasn't " +
+    "writable, redo the write at the **originally-requested path**. Don't assume the previous failure " +
+    "still applies — verify with a tool call.\n" +
+    "- Your session memory (file reads, prior tool outputs, reasoning) is preserved so you can be " +
+    "efficient — use it as context, then finish the work.\n" +
+    "- A reply that only restates what you did in earlier turns will be rejected as another empty " +
+    "completion. Re-execute, then report what the new tool calls actually returned.";
+
+  let resumePrompt = feedback + directiveTail;
   if (diffStat || truncatedDiff) {
     resumePrompt = `## Feedback from Orchestrator\n\n${feedback}\n`;
     if (diffStat) {
@@ -286,7 +313,7 @@ export async function prepareRetry(
     if (truncatedDiff) {
       resumePrompt += `\n## Your Previous Diff\n\`\`\`diff\n${truncatedDiff}\n\`\`\`\n`;
     }
-    resumePrompt += `\nFix the issues described in the feedback above. Reference the diff to understand what you previously changed.`;
+    resumePrompt += directiveTail;
   }
 
   // ── Fresh prompt ──
