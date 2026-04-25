@@ -1,4 +1,5 @@
 import { mkdir, stat } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import type { SessionFileEntry } from "@scheduling-agent/types";
@@ -45,12 +46,53 @@ export function resolveSessionWorkspacePath(
  * Ensures the per-thread folder exists. Idempotent. No-op when `path` is null
  * (e.g. the agent has no workspace). Errors are swallowed and logged by the
  * caller — folder creation should never fail a turn.
+ *
+ * `agent_service` runs as root, so a plain `mkdir` here yields root:root 755
+ * directories the CLI (running as `agent` via `su-exec`, uid 100) cannot
+ * write into. We chown the path back to `agent:agent` after creation so the
+ * CLI can write its outputs (plans, reports, attachments) and so the
+ * filesystem-MCP wrapper's writes from the agent side don't fail with
+ * EACCES on a brand-new thread folder.
  */
 export async function ensureSessionWorkspace(
   sessionWorkspacePath: string | null,
 ): Promise<void> {
   if (!sessionWorkspacePath) return;
   await mkdir(sessionWorkspacePath, { recursive: true });
+  chownPathToAgentBestEffort(sessionWorkspacePath);
+}
+
+/**
+ * Recursively chowns a path to `agent:agent` using `chown -R`. Best-effort —
+ * Alpine containers always have `chown`, and the only realistic failure mode
+ * is "file does not exist", which we already handle by checking truthiness
+ * upstream. Errors are swallowed (with a stderr breadcrumb) so a permission
+ * blip never breaks a turn — but unlike a swallowed `mkdir` failure, a
+ * swallowed chown leaves the symptom in the next CLI invocation, so callers
+ * should ensure the path actually exists before calling this.
+ *
+ * Exported so other modules that create files on the agent's behalf
+ * (notably `persistEpicTaskResultToSession`) can keep ownership consistent
+ * with the rest of the per-thread folder.
+ */
+export function chownPathToAgentBestEffort(absPath: string): void {
+  if (!absPath) return;
+  try {
+    const r = spawnSync("chown", ["-R", "agent:agent", absPath], {
+      stdio: "pipe",
+      timeout: 30_000,
+      encoding: "utf-8",
+    });
+    if (r.error || (typeof r.status === "number" && r.status !== 0)) {
+      // Stderr-only — the logger is per-module and we don't want to require
+      // a logger import on this hot helper. The real signal is the next CLI
+      // run failing with EACCES, which the caller's logs will surface.
+      const reason = r.error?.message ?? r.stderr?.toString().trim() ?? `exit ${r.status}`;
+      process.stderr.write(`chownPathToAgentBestEffort: ${absPath}: ${reason}\n`);
+    }
+  } catch (err: any) {
+    process.stderr.write(`chownPathToAgentBestEffort: ${absPath}: ${err?.message}\n`);
+  }
 }
 
 /**

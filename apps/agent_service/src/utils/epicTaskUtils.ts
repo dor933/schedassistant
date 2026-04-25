@@ -36,6 +36,7 @@ import {
 import {
   resolveSessionWorkspacePath,
   recordSessionFileWrite,
+  chownPathToAgentBestEffort,
 } from "../workspace/sessionWorkspace";
 
 // The agent_service container runs as root, but Claude CLI (and gh) must run
@@ -2274,6 +2275,11 @@ export async function persistEpicTaskResultToSession(args: {
     if (!sessionRoot) return null;
 
     fs.mkdirSync(sessionRoot, { recursive: true });
+    // agent_service runs as root, so the mkdir above produces a root:root 755
+    // directory the CLI (uid 100, via su-exec agent) can read but not write.
+    // Re-chown the whole thread folder to agent so subsequent CLI writes,
+    // filesystem-MCP writes, and follow-up persists all succeed.
+    chownPathToAgentBestEffort(sessionRoot);
 
     const slug = sanitizeFilenameSlug(args.taskTitle ?? "epic-task");
     const shortTaskId = String(args.taskId).slice(0, 8);
@@ -2291,6 +2297,9 @@ export async function persistEpicTaskResultToSession(args: {
     const workspaceRelPath = path.posix.join("threads", args.threadId, fileName);
 
     fs.writeFileSync(absPath, args.content, "utf-8");
+    // Match ownership on the file itself — keeps agent able to overwrite on
+    // a retry attempt without going through this helper again.
+    chownPathToAgentBestEffort(absPath);
 
     let bytes = 0;
     try {

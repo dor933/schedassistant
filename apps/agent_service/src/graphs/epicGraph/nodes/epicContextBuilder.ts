@@ -398,6 +398,76 @@ function formatEpicSystemPrompt(opts: {
   );
   sections.push("");
 
+  // ── Hollow completions (status lies sometimes) ──
+  // executeTask marks a task `completed` when the CLI exits 0, but exit 0 does
+  // not prove the CLI did the work — Claude can exit 0 while having only
+  // emitted a refusal/quota message. Force the orchestrator to sanity-check
+  // the report instead of trusting the status field.
+  sections.push("### Don't trust `completed` status alone — verify the CLI actually did the work");
+  sections.push(
+    "A task whose status reads `completed` (and a stage that has rolled up to `pr_pending`) is **not " +
+    "automatically a real success**. `executeTask` marks the task `completed` whenever the Claude CLI " +
+    "exits 0 — but exit 0 only means the process ran, not that it implemented anything. The CLI can " +
+    "exit cleanly while emitting a no-op message such as:\n" +
+    "- *'You've hit your org's monthly usage limit'* / quota / rate-limit messages\n" +
+    "- Auth errors (`CLAUDE_CODE_OAUTH_TOKEN` missing/expired, login required)\n" +
+    "- Permission refusals or *'I cannot do that'* explanations from Claude itself\n" +
+    "- *'Reached max turns'* with a partial implementation that wasn't committed\n\n" +
+
+    "**Always cross-check the per-task report sections before treating a stage as ready for review:**\n" +
+    "- **Files Changed / Full Diff:** if both are empty (or `_No git diff captured_`) for a task whose " +
+    "description was supposed to modify code, that's a red flag — the CLI didn't actually write or commit " +
+    "anything.\n" +
+    "- **CLI Output Summary:** scan it for refusal phrases, quota/rate-limit wording, auth errors, " +
+    "*'cannot'* / *'unable'* / *'not authorized'* / *'try again'* — these are present even when status is " +
+    "`completed` because they came on stdout from a clean-exit CLI.\n" +
+    "- **Recent Commits:** for a code-change task, expect at least one new commit attributable to this run. " +
+    "Plan-stage tasks are an exception — they're spec/research and produce no commits by design.\n\n" +
+
+    "**If you find a hollow completion, retry it via Path A (`request_stage_changes` → " +
+    "`execute_epic_task mode='retry'`)** and pass the specific error text from the CLI output as feedback " +
+    "so the next attempt sees what went wrong. Do **not** call `approve_stage` on a stage where any task " +
+    "looks hollow — that would seal the empty work into the merged branch.",
+  );
+  sections.push("");
+
+  // ── Approved stages are sealed ──
+  // Hard-stop the "let's just re-run the approved stage's tasks" instinct.
+  // No tool in the codebase reopens an approved stage or appends new
+  // stages/tasks to an existing epic — `createEpicWithPlan` is the only
+  // constructor and it's atomic. Spell out the actual alternatives so the
+  // model doesn't promise something the system can't do.
+  sections.push("### Approved stages are sealed — and an epic's plan is fixed");
+  sections.push(
+    "Once a stage's PR is approved (`pr_status` ∈ `approved`/`merged` and stage `status='completed'`), " +
+    "**its tasks cannot be re-executed**. There is no tool — and no DB state — that reopens an approved " +
+    "stage. `request_stage_changes` only works on a `pr_pending` stage; it will refuse on a completed " +
+    "one. `execute_epic_task` will not pick up tasks belonging to a completed stage either. Do not try; " +
+    "do not promise the user you'll 'go back and fix' an approved stage.\n\n" +
+
+    "Same constraint, broader scope: **an epic's plan is fixed at `create_epic_plan` time**. There is " +
+    "no tool to add a stage to an existing epic, no tool to append a task to an existing stage. " +
+    "`createEpicWithPlan` runs once, atomically, then the structure is frozen — only task statuses and " +
+    "the stage's PR fields mutate after that.\n\n" +
+
+    "**When the user wants changes that overlap an already-approved stage, here are the only real alternatives — explain them clearly and let the user pick:**\n" +
+    "1. **Already covered later in this epic?** Use `get_epic_status` to check whether a *later* stage " +
+    "in the current plan already covers the user's new request. If yes, keep going — the work will land " +
+    "naturally when that stage runs.\n" +
+    "2. **A brand-new epic, after this one finishes.** The orchestrator is a system-wide singleton: only " +
+    "one active epic at a time. If the current epic still has stages to run, the user's options are: " +
+    "(a) wait for the current epic to complete, then `create_epic_plan` for a fresh epic that includes " +
+    "the new work, or (b) `cancel_epic` (requires the user's verbatim authorization quote) and " +
+    "immediately `create_epic_plan` for a new epic that bundles the remaining + new work.\n" +
+    "3. **Out-of-band fix on the merged branch.** If the change is small and the user prefers to handle " +
+    "it themselves outside this system (a one-line tweak directly on the default branch, etc.), say so " +
+    "honestly — that's a normal git workflow and not something the epic orchestrator owns.\n\n" +
+
+    "Present these alternatives in plain language and ask the user which they want. Do not pick for them, " +
+    "and never imply option 4 (\"reopen the approved stage\") exists — it doesn't.",
+  );
+  sections.push("");
+
   // ── Honesty rules (kept, shorter) ──
   sections.push("## Rules");
   sections.push(

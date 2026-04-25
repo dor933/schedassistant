@@ -134,12 +134,28 @@ function runClaudeArchitecture(cwd: string, prompt: string): string {
   return stdout;
 }
 
-/** Make a cloned repo writable by the `agent` user (Claude CLI runs as `agent` via su-exec). */
+/**
+ * Make a cloned repo writable by the `agent` user (Claude CLI runs as `agent`
+ * via `su-exec`). Promoted from "best-effort warn" to a hard error: a silent
+ * chown failure leaves the repo root-owned, which then surfaces as cryptic
+ * `cannot open '.git/FETCH_HEAD': Permission denied` from `gitAsAgent` at the
+ * NEXT epic task run — by which point the cause is hours/days behind in the
+ * logs. Failing the setup loud here means the operator can re-run setup on a
+ * clean repo or chown manually before users hit the runtime symptom.
+ */
 function chownToAgent(dir: string): void {
   try {
     execSync(`chown -R agent:agent "${dir}"`, { stdio: "pipe", timeout: 30_000 });
   } catch (err: any) {
-    logger.warn("chownToAgent: failed (non-fatal)", { dir, error: err?.message });
+    logger.error("chownToAgent: failed — repo will be root-owned, runtime git as agent WILL fail", {
+      dir,
+      error: err?.message,
+    });
+    throw new Error(
+      `chown -R agent:agent "${dir}" failed: ${err?.message ?? "unknown"}. ` +
+      `The repo would be root-owned and any subsequent git operation under su-exec agent would ` +
+      `fail with EACCES on .git/. Resolve manually: \`chown -R agent:agent "${dir}"\`.`,
+    );
   }
 }
 
