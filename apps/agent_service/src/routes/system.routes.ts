@@ -9,5 +9,6 @@ const controller = new SystemController();
 router.get("/claude-oauth-token", controller.getClaudeOauthToken);
 router.put("/claude-oauth-token", controller.setClaudeOauthToken);
 router.delete("/claude-oauth-token", controller.deleteClaudeOauthToken);
+router.post("/claude-oauth-token/probe", controller.probeClaudeOauthToken);
 
 export { router as systemRouter };

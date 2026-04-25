@@ -3,6 +3,7 @@ import {
   ClaudeOauthTokenError,
   clear as clearClaudeOauthToken,
   describe as describeClaudeOauthToken,
+  probeAgentSideEnv as probeClaudeOauthAgentSide,
   set as setClaudeOauthToken,
 } from "../services/claudeOauthToken.service";
 import { logger } from "../logger";
@@ -45,6 +46,20 @@ export class SystemController {
       return res.json(clearClaudeOauthToken());
     } catch (err) {
       return handleError(res, err, "DELETE /system/claude-oauth-token error");
+    }
+  };
+
+  /**
+   * Diagnostic probe — confirms (a) the running Node process has the env var
+   * set, and (b) it propagates through `su-exec agent` exactly the way the
+   * Claude CLI is spawned. Never returns the token value; only presence +
+   * length. Useful for triage when the CLI claims it's not authenticated.
+   */
+  probeClaudeOauthToken = async (_req: Request, res: Response) => {
+    try {
+      return res.json(probeClaudeOauthAgentSide());
+    } catch (err) {
+      return handleError(res, err, "POST /system/claude-oauth-token/probe error");
     }
   };
 }
