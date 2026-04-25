@@ -31,12 +31,18 @@ import {
 import { cronAgentQueue, cronAgentQueueEvents } from "./queues/cronAgent.bull";
 import { roundtableQueueEvents } from "./queues/roundtable.bull";
 import { attachAgentSocketIO } from "./socket";
+import { loadIntoEnv as loadClaudeOauthTokenIntoEnv } from "./services/claudeOauthToken.service";
 import { logger } from "./logger";
 
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
 
 async function main(): Promise<void> {
   logger.info("Starting agent_service…");
+
+  // Load the persisted Claude Code OAuth token (set from the admin UI) into
+  // process.env so every spawned `claude` CLI inherits CLAUDE_CODE_OAUTH_TOKEN
+  // via `agentSpawnEnv()` and skips the interactive login.
+  loadClaudeOauthTokenIntoEnv();
 
   if (isLangfuseConfigured()) {
     try {

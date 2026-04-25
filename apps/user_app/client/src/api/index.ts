@@ -733,6 +733,25 @@ export const admin = {
       { method: "DELETE" },
     ),
 
+  // ── Claude Code OAuth token (super_admin only, system-wide) ───────────────
+  // The token is persisted on the agent_service container and inherited by
+  // every spawned `claude` CLI via CLAUDE_CODE_OAUTH_TOKEN, so admins can
+  // configure auth from the UI without `su-exec agent claude /login`.
+  getClaudeOauthToken: () =>
+    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
+      "/admin/claude-oauth-token",
+    ),
+  setClaudeOauthToken: (token: string) =>
+    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
+      "/admin/claude-oauth-token",
+      { method: "PUT", body: JSON.stringify({ token }) },
+    ),
+  deleteClaudeOauthToken: () =>
+    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
+      "/admin/claude-oauth-token",
+      { method: "DELETE" },
+    ),
+
   // ── Projects & Repositories ───────────────────────────────────────────────
   getProjects: () => request<AdminProject[]>("/admin/projects"),
   getRemoteBranches: (repoName: string) =>

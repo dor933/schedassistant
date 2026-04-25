@@ -12,6 +12,7 @@ import { repositoriesRouter } from "./routes/repositories.routes";
 import { roundtableRouter } from "./routes/roundtable.routes";
 import { libraryRouter } from "./routes/library.routes";
 import { attachmentsRouter } from "./routes/attachments.routes";
+import { systemRouter } from "./routes/system.routes";
 
 export type CreateServerDeps = {
   agentChatQueue: Queue<AgentChatJobData, AgentChatJobResult, string>;
@@ -39,6 +40,7 @@ export function createServer(deps: CreateServerDeps) {
   app.use("/api/roundtable", roundtableRouter);
   app.use("/api/library", libraryRouter);
   app.use("/api/attachments", attachmentsRouter);
+  app.use("/api/system", systemRouter);
 
   return app;
 }

@@ -17,6 +17,7 @@ import { agentUserScopesRouter } from "./agentUserScopes.routes";
 import { vendorApiKeysRouter } from "./vendorApiKeys.routes";
 import { organizationRouter } from "./organization.routes";
 import { libraryRouter } from "./library.routes";
+import { claudeOauthRouter } from "./claudeOauth.routes";
 
 const router = Router();
 
@@ -37,6 +38,7 @@ router.use("/web-search-agent", webSearchAgentRouter);
 router.use("/vendor-api-keys", vendorApiKeysRouter);
 router.use("/organization", organizationRouter);
 router.use("/library", libraryRouter);
+router.use("/claude-oauth-token", claudeOauthRouter);
 // Agent ↔ user Google scope grants (super_admin gated inside the router).
 // Mounts at the admin root so the same router covers both
 // /admin/google-users and /admin/agents/:agentId/user-scopes.

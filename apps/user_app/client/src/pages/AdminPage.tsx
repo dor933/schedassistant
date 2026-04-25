@@ -212,6 +212,14 @@ export default function AdminPage() {
       updatedAt: string | null;
     }[]
   >([]);
+  // System-wide Claude Code OAuth token — super_admin only. Persisted on the
+  // agent_service container and inherited by every spawned `claude` CLI via
+  // CLAUDE_CODE_OAUTH_TOKEN, so admins skip `su-exec agent claude /login`.
+  const [claudeOauthToken, setClaudeOauthToken] = useState<{
+    configured: boolean;
+    masked: string | null;
+    updatedAt: string | null;
+  } | null>(null);
   const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
   const [webSearchStatus, setWebSearchStatus] =
     useState<AdminWebSearchStatus | null>(null);
@@ -320,7 +328,7 @@ export default function AdminPage() {
     try {
       // Vendor API keys are super_admin-only. Use .catch(() => []) so regular
       // admins don't surface the 403 as a page-level error.
-      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak, org, lib] = await Promise.all([
+      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak, org, lib, claudeTok] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
@@ -344,6 +352,9 @@ export default function AdminPage() {
         ),
         admin.getOrganization().catch(() => null),
         admin.getLibraryFiles().catch(() => ({ files: [] as LibraryFile[] })),
+        // super_admin-only: regular admins get a 403 here, swallow it so the
+        // page still loads.
+        admin.getClaudeOauthToken().catch(() => null),
       ]);
       setUsers(u);
       if (org) {
@@ -361,6 +372,7 @@ export default function AdminPage() {
       setWebSearchStatus(ws);
       setVendorApiKeys(vak);
       setLibraryFiles(lib.files ?? []);
+      setClaudeOauthToken(claudeTok);
       // System agents are delegated to by primary agents — they never own a
       // group / roundtable themselves. External agents are roundtable-only.
       if (!newGroupAgentId) {
@@ -2138,10 +2150,14 @@ export default function AdminPage() {
           </div>
 
           {/* Vendor API Keys — per-org. Super-admin only: these credentials
-              belong to THIS organization and are used by all agents in it. */}
+              belong to THIS organization and are used by all agents in it.
+              The Claude Code OAuth token sits in the same card because it is
+              also a credential the platform uses to authenticate models, just
+              system-wide rather than per-org. */}
           {user?.role === "super_admin" && (
             <VendorApiKeysCard
               vendorApiKeys={vendorApiKeys}
+              claudeOauthToken={claudeOauthToken}
               reload={reload}
               setError={setError}
             />
@@ -2692,10 +2708,16 @@ interface VendorApiKeyEntry {
  */
 function VendorApiKeysCard({
   vendorApiKeys,
+  claudeOauthToken,
   reload,
   setError,
 }: {
   vendorApiKeys: VendorApiKeyEntry[];
+  claudeOauthToken: {
+    configured: boolean;
+    masked: string | null;
+    updatedAt: string | null;
+  } | null;
   reload: () => Promise<void>;
   setError: (msg: string) => void;
 }) {
@@ -2726,6 +2748,11 @@ function VendorApiKeysCard({
             setError={setError}
           />
         ))}
+        <ClaudeOauthTokenRow
+          entry={claudeOauthToken}
+          reload={reload}
+          setError={setError}
+        />
       </div>
     </div>
   );
@@ -2835,6 +2862,169 @@ function VendorApiKeyRow({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Paste new API key"
+            className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || !draft.trim()}
+              onClick={handleSave}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+              Save
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setEditing(false);
+                setDraft("");
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+            >
+              <X className="h-3 w-3" />
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Claude Code OAuth token (super_admin only, system-wide) ──────────────────
+//
+// Sits next to the vendor API keys because it is also a model-vendor
+// credential, just stored on the agent_service container instead of in the
+// per-org table. The agent_service persists the token to a file under
+// /home/agent/.claude/.oauth-token and exports CLAUDE_CODE_OAUTH_TOKEN into
+// process.env at startup, so every spawned `claude` CLI authenticates without
+// a manual `su-exec agent claude /login` inside the container.
+
+function ClaudeOauthTokenRow({
+  entry,
+  reload,
+  setError,
+}: {
+  entry: { configured: boolean; masked: string | null; updatedAt: string | null } | null;
+  reload: () => Promise<void>;
+  setError: (msg: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // While the super_admin-only fetch is in flight we render a placeholder
+  // entry so the layout matches the other rows.
+  const safeEntry = entry ?? { configured: false, masked: null, updatedAt: null };
+
+  async function handleSave() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setError("OAuth token cannot be empty. Use Remove to clear it.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await admin.setClaudeOauthToken(trimmed);
+      setDraft("");
+      setEditing(false);
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to save token.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete() {
+    setBusy(true);
+    try {
+      await admin.deleteClaudeOauthToken();
+      setDraft("");
+      setEditing(false);
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to remove token.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const tooltip =
+    "Claude Code CLI OAuth token. Saved on the agent_service container and " +
+    "exported as CLAUDE_CODE_OAUTH_TOKEN so every spawned `claude` invocation " +
+    "authenticates without an interactive login inside the container. Generate " +
+    "with `claude setup-token` on a machine where you're logged in.";
+
+  return (
+    <div className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600"
+          title={tooltip}
+        >
+          <Terminal className="h-4 w-4" />
+        </div>
+        <span
+          className="min-w-0 truncate text-sm font-semibold text-gray-900"
+          title={tooltip}
+        >
+          Claude CLI OAuth
+        </span>
+        {safeEntry.configured ? (
+          <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+            Configured
+          </span>
+        ) : (
+          <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
+            Missing
+          </span>
+        )}
+      </div>
+
+      <p className="mt-2 text-[11px] leading-relaxed text-gray-500" title={tooltip}>
+        Sets <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
+          CLAUDE_CODE_OAUTH_TOKEN
+        </code> on the agent_service container so the spawned <code>claude</code>{" "}
+        CLI skips manual login.
+      </p>
+
+      {safeEntry.configured && safeEntry.masked && (
+        <div className="mt-2 font-mono text-[11px] text-gray-500">{safeEntry.masked}</div>
+      )}
+
+      {!editing ? (
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            <Pencil className="h-3 w-3" />
+            {safeEntry.configured ? "Replace" : "Set token"}
+          </button>
+          {safeEntry.configured && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleDelete}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              Remove
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          <input
+            type="password"
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Paste OAuth token"
             className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
           />
           <div className="flex items-center gap-2">

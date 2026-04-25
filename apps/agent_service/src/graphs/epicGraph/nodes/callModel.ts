@@ -54,6 +54,7 @@ import {
   CancelEpicTool,
   parseContinuationMarker,
 } from "../../../tools/epicTaskTools";
+import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
@@ -228,6 +229,8 @@ export async function epicCallModelNode(
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))
     tools.push(ListRepositoriesTool());
+  if (has("send_file_to_user"))
+    tools.push(SendFileToUserTool(agentId));
 
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),
