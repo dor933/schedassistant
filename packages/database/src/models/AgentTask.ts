@@ -4,7 +4,7 @@ import type { AgentTaskAttributes, AgentTaskStatus, TaskStageId } from "@schedul
 
 type AgentTaskCreationAttributes = Optional<
   AgentTaskAttributes,
-  "id" | "createdAt" | "updatedAt" | "status" | "description" | "sortOrder" | "metadata" | "startedAt" | "completedAt"
+  "id" | "createdAt" | "updatedAt" | "status" | "description" | "sortOrder" | "summaryFilePath" | "metadata" | "startedAt" | "completedAt"
 >;
 
 class AgentTask extends Model<AgentTaskAttributes, AgentTaskCreationAttributes> implements AgentTaskAttributes {
@@ -14,6 +14,7 @@ class AgentTask extends Model<AgentTaskAttributes, AgentTaskCreationAttributes> 
   declare description: string | null;
   declare status: AgentTaskStatus;
   declare sortOrder: number;
+  declare summaryFilePath: string | null;
   declare metadata: Record<string, unknown> | null;
   declare createdAt: Date;
   declare updatedAt: Date;
@@ -52,6 +53,11 @@ AgentTask.init(
       allowNull: false,
       defaultValue: 0,
       field: "sort_order",
+    },
+    summaryFilePath: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "summary_file_path",
     },
     metadata: {
       type: DataTypes.JSONB,

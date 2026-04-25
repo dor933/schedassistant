@@ -1,4 +1,5 @@
 import { spawn, execSync, spawnSync } from "child_process";
+import fs from "node:fs";
 import { QueryTypes } from "sequelize";
 import {
   sequelize,
@@ -9,6 +10,7 @@ import {
   TaskStage,
   AgentTask,
   TaskExecution,
+  Agent,
 } from "@scheduling-agent/database";
 import type {
   UserId,
@@ -1310,6 +1312,16 @@ export async function executeTask(
      * Ignored if `resumeSessionId` is not set.
      */
     freshPromptFallback?: string;
+    /**
+     * Absolute path the CLI was instructed to write its per-task summary
+     * `.md` file to (via the system prompt's "Required output: per-task
+     * summary file" block). Set by the caller using `buildTaskSummaryFilePath`
+     * with the *current* threadId — same value the system prompt names — so
+     * the post-success persist on `agent_tasks.summary_file_path` matches
+     * what the CLI actually wrote. Null/omitted disables the persist
+     * (e.g. non-chat invocations without a thread context).
+     */
+    expectedSummaryFilePath?: string | null;
   },
 ): Promise<TaskExecution> {
   const task = await AgentTask.findByPk(taskId, {
@@ -1467,6 +1479,16 @@ export async function executeTask(
 
           if (sessionId) {
             await execution.update({ cliSessionId: sessionId });
+          }
+
+          // Persist the per-task summary file path so retrieval tools
+          // (`get_epic_task_summaries`) can fan out the latest summary via
+          // `send_file_to_user`. Idempotent — overwrites the prior value on
+          // every retry, which is exactly what the user wants ("most updated
+          // and relevant file"). No-op when caller didn't pass a path or
+          // when the CLI ignored the instruction (file missing on disk).
+          if (options.expectedSummaryFilePath) {
+            await recordTaskSummaryFilePath(taskId, options.expectedSummaryFilePath);
           }
 
           await updateTaskStatus(taskId, "completed");
@@ -1697,7 +1719,20 @@ export async function createEpicWithPlan(data: {
  */
 export async function continueRemainingTasks(
   completedTaskId: string,
-  options: { cwd: string; allowedTools?: string; maxTurns?: number; systemPrompt?: string; agentName?: string },
+  options: {
+    cwd: string;
+    allowedTools?: string;
+    maxTurns?: number;
+    systemPrompt?: string;
+    agentName?: string;
+    /**
+     * When set, every sub-task execution gets its per-task summary path
+     * computed and persisted on success — same flow as the first task in
+     * `ExecuteEpicTaskTool`. Optional so non-chat callers (none today) keep
+     * working without a thread context.
+     */
+    summaryContext?: { agentId: AgentId; threadId: string };
+  },
 ): Promise<string | null> {
   const task = await AgentTask.findByPk(completedTaskId, {
     include: [{ model: TaskStage, as: "stage" }],
@@ -1719,12 +1754,21 @@ export async function continueRemainingTasks(
       taskTitle: next.title,
     });
 
+    const expectedSummaryFilePath = options.summaryContext
+      ? await buildTaskSummaryFilePath({
+          agentId: options.summaryContext.agentId,
+          threadId: options.summaryContext.threadId,
+          taskId: next.id,
+        })
+      : null;
+
     const execution = await executeTask(next.id, {
       cwd: options.cwd,
       allowedTools: options.allowedTools,
       maxTurns: options.maxTurns,
       systemPrompt: options.systemPrompt,
       agentName: options.agentName,
+      expectedSummaryFilePath,
     });
 
     results.push(await formatExecutionResult(execution, next.id));
@@ -2182,6 +2226,85 @@ async function formatReviewActionForCompletedTask(taskId: string): Promise<strin
   return (
     `\n**Action:** No task is currently in the ready queue. Use \`get_epic_status\` to see the epic state (e.g. waiting on PR approval). ${RETRY_EPIC_TASK_HINT}`
   );
+}
+
+/**
+ * Deterministic absolute path the CLI is told to write its per-task summary
+ * `.md` file to. Path is `<agent.workspacePath>/threads/<threadId>/task-<8charId>-summary.md`
+ * — keyed on the *current* threadId, not whatever thread the task was
+ * planned in, so a cross-thread retry lands in the active thread's folder.
+ *
+ * No attempt number in the filename — by design. Each retry overwrites the
+ * previous summary, and `agent_tasks.summary_file_path` always points at the
+ * latest, surfacing the most relevant content to "show me what we did" type
+ * queries (the user's stated requirement). This also avoids an ordering
+ * hazard: `buildSystemPrompt` runs before `startExecution` allocates an
+ * attempt number, so encoding the attempt in the path would force a
+ * pre-flight query just to keep it in sync.
+ *
+ * Returns null when we can't compute it (missing workspace, missing thread,
+ * agent lookup failed). Callers must handle null gracefully — either skip
+ * the summary instruction (CLI prompt) or skip the persist (executeTask).
+ */
+export async function buildTaskSummaryFilePath(args: {
+  agentId: AgentId;
+  threadId: string | null | undefined;
+  taskId: AgentTaskId;
+}): Promise<string | null> {
+  if (!args.threadId) return null;
+  try {
+    const agent = await Agent.findByPk(args.agentId, { attributes: ["workspacePath"] });
+    const workspacePath =
+      (agent as { workspacePath?: string | null } | null)?.workspacePath ?? null;
+    if (!workspacePath) return null;
+    const shortTaskId = String(args.taskId).slice(0, 8);
+    return `${workspacePath}/threads/${args.threadId}/task-${shortTaskId}-summary.md`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Post-execution: if the CLI was supposed to write the summary file at
+ * `expectedPath`, verify the file exists on disk and persist that path on
+ * the agent_tasks row. Overwrites any prior value — by design, since each
+ * retry produces a fresh summary and the previous attempt's file may be in
+ * a different (rejected) thread folder we don't want to surface to users.
+ *
+ * Best-effort: a missing file (CLI ignored the instruction) or a DB hiccup
+ * is logged but never throws. Returns the path we persisted, or null if
+ * nothing was persisted.
+ */
+export async function recordTaskSummaryFilePath(
+  taskId: AgentTaskId,
+  expectedPath: string | null,
+): Promise<string | null> {
+  if (!expectedPath) return null;
+  try {
+    if (!fs.existsSync(expectedPath)) {
+      logger.warn(
+        "recordTaskSummaryFilePath: expected summary file missing — CLI may have skipped the write",
+        { taskId, expectedPath },
+      );
+      return null;
+    }
+    await AgentTask.update(
+      { summaryFilePath: expectedPath },
+      { where: { id: taskId } },
+    );
+    logger.info("recordTaskSummaryFilePath: persisted summary file path", {
+      taskId,
+      summaryFilePath: expectedPath,
+    });
+    return expectedPath;
+  } catch (err: any) {
+    logger.warn("recordTaskSummaryFilePath: persist failed (non-fatal)", {
+      taskId,
+      expectedPath,
+      error: err?.message,
+    });
+    return null;
+  }
 }
 
 export async function formatExecutionResult(execution: any, taskId: string): Promise<string> {

@@ -52,6 +52,8 @@ import {
   ApproveStageTool,
   RequestStageChangesTool,
   CancelEpicTool,
+  SearchEpicTasksByDateTool,
+  GetEpicTaskSummariesTool,
   parseContinuationMarker,
 } from "../../../tools/epicTaskTools";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
@@ -231,6 +233,10 @@ export async function epicCallModelNode(
     tools.push(ListRepositoriesTool());
   if (has("send_file_to_user"))
     tools.push(SendFileToUserTool(agentId));
+  if (has("search_epic_tasks_by_date"))
+    tools.push(SearchEpicTasksByDateTool());
+  if (has("get_epic_task_summaries"))
+    tools.push(GetEpicTaskSummariesTool());
 
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

@@ -617,6 +617,15 @@ export interface AgentTaskAttributes {
   description: string | null;
   status: AgentTaskStatus;
   sortOrder: number;
+  /**
+   * Absolute path of the per-task summary `.md` the CLI wrote to the
+   * current session folder on the most recent successful run. Updated on
+   * every `executeTask` (including retries) so it always points at the
+   * latest attempt's file — never at a stale path from a different thread.
+   * `null` when the task hasn't run successfully (yet) or predates the
+   * `summary_file_path` migration.
+   */
+  summaryFilePath: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;

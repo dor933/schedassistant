@@ -1,7 +1,9 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { execSync } from "child_process";
+import { Op, QueryTypes } from "sequelize";
 import {
+  sequelize,
   Repository,
   EpicTask,
   TaskStage,
@@ -25,6 +27,7 @@ import {
   prepareRetry,
   preExecutionSync,
   buildArchitectureContext,
+  buildTaskSummaryFilePath,
   captureGitDiff,
   captureStageDiff,
   continueRemainingTasks,
@@ -363,6 +366,43 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
                   `replace the \`threads/<other-id>\` segment with \`threads/${currentThreadId}\` ` +
                   `before writing.`,
                 );
+
+                // Mandatory per-task summary file — captured into
+                // `agent_tasks.summary_file_path` after this run so the
+                // orchestrator can fan summaries out via `send_file_to_user`
+                // for any past or current epic. Path is computed via the
+                // same helper used by `recordTaskSummaryFilePath` so the
+                // CLI's write target and the DB column always agree.
+                const summaryAbsPath = await buildTaskSummaryFilePath({
+                  agentId: epic.agentId,
+                  threadId: currentThreadId,
+                  taskId,
+                });
+                if (summaryAbsPath) {
+                  parts.push(
+                    `## Required output: per-task summary file (MANDATORY)\n` +
+                    `Before you finish this task — regardless of whether it's a planning task or ` +
+                    `a code-change task — you **MUST** write a Markdown summary of what you did to ` +
+                    `**\`${summaryAbsPath}\`** using your built-in \`Write\` tool. ` +
+                    `Each new attempt overwrites the previous summary at this exact path; do ` +
+                    `not pick a different filename, do not append a timestamp, do not put it in ` +
+                    `a sub-folder. The downstream system reads this file by exact path.\n\n` +
+                    `Contents of the summary, brief and skimmable:\n` +
+                    `- **Task title** and a one-sentence restatement of the goal as you understood it.\n` +
+                    `- **What you actually did** in this attempt — files created/modified/deleted ` +
+                    `(or "no code changes — planning only" for plan tasks), key decisions, anything ` +
+                    `non-obvious about the approach.\n` +
+                    `- **Outcome** — completed / partial / blocked, with a 1-2 sentence ` +
+                    `explanation. If a previous attempt was rejected and you reworked it based on ` +
+                    `feedback, note what changed.\n` +
+                    `- **Pointers** to any larger artifacts you produced (e.g. "full plan at ` +
+                    `\`<other-file>.md\` in the same folder").\n\n` +
+                    `This summary is how the user retrieves "what did task X do" later, possibly ` +
+                    `from a different chat thread. Skipping it means the orchestrator cannot ` +
+                    `surface this task's work via \`send_file_to_user\`. **The summary file write ` +
+                    `is a hard requirement of finishing the task — do not exit without it.**`,
+                  );
+                }
               }
             } catch (err: any) {
               logger.warn("buildSystemPrompt: session-folder injection failed (non-fatal)", {
@@ -419,6 +459,22 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
         const { cwd, agentName } = await resolveRepoContext(input.cwd);
         const systemPrompt = await buildSystemPrompt(firstTask.id, input.systemPrompt);
 
+        // Per-task summary capture: same path the system prompt names is
+        // passed down to executeTask so it can persist
+        // `agent_tasks.summary_file_path` after a successful run. Computed
+        // once for the first task; `continueRemainingTasks` recomputes per
+        // sub-task using `summaryContext`.
+        const summaryContext = conversationCtx?.threadId
+          ? { agentId: epic.agentId, threadId: conversationCtx.threadId }
+          : undefined;
+        const firstTaskSummaryPath = summaryContext
+          ? await buildTaskSummaryFilePath({
+              agentId: summaryContext.agentId,
+              threadId: summaryContext.threadId,
+              taskId: firstTask.id,
+            })
+          : null;
+
         if (effectiveMode === "retry") {
           // Pull feedback from input, or fall back to what request_stage_changes
           // already stored on the task's latest execution row.
@@ -472,12 +528,14 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
             maxTurns: input.maxTurns,
             systemPrompt,
             agentName,
+            expectedSummaryFilePath: firstTaskSummaryPath,
           });
 
           let result = await formatExecutionResult(execution, firstTask.id);
           if (execution.status !== "failed") {
             const contResult = await continueRemainingTasks(firstTask.id, {
               cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt, agentName,
+              summaryContext,
             });
             if (contResult) result += "\n\n---\n\n" + contResult;
           }
@@ -498,12 +556,14 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
           maxTurns: input.maxTurns,
           systemPrompt,
           agentName,
+          expectedSummaryFilePath: firstTaskSummaryPath,
         });
 
         let result = await formatExecutionResult(execution, firstTask.id);
         if (execution.status !== "failed") {
           const contResult = await continueRemainingTasks(firstTask.id, {
             cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt, agentName,
+            summaryContext,
           });
           if (contResult) result += "\n\n---\n\n" + contResult;
         }
@@ -1268,6 +1328,244 @@ export function RequestStageChangesTool() {
         feedback: z.string().min(5).describe(
           "Detailed feedback explaining what needs to be fixed. " +
           "Stored on each task's execution row and passed to the CLI on retry.",
+        ),
+      }),
+    },
+  );
+}
+
+// ─── Search past epic tasks by date ─────────────────────────────────────────
+
+/**
+ * Lets the orchestrator answer "what did we work on last Tuesday?" — returns
+ * a list of epic tasks whose `created_at` falls in the requested window
+ * (inclusive). Either or both of `from`/`to` may be supplied; with neither,
+ * defaults to the last 30 days. Returns id/title/description/status/createdAt
+ * + a count of agent tasks attached, so the orchestrator can pick the right
+ * one and follow up with `get_epic_task_summaries(epicId)`.
+ */
+export function SearchEpicTasksByDateTool() {
+  return tool(
+    async (input) => {
+      try {
+        const fromDate = input.from ? new Date(input.from) : null;
+        const toDate = input.to ? new Date(input.to) : null;
+        if (input.from && (!fromDate || isNaN(fromDate.getTime()))) {
+          return `Error: invalid \`from\` date "${input.from}". Use ISO 8601 (YYYY-MM-DD or full timestamp).`;
+        }
+        if (input.to && (!toDate || isNaN(toDate.getTime()))) {
+          return `Error: invalid \`to\` date "${input.to}". Use ISO 8601 (YYYY-MM-DD or full timestamp).`;
+        }
+        // When `to` is a bare date (no time), include the entire day by
+        // bumping it to end-of-day. Avoids "I asked about Tuesday and didn't
+        // get the epic created at Tuesday 14:00".
+        if (toDate && /^\d{4}-\d{2}-\d{2}$/.test(input.to ?? "")) {
+          toDate.setUTCHours(23, 59, 59, 999);
+        }
+
+        // Default window: last 30 days. Bounded on both sides explicitly so
+        // the SQL plan stays predictable on huge tables.
+        const effectiveFrom =
+          fromDate ??
+          new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        const effectiveTo = toDate ?? new Date();
+
+        const epics = await EpicTask.findAll({
+          where: {
+            createdAt: {
+              [Op.between]: [effectiveFrom, effectiveTo],
+            },
+          },
+          order: [["createdAt", "DESC"]],
+          limit: 50,
+          attributes: ["id", "title", "description", "status", "createdAt", "completedAt"],
+        });
+
+        if (epics.length === 0) {
+          return (
+            `No epic tasks found between ${effectiveFrom.toISOString()} and ${effectiveTo.toISOString()}.\n` +
+            `Try widening the window — e.g. pass a wider \`from\`/\`to\` range, or omit them ` +
+            `entirely to fall back to the last 30 days.`
+          );
+        }
+
+        // Surface task counts so the user can quickly see "this epic had 4
+        // tasks across 2 stages" without a follow-up call.
+        const taskCounts = await sequelize.query<{ epic_task_id: string; task_count: string }>(
+          `SELECT ts.epic_task_id, COUNT(at.id)::text AS task_count
+             FROM task_stages ts
+             LEFT JOIN agent_tasks at ON at.task_stage_id = ts.id
+            WHERE ts.epic_task_id IN (:epicIds)
+            GROUP BY ts.epic_task_id`,
+          {
+            replacements: { epicIds: epics.map((e) => e.id) },
+            type: QueryTypes.SELECT,
+          },
+        );
+        const countByEpic = new Map(taskCounts.map((r) => [r.epic_task_id, Number(r.task_count)]));
+
+        let summary =
+          `Found ${epics.length} epic task(s) between ${effectiveFrom.toISOString().slice(0, 10)} ` +
+          `and ${effectiveTo.toISOString().slice(0, 10)} (newest first):\n\n`;
+        for (const epic of epics) {
+          const taskCount = countByEpic.get(epic.id) ?? 0;
+          summary += `### ${epic.title}\n`;
+          summary += `- **Epic ID:** \`${epic.id}\`\n`;
+          summary += `- **Status:** ${epic.status}\n`;
+          summary += `- **Created:** ${epic.createdAt.toISOString()}\n`;
+          if (epic.completedAt) {
+            summary += `- **Completed:** ${epic.completedAt.toISOString()}\n`;
+          }
+          summary += `- **Tasks attached:** ${taskCount}\n`;
+          if (epic.description) {
+            const descPreview = epic.description.length > 240
+              ? epic.description.slice(0, 240) + "…"
+              : epic.description;
+            summary += `- **Description:** ${descPreview}\n`;
+          }
+          summary += "\n";
+        }
+        summary +=
+          `Once you've identified the epic the user means, call ` +
+          `\`get_epic_task_summaries\` with its \`epicId\` to retrieve the per-task summary ` +
+          `files and deliver them via \`send_file_to_user\`.`;
+        return summary;
+      } catch (err: any) {
+        logger.error("SearchEpicTasksByDate: failed", { error: err.message });
+        return `Error searching epic tasks: ${err.message}`;
+      }
+    },
+    {
+      name: "search_epic_tasks_by_date",
+      description:
+        "Search past epic tasks by creation date and return their id/title/description so you can " +
+        "identify which epic the user is asking about. Use this when the user references a past " +
+        "epic by time (\"what we did last week\", \"the planning we ran on Tuesday\", etc.) — " +
+        "results are paginated to 50, newest first. After the user confirms which epic they mean, " +
+        "call `get_epic_task_summaries` with that epic's id to fetch and deliver the saved per-task " +
+        "summary files.",
+      schema: z.object({
+        from: z.string().optional().describe(
+          "ISO 8601 lower bound for `created_at` (inclusive). Bare dates like '2026-04-22' are " +
+          "interpreted as start-of-day UTC. Omit for 'last 30 days'.",
+        ),
+        to: z.string().optional().describe(
+          "ISO 8601 upper bound for `created_at` (inclusive). Bare dates like '2026-04-22' are " +
+          "auto-extended to end-of-day UTC so the whole day is included. Omit for 'now'.",
+        ),
+      }),
+    },
+  );
+}
+
+// ─── Get all per-task summaries for an epic ─────────────────────────────────
+
+/**
+ * Returns the list of `agent_tasks.summary_file_path` rows for every task in
+ * the given epic, joined with task title and stage title for display. Tasks
+ * without a captured summary (`summary_file_path IS NULL`) are still listed
+ * so the orchestrator can tell the user "task X has no summary on file" —
+ * either because the run predates this feature, or the CLI skipped the
+ * mandatory summary write on that attempt.
+ *
+ * Paths returned are absolute (under `<agent.workspacePath>/`); the caller
+ * passes them straight to `send_file_to_user`, which accepts absolute paths
+ * inside the workspace.
+ */
+export function GetEpicTaskSummariesTool() {
+  return tool(
+    async (input) => {
+      try {
+        const epic = await EpicTask.findByPk(input.epicId, { attributes: ["id", "title"] });
+        if (!epic) {
+          return `Error: epic with id "${input.epicId}" not found.`;
+        }
+
+        const rows = await sequelize.query<{
+          task_id: string;
+          task_title: string;
+          task_status: string;
+          summary_file_path: string | null;
+          stage_title: string;
+          stage_kind: string;
+          stage_sort_order: number;
+          task_sort_order: number;
+        }>(
+          `SELECT at.id AS task_id,
+                  at.title AS task_title,
+                  at.status AS task_status,
+                  at.summary_file_path AS summary_file_path,
+                  ts.title AS stage_title,
+                  ts.kind AS stage_kind,
+                  ts.sort_order AS stage_sort_order,
+                  at.sort_order AS task_sort_order
+             FROM agent_tasks at
+             JOIN task_stages ts ON at.task_stage_id = ts.id
+            WHERE ts.epic_task_id = :epicId
+            ORDER BY ts.sort_order, at.sort_order`,
+          { replacements: { epicId: epic.id }, type: QueryTypes.SELECT },
+        );
+
+        if (rows.length === 0) {
+          return `Epic "${epic.title}" has no tasks.`;
+        }
+
+        const withSummary = rows.filter((r) => r.summary_file_path);
+        const withoutSummary = rows.filter((r) => !r.summary_file_path);
+
+        let result = `# Per-task summaries for epic "${epic.title}"\n\n`;
+        result += `**Total tasks:** ${rows.length} ` +
+          `(${withSummary.length} with saved summary, ${withoutSummary.length} without)\n\n`;
+
+        if (withSummary.length > 0) {
+          result += `## Tasks with saved summary files\n\n`;
+          result += `Pass each \`summaryFilePath\` below to \`send_file_to_user\` (the tool ` +
+            `accepts absolute workspace paths) and include the returned markdown chip in your ` +
+            `reply to the user.\n\n`;
+          for (const r of withSummary) {
+            result += `- **${r.task_title}** ` +
+              `(stage: "${r.stage_title}"${r.stage_kind === "plan" ? " — plan" : ""}, ` +
+              `task status: ${r.task_status})\n`;
+            result += `  - Task ID: \`${r.task_id}\`\n`;
+            result += `  - summaryFilePath: \`${r.summary_file_path}\`\n`;
+          }
+          result += "\n";
+        }
+
+        if (withoutSummary.length > 0) {
+          result += `## Tasks without saved summary\n\n`;
+          result +=
+            `These tasks either predate the per-task summary feature, or the CLI didn't write ` +
+            `the mandatory summary file on its run (rare — usually means a CLI error). Tell the ` +
+            `user the work happened but no summary file is on record; offer to retry the task ` +
+            `if they want one generated now.\n\n`;
+          for (const r of withoutSummary) {
+            result += `- **${r.task_title}** ` +
+              `(stage: "${r.stage_title}"${r.stage_kind === "plan" ? " — plan" : ""}, ` +
+              `task status: ${r.task_status}, Task ID: \`${r.task_id}\`)\n`;
+          }
+        }
+
+        return result;
+      } catch (err: any) {
+        logger.error("GetEpicTaskSummaries: failed", { error: err.message });
+        return `Error fetching epic task summaries: ${err.message}`;
+      }
+    },
+    {
+      name: "get_epic_task_summaries",
+      description:
+        "Fetches the saved per-task summary file paths for every task in an epic. Use this AFTER " +
+        "you've identified which epic the user is asking about (typically via " +
+        "`search_epic_tasks_by_date` followed by user confirmation). Returns absolute paths under " +
+        "the agent's workspace — pass each one to `send_file_to_user` and include the returned " +
+        "markdown chip in your reply so the user gets each summary as a downloadable attachment.\n\n" +
+        "Tasks without a captured summary are also listed (with a note) so the user knows about " +
+        "the gap rather than silently missing entries.",
+      schema: z.object({
+        epicId: z.string().uuid().describe(
+          "The id of the epic whose per-task summaries you want — typically copied verbatim from " +
+          "an earlier `search_epic_tasks_by_date` result the user has just confirmed.",
         ),
       }),
     },

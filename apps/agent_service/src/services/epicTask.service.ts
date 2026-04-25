@@ -261,48 +261,14 @@ export class EpicTaskService {
       title: epic.title,
     });
 
-    await this.enqueueEpicCompletionNotification(epic);
+    // No synthetic "epic complete → call get_epic_status and summarize"
+    // chat is enqueued anymore. The user's approval-of-final-stage turn
+    // already produced an "all stages are now complete — the epic is
+    // finished!" line in `approve_stage`'s tool result (see
+    // epicTaskTools.ts), so a follow-up auto-chat that just calls
+    // get_epic_status (which has nothing new to report) was redundant
+    // and ate context tokens for no reason.
 
     return true;
-  }
-
-  /**
-   * Sends a completion notification to the user via the orchestrator
-   * when the entire epic is finished.
-   */
-  private async enqueueEpicCompletionNotification(epic: EpicTask): Promise<void> {
-    try {
-      const singleChat = await SingleChat.findOne({
-        where: { agentId: epic.agentId, userId: epic.userId },
-        attributes: ["id"],
-      });
-
-      const requestId = `epic-completed-${epic.id}-${Date.now()}`;
-
-      await agentChatQueue.add("epic_completed", {
-        userId: epic.userId,
-        message:
-          `[Epic Completed] All stages and pull requests for epic "${epic.title}" (${epic.id}) ` +
-          `have been completed and approved. ` +
-          `Provide a final summary to the user of what was accomplished across all stages. ` +
-          `Use get_epic_status to review the full results, then congratulate the user.`,
-        requestId,
-        groupId: null,
-        singleChatId: singleChat?.id ?? null,
-        agentId: epic.agentId,
-        mentionsAgent: true,
-        displayName: "System",
-      } as any);
-
-      logger.info("Enqueued epic completion notification", {
-        epicTaskId: epic.id,
-        requestId,
-      });
-    } catch (err: any) {
-      logger.error("Failed to enqueue epic completion notification", {
-        epicTaskId: epic.id,
-        error: err.message,
-      });
-    }
   }
 }

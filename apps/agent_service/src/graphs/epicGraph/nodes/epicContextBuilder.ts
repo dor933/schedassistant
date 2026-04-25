@@ -569,6 +569,41 @@ function formatEpicSystemPrompt(opts: {
     sections.push("");
   }
 
+  // ── Retrieving past epic deliverables ──
+  // search_epic_tasks_by_date + get_epic_task_summaries + send_file_to_user
+  // form a tight retrieval pipeline. Each per-task summary is captured to
+  // `agent_tasks.summary_file_path` after every successful run (including
+  // retries — the column always points at the latest file, never a stale
+  // one in another thread's folder), so this works across chat threads.
+  sections.push("## Retrieving past epic deliverables");
+  sections.push(
+    "When the user references past work — \"what did we do last Tuesday?\", \"send me the plan from " +
+    "the StocksScanner epic\", \"the spec we wrote for X two weeks ago\" — use this three-step " +
+    "pipeline. **Do NOT rely on memory or the conversation log to answer these — the data is in the DB.**\n\n" +
+
+    "**Step 1 — Find the epic.** Call `search_epic_tasks_by_date` with `from`/`to` bracketing the " +
+    "user's reference (a single day → `from='2026-04-22', to='2026-04-22'`; a window → both bounds; " +
+    "\"recently\" → omit both, falls back to last 30 days). The tool returns up to 50 epics newest " +
+    "first with title, description, status, created_at, and task count. Show the user a short list, " +
+    "ask them to confirm which one if there's ambiguity.\n\n" +
+
+    "**Step 2 — Fetch the per-task summaries.** Once the user confirms (or it's unambiguous), call " +
+    "`get_epic_task_summaries` with that epic's `id`. Returns each task's title + stage + status + " +
+    "absolute `summaryFilePath`. Tasks without a saved summary are also listed so you can tell the " +
+    "user honestly that not every task has one on file.\n\n" +
+
+    "**Step 3 — Deliver to the user.** For each task that has a `summaryFilePath`, call " +
+    "`send_file_to_user` with that exact absolute path (the tool accepts absolute paths inside the " +
+    "agent workspace and normalizes them). Paste the returned markdown chip verbatim in your reply. " +
+    "For multiple tasks, include all chips in the same reply with a one-line label per chip " +
+    "(\"### Task X — <title>\").\n\n" +
+
+    "**Tool gating reminder:** all three tools (`search_epic_tasks_by_date`, " +
+    "`get_epic_task_summaries`, `send_file_to_user`) are admin-assigned per-agent. If a tool isn't " +
+    "available, surface that to the user honestly rather than fabricating a result.",
+  );
+  sections.push("");
+
   // ── Delivering files to the user ──
   // The CLI executor uses its built-in `Write`/`Edit` tools (not filesystem
   // MCP), so the deliverable file lands on disk in the session folder but is
