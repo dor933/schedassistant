@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { logger } from "../logger";
 
 /**
@@ -76,14 +75,6 @@ export interface ClaudeOauthTokenStatus {
   configured: boolean;
   masked: string | null;
   updatedAt: string | null;
-  /**
-   * Diagnostic: whether `process.env.CLAUDE_CODE_OAUTH_TOKEN` is currently
-   * set on the running agent_service Node process. Useful for confirming
-   * that `loadIntoEnv()` actually populated the env after a UI set, since
-   * `/proc/<pid>/environ` is an exec-time snapshot and won't reflect
-   * runtime mutations. Never reveals the token value itself.
-   */
-  processEnvSet: boolean;
 }
 
 /**
@@ -108,15 +99,13 @@ export function loadIntoEnv(): void {
 
 export function describe(): ClaudeOauthTokenStatus {
   const entry = readTokenFile();
-  const processEnvSet = !!process.env[ENV_VAR];
   if (!entry) {
-    return { configured: false, masked: null, updatedAt: null, processEnvSet };
+    return { configured: false, masked: null, updatedAt: null };
   }
   return {
     configured: true,
     masked: maskToken(entry.token),
     updatedAt: entry.updatedAt.toISOString(),
-    processEnvSet,
   };
 }
 
@@ -144,62 +133,4 @@ export function clear(): ClaudeOauthTokenStatus {
   deleteTokenFile();
   loadIntoEnv();
   return describe();
-}
-
-/**
- * Diagnostic probe: spawns `su-exec agent printenv CLAUDE_CODE_OAUTH_TOKEN`
- * with the *exact* same env recipe used for the Claude CLI spawn (process.env
- * spread, HOME pinned to the agent user's home), and reports whether the
- * agent-side process saw the variable. Never returns the token value — only
- * presence and length — so a super_admin can debug the chain without leaking
- * the secret into HTTP responses or logs.
- *
- * Use cases:
- *   - Confirm that `process.env[CLAUDE_CODE_OAUTH_TOKEN]` propagates through
- *     `su-exec` to the `agent` user (the suspicion that prompted this probe).
- *   - Detect a stripped-env build of `su-exec` (none known on Alpine, but
- *     belt-and-suspenders).
- */
-export function probeAgentSideEnv(): {
-  processEnvSet: boolean;
-  agentSawToken: boolean;
-  agentSeenLength: number;
-  exitCode: number | null;
-  error?: string;
-} {
-  const processEnvSet = !!process.env[ENV_VAR];
-
-  const result = spawnSync(
-    "su-exec",
-    ["agent", "printenv", ENV_VAR],
-    {
-      // Same recipe as `agentSpawnEnv()` in epicTaskUtils.ts — kept inline so
-      // this file has no dependency on the epic utils module.
-      env: { ...process.env, HOME: process.env.AGENT_HOME ?? "/home/agent" },
-      encoding: "utf-8",
-      timeout: 10_000,
-    },
-  );
-
-  if (result.error) {
-    return {
-      processEnvSet,
-      agentSawToken: false,
-      agentSeenLength: 0,
-      exitCode: null,
-      error: result.error.message,
-    };
-  }
-
-  // `printenv VAR` exits 0 with the value on stdout when set, or 1 with no
-  // output when missing. The token is intentionally not echoed back to the
-  // caller — only its length, so an admin can see "yes, agent received N
-  // characters" without the raw secret hitting the response body.
-  const stdout = (result.stdout ?? "").trim();
-  return {
-    processEnvSet,
-    agentSawToken: result.status === 0 && stdout.length > 0,
-    agentSeenLength: stdout.length,
-    exitCode: result.status,
-  };
 }
