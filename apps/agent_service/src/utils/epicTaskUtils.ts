@@ -1,4 +1,6 @@
 import { spawn, execSync, spawnSync } from "child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { QueryTypes } from "sequelize";
 import {
   sequelize,
@@ -9,6 +11,7 @@ import {
   TaskStage,
   AgentTask,
   TaskExecution,
+  Agent,
 } from "@scheduling-agent/database";
 import type {
   UserId,
@@ -30,6 +33,10 @@ import {
   buildArchitectureOverviewPrompt,
   MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
 } from "../services/architectureOverviewPrompt";
+import {
+  resolveSessionWorkspacePath,
+  recordSessionFileWrite,
+} from "../workspace/sessionWorkspace";
 
 // The agent_service container runs as root, but Claude CLI (and gh) must run
 // as the non-root `agent` user via `su-exec`. `su-exec` inherits env unchanged,
@@ -552,13 +559,13 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
   const task = await AgentTask.findByPk(taskId);
   if (!task) return;
 
-  // Look up the parent stage first — its `kind` decides whether all-tasks-
-  // completed should park at `pr_pending` (waiting for PR approval) or
-  // jump straight to `completed` (plan stages have no PR).
-  const stageBefore = await TaskStage.findByPk(task.taskStageId);
-  if (!stageBefore) return;
-
-  // Propagate to stage
+  // Propagate to stage. Plan stages park at `pr_pending` exactly like
+  // code-change stages so the user can review the produced plan/spec before
+  // explicitly approving it via `approve_stage` — auto-completing plan stages
+  // would skip review. The only difference is in the gating predicate
+  // (see `getReadyTasks` SQL): a `kind='plan'` previous stage clears as soon
+  // as it's `status='completed'`, without requiring `pr_status` because no
+  // PR ever exists.
   const stageTasks = await AgentTask.findAll({
     where: { taskStageId: task.taskStageId },
   });
@@ -567,10 +574,9 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
   let newStageStatus: TaskStageStatus;
 
   if (stageStatuses.every((s) => s === "completed")) {
-    // All tasks done. Code-change stages wait for PR approval; plan stages
-    // are pure research/design (no commits, no PR) so they're done now.
-    newStageStatus =
-      stageBefore.kind === ("plan" as TaskStageKind) ? "completed" : "pr_pending";
+    // All tasks done — wait for explicit user approval (PR for code_change,
+    // chat-confirmation for plan) before becoming "completed".
+    newStageStatus = "pr_pending";
   } else if (stageStatuses.some((s) => s === "failed")) {
     newStageStatus = "failed";
   } else if (stageStatuses.some((s) => s === "in_progress" || s === "ready")) {
@@ -579,18 +585,7 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
     newStageStatus = "pending";
   }
 
-  const stageUpdates: Record<string, unknown> = { status: newStageStatus };
-  // Stamp completedAt when a plan stage auto-completes here. For code-change
-  // stages the timestamp is set later when approve_stage / handlePrApproval
-  // marks them completed after PR approval.
-  const planJustCompleted =
-    newStageStatus === "completed" &&
-    stageBefore.kind === ("plan" as TaskStageKind) &&
-    !stageBefore.completedAt;
-  if (planJustCompleted) {
-    stageUpdates.completedAt = new Date();
-  }
-  await TaskStage.update(stageUpdates, { where: { id: task.taskStageId } });
+  await TaskStage.update({ status: newStageStatus }, { where: { id: task.taskStageId } });
 
   // Propagate to epic — never mark epic completed here;
   // epic completion is handled by handlePrApproval / force_approve_stage_pr
@@ -620,23 +615,6 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
     epicUpdates.completedAt = new Date();
   }
   await EpicTask.update(epicUpdates, { where: { id: stage.epicTaskId } });
-
-  // For plan stages that just auto-completed, immediately unblock the next
-  // stage's tasks (pending → ready) and trigger another propagation pass
-  // so the next stage's derived status flips to in_progress without waiting
-  // for executeTask to start the first task. This is the missing link that
-  // left epics stuck on a "completed" plan stage with the next stage still
-  // showing `pending`.
-  if (planJustCompleted) {
-    try {
-      await advanceNextStageReadyTasks(stage.epicTaskId);
-    } catch (err: any) {
-      logger.warn(
-        "propagateStatus: advanceNextStageReadyTasks after plan-stage auto-completion failed",
-        { stageId: stage.id, epicId: stage.epicTaskId, error: err?.message },
-      );
-    }
-  }
 }
 
 // ─── Update Task Status ──────────────────────────────────────────────────────
@@ -1699,7 +1677,27 @@ export async function createEpicWithPlan(data: {
  */
 export async function continueRemainingTasks(
   completedTaskId: string,
-  options: { cwd: string; allowedTools?: string; maxTurns?: number; systemPrompt?: string; agentName?: string },
+  options: {
+    cwd: string;
+    allowedTools?: string;
+    maxTurns?: number;
+    systemPrompt?: string;
+    agentName?: string;
+    /**
+     * When set, every successful sub-task execution gets archived as a .md
+     * file in the agent's per-thread session workspace via
+     * `persistEpicTaskResultToSession`. Optional so existing callers that
+     * don't have a thread context (none today) keep working.
+     *
+     * When `attachToChat` is also true, the tool result string returned to
+     * the orchestrator includes a signed-URL markdown link for each
+     * archived report — flagged with a "include verbatim in your reply"
+     * directive so the user actually receives the file in chat. This is set
+     * by the caller only when the orchestrator agent has the
+     * `send_file_to_user` tool active in `agent_available_tools`.
+     */
+    persistContext?: { agentId: AgentId; threadId: string; attachToChat: boolean };
+  },
 ): Promise<string | null> {
   const task = await AgentTask.findByPk(completedTaskId, {
     include: [{ model: TaskStage, as: "stage" }],
@@ -1713,6 +1711,10 @@ export async function continueRemainingTasks(
   });
 
   if (remaining.length === 0) return null;
+
+  // Imported lazily so this module's import graph stays cycle-free against
+  // sendFileTool (which lives under `tools/` and may itself import utils).
+  const { buildAttachmentUrl } = await import("../tools/sendFileTool");
 
   const results: string[] = [];
   for (const next of remaining) {
@@ -1729,7 +1731,40 @@ export async function continueRemainingTasks(
       agentName: options.agentName,
     });
 
-    results.push(await formatExecutionResult(execution, next.id));
+    const formatted = await formatExecutionResult(execution, next.id);
+    let withAttachment = formatted;
+
+    if (execution.status !== "failed" && options.persistContext) {
+      const persisted = await persistEpicTaskResultToSession({
+        agentId: options.persistContext.agentId,
+        threadId: options.persistContext.threadId,
+        taskId: next.id,
+        attemptNumber: (execution as { attemptNumber?: number }).attemptNumber ?? 1,
+        content: formatted,
+        taskTitle: next.title,
+      });
+      if (persisted && options.persistContext.attachToChat) {
+        try {
+          const url = buildAttachmentUrl(
+            options.persistContext.agentId,
+            persisted.workspaceRelPath,
+          );
+          withAttachment +=
+            `\n\n## Task Summary Attachment\n\n` +
+            `**MANDATORY — include the markdown link below verbatim in your reply ` +
+            `to the user so the chat UI renders the task summary as a downloadable ` +
+            `attachment chip:**\n\n` +
+            `[📎 ${persisted.fileName}](${url})\n`;
+        } catch (err: any) {
+          logger.warn("continueRemainingTasks: buildAttachmentUrl failed (non-fatal)", {
+            taskId: next.id,
+            error: err?.message,
+          });
+        }
+      }
+    }
+
+    results.push(withAttachment);
 
     if (execution.status === "failed") {
       results.push(`\n⚠ Task "${next.title}" failed. Stopping sequential execution.`);
@@ -2041,17 +2076,20 @@ export async function appendContinuationMarker(taskId: string): Promise<string> 
     // No more ready tasks — check if this stage just finished all tasks and needs PR action
     const freshStage = await TaskStage.findByPk(stage.id);
     if (freshStage && (freshStage.status === "pr_pending" || freshStage.status === "completed")) {
-      // Plan stages are pure research/design with no commits and no PR.
-      // propagateStatus has already moved them to `completed` and unblocked
-      // the next stage's tasks via advanceNextStageReadyTasks — there is
-      // nothing left to push, no PR to create. Surface a short note so the
-      // orchestrator's reply to the user reflects that the stage is done.
+      // Plan stages have no commits and no PR — review happens against the
+      // produced plan/spec text in the chat. Tell the orchestrator the stage
+      // is awaiting the user's explicit approval (the same `approve_stage`
+      // tool that handles code_change stages routes through the no-PR
+      // branch when there's no prNumber).
       if (freshStage.kind === ("plan" as TaskStageKind)) {
         return (
-          `\n\n## Plan Stage Completed\n\n` +
-          `Stage "${freshStage.title}" is a planning-only stage — no code changes ` +
-          `or pull request are needed. The next stage's tasks have been unblocked ` +
-          `automatically and will be executed on the next turn.`
+          `\n\n## Plan Stage Awaiting Review\n\n` +
+          `Stage "${freshStage.title}" is a planning-only stage — no code changes, no PR.\n` +
+          `All its tasks are complete. **The next stage will not start until the user ` +
+          `explicitly approves this plan.**\n\n` +
+          `Summarize the plan for the user and wait for their approval. Once they ` +
+          `confirm, call \`approve_stage\` with their verbatim authorization quote — ` +
+          `that will mark this stage as completed and unblock the next stage's tasks.`
         );
       }
 
@@ -2159,6 +2197,13 @@ async function formatReviewActionForCompletedTask(taskId: string): Promise<strin
 
   const stageRow = await TaskStage.findByPk(stage.id);
   if (stageRow?.status === ("pr_pending" as TaskStageStatus)) {
+    if (stageRow.kind === ("plan" as TaskStageKind)) {
+      return (
+        `\n**Action:** **This plan stage is complete** and is **waiting for the user to review and approve** — ` +
+        `do **not** call \`execute_epic_task\` to start the next stage until they confirm. ` +
+        `Summarize the plan, ask for approval, then call \`approve_stage\` with their verbatim quote. ${RETRY_EPIC_TASK_HINT}`
+      );
+    }
     return (
       `\n**Action:** **This stage is complete** and is **waiting for PR approval** — do **not** call ` +
       `\`execute_epic_task\` to start the next stage until this PR is approved (or handled via \`approve_stage\` / your workflow). ` +
@@ -2174,6 +2219,123 @@ async function formatReviewActionForCompletedTask(taskId: string): Promise<strin
   return (
     `\n**Action:** No task is currently in the ready queue. Use \`get_epic_status\` to see the epic state (e.g. waiting on PR approval). ${RETRY_EPIC_TASK_HINT}`
   );
+}
+
+/**
+ * Result of {@link persistEpicTaskResultToSession}.
+ *
+ * `workspaceRelPath` is the canonical forward-slash path RELATIVE TO THE
+ * AGENT'S WORKSPACE ROOT (e.g. `threads/<threadId>/epic-task-….md`) — the
+ * exact form `send_file_to_user` / `buildAttachmentUrl` expects, and the form
+ * the HMAC signature is computed over by `signAttachment`.
+ *
+ * `sessionRelPath` is relative to the per-thread session folder
+ * (`<workspace>/threads/<threadId>/`) — what `recordSessionFileWrite` stores
+ * in the session ledger so the chat UI can surface it as a session chip.
+ */
+export interface EpicTaskSessionPersistence {
+  workspaceRelPath: string;
+  sessionRelPath: string;
+  fileName: string;
+}
+
+/**
+ * Persist a successful task-execution report into the agent's per-thread
+ * session workspace as a .md file, and record the write into the session
+ * ledger so the UI surfaces it as a session file chip.
+ *
+ * Best-effort: every failure path is swallowed and logged — auto-archiving a
+ * report should never break the orchestrator's reply. Returns the persisted
+ * paths on success, or `null` when nothing was written (no agent workspace,
+ * no threadId, fs error, …).
+ */
+export async function persistEpicTaskResultToSession(args: {
+  agentId: AgentId;
+  threadId: string | null | undefined;
+  taskId: AgentTaskId;
+  /** 1-based attempt number (matches `task_executions.attempt_number`). */
+  attemptNumber: number;
+  /** The full markdown body to persist. */
+  content: string;
+  /** Optional task title — used to build a human-readable filename slug. */
+  taskTitle?: string;
+}): Promise<EpicTaskSessionPersistence | null> {
+  if (!args.threadId) return null;
+  if (!args.content || !args.content.trim()) return null;
+
+  try {
+    const agent = await Agent.findByPk(args.agentId, {
+      attributes: ["id", "workspacePath"],
+    });
+    const workspacePath = (agent as { workspacePath?: string | null } | null)?.workspacePath ?? null;
+    if (!workspacePath) return null;
+
+    const sessionRoot = resolveSessionWorkspacePath(workspacePath, args.threadId);
+    if (!sessionRoot) return null;
+
+    fs.mkdirSync(sessionRoot, { recursive: true });
+
+    const slug = sanitizeFilenameSlug(args.taskTitle ?? "epic-task");
+    const shortTaskId = String(args.taskId).slice(0, 8);
+    const fileName = `epic-task-${shortTaskId}-${slug}-attempt-${args.attemptNumber}.md`;
+    const absPath = path.join(sessionRoot, fileName);
+
+    // Two distinct paths:
+    //   - sessionRelPath: relative to <workspace>/threads/<threadId>/ — what
+    //     the per-thread session ledger stores so UI chips line up with other
+    //     session files.
+    //   - workspaceRelPath: relative to <workspace>/ — the canonical form
+    //     `send_file_to_user`/`buildAttachmentUrl` use. The HMAC is computed
+    //     over this exact string, so the download endpoint will resolve it.
+    const sessionRelPath = fileName;
+    const workspaceRelPath = path.posix.join("threads", args.threadId, fileName);
+
+    fs.writeFileSync(absPath, args.content, "utf-8");
+
+    let bytes = 0;
+    try {
+      bytes = fs.statSync(absPath).size;
+    } catch {
+      // Non-fatal — bytes is best-effort.
+    }
+
+    const nowIso = new Date().toISOString();
+    recordSessionFileWrite(args.threadId, {
+      path: sessionRelPath,
+      bytes,
+      updatedAt: nowIso,
+      source: "epic_orchestrator:execute_epic_task",
+    });
+
+    logger.info("persistEpicTaskResultToSession: wrote execution report", {
+      taskId: args.taskId,
+      attempt: args.attemptNumber,
+      workspaceRelPath,
+      bytes,
+    });
+    return { workspaceRelPath, sessionRelPath, fileName };
+  } catch (err: any) {
+    logger.warn("persistEpicTaskResultToSession: write failed (non-fatal)", {
+      taskId: args.taskId,
+      error: err?.message,
+    });
+    return null;
+  }
+}
+
+/**
+ * Lower-cases a string and strips it down to ASCII alphanumerics + dashes
+ * so it's safe to drop into a filename. Caps length so a sprawling task
+ * title doesn't push the path past Windows' MAX_PATH for shared workspaces.
+ */
+function sanitizeFilenameSlug(raw: string): string {
+  const ascii = raw
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!ascii) return "task";
+  return ascii.length > 60 ? ascii.slice(0, 60) : ascii;
 }
 
 export async function formatExecutionResult(execution: any, taskId: string): Promise<string> {

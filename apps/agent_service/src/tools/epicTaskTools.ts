@@ -30,12 +30,15 @@ import {
   continueRemainingTasks,
   appendContinuationMarker,
   formatExecutionResult,
+  persistEpicTaskResultToSession,
   resolveActiveEpic,
   resolveActivePrPendingStage,
   resolveNextRetryableTask,
   EPIC_CONTINUATION_MARKER,
   parseContinuationMarker,
 } from "../utils/epicTaskUtils";
+import { loadActiveToolSlugs } from "./resolveAgentTools";
+import { buildAttachmentUrl } from "./sendFileTool";
 
 // Re-export utils that are imported by other modules
 export { getReadyTasks, parseContinuationMarker, EPIC_CONTINUATION_MARKER };
@@ -239,12 +242,15 @@ export function CreateEpicPlanTool(userId: number, agentId: string) {
         "Create a full epic task plan for a coding project. This creates an epic with stages and agent tasks within " +
         "each stage — all in one atomic operation. Use this after you have analyzed the user's request and broken it " +
         "down into concrete stages and tasks. Tasks within a stage are executed sequentially in the order they are defined.\n\n" +
+        "Every stage requires explicit user approval before the next stage starts — call `approve_stage` with the user's " +
+        "verbatim approval quote.\n\n" +
         "Stage kinds:\n" +
-        "- 'code_change' (default): the stage produces commits and a pull request. The next stage is gated on PR " +
-        "approval — it starts only after the user approves the PR.\n" +
-        "- 'plan': pure research/design/specification work that produces NO code changes. No commits, no PR. The " +
-        "stage auto-completes as soon as all its tasks finish, and the next stage's tasks are unblocked immediately. " +
-        "Use this for stages whose task descriptions explicitly say 'planning only', 'no code changes', 'produce a spec', etc.",
+        "- 'code_change' (default): the stage produces commits and a pull request. The user reviews the PR; once they " +
+        "approve, the next stage's tasks are unblocked automatically.\n" +
+        "- 'plan': pure research/design/specification work that produces NO code changes. No commits, no PR. The user " +
+        "reviews the plan/spec text in the chat itself — the orchestrator must summarize it, ask for approval, then call " +
+        "`approve_stage` with their verbatim quote. Use this for stages whose task descriptions explicitly say " +
+        "'planning only', 'no code changes', 'produce a spec', etc.",
       schema: z.object({
         title: z.string().min(1).describe("Short title for the epic (e.g. 'Add user authentication')"),
         description: z.string().min(1).describe("Detailed description of the overall task as instructed by the user"),
@@ -341,14 +347,19 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
         if (!firstTask) {
           const fullEpic = await getEpic(epicId, { includeStages: true, includeTasks: true });
           const stages = ((fullEpic as any)?.stages ?? []) as any[];
-          const waitingForPr = stages.filter((s) => s.status === "pr_pending");
-          if (waitingForPr.length > 0) {
-            const stageNames = waitingForPr
-              .map((s) => `"${s.title}" (PR #${s.prNumber ?? "not opened"})`)
+          const waitingForReview = stages.filter((s) => s.status === "pr_pending");
+          if (waitingForReview.length > 0) {
+            const labels = waitingForReview
+              .map((s) =>
+                s.kind === "plan"
+                  ? `"${s.title}" (plan — awaiting your approval)`
+                  : `"${s.title}" (PR #${s.prNumber ?? "not opened"})`,
+              )
               .join(", ");
             return (
-              `No tasks are ready to execute. Waiting for PR approval on: ${stageNames}.\n` +
-              `Inform the user that the next tasks are blocked until these PRs are approved.`
+              `No tasks are ready to execute. Waiting for review/approval on: ${labels}.\n` +
+              `For code_change stages, the next stage starts when the PR is approved. ` +
+              `For plan stages, summarize the plan to the user and call approve_stage with their verbatim approval quote.`
             );
           }
           if (epic.status === "completed") {
@@ -422,10 +433,56 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
             agentName,
           });
 
-          let result = await formatExecutionResult(execution, firstTask.id);
+          const formattedFirst = await formatExecutionResult(execution, firstTask.id);
+          let result = formattedFirst;
+          // Persist the per-task report into the agent's session folder on
+          // success so the user can review it later as a .md attachment.
+          // threadId comes from `conversationCtx`, which is populated for
+          // every chat-driven invocation; no-op for non-chat callers.
+          //
+          // When the orchestrator agent has `send_file_to_user` active, also
+          // build a signed-URL markdown link and embed it in the tool result
+          // with a "verbatim in reply" directive so the user receives the
+          // summary as a downloadable attachment in chat.
+          const activeSlugsForAttach = await loadActiveToolSlugs(epic.agentId);
+          const canAttachToChat = activeSlugsForAttach.has("send_file_to_user");
+          const persistContext = conversationCtx?.threadId
+            ? {
+                agentId: epic.agentId,
+                threadId: conversationCtx.threadId,
+                attachToChat: canAttachToChat,
+              }
+            : undefined;
+          if (execution.status !== "failed" && persistContext) {
+            const persisted = await persistEpicTaskResultToSession({
+              agentId: persistContext.agentId,
+              threadId: persistContext.threadId,
+              taskId: firstTask.id,
+              attemptNumber: (execution as { attemptNumber?: number }).attemptNumber ?? 1,
+              content: formattedFirst,
+              taskTitle: firstTask.title,
+            });
+            if (persisted && persistContext.attachToChat) {
+              try {
+                const url = buildAttachmentUrl(persistContext.agentId, persisted.workspaceRelPath);
+                result +=
+                  `\n\n## Task Summary Attachment\n\n` +
+                  `**MANDATORY — include the markdown link below verbatim in your reply ` +
+                  `to the user so the chat UI renders the task summary as a downloadable ` +
+                  `attachment chip:**\n\n` +
+                  `[📎 ${persisted.fileName}](${url})\n`;
+              } catch (err: any) {
+                logger.warn("ExecuteEpicTask: buildAttachmentUrl failed (non-fatal)", {
+                  taskId: firstTask.id,
+                  error: err?.message,
+                });
+              }
+            }
+          }
           if (execution.status !== "failed") {
             const contResult = await continueRemainingTasks(firstTask.id, {
               cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt, agentName,
+              persistContext,
             });
             if (contResult) result += "\n\n---\n\n" + contResult;
           }
@@ -448,10 +505,47 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
           agentName,
         });
 
-        let result = await formatExecutionResult(execution, firstTask.id);
+        const formattedFirst = await formatExecutionResult(execution, firstTask.id);
+        let result = formattedFirst;
+        const activeSlugsForAttach = await loadActiveToolSlugs(epic.agentId);
+        const canAttachToChat = activeSlugsForAttach.has("send_file_to_user");
+        const persistContext = conversationCtx?.threadId
+          ? {
+              agentId: epic.agentId,
+              threadId: conversationCtx.threadId,
+              attachToChat: canAttachToChat,
+            }
+          : undefined;
+        if (execution.status !== "failed" && persistContext) {
+          const persisted = await persistEpicTaskResultToSession({
+            agentId: persistContext.agentId,
+            threadId: persistContext.threadId,
+            taskId: firstTask.id,
+            attemptNumber: (execution as { attemptNumber?: number }).attemptNumber ?? 1,
+            content: formattedFirst,
+            taskTitle: firstTask.title,
+          });
+          if (persisted && persistContext.attachToChat) {
+            try {
+              const url = buildAttachmentUrl(persistContext.agentId, persisted.workspaceRelPath);
+              result +=
+                `\n\n## Task Summary Attachment\n\n` +
+                `**MANDATORY — include the markdown link below verbatim in your reply ` +
+                `to the user so the chat UI renders the task summary as a downloadable ` +
+                `attachment chip:**\n\n` +
+                `[📎 ${persisted.fileName}](${url})\n`;
+            } catch (err: any) {
+              logger.warn("ExecuteEpicTask: buildAttachmentUrl failed (non-fatal)", {
+                taskId: firstTask.id,
+                error: err?.message,
+              });
+            }
+          }
+        }
         if (execution.status !== "failed") {
           const contResult = await continueRemainingTasks(firstTask.id, {
             cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt, agentName,
+            persistContext,
           });
           if (contResult) result += "\n\n---\n\n" + contResult;
         }
@@ -570,11 +664,19 @@ export function GetEpicStatusTool() {
           summary += `Ready to execute: ${readyTasks.map((t) => `"${t.title}"`).join(", ")}\n`;
         }
 
-        // Flag stages that need attention. Plan stages don't go through
-        // pr_pending and don't have PRs, so the PR-related warnings only
-        // apply to code_change stages.
+        // Flag stages that need attention. Plan stages park at `pr_pending`
+        // for user review even though they don't produce a PR — surface that
+        // explicitly so the orchestrator knows to ask for approval rather
+        // than chasing a missing PR.
         for (const stage of stages) {
-          if (stage.kind === "plan") continue;
+          if (stage.kind === "plan") {
+            if (stage.status === "pr_pending") {
+              summary +=
+                `\n⏳ Plan stage "${stage.title}" is awaiting the user's review and approval. ` +
+                `No PR — call \`approve_stage\` with the user's verbatim approval quote to continue.\n`;
+            }
+            continue;
+          }
           if (stage.status === "pr_pending" && !stage.prNumber) {
             summary +=
               `\n⚠ Stage "${stage.title}" tasks are done but no PR was created yet. ` +
