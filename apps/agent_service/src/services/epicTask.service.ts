@@ -1,7 +1,6 @@
-import { TaskStage, AgentTask, EpicTask, TaskExecution, SingleChat, sequelize } from "@scheduling-agent/database";
-import { QueryTypes } from "sequelize";
-import type { AgentTaskStatus, PrStatus, EpicTaskId } from "@scheduling-agent/types";
-import { getReadyTasks } from "../utils/epicTaskUtils";
+import { TaskStage, AgentTask, EpicTask, TaskExecution, SingleChat } from "@scheduling-agent/database";
+import type { AgentTaskStatus, PrStatus } from "@scheduling-agent/types";
+import { advanceNextStageReadyTasks } from "../utils/epicTaskUtils";
 import { agentChatQueue } from "../queues/agentChat.bull";
 import { logger } from "../logger";
 
@@ -24,34 +23,17 @@ export class EpicTaskService {
       completedAt: new Date(),
     });
 
-    // Find pending tasks in the next stage(s) that are now unblocked by this PR approval
-    const newlyReady = await sequelize.query<AgentTask>(
-      `SELECT at.*
-       FROM agent_tasks at
-       JOIN task_stages ts ON at.task_stage_id = ts.id
-       WHERE ts.epic_task_id = :epicId
-         AND at.status = 'pending'
-         -- All previous stages must be completed AND PR-approved
-         AND NOT EXISTS (
-           SELECT 1
-           FROM task_stages prev
-           WHERE prev.epic_task_id = ts.epic_task_id
-             AND prev.sort_order < ts.sort_order
-             AND (
-               prev.status <> 'completed'
-               OR COALESCE(prev.pr_status, 'none') NOT IN ('approved', 'merged')
-             )
-         )
-       ORDER BY ts.sort_order, at.sort_order`,
-      { replacements: { epicId: stage.epicTaskId }, type: QueryTypes.SELECT },
-    );
+    // Unblock next-stage tasks AND propagate the next stage's derived status
+    // (pending → in_progress) in one call. The shared helper also handles the
+    // `kind='plan'` skip-PR gate, so a `code_change` stage approved here can
+    // unblock a chain that includes a later plan stage correctly.
+    const newlyReadyIds = await advanceNextStageReadyTasks(stage.epicTaskId);
+    const newlyReady =
+      newlyReadyIds.length > 0
+        ? await AgentTask.findAll({ where: { id: newlyReadyIds } })
+        : [];
 
     if (newlyReady.length > 0) {
-      await AgentTask.update(
-        { status: "ready" as AgentTaskStatus },
-        { where: { id: newlyReady.map((t) => t.id) } },
-      );
-
       // Auto-continue: enqueue a job so the orchestrator picks up the next stage
       await this.enqueueEpicContinuation(stage.epicTaskId, newlyReady.length);
     }

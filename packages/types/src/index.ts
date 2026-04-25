@@ -526,6 +526,12 @@ export type TaskExecutionId = string;
 
 export type EpicTaskStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
 export type TaskStageStatus = "pending" | "in_progress" | "pr_pending" | "completed" | "failed" | "cancelled";
+/**
+ * "code_change": default — produces commits and a PR; gates next stage on PR approval.
+ * "plan":        research/design only — no commits, no PR; auto-completes and unblocks
+ *                the next stage as soon as all its tasks finish.
+ */
+export type TaskStageKind = "code_change" | "plan";
 export type AgentTaskStatus = "pending" | "ready" | "in_progress" | "completed" | "failed" | "cancelled";
 export type TaskExecutionStatus = "running" | "completed" | "failed" | "cancelled";
 export type PrStatus = "draft" | "open" | "approved" | "merged" | "closed" | "changes_requested";
@@ -590,6 +596,7 @@ export interface TaskStageAttributes {
   title: string;
   description: string | null;
   status: TaskStageStatus;
+  kind: TaskStageKind;
   sortOrder: number;
   prUrl: string | null;
   prNumber: number | null;

@@ -1,9 +1,7 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { execSync } from "child_process";
-import { QueryTypes } from "sequelize";
 import {
-  sequelize,
   Repository,
   EpicTask,
   TaskStage,
@@ -21,6 +19,7 @@ import {
   getProject,
   getEpic,
   getReadyTasks,
+  advanceNextStageReadyTasks,
   createEpicWithPlan,
   executeTask,
   prepareRetry,
@@ -237,12 +236,15 @@ export function CreateEpicPlanTool(userId: number, agentId: string) {
     {
       name: "create_epic_plan",
       description:
-        "Create a full epic task plan for a coding project. This creates an epic with stages (each stage = one PR) " +
-        "and agent tasks within each stage — all in one atomic operation. " +
-        "Use this after you have analyzed the user's request and broken it down into concrete stages and tasks. " +
-        "Each stage groups related tasks that will be submitted together in a single pull request. " +
-        "Tasks within a stage are executed sequentially in the order they are defined. " +
-        "Cross-stage execution is gated by PR approval — the next stage starts only after the previous stage's PR is approved.",
+        "Create a full epic task plan for a coding project. This creates an epic with stages and agent tasks within " +
+        "each stage — all in one atomic operation. Use this after you have analyzed the user's request and broken it " +
+        "down into concrete stages and tasks. Tasks within a stage are executed sequentially in the order they are defined.\n\n" +
+        "Stage kinds:\n" +
+        "- 'code_change' (default): the stage produces commits and a pull request. The next stage is gated on PR " +
+        "approval — it starts only after the user approves the PR.\n" +
+        "- 'plan': pure research/design/specification work that produces NO code changes. No commits, no PR. The " +
+        "stage auto-completes as soon as all its tasks finish, and the next stage's tasks are unblocked immediately. " +
+        "Use this for stages whose task descriptions explicitly say 'planning only', 'no code changes', 'produce a spec', etc.",
       schema: z.object({
         title: z.string().min(1).describe("Short title for the epic (e.g. 'Add user authentication')"),
         description: z.string().min(1).describe("Detailed description of the overall task as instructed by the user"),
@@ -252,6 +254,11 @@ export function CreateEpicPlanTool(userId: number, agentId: string) {
         stages: z.array(z.object({
           title: z.string().min(1).describe("Stage name (e.g. 'Backend API', 'Client side', 'Database migrations')"),
           description: z.string().optional().describe("What this stage covers"),
+          kind: z.enum(["code_change", "plan"]).optional()
+            .describe(
+              "Stage kind. Default 'code_change' — produces a PR. Use 'plan' for stages that are pure " +
+              "planning/research/spec work with no code changes; those stages skip PR creation and auto-unblock the next stage.",
+            ),
           tasks: z.array(z.object({
             title: z.string().min(1).describe("Short task title"),
             description: z.string().optional()
@@ -522,7 +529,10 @@ export function GetEpicStatusTool() {
           const prInfo = stage.prUrl
             ? ` | PR: ${stage.prUrl} (${stage.prStatus})`
             : "";
-          summary += `Stage "${stage.title}" — ${stage.status}${prInfo}\n`;
+          // Tag plan stages so the user/orchestrator sees they will not
+          // produce a PR. Code-change stages stay un-tagged (default).
+          const kindTag = stage.kind === "plan" ? " (plan — no PR)" : "";
+          summary += `Stage "${stage.title}"${kindTag} — ${stage.status}${prInfo}\n`;
 
           for (const task of tasks) {
             const executions = task.executions ?? [];
@@ -560,8 +570,11 @@ export function GetEpicStatusTool() {
           summary += `Ready to execute: ${readyTasks.map((t) => `"${t.title}"`).join(", ")}\n`;
         }
 
-        // Flag stages that need attention
+        // Flag stages that need attention. Plan stages don't go through
+        // pr_pending and don't have PRs, so the PR-related warnings only
+        // apply to code_change stages.
         for (const stage of stages) {
+          if (stage.kind === "plan") continue;
           if (stage.status === "pr_pending" && !stage.prNumber) {
             summary +=
               `\n⚠ Stage "${stage.title}" tasks are done but no PR was created yet. ` +
@@ -934,30 +947,10 @@ export function ApproveStageTool() {
           completedAt: new Date(),
         });
 
-        // Check if there are next-stage tasks to unblock
-        const nextStageTasks = await sequelize.query<AgentTask>(
-          `SELECT at.*
-           FROM agent_tasks at
-           JOIN task_stages ts ON at.task_stage_id = ts.id
-           WHERE ts.epic_task_id = :epicId
-             AND at.status = 'pending'
-             AND NOT EXISTS (
-               SELECT 1
-               FROM task_stages prev
-               WHERE prev.epic_task_id = ts.epic_task_id
-                 AND prev.sort_order < ts.sort_order
-                 AND prev.status <> 'completed'
-             )
-           ORDER BY ts.sort_order, at.sort_order`,
-          { replacements: { epicId: stage.epicTaskId }, type: QueryTypes.SELECT },
-        );
-
-        if (nextStageTasks.length > 0) {
-          await AgentTask.update(
-            { status: "ready" as AgentTaskStatus },
-            { where: { id: nextStageTasks.map((t) => t.id) } },
-          );
-        }
+        // Unblock next-stage tasks AND propagate that stage's derived status
+        // (pending → in_progress) in one call, so the orchestrator's next
+        // turn doesn't have to start a task before the UI catches up.
+        const newlyReadyIds = await advanceNextStageReadyTasks(stage.epicTaskId);
 
         // Check if epic is fully done
         const { EpicTaskService } = await import("../services/epicTask.service");
@@ -967,6 +960,7 @@ export function ApproveStageTool() {
         logger.info("Stage approved manually via chat (no PR)", {
           stageId: stage.id,
           userQuote: quote,
+          newlyReadyCount: newlyReadyIds.length,
         });
 
         let summary =
@@ -975,8 +969,8 @@ export function ApproveStageTool() {
 
         if (epicCompleted) {
           summary += `All stages are now complete — the epic is finished!`;
-        } else if (nextStageTasks.length > 0) {
-          summary += `${nextStageTasks.length} task(s) in the next stage are now ready and will be executed automatically.`;
+        } else if (newlyReadyIds.length > 0) {
+          summary += `${newlyReadyIds.length} task(s) in the next stage are now ready and will be executed automatically.`;
         } else {
           summary += `No new tasks were unblocked.`;
         }

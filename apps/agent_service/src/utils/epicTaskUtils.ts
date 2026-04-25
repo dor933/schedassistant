@@ -20,6 +20,7 @@ import type {
   TaskExecutionId,
   EpicTaskStatus,
   TaskStageStatus,
+  TaskStageKind,
   AgentTaskStatus,
   TaskExecutionStatus,
   PrStatus,
@@ -339,7 +340,10 @@ export async function getReadyTasks(epicId: EpicTaskId): Promise<AgentTask[]> {
      JOIN task_stages ts ON at.task_stage_id = ts.id
      WHERE ts.epic_task_id = :epicId
        AND at.status = 'ready'
-       -- Block if ANY earlier stage is not completed OR its PR is not approved/merged
+       -- Block if ANY earlier stage is not completed, OR — for code_change
+       -- stages — its PR is not approved/merged. Plan stages skip the
+       -- pr_status check entirely: they never produce a PR, so once the
+       -- stage is 'completed' the gate is cleared.
        AND NOT EXISTS (
          SELECT 1
          FROM task_stages prev_stage
@@ -347,7 +351,10 @@ export async function getReadyTasks(epicId: EpicTaskId): Promise<AgentTask[]> {
            AND prev_stage.sort_order < ts.sort_order
            AND (
              prev_stage.status <> 'completed'
-             OR COALESCE(prev_stage.pr_status, 'none') NOT IN ('approved', 'merged')
+             OR (
+               prev_stage.kind = 'code_change'
+               AND COALESCE(prev_stage.pr_status, 'none') NOT IN ('approved', 'merged')
+             )
            )
        )
      ORDER BY ts.sort_order, at.sort_order`,
@@ -357,6 +364,75 @@ export async function getReadyTasks(epicId: EpicTaskId): Promise<AgentTask[]> {
     },
   );
   return results;
+}
+
+/**
+ * Flip the next stage's `pending` agent tasks to `ready` once their preceding
+ * stages are all cleared (completed AND, for code_change stages, PR
+ * approved/merged), and run `propagateStatus` once so the next stage's
+ * derived status (`pending` → `in_progress`) catches up immediately rather
+ * than waiting for `executeTask` to start the first task.
+ *
+ * Single source of truth shared by:
+ *   - `propagateStatus` auto-completion of `kind='plan'` stages
+ *   - `approve_stage` no-PR branch
+ *   - `EpicTaskService.handlePrApproval` (PR-approved branch)
+ *
+ * Returns the agent task IDs that were promoted to `ready` so callers can
+ * surface a "N task(s) unblocked" message and decide whether to enqueue an
+ * orchestrator continuation.
+ */
+export async function advanceNextStageReadyTasks(
+  epicId: EpicTaskId,
+): Promise<AgentTaskId[]> {
+  const newlyReady = await sequelize.query<AgentTask>(
+    `SELECT at.*
+       FROM agent_tasks at
+       JOIN task_stages ts ON at.task_stage_id = ts.id
+      WHERE ts.epic_task_id = :epicId
+        AND at.status = 'pending'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM task_stages prev_stage
+          WHERE prev_stage.epic_task_id = ts.epic_task_id
+            AND prev_stage.sort_order < ts.sort_order
+            AND (
+              prev_stage.status <> 'completed'
+              OR (
+                prev_stage.kind = 'code_change'
+                AND COALESCE(prev_stage.pr_status, 'none') NOT IN ('approved', 'merged')
+              )
+            )
+        )
+      ORDER BY ts.sort_order, at.sort_order`,
+    { replacements: { epicId }, type: QueryTypes.SELECT },
+  );
+
+  if (newlyReady.length === 0) return [];
+
+  const ids = newlyReady.map((t) => t.id);
+  await AgentTask.update(
+    { status: "ready" as AgentTaskStatus },
+    { where: { id: ids } },
+  );
+
+  // One propagateStatus call is enough: it recomputes the touched task's
+  // stage and the epic. If the unblocked tasks span multiple stages (rare —
+  // requires consecutive plan stages with empty task lists), the SQL pulls
+  // them ordered by sort_order so the first ID belongs to the earliest stage,
+  // and subsequent stages will be picked up the next time any task in them
+  // moves through updateTaskStatus.
+  try {
+    await propagateStatus(ids[0]);
+  } catch (err: any) {
+    logger.warn("advanceNextStageReadyTasks: propagateStatus failed (status will catch up on next task transition)", {
+      epicId,
+      taskId: ids[0],
+      error: err?.message,
+    });
+  }
+
+  return ids;
 }
 
 // ─── Active-state Resolvers ────────────────────────────────────────────────
@@ -476,6 +552,12 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
   const task = await AgentTask.findByPk(taskId);
   if (!task) return;
 
+  // Look up the parent stage first — its `kind` decides whether all-tasks-
+  // completed should park at `pr_pending` (waiting for PR approval) or
+  // jump straight to `completed` (plan stages have no PR).
+  const stageBefore = await TaskStage.findByPk(task.taskStageId);
+  if (!stageBefore) return;
+
   // Propagate to stage
   const stageTasks = await AgentTask.findAll({
     where: { taskStageId: task.taskStageId },
@@ -485,8 +567,10 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
   let newStageStatus: TaskStageStatus;
 
   if (stageStatuses.every((s) => s === "completed")) {
-    // All tasks done — stage waits for PR approval before becoming "completed"
-    newStageStatus = "pr_pending";
+    // All tasks done. Code-change stages wait for PR approval; plan stages
+    // are pure research/design (no commits, no PR) so they're done now.
+    newStageStatus =
+      stageBefore.kind === ("plan" as TaskStageKind) ? "completed" : "pr_pending";
   } else if (stageStatuses.some((s) => s === "failed")) {
     newStageStatus = "failed";
   } else if (stageStatuses.some((s) => s === "in_progress" || s === "ready")) {
@@ -496,6 +580,16 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
   }
 
   const stageUpdates: Record<string, unknown> = { status: newStageStatus };
+  // Stamp completedAt when a plan stage auto-completes here. For code-change
+  // stages the timestamp is set later when approve_stage / handlePrApproval
+  // marks them completed after PR approval.
+  const planJustCompleted =
+    newStageStatus === "completed" &&
+    stageBefore.kind === ("plan" as TaskStageKind) &&
+    !stageBefore.completedAt;
+  if (planJustCompleted) {
+    stageUpdates.completedAt = new Date();
+  }
   await TaskStage.update(stageUpdates, { where: { id: task.taskStageId } });
 
   // Propagate to epic — never mark epic completed here;
@@ -527,6 +621,22 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
   }
   await EpicTask.update(epicUpdates, { where: { id: stage.epicTaskId } });
 
+  // For plan stages that just auto-completed, immediately unblock the next
+  // stage's tasks (pending → ready) and trigger another propagation pass
+  // so the next stage's derived status flips to in_progress without waiting
+  // for executeTask to start the first task. This is the missing link that
+  // left epics stuck on a "completed" plan stage with the next stage still
+  // showing `pending`.
+  if (planJustCompleted) {
+    try {
+      await advanceNextStageReadyTasks(stage.epicTaskId);
+    } catch (err: any) {
+      logger.warn(
+        "propagateStatus: advanceNextStageReadyTasks after plan-stage auto-completion failed",
+        { stageId: stage.id, epicId: stage.epicTaskId, error: err?.message },
+      );
+    }
+  }
 }
 
 // ─── Update Task Status ──────────────────────────────────────────────────────
@@ -1478,6 +1588,7 @@ export async function createEpicWithPlan(data: {
   stages: Array<{
     title: string;
     description?: string;
+    kind?: TaskStageKind;
     tasks: Array<{
       title: string;
       description?: string;
@@ -1516,6 +1627,7 @@ export async function createEpicWithPlan(data: {
           epicTaskId: epic.id,
           title: stageData.title,
           description: stageData.description,
+          kind: stageData.kind ?? ("code_change" as TaskStageKind),
           sortOrder: si,
         },
         { transaction },
@@ -1929,6 +2041,20 @@ export async function appendContinuationMarker(taskId: string): Promise<string> 
     // No more ready tasks — check if this stage just finished all tasks and needs PR action
     const freshStage = await TaskStage.findByPk(stage.id);
     if (freshStage && (freshStage.status === "pr_pending" || freshStage.status === "completed")) {
+      // Plan stages are pure research/design with no commits and no PR.
+      // propagateStatus has already moved them to `completed` and unblocked
+      // the next stage's tasks via advanceNextStageReadyTasks — there is
+      // nothing left to push, no PR to create. Surface a short note so the
+      // orchestrator's reply to the user reflects that the stage is done.
+      if (freshStage.kind === ("plan" as TaskStageKind)) {
+        return (
+          `\n\n## Plan Stage Completed\n\n` +
+          `Stage "${freshStage.title}" is a planning-only stage — no code changes ` +
+          `or pull request are needed. The next stage's tasks have been unblocked ` +
+          `automatically and will be executed on the next turn.`
+        );
+      }
+
       const epic = await EpicTask.findByPk(stage.epicTaskId, {
         include: [{ model: Repository, as: "repositories" }],
       });

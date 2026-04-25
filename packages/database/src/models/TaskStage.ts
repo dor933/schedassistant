@@ -1,10 +1,10 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
-import type { TaskStageAttributes, TaskStageStatus, PrStatus, EpicTaskId, RepositoryId } from "@scheduling-agent/types";
+import type { TaskStageAttributes, TaskStageStatus, TaskStageKind, PrStatus, EpicTaskId, RepositoryId } from "@scheduling-agent/types";
 
 type TaskStageCreationAttributes = Optional<
   TaskStageAttributes,
-  "id" | "createdAt" | "updatedAt" | "status" | "description" | "sortOrder" | "prUrl" | "prNumber" | "prStatus" | "repositoryId" | "branchName" | "baseCommitSha" | "metadata" | "completedAt"
+  "id" | "createdAt" | "updatedAt" | "status" | "kind" | "description" | "sortOrder" | "prUrl" | "prNumber" | "prStatus" | "repositoryId" | "branchName" | "baseCommitSha" | "metadata" | "completedAt"
 >;
 
 class TaskStage extends Model<TaskStageAttributes, TaskStageCreationAttributes> implements TaskStageAttributes {
@@ -13,6 +13,7 @@ class TaskStage extends Model<TaskStageAttributes, TaskStageCreationAttributes> 
   declare title: string;
   declare description: string | null;
   declare status: TaskStageStatus;
+  declare kind: TaskStageKind;
   declare sortOrder: number;
   declare prUrl: string | null;
   declare prNumber: number | null;
@@ -51,6 +52,11 @@ TaskStage.init(
       type: DataTypes.STRING(32),
       allowNull: false,
       defaultValue: "pending",
+    },
+    kind: {
+      type: DataTypes.STRING(32),
+      allowNull: false,
+      defaultValue: "code_change",
     },
     sortOrder: {
       type: DataTypes.INTEGER,
