@@ -545,6 +545,43 @@ export async function resolveNextRetryableTask(
 }
 
 /**
+ * Resolve a stage's position within its epic — `index` is 1-based for human
+ * messaging ("Stage 3 of 5"), `total` is the count of stages in the epic,
+ * and `isLast` is true when the stage's `sortOrder` is the maximum among
+ * its siblings. Used by `appendContinuationMarker` and
+ * `formatReviewActionForCompletedTask` so the "approve to start the next
+ * stage" prompt only fires when a next stage actually exists — and the
+ * final-stage message correctly tells the user "approving completes the
+ * epic" instead of inventing a phantom stage.
+ *
+ * Returns null on lookup failure so callers can degrade gracefully to the
+ * generic "next stage" wording rather than throwing on a transient DB
+ * issue.
+ */
+async function resolveStagePosition(
+  stage: { id: string; epicTaskId: EpicTaskId; sortOrder: number },
+): Promise<{ index: number; total: number; isLast: boolean } | null> {
+  try {
+    const siblings = await TaskStage.findAll({
+      where: { epicTaskId: stage.epicTaskId },
+      attributes: ["id", "sortOrder"],
+      order: [["sortOrder", "ASC"]],
+    });
+    if (siblings.length === 0) return null;
+    const total = siblings.length;
+    const idx = siblings.findIndex((s) => s.id === stage.id);
+    if (idx < 0) return null;
+    return {
+      index: idx + 1,
+      total,
+      isLast: idx === siblings.length - 1,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Returns the unique stage of the active epic that is currently awaiting
  * PR approval (status = 'pr_pending'). Throws if there are zero or >1.
  * Used by request_stage_changes, approve_stage, force_approve_stage_pr.
@@ -2089,14 +2126,23 @@ export async function appendContinuationMarker(taskId: string): Promise<string> 
       // tool that handles code_change stages routes through the no-PR
       // branch when there's no prNumber).
       if (freshStage.kind === ("plan" as TaskStageKind)) {
+        const pos = await resolveStagePosition(freshStage);
+        const positionLabel = pos ? ` (stage ${pos.index} of ${pos.total})` : "";
+        const nextLine = pos?.isLast
+          ? `**This is the FINAL stage of the epic.** Approving it completes the epic — there is no stage ${pos!.total + 1}; no further stages will run after approval.`
+          : pos
+            ? `Approving this stage will unblock stage ${pos.index + 1} of ${pos.total} and its tasks will start automatically.`
+            : `Approving this stage will unblock the next stage's tasks (if any) automatically.`;
         return (
-          `\n\n## Plan Stage Awaiting Review\n\n` +
+          `\n\n## Plan Stage Awaiting Review${positionLabel}\n\n` +
           `Stage "${freshStage.title}" is a planning-only stage — no code changes, no PR.\n` +
-          `All its tasks are complete. **The next stage will not start until the user ` +
-          `explicitly approves this plan.**\n\n` +
+          `All its tasks are complete. **No further stage will start until the user explicitly ` +
+          `approves this plan.**\n\n` +
+          `${nextLine}\n\n` +
           `Summarize the plan for the user and wait for their approval. Once they ` +
-          `confirm, call \`approve_stage\` with their verbatim authorization quote — ` +
-          `that will mark this stage as completed and unblock the next stage's tasks.`
+          `confirm, call \`approve_stage\` with their verbatim authorization quote. ` +
+          `**Phrase your prompt to the user honestly — do NOT invent a next-stage number ` +
+          `that doesn't exist.**`
         );
       }
 
@@ -2114,11 +2160,18 @@ export async function appendContinuationMarker(taskId: string): Promise<string> 
       if (freshStage.prNumber && freshStage.prStatus === "changes_requested") {
         const pushResult = await autoPushToExistingPr(freshStage, repo);
         if (pushResult.ok) {
+          const pos = await resolveStagePosition(freshStage);
+          const positionLabel = pos ? ` (stage ${pos.index} of ${pos.total})` : "";
+          const blockerLine = pos?.isLast
+            ? `**This is the FINAL stage of the epic.** Approving the PR completes the epic — there is no stage ${pos!.total + 1}.`
+            : pos
+              ? `Stage ${pos.index + 1} of ${pos.total} is blocked until this PR is approved.`
+              : `The next stage (if any) is blocked until this PR is approved.`;
           return (
-            `\n\n## Fixes Pushed to PR #${freshStage.prNumber}\n\n` +
+            `\n\n## Fixes Pushed to PR #${freshStage.prNumber}${positionLabel}\n\n` +
             `All retry tasks completed and fixes have been pushed automatically.\n` +
             `PR: ${freshStage.prUrl ?? `#${freshStage.prNumber}`}\n` +
-            `The next stage is blocked until this PR is approved.`
+            `${blockerLine}`
           );
         }
         return (
@@ -2132,11 +2185,20 @@ export async function appendContinuationMarker(taskId: string): Promise<string> 
       if (!freshStage.prNumber) {
         const prResult = await autoCreateStagePr(freshStage, repo, epic?.title ?? "Epic");
         if (prResult.ok) {
+          const pos = await resolveStagePosition(freshStage);
+          const positionLabel = pos ? ` (stage ${pos.index} of ${pos.total})` : "";
+          const nextLine = pos?.isLast
+            ? `**This is the FINAL stage of the epic.** Approving this PR completes the epic — there is no stage ${pos!.total + 1}; no further stages will run.`
+            : pos
+              ? `Stage ${pos.index + 1} of ${pos.total} will begin automatically once this PR is approved.`
+              : `The next stage will begin automatically once the PR is approved.`;
           return (
-            `\n\n## Pull Request Created Automatically\n\n` +
+            `\n\n## Pull Request Created Automatically${positionLabel}\n\n` +
             `**PR #${prResult.prNumber}:** ${prResult.prUrl}\n` +
             `Stage "${freshStage.title}" is now waiting for PR approval.\n` +
-            `The next stage will begin automatically once the PR is approved.`
+            `${nextLine}\n\n` +
+            `**When you tell the user about the PR, phrase the next-step honestly — do NOT ` +
+            `invent a next-stage number that doesn't exist.**`
           );
         }
         return (
@@ -2204,16 +2266,23 @@ async function formatReviewActionForCompletedTask(taskId: string): Promise<strin
 
   const stageRow = await TaskStage.findByPk(stage.id);
   if (stageRow?.status === ("pr_pending" as TaskStageStatus)) {
+    const pos = await resolveStagePosition(stageRow);
+    const positionLabel = pos ? ` (stage ${pos.index} of ${pos.total})` : "";
+    const finalityLine = pos?.isLast
+      ? ` **This is the FINAL stage of the epic — approving it completes the whole epic; do NOT tell the user a next-stage number.**`
+      : pos
+        ? ` Approval will start stage ${pos.index + 1} of ${pos.total}.`
+        : "";
     if (stageRow.kind === ("plan" as TaskStageKind)) {
       return (
-        `\n**Action:** **This plan stage is complete** and is **waiting for the user to review and approve** — ` +
-        `do **not** call \`execute_epic_task\` to start the next stage until they confirm. ` +
+        `\n**Action:** **This plan stage is complete${positionLabel}** and is **waiting for the user to review and approve** — ` +
+        `do **not** call \`execute_epic_task\` to start the next stage until they confirm.${finalityLine} ` +
         `Summarize the plan, ask for approval, then call \`approve_stage\` with their verbatim quote. ${RETRY_EPIC_TASK_HINT}`
       );
     }
     return (
-      `\n**Action:** **This stage is complete** and is **waiting for PR approval** — do **not** call ` +
-      `\`execute_epic_task\` to start the next stage until this PR is approved (or handled via \`approve_stage\` / your workflow). ` +
+      `\n**Action:** **This stage is complete${positionLabel}** and is **waiting for PR approval** — do **not** call ` +
+      `\`execute_epic_task\` to start the next stage until this PR is approved (or handled via \`approve_stage\` / your workflow).${finalityLine} ` +
       `Tell the user the stage is blocked on review. ${RETRY_EPIC_TASK_HINT}`
     );
   }
