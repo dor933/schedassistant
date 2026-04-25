@@ -30,15 +30,12 @@ import {
   continueRemainingTasks,
   appendContinuationMarker,
   formatExecutionResult,
-  persistEpicTaskResultToSession,
   resolveActiveEpic,
   resolveActivePrPendingStage,
   resolveNextRetryableTask,
   EPIC_CONTINUATION_MARKER,
   parseContinuationMarker,
 } from "../utils/epicTaskUtils";
-import { loadActiveToolSlugs } from "./resolveAgentTools";
-import { buildAttachmentUrl } from "./sendFileTool";
 
 // Re-export utils that are imported by other modules
 export { getReadyTasks, parseContinuationMarker, EPIC_CONTINUATION_MARKER };
@@ -433,56 +430,10 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
             agentName,
           });
 
-          const formattedFirst = await formatExecutionResult(execution, firstTask.id);
-          let result = formattedFirst;
-          // Persist the per-task report into the agent's session folder on
-          // success so the user can review it later as a .md attachment.
-          // threadId comes from `conversationCtx`, which is populated for
-          // every chat-driven invocation; no-op for non-chat callers.
-          //
-          // When the orchestrator agent has `send_file_to_user` active, also
-          // build a signed-URL markdown link and embed it in the tool result
-          // with a "verbatim in reply" directive so the user receives the
-          // summary as a downloadable attachment in chat.
-          const activeSlugsForAttach = await loadActiveToolSlugs(epic.agentId);
-          const canAttachToChat = activeSlugsForAttach.has("send_file_to_user");
-          const persistContext = conversationCtx?.threadId
-            ? {
-                agentId: epic.agentId,
-                threadId: conversationCtx.threadId,
-                attachToChat: canAttachToChat,
-              }
-            : undefined;
-          if (execution.status !== "failed" && persistContext) {
-            const persisted = await persistEpicTaskResultToSession({
-              agentId: persistContext.agentId,
-              threadId: persistContext.threadId,
-              taskId: firstTask.id,
-              attemptNumber: (execution as { attemptNumber?: number }).attemptNumber ?? 1,
-              content: formattedFirst,
-              taskTitle: firstTask.title,
-            });
-            if (persisted && persistContext.attachToChat) {
-              try {
-                const url = buildAttachmentUrl(persistContext.agentId, persisted.workspaceRelPath);
-                result +=
-                  `\n\n## Task Summary Attachment\n\n` +
-                  `**MANDATORY — include the markdown link below verbatim in your reply ` +
-                  `to the user so the chat UI renders the task summary as a downloadable ` +
-                  `attachment chip:**\n\n` +
-                  `[📎 ${persisted.fileName}](${url})\n`;
-              } catch (err: any) {
-                logger.warn("ExecuteEpicTask: buildAttachmentUrl failed (non-fatal)", {
-                  taskId: firstTask.id,
-                  error: err?.message,
-                });
-              }
-            }
-          }
+          let result = await formatExecutionResult(execution, firstTask.id);
           if (execution.status !== "failed") {
             const contResult = await continueRemainingTasks(firstTask.id, {
               cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt, agentName,
-              persistContext,
             });
             if (contResult) result += "\n\n---\n\n" + contResult;
           }
@@ -505,47 +456,10 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
           agentName,
         });
 
-        const formattedFirst = await formatExecutionResult(execution, firstTask.id);
-        let result = formattedFirst;
-        const activeSlugsForAttach = await loadActiveToolSlugs(epic.agentId);
-        const canAttachToChat = activeSlugsForAttach.has("send_file_to_user");
-        const persistContext = conversationCtx?.threadId
-          ? {
-              agentId: epic.agentId,
-              threadId: conversationCtx.threadId,
-              attachToChat: canAttachToChat,
-            }
-          : undefined;
-        if (execution.status !== "failed" && persistContext) {
-          const persisted = await persistEpicTaskResultToSession({
-            agentId: persistContext.agentId,
-            threadId: persistContext.threadId,
-            taskId: firstTask.id,
-            attemptNumber: (execution as { attemptNumber?: number }).attemptNumber ?? 1,
-            content: formattedFirst,
-            taskTitle: firstTask.title,
-          });
-          if (persisted && persistContext.attachToChat) {
-            try {
-              const url = buildAttachmentUrl(persistContext.agentId, persisted.workspaceRelPath);
-              result +=
-                `\n\n## Task Summary Attachment\n\n` +
-                `**MANDATORY — include the markdown link below verbatim in your reply ` +
-                `to the user so the chat UI renders the task summary as a downloadable ` +
-                `attachment chip:**\n\n` +
-                `[📎 ${persisted.fileName}](${url})\n`;
-            } catch (err: any) {
-              logger.warn("ExecuteEpicTask: buildAttachmentUrl failed (non-fatal)", {
-                taskId: firstTask.id,
-                error: err?.message,
-              });
-            }
-          }
-        }
+        let result = await formatExecutionResult(execution, firstTask.id);
         if (execution.status !== "failed") {
           const contResult = await continueRemainingTasks(firstTask.id, {
             cwd, allowedTools: input.allowedTools, maxTurns: input.maxTurns, systemPrompt, agentName,
-            persistContext,
           });
           if (contResult) result += "\n\n---\n\n" + contResult;
         }

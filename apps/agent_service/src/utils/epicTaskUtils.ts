@@ -1,6 +1,4 @@
 import { spawn, execSync, spawnSync } from "child_process";
-import fs from "node:fs";
-import path from "node:path";
 import { QueryTypes } from "sequelize";
 import {
   sequelize,
@@ -11,7 +9,6 @@ import {
   TaskStage,
   AgentTask,
   TaskExecution,
-  Agent,
 } from "@scheduling-agent/database";
 import type {
   UserId,
@@ -33,11 +30,6 @@ import {
   buildArchitectureOverviewPrompt,
   MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
 } from "../services/architectureOverviewPrompt";
-import {
-  resolveSessionWorkspacePath,
-  recordSessionFileWrite,
-  chownPathToAgentBestEffort,
-} from "../workspace/sessionWorkspace";
 
 // The agent_service container runs as root, but Claude CLI (and gh) must run
 // as the non-root `agent` user via `su-exec`. `su-exec` inherits env unchanged,
@@ -1705,27 +1697,7 @@ export async function createEpicWithPlan(data: {
  */
 export async function continueRemainingTasks(
   completedTaskId: string,
-  options: {
-    cwd: string;
-    allowedTools?: string;
-    maxTurns?: number;
-    systemPrompt?: string;
-    agentName?: string;
-    /**
-     * When set, every successful sub-task execution gets archived as a .md
-     * file in the agent's per-thread session workspace via
-     * `persistEpicTaskResultToSession`. Optional so existing callers that
-     * don't have a thread context (none today) keep working.
-     *
-     * When `attachToChat` is also true, the tool result string returned to
-     * the orchestrator includes a signed-URL markdown link for each
-     * archived report — flagged with a "include verbatim in your reply"
-     * directive so the user actually receives the file in chat. This is set
-     * by the caller only when the orchestrator agent has the
-     * `send_file_to_user` tool active in `agent_available_tools`.
-     */
-    persistContext?: { agentId: AgentId; threadId: string; attachToChat: boolean };
-  },
+  options: { cwd: string; allowedTools?: string; maxTurns?: number; systemPrompt?: string; agentName?: string },
 ): Promise<string | null> {
   const task = await AgentTask.findByPk(completedTaskId, {
     include: [{ model: TaskStage, as: "stage" }],
@@ -1739,10 +1711,6 @@ export async function continueRemainingTasks(
   });
 
   if (remaining.length === 0) return null;
-
-  // Imported lazily so this module's import graph stays cycle-free against
-  // sendFileTool (which lives under `tools/` and may itself import utils).
-  const { buildAttachmentUrl } = await import("../tools/sendFileTool");
 
   const results: string[] = [];
   for (const next of remaining) {
@@ -1759,40 +1727,7 @@ export async function continueRemainingTasks(
       agentName: options.agentName,
     });
 
-    const formatted = await formatExecutionResult(execution, next.id);
-    let withAttachment = formatted;
-
-    if (execution.status !== "failed" && options.persistContext) {
-      const persisted = await persistEpicTaskResultToSession({
-        agentId: options.persistContext.agentId,
-        threadId: options.persistContext.threadId,
-        taskId: next.id,
-        attemptNumber: (execution as { attemptNumber?: number }).attemptNumber ?? 1,
-        content: formatted,
-        taskTitle: next.title,
-      });
-      if (persisted && options.persistContext.attachToChat) {
-        try {
-          const url = buildAttachmentUrl(
-            options.persistContext.agentId,
-            persisted.workspaceRelPath,
-          );
-          withAttachment +=
-            `\n\n## Task Summary Attachment\n\n` +
-            `**MANDATORY — include the markdown link below verbatim in your reply ` +
-            `to the user so the chat UI renders the task summary as a downloadable ` +
-            `attachment chip:**\n\n` +
-            `[📎 ${persisted.fileName}](${url})\n`;
-        } catch (err: any) {
-          logger.warn("continueRemainingTasks: buildAttachmentUrl failed (non-fatal)", {
-            taskId: next.id,
-            error: err?.message,
-          });
-        }
-      }
-    }
-
-    results.push(withAttachment);
+    results.push(await formatExecutionResult(execution, next.id));
 
     if (execution.status === "failed") {
       results.push(`\n⚠ Task "${next.title}" failed. Stopping sequential execution.`);
@@ -2247,131 +2182,6 @@ async function formatReviewActionForCompletedTask(taskId: string): Promise<strin
   return (
     `\n**Action:** No task is currently in the ready queue. Use \`get_epic_status\` to see the epic state (e.g. waiting on PR approval). ${RETRY_EPIC_TASK_HINT}`
   );
-}
-
-/**
- * Result of {@link persistEpicTaskResultToSession}.
- *
- * `workspaceRelPath` is the canonical forward-slash path RELATIVE TO THE
- * AGENT'S WORKSPACE ROOT (e.g. `threads/<threadId>/epic-task-….md`) — the
- * exact form `send_file_to_user` / `buildAttachmentUrl` expects, and the form
- * the HMAC signature is computed over by `signAttachment`.
- *
- * `sessionRelPath` is relative to the per-thread session folder
- * (`<workspace>/threads/<threadId>/`) — what `recordSessionFileWrite` stores
- * in the session ledger so the chat UI can surface it as a session chip.
- */
-export interface EpicTaskSessionPersistence {
-  workspaceRelPath: string;
-  sessionRelPath: string;
-  fileName: string;
-}
-
-/**
- * Persist a successful task-execution report into the agent's per-thread
- * session workspace as a .md file, and record the write into the session
- * ledger so the UI surfaces it as a session file chip.
- *
- * Best-effort: every failure path is swallowed and logged — auto-archiving a
- * report should never break the orchestrator's reply. Returns the persisted
- * paths on success, or `null` when nothing was written (no agent workspace,
- * no threadId, fs error, …).
- */
-export async function persistEpicTaskResultToSession(args: {
-  agentId: AgentId;
-  threadId: string | null | undefined;
-  taskId: AgentTaskId;
-  /** 1-based attempt number (matches `task_executions.attempt_number`). */
-  attemptNumber: number;
-  /** The full markdown body to persist. */
-  content: string;
-  /** Optional task title — used to build a human-readable filename slug. */
-  taskTitle?: string;
-}): Promise<EpicTaskSessionPersistence | null> {
-  if (!args.threadId) return null;
-  if (!args.content || !args.content.trim()) return null;
-
-  try {
-    const agent = await Agent.findByPk(args.agentId, {
-      attributes: ["id", "workspacePath"],
-    });
-    const workspacePath = (agent as { workspacePath?: string | null } | null)?.workspacePath ?? null;
-    if (!workspacePath) return null;
-
-    const sessionRoot = resolveSessionWorkspacePath(workspacePath, args.threadId);
-    if (!sessionRoot) return null;
-
-    fs.mkdirSync(sessionRoot, { recursive: true });
-    // agent_service runs as root, so the mkdir above produces a root:root 755
-    // directory the CLI (uid 100, via su-exec agent) can read but not write.
-    // Re-chown the whole thread folder to agent so subsequent CLI writes,
-    // filesystem-MCP writes, and follow-up persists all succeed.
-    chownPathToAgentBestEffort(sessionRoot);
-
-    const slug = sanitizeFilenameSlug(args.taskTitle ?? "epic-task");
-    const shortTaskId = String(args.taskId).slice(0, 8);
-    const fileName = `epic-task-${shortTaskId}-${slug}-attempt-${args.attemptNumber}.md`;
-    const absPath = path.join(sessionRoot, fileName);
-
-    // Two distinct paths:
-    //   - sessionRelPath: relative to <workspace>/threads/<threadId>/ — what
-    //     the per-thread session ledger stores so UI chips line up with other
-    //     session files.
-    //   - workspaceRelPath: relative to <workspace>/ — the canonical form
-    //     `send_file_to_user`/`buildAttachmentUrl` use. The HMAC is computed
-    //     over this exact string, so the download endpoint will resolve it.
-    const sessionRelPath = fileName;
-    const workspaceRelPath = path.posix.join("threads", args.threadId, fileName);
-
-    fs.writeFileSync(absPath, args.content, "utf-8");
-    // Match ownership on the file itself — keeps agent able to overwrite on
-    // a retry attempt without going through this helper again.
-    chownPathToAgentBestEffort(absPath);
-
-    let bytes = 0;
-    try {
-      bytes = fs.statSync(absPath).size;
-    } catch {
-      // Non-fatal — bytes is best-effort.
-    }
-
-    const nowIso = new Date().toISOString();
-    recordSessionFileWrite(args.threadId, {
-      path: sessionRelPath,
-      bytes,
-      updatedAt: nowIso,
-      source: "epic_orchestrator:execute_epic_task",
-    });
-
-    logger.info("persistEpicTaskResultToSession: wrote execution report", {
-      taskId: args.taskId,
-      attempt: args.attemptNumber,
-      workspaceRelPath,
-      bytes,
-    });
-    return { workspaceRelPath, sessionRelPath, fileName };
-  } catch (err: any) {
-    logger.warn("persistEpicTaskResultToSession: write failed (non-fatal)", {
-      taskId: args.taskId,
-      error: err?.message,
-    });
-    return null;
-  }
-}
-
-/**
- * Lower-cases a string and strips it down to ASCII alphanumerics + dashes
- * so it's safe to drop into a filename. Caps length so a sprawling task
- * title doesn't push the path past Windows' MAX_PATH for shared workspaces.
- */
-function sanitizeFilenameSlug(raw: string): string {
-  const ascii = raw
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (!ascii) return "task";
-  return ascii.length > 60 ? ascii.slice(0, 60) : ascii;
 }
 
 export async function formatExecutionResult(execution: any, taskId: string): Promise<string> {
