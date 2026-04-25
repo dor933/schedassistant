@@ -9,14 +9,12 @@ import type {
 import { getUserIdentity } from "../../../sessionsManagment/userIdentityManager";
 import { loadRecentConversationMessagesForContext } from "../../../sessionsManagment/conversationLogForContext";
 import { formatCheckpointMessagesForSystemPrompt } from "../../../sessionsManagment/checkpointMessagesForContext";
-import { retrieveEpisodicMemory } from "../../../rag/episodicRetrieval";
 import { loadRecentSessionSummaries } from "../../../sessionsManagment/sessionSummaryLoader";
 import {
   loadRecentRoundtableSummaries,
   formatRoundtableSummariesSection,
   type RecentRoundtableSummary,
 } from "../../../sessionsManagment/roundtableSummaryLoader";
-import { getEmbedderForAgent } from "../../../rag/embeddings";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import {
@@ -125,23 +123,13 @@ export async function buildEpicContext(
   );
 
   // ── 5. Episodic memory ──
-  let episodicSnippets: string[] = [];
-  if (userInput) {
-    try {
-      const embedder = await getEmbedderForAgent(agentId);
-      const queryEmbedding = await embedder.embedText(userInput);
-      const hits = await retrieveEpisodicMemory(agentId, queryEmbedding);
-      episodicSnippets = hits.map(
-        (h) => `(thread_id: ${h.threadId}) ${h.content}`,
-      );
-    } catch (err) {
-      logger.warn("Episodic memory skipped for epic agent", {
-        threadId,
-        agentId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  // Auto-injection of vector-store hits has been removed: embedding the
+  // latest user message verbatim ("yes, do it" / "ok") produces noise
+  // queries against pgvector. Past-context retrieval is now agent-driven —
+  // the agent calls `recall_episodic_memory` with a real query when it
+  // actually needs prior context. The "Long-term memory" prompt section
+  // below describes the trigger conditions and the cascade.
+  const episodicSnippets: string[] = [];
 
   // ── 6. Session summaries ──
   const recentSessionSummaries = await loadRecentSessionSummaries(agentId, {
@@ -701,34 +689,38 @@ function formatEpicSystemPrompt(opts: {
     sections.push("");
   }
 
-  // ── Episodic memory ──
-  if (opts.episodicSnippets.length > 0) {
-    sections.push("## Relevant past context (from vector store)");
-    sections.push(
-      "Auto-retrieved knowledge chunks from previous executions, scoped to relevant repositories and projects. " +
-      "Each snippet is prefixed with its originating `thread_id` — if a snippet references a past " +
-      "session or roundtable but lacks detail, call `get_thread_summary` with that thread_id to " +
-      "pull the full saved summary, which also lists every file written into that session's " +
-      "workspace. If a manifest entry looks like it holds the answer (e.g. a saved plan, audit, " +
-      "or research brief), follow up with `read_session_file` (same thread_id + the file's path) " +
-      "to fetch the contents. " +
-      "If you need more context on a different repo, pattern, or decision, use `recall_episodic_memory` with a targeted query.",
-    );
-    for (const snippet of opts.episodicSnippets) {
-      sections.push(`- ${snippet}`);
-    }
-    sections.push("");
-  } else {
-    sections.push("## Long-term memory");
-    sections.push(
-      "No auto-retrieved memories matched this turn. If you need context from past executions " +
-      "(e.g. repo patterns, architectural decisions, task outcomes), follow this cascade: " +
-      "first `recall_episodic_memory` with a descriptive query; if a hit references a past thread " +
-      "but lacks detail, `get_thread_summary` for the full text plus its file manifest; if a " +
-      "manifest file looks relevant, `read_session_file` to read it. Stop as soon as you have enough.",
-    );
-    sections.push("");
-  }
+  // ── Long-term memory (tool-driven, NOT auto-injected) ──
+  sections.push("## Long-term memory — call `recall_episodic_memory` when you need it");
+  sections.push(
+    "Past context (architectural decisions, repo patterns, prior epic outcomes, prior task " +
+    "implementations) is **not auto-injected** into your prompt — you have to retrieve it " +
+    "yourself. Use these tools when any of the trigger conditions below applies; do NOT fabricate " +
+    "past context from memory or from the conversation log alone.\n\n" +
+
+    "**Trigger — call `recall_episodic_memory` whenever:**\n" +
+    "- The user references something from the past (\"the auth refactor we did\", \"that pattern from " +
+    "last week's audit\") — search for it instead of guessing.\n" +
+    "- You're about to plan a new epic (`create_epic_plan`) and a similar one might exist — `recall_episodic_memory` " +
+    "first, or use `search_epic_tasks_by_date` if you have a rough time window.\n" +
+    "- You're about to make a non-trivial architectural decision and there might be a prior decision " +
+    "worth aligning with.\n" +
+    "- A repo-specific question comes up that prior epics have likely touched.\n\n" +
+
+    "**Crafting the query:** describe the topic in your own words, not the user's latest reply. " +
+    "Good: \"prior decisions about repository session-folder file persistence\". Bad: passing \"yes\" " +
+    "or \"do it\" verbatim — embeddings of bare affirmatives are noise.\n\n" +
+
+    "**Cascade after a hit:** episodic snippets are short. If a snippet references a past thread " +
+    "but you need more detail, `get_thread_summary` with the thread_id from the snippet returns " +
+    "the full saved summary plus a manifest of every session file written. If a manifest entry " +
+    "looks promising, `read_session_file` (same thread_id + file path) fetches the contents. Stop " +
+    "as soon as you have enough.\n\n" +
+
+    "**When to skip:** simple reply-to-the-current-message turns, structural questions answerable " +
+    "from the prompt itself, or workflow questions covered by the Epic Task Workflow skill. " +
+    "Don't gratuitously fetch memory on every turn — fetch when there's a real reason.",
+  );
+  sections.push("");
 
   return sections.join("\n");
 }

@@ -18,14 +18,12 @@ import type {
 import { getUserIdentity } from "../../../sessionsManagment/userIdentityManager";
 import { loadRecentConversationMessagesForContext } from "../../../sessionsManagment/conversationLogForContext";
 import { formatCheckpointMessagesForSystemPrompt } from "../../../sessionsManagment/checkpointMessagesForContext";
-import { retrieveEpisodicMemory } from "../../../rag/episodicRetrieval";
 import { loadRecentSessionSummaries } from "../../../sessionsManagment/sessionSummaryLoader";
 import {
   loadRecentRoundtableSummaries,
   formatRoundtableSummariesSection,
   type RecentRoundtableSummary,
 } from "../../../sessionsManagment/roundtableSummaryLoader";
-import { getEmbedderForAgent } from "../../../rag/embeddings";
 import { formatUserIdentityForPrompt } from "../../../utils/formatUserIdentityForPrompt";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
@@ -375,30 +373,15 @@ export async function buildContext(
     groupId ?? null,
   );
 
-  // ── 3. Episodic snippets (pgvector, scoped by agentId) ────────────
-  // Uses OpenAI embeddings only — not the chat model (Anthropic/Google/OpenAI chat keys are separate).
-  // The embedding key is pulled from the agent's organization_vendor_api_keys row (vendor="openai"),
-  // not from env — so embeddings are billed to the tenant like chat calls.
-  let episodicSnippets: string[] = [];
-  if (userInput) {
-    try {
-      const embedder = await getEmbedderForAgent(agentId);
-      const queryEmbedding = await embedder.embedText(userInput);
-      const hits = await retrieveEpisodicMemory(agentId, queryEmbedding);
-      // Prefix with thread_id so the agent can follow up via `get_thread_summary`
-      // if a snippet references a past session/roundtable but lacks detail.
-      episodicSnippets = hits.map(
-        (h) => `(thread_id: ${h.threadId}) ${h.content}`,
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.warn("Episodic memory skipped (OpenAI embedding failed or missing org key)", {
-        threadId,
-        agentId,
-        error: message,
-      });
-    }
-  }
+  // ── 3. Episodic snippets ─────────────────────────────────────────
+  // Auto-injection of vector-store hits has been removed: embedding the
+  // latest user message verbatim ("yes, do it" / "ok" / "thanks") produces
+  // noise queries against pgvector that surface irrelevant snippets and
+  // spend tokens for no signal. Past-context retrieval is now agent-driven —
+  // the agent calls `recall_episodic_memory` with a real query when it
+  // actually needs prior context. The "Long-term memory" prompt section
+  // below describes the trigger conditions and the cascade.
+  const episodicSnippets: string[] = [];
 
   // ── 4. Recent session summaries (last 48h, max 2, scoped by agentId) ──
   const recentSessionSummaries = await loadRecentSessionSummaries(
@@ -1010,34 +993,42 @@ function formatSystemPrompt(
     sections.push("");
   }
 
-  // Episodic snippets
-  if (episodicSnippets.length > 0) {
-    sections.push("## Relevant past context");
-    sections.push(
-      "Auto-retrieved from your long-term memory based on the user's latest message. " +
-      "Each snippet is prefixed with its originating `thread_id` — if a snippet hints at a past " +
-      "session or roundtable but lacks detail, call `get_thread_summary` with that thread_id to " +
-      "pull the full saved summary, which also lists every file written into that session's " +
-      "workspace. If a manifest entry looks like it holds the answer, follow up with " +
-      "`read_session_file` (passing the same thread_id and the file's path) to fetch the contents. " +
-      "If you need more context on a different topic, use `recall_episodic_memory` with a targeted query.",
-    );
-    for (const snippet of episodicSnippets) {
-      sections.push(`- ${snippet}`);
-    }
-    sections.push("");
-  } else {
-    sections.push("## Long-term memory");
-    sections.push(
-      "No auto-retrieved memories matched this turn. If you feel you're missing context " +
-      "(e.g. past decisions, repo-specific patterns, user preferences), follow this cascade: " +
-      "first `recall_episodic_memory` with a descriptive query; if a hit references a past thread " +
-      "but lacks detail, `get_thread_summary` for the full text plus its file manifest; if a " +
-      "manifest file looks relevant, `read_session_file` to read it. Stop as soon as you have " +
-      "enough — you do not need to walk every step.",
-    );
-    sections.push("");
-  }
+  // ── Long-term memory (tool-driven, NOT auto-injected) ──
+  // Snippets are deliberately not pre-fetched and dropped into the prompt:
+  // the latest user message ("yes, do it" / "ok" / short replies) embeds
+  // poorly and produces noise hits. You decide when memory matters and
+  // call the tool with a real query.
+  sections.push("## Long-term memory — call `recall_episodic_memory` when you need it");
+  sections.push(
+    "Past context (decisions, repo patterns, prior task outcomes, user preferences) is **not " +
+    "auto-injected** into your prompt — you have to retrieve it yourself. Use these tools when " +
+    "any of the trigger conditions below applies; do NOT fabricate past context from memory or " +
+    "from the conversation log alone.\n\n" +
+
+    "**Trigger — call `recall_episodic_memory` whenever:**\n" +
+    "- The user references something from the past (\"the auth refactor we did\", \"last week's audit\", " +
+    "\"that pattern we discussed\") — search for it instead of guessing.\n" +
+    "- You're about to make a non-trivial decision (architecture, naming, tooling) and there might " +
+    "be a prior decision worth aligning with.\n" +
+    "- You're starting a substantial task and want to know if a similar one was done before.\n" +
+    "- A user-preferences-y question comes up (\"how do I usually want X formatted?\") — past " +
+    "interactions probably hold the answer.\n\n" +
+
+    "**Crafting the query:** describe the topic in your own words, not the user's latest reply. " +
+    "Good: \"prior decisions about session-folder file persistence\". Bad: passing \"yes\" or \"do it\" " +
+    "verbatim — embeddings of bare affirmatives are noise.\n\n" +
+
+    "**Cascade after a hit:** episodic snippets are short. If a snippet references a past thread " +
+    "but you need more detail, call `get_thread_summary` with the thread_id from the snippet — " +
+    "that returns the full saved summary plus a manifest of every session file written. If a " +
+    "manifest entry looks promising, `read_session_file` (same thread_id + file path) fetches the " +
+    "contents. Stop as soon as you have enough; you don't need to walk every step.\n\n" +
+
+    "**When to skip:** simple reply-to-the-current-message turns, structural questions answerable " +
+    "from the prompt itself, or workflow questions covered by your skills. Don't gratuitously fetch " +
+    "memory on every turn — fetch when there's a real reason.",
+  );
+  sections.push("");
 
   return sections.join("\n");
 }
