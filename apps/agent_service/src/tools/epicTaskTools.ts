@@ -323,12 +323,56 @@ export function ExecuteEpicTaskTool(conversationCtx?: {
         // Build the executor's system prompt. `preExecutionSync` resolves
         // the stage and syncs onto its feature branch, so it needs a taskId
         // to know which stage to use.
+        //
+        // The session-folder block is THE fix for the cross-thread retry
+        // confusion: a task description authored in thread A (and persisted
+        // in agent_tasks) may carry a hardcoded `threads/A/...` path. When
+        // the user retries the same epic from thread B, we still want the
+        // CLI's deliverables to land in B's session folder, not A's. Putting
+        // the *current* thread's absolute path in the system prompt with an
+        // explicit "any other threads/<id>/ in the description is stale" line
+        // overrides the stale path in the description. No DB rewrite needed.
         async function buildSystemPrompt(
           taskId: string,
           userSystemPrompt: string | undefined,
         ): Promise<string | undefined> {
           await preExecutionSync(epicId, taskId);
           const parts: string[] = [];
+
+          if (conversationCtx?.threadId) {
+            try {
+              const { Agent } = await import("@scheduling-agent/database");
+              const agent = await Agent.findByPk(epic.agentId, {
+                attributes: ["workspacePath"],
+              });
+              const workspacePath =
+                (agent as { workspacePath?: string | null } | null)?.workspacePath ?? null;
+              if (workspacePath) {
+                const currentThreadId = conversationCtx.threadId;
+                const sessionFolder = `${workspacePath}/threads/${currentThreadId}/`;
+                parts.push(
+                  `## Session folder for this execution\n` +
+                  `The current thread's session folder is **\`${sessionFolder}\`** ` +
+                  `(thread ${currentThreadId}). Write every deliverable file (plan, spec, ` +
+                  `audit, report) here.\n\n` +
+                  `**If the task description references a different \`threads/<id>/\` path, ` +
+                  `that path is stale — the task may have been authored from a previous ` +
+                  `conversation thread. Always use the current session folder above.** ` +
+                  `Specifically, if the task description says e.g. ` +
+                  `\`/app/data/workspaces/<agent>/threads/<other-id>/<filename>.md\`, ` +
+                  `replace the \`threads/<other-id>\` segment with \`threads/${currentThreadId}\` ` +
+                  `before writing.`,
+                );
+              }
+            } catch (err: any) {
+              logger.warn("buildSystemPrompt: session-folder injection failed (non-fatal)", {
+                epicId,
+                threadId: conversationCtx?.threadId,
+                error: err?.message,
+              });
+            }
+          }
+
           const archCtx = await buildArchitectureContext(epicId);
           if (archCtx) parts.push(archCtx);
           if (userSystemPrompt) parts.push(userSystemPrompt);

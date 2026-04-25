@@ -551,7 +551,18 @@ function formatEpicSystemPrompt(opts: {
             `retrieval — so a future epic run can recover them via \`recall_episodic_memory\` → ` +
             `\`get_thread_summary\` → \`read_session_file\`. Writes anywhere else under ` +
             `\`${opts.agentWorkspacePath}\` are still saved but **will NOT appear in the per-thread ` +
-            `manifest** and won't surface in future sessions.`
+            `manifest** and won't surface in future sessions.\n\n` +
+
+            `**Important — when authoring \`create_epic_plan\` task descriptions for the CLI, do NOT ` +
+            `bake the absolute \`threads/<this-thread-id>/\` path into the task description.** Epic tasks ` +
+            `outlive a single conversation: the user can retry an epic from a different chat thread, ` +
+            `at which point a hardcoded \`threads/${opts.threadId}/...\` path in the description ` +
+            `would point at this stale folder instead of the new thread's. Instead, instruct the CLI ` +
+            `in plain English — e.g. *"Write the plan as \`<filename>.md\` in the current session ` +
+            `folder."* The CLI executor receives the **current** thread's session-folder path in its ` +
+            `system prompt at run time, so it always writes to the right place. **The same rule ` +
+            `applies for your own writes via filesystem MCP for the current turn** — using the ` +
+            `interpolated path above is fine because it's resolved against the active thread.`
           )
         : ""),
     );
