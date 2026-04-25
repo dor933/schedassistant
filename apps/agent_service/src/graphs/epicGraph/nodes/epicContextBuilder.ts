@@ -351,6 +351,53 @@ function formatEpicSystemPrompt(opts: {
   );
   sections.push("");
 
+  // ── Retry & error recovery ──
+  // Surfaced inline (not just in the skill) so the orchestrator always sees
+  // it even when it skips the optional skill-load step. Names the tools and
+  // the actual `agent_tasks.status` transitions so the model treats
+  // `completed` / `failed` as recoverable, not terminal.
+  sections.push("### Retry & error recovery");
+  sections.push(
+    "A task is **NOT final** when it lands at `completed` or `failed` — it can be flipped " +
+    "back to `in_progress` and re-executed. There are two distinct triggers; pick the matching path.\n\n" +
+
+    "**Path A — user is unhappy with a stage's diff (stage is in `pr_pending`):**\n" +
+    "1. Call `request_stage_changes` with the user's specific, diff-referenced feedback. " +
+    "That resets every completed task in the stage back to `ready`, persists the feedback on " +
+    "each task's latest execution row, and moves the stage from `pr_pending` back to `in_progress`.\n" +
+    "2. Call `execute_epic_task` with `mode='retry'`. It auto-resolves the next ready task, " +
+    "flips it to `in_progress`, and **resumes the previous Claude CLI session** with the stored " +
+    "feedback — so the executor has the full prior context, not just the feedback string.\n" +
+    "3. After auto-continuation runs through the rest of the stage, the stage hits `pr_pending` " +
+    "again. The retry tasks push fixes to the **existing** PR (no new PR is created).\n\n" +
+
+    "**Path B — a task failed mid-stage (CLI error, timeout, non-zero exit):**\n" +
+    "1. Just call `execute_epic_task` again — no `request_stage_changes`, no manual reset. " +
+    "It auto-detects a `failed` task in an `in_progress` stage, switches itself to retry mode, " +
+    "and resumes the failed session. `prepareRetry` flips the task's status back to `in_progress` " +
+    "and clears `completedAt` so the lifecycle stays consistent.\n" +
+    "2. If retry mode has no useful feedback to pass, the system synthesizes a neutral 'previous " +
+    "attempt failed before it could finish — resume and complete the original task' stub. You don't " +
+    "have to fabricate one.\n\n" +
+
+    "**Per-task lifecycle (so the transitions are explicit):**\n" +
+    "`pending` → `ready` (when previous stage clears) → `in_progress` (when `executeTask` runs) → " +
+    "`completed` **or** `failed`. From `completed` or `failed`, either retry path above flips it back " +
+    "to `ready`/`in_progress` and the cycle repeats. Stage status is derived from its tasks: as soon " +
+    "as one task in the stage moves to `in_progress`/`ready`, the stage flips to `in_progress` again.\n\n" +
+
+    "**Anti-patterns — do not do these:**\n" +
+    "- Treat `completed` or `failed` as terminal and tell the user 'we're stuck'. The two paths above " +
+    "always exist.\n" +
+    "- Create a *new* task whose description is 'fix what the previous task did wrong'. That breaks the " +
+    "PR/branch model — fixes belong on the original task via retry so they land in the same stage's PR.\n" +
+    "- Use `request_stage_changes` for a CLI failure (Path B). It's only for PR-review feedback after a " +
+    "stage has finished its tasks.\n" +
+    "- Use `execute_epic_task mode='retry'` without first calling `request_stage_changes` when the user " +
+    "is reviewing the PR — there'd be no `ready` task to pick up because all tasks are `completed`.",
+  );
+  sections.push("");
+
   // ── Honesty rules (kept, shorter) ──
   sections.push("## Rules");
   sections.push(
