@@ -698,7 +698,7 @@ function formatEpicSystemPrompt(opts: {
 
   // ── Session summaries ──
   if (opts.recentSummaries.length > 0) {
-    sections.push("## Recent conversation summaries");
+    sections.push("## Recent conversation summaries (last week)");
     for (const s of opts.recentSummaries) {
       sections.push(`- [${s.createdAt}] ${s.text}`);
     }

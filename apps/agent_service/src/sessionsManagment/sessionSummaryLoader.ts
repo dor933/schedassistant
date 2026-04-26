@@ -3,7 +3,7 @@ import type { AgentId, SessionSummary } from "@scheduling-agent/types";
 import { Op } from "sequelize";
 import { logger } from "../logger";
 
-const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const NUM_SUMMARIES = 5;
 
 export type LoadRecentSessionSummariesOptions = {
@@ -25,7 +25,7 @@ export async function loadRecentSessionSummaries(
 ): Promise<SessionSummary[]> {
   if (!agentId) return [];
 
-  const since = new Date(Date.now() - FORTY_EIGHT_HOURS_MS);
+  const since = new Date(Date.now() - WEEK_MS);
   const { excludeThreadId } = options;
 
   const threadFilter =

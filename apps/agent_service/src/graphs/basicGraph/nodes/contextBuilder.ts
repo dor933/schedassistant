@@ -1001,7 +1001,7 @@ function formatSystemPrompt(
 
   // Recent session summaries
   if (recentSummaries.length > 0) {
-    sections.push("## Recent conversation summaries (last 48 hours)");
+    sections.push("## Recent conversation summaries (last week)");
     sections.push(
       "These are auto-generated summaries of prior sessions. They may contain inaccuracies — " +
       "verify key facts before acting on them.",
