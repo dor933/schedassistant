@@ -10,7 +10,7 @@
  * files into different threads' folders that the user later rejected.
  *
  * Used by:
- *   - `get_epic_task_summaries` tool — returns these paths so the
+ *   - `get_epic_task_stages_and_tasks` tool — surfaces these paths in the
  *     orchestrator can fan them out via `send_file_to_user`.
  *   - Future "show me what we did" flows that pivot from
  *     `search_epic_tasks_by_date` to the actual deliverables.

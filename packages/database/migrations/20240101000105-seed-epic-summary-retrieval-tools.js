@@ -1,14 +1,16 @@
 "use strict";
 
 /**
- * Seeds the two epic-summary retrieval tools used by the Epic Task
- * Orchestrator to surface past work to users:
+ * Seeds the two epic retrieval tools used by the Epic Task Orchestrator to
+ * surface past work to users:
  *
- *   - `search_epic_tasks_by_date` — find an epic by creation-date window.
- *   - `get_epic_task_summaries`    — return saved per-task summary file
- *                                    paths for a chosen epic so the
- *                                    orchestrator can fan them out via
- *                                    `send_file_to_user`.
+ *   - `search_epic_tasks_by_date`         — find an epic by creation-date
+ *                                           window; returns full description
+ *                                           plus metadata for each match.
+ *   - `get_epic_task_stages_and_tasks`    — return the full stage + task
+ *                                           structure for a chosen epic
+ *                                           (titles, descriptions, statuses,
+ *                                           PR info, summary file paths).
  *
  * NOT auto-assigned (same policy as `send_file_to_user`) — admins grant per
  * agent via `agent_available_tools` since these tools read across all past
@@ -29,12 +31,15 @@ const TOOLS = [
       "questions directly.",
   },
   {
-    name: "Get Epic Task Summaries",
-    slug: "get_epic_task_summaries",
+    name: "Get Epic Task Stages and Tasks",
+    slug: "get_epic_task_stages_and_tasks",
     category: "epic_retrieval",
     description:
-      "Returns the saved per-task summary file paths for a given epic. Use after identifying the epic " +
-      "via search_epic_tasks_by_date — pass each path to send_file_to_user to deliver as chat attachments.",
+      "Returns the complete stage + task structure of an epic, organized hierarchically — every " +
+      "stage with its metadata (title, description, kind, status, PR info) and every task under " +
+      "each stage (title, description, status, summary file path, timestamps). Use after " +
+      "search_epic_tasks_by_date to deliver summaries, browse scope, find a stage's PR, or reuse " +
+      "a stage/task description in a new create_epic_plan.",
   },
 ];
 

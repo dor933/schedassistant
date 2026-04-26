@@ -575,9 +575,8 @@ function formatEpicSystemPrompt(opts: {
   }
 
   // ── Retrieving past epic context ──
-  // `search_epic_tasks_by_date` is a general lookup; the other two tools
-  // (`get_epic_task_summaries`, `send_file_to_user`) are downstream paths
-  // ONE of several uses. Per-task summaries live at
+  // `search_epic_tasks_by_date` is the general lookup; everything else is a
+  // downstream branch. Per-task summaries live at
   // `agent_tasks.summary_file_path`, refreshed every successful run
   // (including retries) so the path is always current.
   sections.push("## Retrieving past epic context");
@@ -593,26 +592,33 @@ function formatEpicSystemPrompt(opts: {
     "If multiple match, show the user a short list and ask them to confirm. Once the right epic is " +
     "identified, branch on the user's actual request:\n\n" +
 
-    "**Path A — \"send me the deliverables / what did each task do?\"** Call " +
-    "`get_epic_task_summaries` with the `epicId`. Returns each task's title + stage + status + " +
-    "absolute `summaryFilePath` (NULLs included with a note). For each task with a summary, call " +
+    "**Path A — anything that needs the epic's interior** (deliver summaries, browse scope, find " +
+    "a stage's PR, copy a stage/task description into a new epic, answer detailed scope/status " +
+    "questions). Call `get_epic_task_stages_and_tasks` with the `epicId`. Returns the full " +
+    "hierarchy: every stage with its metadata (title, description, kind, status, PR info) and " +
+    "every task with its metadata (title, description, status, `summaryFilePath`, timestamps). " +
+    "From there:\n" +
+    "  - **\"Send me what was done\"** → for each task with a `summaryFilePath`, call " +
     "`send_file_to_user` with that absolute path and paste the returned markdown chip verbatim in " +
-    "your reply. For multiple tasks, all chips in one reply with a `### Task X — <title>` label.\n\n" +
+    "your reply. Multiple tasks → all chips in one reply with a `### Task X — <title>` label.\n" +
+    "  - **\"Show me the PR for stage Y\"** → read the stage's `prNumber` / `prUrl` straight from " +
+    "the structure.\n" +
+    "  - **\"What was the original scope of stage Y / task Z\"** → read the description fields.\n\n" +
 
     "**Path B — \"create a new epic similar to / referencing / extending the old one.\"** You " +
-    "already have the original epic's full description from the search result. Use it as the " +
-    "foundation for a new `create_epic_plan` call: paraphrase or copy the scope, layer on the " +
-    "user's new requirements, and mention the source epic's id in your reply so the user knows " +
-    "what you're building on. **Don't fabricate the old scope from memory — quote what the search " +
-    "actually returned.**\n\n" +
+    "already have the epic's full description from the search result. For more depth, " +
+    "`get_epic_task_stages_and_tasks` gives you each stage and task description verbatim — copy " +
+    "or paraphrase those into a new `create_epic_plan` call, layer on the user's new requirements, " +
+    "and mention the source epic's id in your reply. **Don't fabricate scope from memory — quote " +
+    "what the tools actually returned.**\n\n" +
 
     "**Path C — \"remind me what was in scope / what we decided.\"** Just answer from the " +
-    "description in the search result. No follow-up tool call needed. If the user wants more " +
-    "depth than the description provides, fall back to Path A to surface the per-task summaries.\n\n" +
+    "description in the search result. No follow-up tool call needed unless the user wants more " +
+    "depth than the high-level description (then fall back to Path A).\n\n" +
 
     "**Tool gating reminder:** all three tools (`search_epic_tasks_by_date`, " +
-    "`get_epic_task_summaries`, `send_file_to_user`) are admin-assigned per-agent. If a tool isn't " +
-    "available, surface that to the user honestly rather than fabricating a result.",
+    "`get_epic_task_stages_and_tasks`, `send_file_to_user`) are admin-assigned per-agent. If a tool " +
+    "isn't available, surface that to the user honestly rather than fabricating a result.",
   );
   sections.push("");
 

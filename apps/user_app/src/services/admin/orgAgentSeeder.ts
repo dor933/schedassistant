@@ -37,6 +37,7 @@ const EPIC_ORCHESTRATOR_CORE_INSTRUCTIONS =
 
 const EPIC_ORCHESTRATOR_SKILL_SLUGS = [
   "epic-task-workflow",
+  "epic-task-retrieval",
   "mcp-bash-build-test",
   "mcp-filesystem-repo",
   "gh-cli",

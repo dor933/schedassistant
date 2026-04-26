@@ -1519,7 +1519,7 @@ export async function executeTask(
           }
 
           // Persist the per-task summary file path so retrieval tools
-          // (`get_epic_task_summaries`) can fan out the latest summary via
+          // (`get_epic_task_stages_and_tasks`) can fan out the latest summary via
           // `send_file_to_user`. Idempotent — overwrites the prior value on
           // every retry, which is exactly what the user wants ("most updated
           // and relevant file"). No-op when caller didn't pass a path or

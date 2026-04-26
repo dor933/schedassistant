@@ -1339,9 +1339,10 @@ export function RequestStageChangesTool() {
 /**
  * General-purpose lookup of past epics by creation-date window. Returns the
  * full epic description (untruncated) so the result is useful for multiple
- * downstream paths, not just step 1 of the summaries pipeline:
- *   - "what did we work on last Tuesday?" → tell the user, optionally fan
- *     out summaries via `get_epic_task_summaries` + `send_file_to_user`.
+ * downstream paths:
+ *   - "what did we work on last Tuesday?" → tell the user, optionally drill
+ *     into the structure via `get_epic_task_stages_and_tasks` and fan out
+ *     summaries via `send_file_to_user`.
  *   - "create a new epic similar to the StocksScanner one we did last week"
  *     → pull that epic's description and reuse it / reference it inside
  *     `create_epic_plan` for the new epic.
@@ -1436,8 +1437,9 @@ export function SearchEpicTasksByDateTool() {
         }
         summary +=
           `**Follow-up options once you've picked the epic the user means:**\n` +
-          `- To deliver the per-task summary files (markdown writeups for each task) — call ` +
-          `\`get_epic_task_summaries\` with the \`epicId\`, then \`send_file_to_user\` for each path.\n` +
+          `- To dive into the epic's stages and tasks (descriptions, statuses, PR info, summary ` +
+          `file paths) — call \`get_epic_task_stages_and_tasks\` with the \`epicId\`. From there ` +
+          `pass any \`summaryFilePath\` to \`send_file_to_user\` to deliver as a chat attachment.\n` +
           `- To reuse the scope in a new epic — copy or paraphrase the description above into a ` +
           `new \`create_epic_plan\` call, with whatever changes the user requested. Reference the ` +
           `original epic by id in your reply so the user knows what you're building on.\n` +
@@ -1457,7 +1459,8 @@ export function SearchEpicTasksByDateTool() {
         "(up to 50 newest-first). Use this whenever the user references a past epic — by time, " +
         "by topic, or by approximate description — and you need the original scope text or the id.\n\n" +
         "Common follow-ups (the tool response also names them):\n" +
-        "- Deliver per-task summaries → `get_epic_task_summaries` + `send_file_to_user`.\n" +
+        "- Drill into stages and tasks → `get_epic_task_stages_and_tasks` (then `send_file_to_user` " +
+        "for any task's `summaryFilePath`).\n" +
         "- Build a new epic that references / extends an old one → copy or paraphrase the returned " +
         "description into a new `create_epic_plan` call.\n" +
         "- Answer a scope question directly → use the returned description; no further tool call needed.",
@@ -1475,113 +1478,162 @@ export function SearchEpicTasksByDateTool() {
   );
 }
 
-// ─── Get all per-task summaries for an epic ─────────────────────────────────
+// ─── Get full stage + task structure for an epic ────────────────────────────
 
 /**
- * Returns the list of `agent_tasks.summary_file_path` rows for every task in
- * the given epic, joined with task title and stage title for display. Tasks
- * without a captured summary (`summary_file_path IS NULL`) are still listed
- * so the orchestrator can tell the user "task X has no summary on file" —
- * either because the run predates this feature, or the CLI skipped the
- * mandatory summary write on that attempt.
+ * Returns the entire structure of an epic — all stages with their metadata
+ * (title, description, kind, status, sort order, PR info) and every task
+ * under each stage with its metadata (title, description, status, sort
+ * order, summary file path, completion timestamp). Output is hierarchical:
+ * epic header → stage 1 + its tasks → stage 2 + its tasks → ...
  *
- * Paths returned are absolute (under `<agent.workspacePath>/`); the caller
- * passes them straight to `send_file_to_user`, which accepts absolute paths
- * inside the workspace.
+ * Replaces the older `get_epic_task_summaries` tool. The previous tool
+ * returned a flat task list partitioned by "has summary / doesn't" — useful
+ * only for the deliver-files flow. The new shape covers the broader use
+ * cases: deliver summaries, browse what was scoped/built, find a specific
+ * stage's PR, copy a stage/task description into a new epic, etc.
+ *
+ * `summaryFilePath` (when present) is an absolute path under the agent's
+ * workspace — pass directly to `send_file_to_user` to attach in chat.
  */
-export function GetEpicTaskSummariesTool() {
+export function GetEpicTaskStagesAndTasksTool() {
   return tool(
     async (input) => {
       try {
-        const epic = await EpicTask.findByPk(input.epicId, { attributes: ["id", "title"] });
+        const epic = await EpicTask.findByPk(input.epicId, {
+          attributes: ["id", "title", "description", "status", "createdAt", "completedAt"],
+        });
         if (!epic) {
           return `Error: epic with id "${input.epicId}" not found.`;
         }
 
-        const rows = await sequelize.query<{
-          task_id: string;
-          task_title: string;
-          task_status: string;
-          summary_file_path: string | null;
-          stage_title: string;
-          stage_kind: string;
-          stage_sort_order: number;
-          task_sort_order: number;
-        }>(
-          `SELECT at.id AS task_id,
-                  at.title AS task_title,
-                  at.status AS task_status,
-                  at.summary_file_path AS summary_file_path,
-                  ts.title AS stage_title,
-                  ts.kind AS stage_kind,
-                  ts.sort_order AS stage_sort_order,
-                  at.sort_order AS task_sort_order
-             FROM agent_tasks at
-             JOIN task_stages ts ON at.task_stage_id = ts.id
-            WHERE ts.epic_task_id = :epicId
-            ORDER BY ts.sort_order, at.sort_order`,
-          { replacements: { epicId: epic.id }, type: QueryTypes.SELECT },
-        );
+        const stages = await TaskStage.findAll({
+          where: { epicTaskId: epic.id },
+          attributes: [
+            "id", "title", "description", "status", "kind", "sortOrder",
+            "prUrl", "prNumber", "prStatus", "completedAt",
+          ],
+          order: [["sortOrder", "ASC"]],
+        });
 
-        if (rows.length === 0) {
-          return `Epic "${epic.title}" has no tasks.`;
+        if (stages.length === 0) {
+          return `Epic "${epic.title}" has no stages.`;
         }
 
-        const withSummary = rows.filter((r) => r.summary_file_path);
-        const withoutSummary = rows.filter((r) => !r.summary_file_path);
+        const tasks = await AgentTask.findAll({
+          where: { taskStageId: stages.map((s) => s.id) },
+          attributes: [
+            "id", "taskStageId", "title", "description", "status",
+            "sortOrder", "summaryFilePath", "startedAt", "completedAt",
+          ],
+          order: [["sortOrder", "ASC"]],
+        });
 
-        let result = `# Per-task summaries for epic "${epic.title}"\n\n`;
-        result += `**Total tasks:** ${rows.length} ` +
-          `(${withSummary.length} with saved summary, ${withoutSummary.length} without)\n\n`;
+        const tasksByStage = new Map<string, typeof tasks>();
+        for (const t of tasks) {
+          const arr = tasksByStage.get(t.taskStageId) ?? [];
+          arr.push(t);
+          tasksByStage.set(t.taskStageId, arr);
+        }
 
-        if (withSummary.length > 0) {
-          result += `## Tasks with saved summary files\n\n`;
-          result += `Pass each \`summaryFilePath\` below to \`send_file_to_user\` (the tool ` +
-            `accepts absolute workspace paths) and include the returned markdown chip in your ` +
-            `reply to the user.\n\n`;
-          for (const r of withSummary) {
-            result += `- **${r.task_title}** ` +
-              `(stage: "${r.stage_title}"${r.stage_kind === "plan" ? " — plan" : ""}, ` +
-              `task status: ${r.task_status})\n`;
-            result += `  - Task ID: \`${r.task_id}\`\n`;
-            result += `  - summaryFilePath: \`${r.summary_file_path}\`\n`;
+        let result = `# Epic: "${epic.title}"\n\n`;
+        result += `- **Epic ID:** \`${epic.id}\`\n`;
+        result += `- **Status:** ${epic.status}\n`;
+        result += `- **Created:** ${epic.createdAt.toISOString()}\n`;
+        if (epic.completedAt) {
+          result += `- **Completed:** ${epic.completedAt.toISOString()}\n`;
+        }
+        result += `- **Stages:** ${stages.length} ` +
+          `(${stages.length === 1 ? "the only stage" : `1 of ${stages.length}` + (stages.length > 1 ? ` through ${stages.length} of ${stages.length}` : "")})\n\n`;
+        if (epic.description) {
+          result += `**Epic description:**\n\n> ${epic.description.replace(/\n/g, "\n> ")}\n\n`;
+        }
+        result += `---\n\n`;
+
+        const totalStages = stages.length;
+        let summaryFileCount = 0;
+        for (const stage of stages) {
+          const stageTasks = tasksByStage.get(stage.id) ?? [];
+          const isLast = stage.sortOrder === Math.max(...stages.map((s) => s.sortOrder));
+          result += `## Stage ${stage.sortOrder + 1} of ${totalStages}: "${stage.title}"`;
+          if (stage.kind === "plan") result += ` _(plan — no PR)_`;
+          if (isLast) result += ` _(final stage)_`;
+          result += `\n\n`;
+          result += `- **Stage ID:** \`${stage.id}\`\n`;
+          result += `- **Status:** ${stage.status}\n`;
+          if (stage.completedAt) {
+            result += `- **Completed:** ${stage.completedAt.toISOString()}\n`;
           }
-          result += "\n";
-        }
+          if (stage.prNumber) {
+            result += `- **PR:** #${stage.prNumber}` +
+              (stage.prUrl ? ` (${stage.prUrl})` : "") +
+              (stage.prStatus ? ` — ${stage.prStatus}` : "") + `\n`;
+          } else if (stage.kind !== "plan") {
+            result += `- **PR:** _not yet created_\n`;
+          }
+          if (stage.description) {
+            result += `- **Stage description:**\n\n  > ${stage.description.replace(/\n/g, "\n  > ")}\n`;
+          }
 
-        if (withoutSummary.length > 0) {
-          result += `## Tasks without saved summary\n\n`;
-          result +=
-            `These tasks either predate the per-task summary feature, or the CLI didn't write ` +
-            `the mandatory summary file on its run (rare — usually means a CLI error). Tell the ` +
-            `user the work happened but no summary file is on record; offer to retry the task ` +
-            `if they want one generated now.\n\n`;
-          for (const r of withoutSummary) {
-            result += `- **${r.task_title}** ` +
-              `(stage: "${r.stage_title}"${r.stage_kind === "plan" ? " — plan" : ""}, ` +
-              `task status: ${r.task_status}, Task ID: \`${r.task_id}\`)\n`;
+          if (stageTasks.length === 0) {
+            result += `\n_(no tasks defined under this stage)_\n\n`;
+            continue;
+          }
+
+          result += `\n### Tasks (${stageTasks.length})\n\n`;
+          for (const t of stageTasks) {
+            if (t.summaryFilePath) summaryFileCount++;
+            result += `#### Task ${t.sortOrder + 1}: ${t.title}\n\n`;
+            result += `- **Task ID:** \`${t.id}\`\n`;
+            result += `- **Status:** ${t.status}\n`;
+            if (t.startedAt) {
+              result += `- **Started:** ${t.startedAt.toISOString()}\n`;
+            }
+            if (t.completedAt) {
+              result += `- **Completed:** ${t.completedAt.toISOString()}\n`;
+            }
+            if (t.summaryFilePath) {
+              result += `- **Summary file:** \`${t.summaryFilePath}\` ` +
+                `_(pass to \`send_file_to_user\` to deliver as chat attachment)_\n`;
+            } else {
+              result += `- **Summary file:** _none on record_ ` +
+                `_(task either predates the summary feature, or the CLI skipped the mandatory write — rare; usually a CLI error)_\n`;
+            }
+            if (t.description) {
+              result += `- **Task description:**\n\n  > ${t.description.replace(/\n/g, "\n  > ")}\n`;
+            }
+            result += `\n`;
           }
         }
+
+        result += `---\n\n`;
+        result += `**Summary files available:** ${summaryFileCount} of ${tasks.length} task(s). ` +
+          `For "send me what was done" requests, pass each \`Summary file\` path above to ` +
+          `\`send_file_to_user\` and include the returned chips verbatim in your reply.`;
 
         return result;
       } catch (err: any) {
-        logger.error("GetEpicTaskSummaries: failed", { error: err.message });
-        return `Error fetching epic task summaries: ${err.message}`;
+        logger.error("GetEpicTaskStagesAndTasks: failed", { error: err.message });
+        return `Error fetching epic stages/tasks: ${err.message}`;
       }
     },
     {
-      name: "get_epic_task_summaries",
+      name: "get_epic_task_stages_and_tasks",
       description:
-        "Fetches the saved per-task summary file paths for every task in an epic. Use this AFTER " +
-        "you've identified which epic the user is asking about (typically via " +
-        "`search_epic_tasks_by_date` followed by user confirmation). Returns absolute paths under " +
-        "the agent's workspace — pass each one to `send_file_to_user` and include the returned " +
-        "markdown chip in your reply so the user gets each summary as a downloadable attachment.\n\n" +
-        "Tasks without a captured summary are also listed (with a note) so the user knows about " +
-        "the gap rather than silently missing entries.",
+        "Returns the complete stage + task structure of an epic — every stage with its metadata " +
+        "(title, description, kind, status, PR info) and every task under each stage (title, " +
+        "description, status, summary file path, timestamps), organized hierarchically. Use this " +
+        "AFTER `search_epic_tasks_by_date` has identified the epic the user means, whenever you " +
+        "need ANY detail about the epic's interior:\n" +
+        "- Deliver per-task summary files → pass each `summaryFilePath` to `send_file_to_user`.\n" +
+        "- Browse what was scoped or built → read each stage's title/description and its tasks' " +
+        "descriptions.\n" +
+        "- Find a specific stage's PR → look at the stage's PR number/URL/status.\n" +
+        "- Reuse a stage or task description in a new `create_epic_plan` call.\n" +
+        "- Answer scope/status questions directly from the structure.",
       schema: z.object({
         epicId: z.string().uuid().describe(
-          "The id of the epic whose per-task summaries you want — typically copied verbatim from " +
+          "The id of the epic whose full structure you want — typically copied verbatim from " +
           "an earlier `search_epic_tasks_by_date` result the user has just confirmed.",
         ),
       }),
