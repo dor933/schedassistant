@@ -192,12 +192,13 @@ module.exports = {
     //    Orchestrator agent. Uses NOT EXISTS to stay idempotent — re-running
     //    the migration on a partially-applied DB won't double-bind. Future
     //    orgs pick the binding up via orgAgentSeeder.ts.
+    //    Note: this junction table only has `created_at` (no `updated_at`)
+    //    per migration 20240101000038-create-skills-and-junctions.js.
     await queryInterface.sequelize.query(
-      `INSERT INTO agent_available_skills (agent_id, skill_id, active, created_at, updated_at)
+      `INSERT INTO agent_available_skills (agent_id, skill_id, active, created_at)
        SELECT a.id,
               s.id,
               true,
-              :now,
               :now
          FROM agents a
          CROSS JOIN skills s
