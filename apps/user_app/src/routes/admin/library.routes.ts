@@ -11,6 +11,7 @@ const upload = multer({
 
 router.get("/", controller.list);
 router.post("/", upload.single("file"), controller.upload);
+router.get("/:fileName/download", controller.download);
 router.delete("/:fileName", controller.delete);
 
 export { router as libraryRouter };

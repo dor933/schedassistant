@@ -47,4 +47,34 @@ export class LibraryController {
       return res.status(500).json({ error: err.message });
     }
   };
+
+  download = async (req: Request, res: Response) => {
+    try {
+      const upstream = await this.service.openDownload(String(req.params.fileName));
+      // Forward the upstream binary response unchanged. Preserving
+      // Content-Disposition is what makes the browser save with the original
+      // file name; Content-Type and Content-Length keep size/mime intact.
+      const passthrough = ["content-type", "content-length", "content-disposition"];
+      for (const h of passthrough) {
+        const v = upstream.headers.get(h);
+        if (v) res.setHeader(h, v);
+      }
+      if (!upstream.body) {
+        return res.status(502).json({ error: "Empty response from agent_service." });
+      }
+      const reader = upstream.body.getReader();
+      res.status(upstream.status);
+      // Pump the readable stream into the express response.
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) res.write(value);
+      }
+      return res.end();
+    } catch (err: any) {
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      logger.error("GET /admin/library/:fileName/download error:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  };
 }

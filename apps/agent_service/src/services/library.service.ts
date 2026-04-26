@@ -96,6 +96,24 @@ export function readLibraryFile(fileName: string): {
   return { fileName: name, content };
 }
 
+/**
+ * Resolve a library file's absolute path for streaming downloads. Returns the
+ * sanitized file name + its on-disk path. Use with `res.sendFile` /
+ * `res.download` in the controller to stream binary contents safely.
+ */
+export function resolveLibraryFilePath(fileName: string): {
+  fileName: string;
+  fullPath: string;
+} {
+  const name = sanitizeFileName(fileName);
+  const dir = libraryDir();
+  const full = path.join(dir, name);
+  if (!fs.existsSync(full)) {
+    throw new LibraryServiceError(`File "${name}" not found.`, 404);
+  }
+  return { fileName: name, fullPath: full };
+}
+
 export function getLibraryPath(): string {
   return libraryDir();
 }

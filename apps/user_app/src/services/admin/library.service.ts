@@ -70,4 +70,21 @@ export class LibraryService {
     }
     logger.info("Library file deleted", { fileName });
   }
+
+  /**
+   * Open a streaming download from the agent_service. Returns the upstream
+   * `fetch` response so the controller can pipe its body back to the browser
+   * along with the original `Content-Type`, `Content-Length`, and
+   * `Content-Disposition` headers. Caller is responsible for forwarding the
+   * stream and any failure status.
+   */
+  async openDownload(fileName: string): Promise<Response> {
+    const resp = await fetch(
+      `${AGENT_SERVICE_URL}/api/library/${encodeURIComponent(fileName)}/download`,
+    );
+    if (!resp.ok) {
+      throw Object.assign(new Error(await readError(resp)), { status: resp.status });
+    }
+    return resp;
+  }
 }

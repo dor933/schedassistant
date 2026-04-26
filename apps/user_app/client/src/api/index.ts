@@ -903,6 +903,28 @@ export const admin = {
       `/admin/library/${encodeURIComponent(fileName)}`,
       { method: "DELETE" },
     ),
+  downloadLibraryFile: async (fileName: string): Promise<void> => {
+    // Bearer-auth means we can't use a plain `<a href>` — fetch with the
+    // Authorization header, then trigger a save via a temporary object URL.
+    const token = getToken();
+    const res = await fetch(
+      `${BASE}/admin/library/${encodeURIComponent(fileName)}/download`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 
   // ── Web search agent (per-org active pick) ─────────────────────────────
   getWebSearchAgent: () =>

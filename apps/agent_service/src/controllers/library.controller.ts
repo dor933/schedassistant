@@ -4,6 +4,7 @@ import {
   deleteLibraryFile,
   listLibraryFiles,
   readLibraryFile,
+  resolveLibraryFilePath,
   saveLibraryFile,
 } from "../services/library.service";
 import { logger } from "../logger";
@@ -48,6 +49,17 @@ export class LibraryController {
       return res.json(result);
     } catch (err) {
       return handleError(res, err, "GET /library/:fileName error");
+    }
+  };
+
+  download = async (req: Request, res: Response) => {
+    try {
+      const { fileName, fullPath } = resolveLibraryFilePath(
+        String(req.params.fileName),
+      );
+      return res.download(fullPath, fileName);
+    } catch (err) {
+      return handleError(res, err, "GET /library/:fileName/download error");
     }
   };
 

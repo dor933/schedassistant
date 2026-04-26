@@ -191,6 +191,7 @@ export default function AdminPage() {
   const [libraryFiles, setLibraryFiles] = useState<LibraryFile[]>([]);
   const [uploadingLibraryFile, setUploadingLibraryFile] = useState(false);
   const [deletingLibraryFile, setDeletingLibraryFile] = useState<string | null>(null);
+  const [downloadingLibraryFile, setDownloadingLibraryFile] = useState<string | null>(null);
   const libraryFileInputRef = useRef<HTMLInputElement | null>(null);
   const [agents, setAgents] = useState<AdminAgent[]>([]);
   const [groups, setGroups] = useState<AdminGroup[]>([]);
@@ -440,6 +441,21 @@ export default function AdminPage() {
       }
     },
     [deletingLibraryFile, toast],
+  );
+
+  const handleDownloadLibraryFile = useCallback(
+    async (fileName: string) => {
+      if (downloadingLibraryFile) return;
+      setDownloadingLibraryFile(fileName);
+      try {
+        await admin.downloadLibraryFile(fileName);
+      } catch (e: any) {
+        toast(e?.message ?? "Failed to download library file.", "error");
+      } finally {
+        setDownloadingLibraryFile(null);
+      }
+    },
+    [downloadingLibraryFile, toast],
   );
 
   // Slugs of system agents that are shared by design and cannot be assigned to
@@ -1797,6 +1813,7 @@ export default function AdminPage() {
                   const kb = Math.max(1, Math.round(f.size / 1024));
                   const updated = new Date(f.updatedAt).toLocaleString();
                   const isDeleting = deletingLibraryFile === f.fileName;
+                  const isDownloading = downloadingLibraryFile === f.fileName;
                   return (
                     <li
                       key={f.fileName}
@@ -1815,8 +1832,21 @@ export default function AdminPage() {
                       </div>
                       <button
                         type="button"
+                        onClick={() => handleDownloadLibraryFile(f.fileName)}
+                        disabled={isDownloading || isDeleting}
+                        className="inline-flex items-center gap-1 rounded-lg border border-purple-200 bg-white px-2.5 py-1 text-xs font-semibold text-purple-600 transition hover:bg-purple-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {isDownloading ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Download className="h-3.5 w-3.5" />
+                        )}
+                        Download
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleDeleteLibraryFile(f.fileName)}
-                        disabled={isDeleting}
+                        disabled={isDeleting || isDownloading}
                         className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                       >
                         {isDeleting ? (
