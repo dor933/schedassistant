@@ -4,6 +4,7 @@ import { Op } from "sequelize";
 import { logger } from "../logger";
 
 const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
+const NUM_SUMMARIES = 5;
 
 export type LoadRecentSessionSummariesOptions = {
   /**
@@ -14,7 +15,7 @@ export type LoadRecentSessionSummariesOptions = {
 };
 
 /**
- * Loads up to two of the most recent session summaries for the given **agent**
+ * Loads up to NUM_SUMMARIES of the most recent session summaries for the given **agent**
  * from `threads` where `summary` is set and `summarized_at` is within the
  * last 48 hours. Agent-level scoping ensures memory persists across conversations.
  */
@@ -41,7 +42,7 @@ export async function loadRecentSessionSummaries(
         summarizedAt: { [Op.gte]: since },
       },
       order: [["summarizedAt", "DESC"]],
-      limit: 2,
+      limit: NUM_SUMMARIES,
     });
 
     return rows
