@@ -1122,11 +1122,11 @@ export default function AdminPage() {
                 <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                   Agent Type
                 </label>
-                <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50/80 p-0.5">
+                <div className="grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-gray-50/80 p-0.5 sm:grid-cols-4">
                   <button
                     type="button"
                     onClick={() => setNewAgentType("primary")}
-                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-150 ${
                       newAgentType === "primary"
                         ? "bg-white text-indigo-700 shadow-sm ring-1 ring-indigo-200"
                         : "text-gray-500 hover:text-gray-700"
@@ -1138,7 +1138,7 @@ export default function AdminPage() {
                   <button
                     type="button"
                     onClick={() => setNewAgentType("system")}
-                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-150 ${
                       newAgentType === "system"
                         ? "bg-white text-emerald-700 shadow-sm ring-1 ring-emerald-200"
                         : "text-gray-500 hover:text-gray-700"
@@ -1150,7 +1150,7 @@ export default function AdminPage() {
                   <button
                     type="button"
                     onClick={() => setNewAgentType("external")}
-                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-150 ${
                       newAgentType === "external"
                         ? "bg-white text-amber-700 shadow-sm ring-1 ring-amber-200"
                         : "text-gray-500 hover:text-gray-700"
@@ -1162,7 +1162,7 @@ export default function AdminPage() {
                   <button
                     type="button"
                     onClick={() => setNewAgentType("application")}
-                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-150 ${
                       newAgentType === "application"
                         ? "bg-white text-sky-700 shadow-sm ring-1 ring-sky-200"
                         : "text-gray-500 hover:text-gray-700"
