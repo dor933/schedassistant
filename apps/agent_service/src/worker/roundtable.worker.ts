@@ -1,6 +1,11 @@
 import { Worker } from "bullmq";
 import type { CompiledStateGraph } from "@langchain/langgraph";
-import { HumanMessage } from "@langchain/core/messages";
+import type { RunnableConfig } from "@langchain/core/runnables";
+import {
+  HumanMessage,
+  RemoveMessage,
+  type BaseMessage,
+} from "@langchain/core/messages";
 import {
   Roundtable,
   RoundtableAgent,
@@ -22,6 +27,11 @@ import { emitAgentTyping, getAgentIO } from "../socket";
 import { summarizeRoundtable } from "../graphs/roundtableGraph/summarizer";
 import { insertEpisodicMemoryChunks } from "../rag/episodicMemoryChunksWriter";
 import { getEmbedderForAgent } from "../rag/embeddings";
+import {
+  observeWithContext,
+  getLangfuseCallbackHandler,
+  flushLangfuse,
+} from "../langfuse";
 import { logger } from "../logger";
 
 const redisConfig = getRedisConfig();
@@ -132,7 +142,10 @@ export function startRoundtableWorker(
       const participantUser = participantUsers[0] ?? null;
 
       try {
-        const result = await withThreadLock(lockRedis, lockKey, async () => {
+        const result = await withThreadLock(lockRedis, lockKey, async () =>
+          observeWithContext(
+            "roundtable_turn",
+            async () => {
           // Ensure the LangGraph session exists for this thread
           await ensureSession(threadId, null, { agentId });
 
@@ -162,9 +175,25 @@ export function startRoundtableWorker(
               ? `You are the first to speak in this roundtable discussion.\n\n**Topic:** ${roundtable.topic}\n\nShare your initial thoughts, analysis, and any concrete contributions from your area of expertise.`
               : `It is your turn to contribute to the roundtable discussion.\n\n**Topic:** ${roundtable.topic}\n\nReview what other participants have said and add your perspective. Build on previous contributions and provide new insights from your expertise.`;
 
+          // Tag the moderator HumanMessage with the agent it is addressed to and
+          // the round number. The roundtable graph uses this metadata to attribute
+          // each turn block in the shared thread to its owning agent so peers'
+          // prior replies don't read as the current agent's own past output.
           const humanMsg = new HumanMessage({
             content: `[Roundtable turn — Round ${roundNumber + 1}]\n\n${turnInstruction}`,
             name: "roundtable_moderator",
+            additional_kwargs: { agentId, roundNumber },
+          });
+
+          const langfuseHandler = getLangfuseCallbackHandler(userId, {
+            threadId,
+            roundtableId,
+            agentId,
+            roundNumber,
+            modelSlug,
+            agentLabel,
+            service: "agent_service",
+            graph: "roundtable",
           });
 
           const graphResult = await roundtableGraph.invoke(
@@ -188,7 +217,14 @@ export function startRoundtableWorker(
                 participantUsers,
               },
             },
-            { configurable: { thread_id: threadId } },
+            {
+              configurable: { thread_id: threadId },
+              ...(langfuseHandler
+                ? {
+                    callbacks: [langfuseHandler] as RunnableConfig["callbacks"],
+                  }
+                : {}),
+            } as RunnableConfig,
           );
 
           if (graphResult.error) {
@@ -222,7 +258,20 @@ export function startRoundtableWorker(
           }
 
           return reply;
-        });
+            },
+            {
+              roundtableId,
+              agentId,
+              agentLabel,
+              roundNumber,
+              userId,
+              topicPreview:
+                typeof roundtable.topic === "string"
+                  ? roundtable.topic.substring(0, 200)
+                  : "",
+            },
+          ),
+        );
 
         // Save the agent's reply as a roundtable message for the UI
         await RoundtableMessage.create({
@@ -352,6 +401,10 @@ export function startRoundtableWorker(
         } catch {
           // Socket not yet initialized
         }
+      } finally {
+        // Flush Langfuse traces so each turn's observation lands even if the
+        // worker process is recycled before the next turn fires.
+        await flushLangfuse();
       }
     },
     {
@@ -681,7 +734,7 @@ async function generateAndPersistSummary(params: {
 
   let summary: string;
   try {
-    summary = await summarizeRoundtable(roundtableId);
+    summary = await summarizeRoundtable(roundtableId, { userId });
   } catch (err: any) {
     logger.error("Roundtable: summary generation failed", {
       roundtableId,
@@ -733,4 +786,184 @@ async function generateAndPersistSummary(params: {
   );
 
   return summary;
+}
+
+// ─── Resume after failure ───────────────────────────────────────────────────
+
+/**
+ * Walks `messages` from the end backwards and returns the index of the last
+ * "clean turn boundary" — a point at which the LangGraph thread can be safely
+ * continued. Anything after that index is orphan content from a failed turn
+ * (e.g. a moderator HumanMessage with no AI reply, an AIMessage with
+ * tool_calls whose ToolMessage never arrived, or partial tool results).
+ *
+ * A clean boundary is either:
+ *   - an AIMessage with non-empty text content and no pending tool_calls
+ *     (a completed reply), or
+ *   - a HumanMessage whose name is NOT "roundtable_moderator" (a user
+ *     contribution submitted via the user-turn route).
+ *
+ * Returns -1 when no clean boundary exists, in which case the entire
+ * checkpoint should be cleared.
+ */
+function findCleanCheckpointBoundary(messages: BaseMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m: any = messages[i];
+    const t =
+      typeof m?._getType === "function" ? m._getType() : m?.role ?? m?._type;
+    if (t === "ai" || t === "assistant") {
+      const tcs = m.tool_calls;
+      const hasToolCalls = Array.isArray(tcs) && tcs.length > 0;
+      const text = extractMessageText(m.content);
+      if (!hasToolCalls && text.trim().length > 0) return i;
+    } else if (t === "human" || t === "user") {
+      if (m.name && m.name !== "roundtable_moderator") return i;
+    }
+  }
+  return -1;
+}
+
+function extractMessageText(content: unknown): string {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const out: string[] = [];
+  for (const part of content) {
+    if (typeof part === "string") out.push(part);
+    else if (
+      part &&
+      typeof part === "object" &&
+      "text" in part &&
+      typeof (part as { text: unknown }).text === "string"
+    ) {
+      out.push((part as { text: string }).text);
+    }
+  }
+  return out.join("\n");
+}
+
+/**
+ * Resume a roundtable that was previously marked `failed`.
+ *
+ * Trims trailing orphan messages from the LangGraph checkpoint (so the next
+ * invoke does not start mid-tool-call), flips the roundtable status back to
+ * `running`, and re-enqueues a `roundtable_turn` job for the agent who was
+ * mid-flight when the failure occurred (`currentAgentOrderIndex` /
+ * `currentRound`).
+ *
+ * The checkpoint and `RoundtableMessage` rows survive the failure, so
+ * verbatim history of completed turns comes back automatically once the
+ * re-enqueued turn runs.
+ */
+export async function resumeRoundtable(
+  roundtableGraph: CompiledStateGraph<any, any, any>,
+  params: { roundtableId: string },
+): Promise<
+  | { ok: true; agentId: string; round: number; trimmedMessages: number }
+  | { ok: false; status: number; error: string }
+> {
+  const { roundtableId } = params;
+
+  const roundtable = await Roundtable.findByPk(roundtableId);
+  if (!roundtable) {
+    return { ok: false, status: 404, error: "Roundtable not found" };
+  }
+  if (roundtable.status !== "failed") {
+    return {
+      ok: false,
+      status: 400,
+      error: `Roundtable is not in failed state (status=${roundtable.status})`,
+    };
+  }
+
+  const threadId = roundtable.threadId;
+  const config = { configurable: { thread_id: threadId } };
+
+  // 1. Trim trailing orphan messages so the next invoke does not start with
+  //    a half-finished tool sequence that providers will reject.
+  let trimmedMessages = 0;
+  try {
+    const stateTuple = await roundtableGraph.getState(config);
+    const messages: BaseMessage[] =
+      (stateTuple?.values?.messages as BaseMessage[]) ?? [];
+    if (messages.length > 0) {
+      const boundary = findCleanCheckpointBoundary(messages);
+      const orphans = messages.slice(boundary + 1);
+      const removeIds = orphans
+        .map((m) => (m as any).id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+      if (removeIds.length > 0) {
+        await roundtableGraph.updateState(config, {
+          messages: removeIds.map((id) => new RemoveMessage({ id })),
+        });
+        trimmedMessages = removeIds.length;
+      }
+      if (orphans.length !== removeIds.length) {
+        logger.warn(
+          "Roundtable resume: some orphan messages had no id and could not be trimmed",
+          {
+            roundtableId,
+            orphanCount: orphans.length,
+            trimmable: removeIds.length,
+          },
+        );
+      }
+    }
+  } catch (err: any) {
+    logger.error("Roundtable resume: checkpoint trim failed", {
+      roundtableId,
+      error: err?.message ?? String(err),
+    });
+    return {
+      ok: false,
+      status: 500,
+      error: "Failed to clean checkpoint state",
+    };
+  }
+
+  // 2. Locate the agent at currentAgentOrderIndex — the one who was running
+  //    (or about to run) when the failure happened.
+  const roundtableAgents = await RoundtableAgent.findAll({
+    where: { roundtableId },
+    order: [["turnOrder", "ASC"]],
+  });
+  const currentAgent = roundtableAgents.find(
+    (ra) => ra.turnOrder === roundtable.currentAgentOrderIndex,
+  );
+  if (!currentAgent) {
+    return {
+      ok: false,
+      status: 500,
+      error: `No agent at turnOrder=${roundtable.currentAgentOrderIndex}`,
+    };
+  }
+
+  // 3. Reset status and re-enqueue the failed turn. Use the roundtable
+  //    creator as the userId — that field is required by the job payload
+  //    and matches the original `start` route's behavior.
+  await Roundtable.update(
+    { status: "running" },
+    { where: { id: roundtableId } },
+  );
+
+  await roundtableQueue.add("roundtable_turn", {
+    roundtableId,
+    agentId: currentAgent.agentId,
+    roundNumber: roundtable.currentRound,
+    userId: roundtable.createdBy,
+  });
+
+  logger.info("Roundtable resumed", {
+    roundtableId,
+    agentId: currentAgent.agentId,
+    round: roundtable.currentRound,
+    trimmedMessages,
+  });
+
+  return {
+    ok: true,
+    agentId: currentAgent.agentId,
+    round: roundtable.currentRound,
+    trimmedMessages,
+  };
 }

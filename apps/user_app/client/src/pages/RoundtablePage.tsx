@@ -1,4 +1,11 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  type MouseEvent,
+} from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
@@ -21,6 +28,7 @@ import {
   Send,
   User as UserIcon,
   Timer,
+  RotateCw,
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -126,6 +134,34 @@ function RoundtableListView() {
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
   const [maxTurns, setMaxTurns] = useState(5);
   const [creating, setCreating] = useState(false);
+  const [resumingId, setResumingId] = useState<string | null>(null);
+
+  const handleResumeFromList = async (
+    e: MouseEvent<HTMLButtonElement>,
+    rtId: string,
+  ) => {
+    e.stopPropagation();
+    setResumingId(rtId);
+    try {
+      const result = await api.resumeRoundtable(rtId);
+      const trimmed = result.trimmedMessages ?? 0;
+      toast(
+        trimmed > 0
+          ? `Resumed — trimmed ${trimmed} orphan message${trimmed === 1 ? "" : "s"}`
+          : "Roundtable resumed",
+        "info",
+      );
+      setRoundtables((prev) =>
+        prev.map((rt) =>
+          rt.id === rtId ? { ...rt, status: "running" } : rt,
+        ),
+      );
+    } catch (err: any) {
+      toast(err.message ?? "Failed to resume roundtable", "error");
+    } finally {
+      setResumingId(null);
+    }
+  };
 
   useEffect(() => {
     api.getRoundtables().then(setRoundtables).catch(console.error);
@@ -196,7 +232,7 @@ function RoundtableListView() {
         <Stack
           component="header"
           direction="row"
-          className="sticky top-0 z-10 -mx-4 mb-6 min-w-0 items-center justify-between gap-3 border-b border-white/5 bg-slate-950/50 px-4 py-3 backdrop-blur-xl sm:-mx-6 sm:mb-8 sm:px-6 sm:py-4 lg:-mx-8 lg:px-8"
+          className="sticky top-0 z-30 -mx-4 mb-6 min-w-0 items-center justify-between gap-3 border-b border-white/5 bg-slate-950/50 px-4 py-3 backdrop-blur-xl sm:-mx-6 sm:mb-8 sm:px-6 sm:py-4 lg:-mx-8 lg:px-8"
         >
           <div className="flex min-w-0 items-center gap-3">
             <div className="relative flex h-10 w-10 items-center justify-center">
@@ -393,28 +429,60 @@ function RoundtableListView() {
               </div>
             ) : (
               <div className="space-y-2.5">
-                {roundtables.map((rt) => (
-                  <button
-                    key={rt.id}
-                    onClick={() => navigate(`/roundtable/${rt.id}`)}
-                    className="group w-full rounded-xl border border-white/10 bg-white/[0.04] p-4 text-left backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-fuchsia-400/40 hover:bg-white/[0.07] hover:shadow-[0_0_28px_-8px_rgba(217,70,239,0.45)]"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-white group-hover:text-fuchsia-100">
-                          {rt.topic}
-                        </p>
-                        <p className="mt-1 flex items-center gap-2 text-[11px] text-indigo-200/60">
-                          <Hash className="h-3 w-3" />
-                          Round {rt.currentRound + 1} of {rt.maxTurnsPerAgent}
-                          <span className="text-indigo-300/40">·</span>
-                          {new Date(rt.createdAt).toLocaleDateString()}
-                        </p>
+                {roundtables.map((rt) => {
+                  const canResume =
+                    rt.status === "failed" &&
+                    (rt.createdBy == null || rt.createdBy === user?.id);
+                  const isResumingThis = resumingId === rt.id;
+                  return (
+                    <div
+                      key={rt.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => navigate(`/roundtable/${rt.id}`)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          navigate(`/roundtable/${rt.id}`);
+                        }
+                      }}
+                      className="group w-full cursor-pointer rounded-xl border border-white/10 bg-white/[0.04] p-4 text-left backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-fuchsia-400/40 hover:bg-white/[0.07] hover:shadow-[0_0_28px_-8px_rgba(217,70,239,0.45)]"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-white group-hover:text-fuchsia-100">
+                            {rt.topic}
+                          </p>
+                          <p className="mt-1 flex items-center gap-2 text-[11px] text-indigo-200/60">
+                            <Hash className="h-3 w-3" />
+                            Round {rt.currentRound + 1} of {rt.maxTurnsPerAgent}
+                            <span className="text-indigo-300/40">·</span>
+                            {new Date(rt.createdAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          {canResume && (
+                            <button
+                              type="button"
+                              onClick={(e) => void handleResumeFromList(e, rt.id)}
+                              disabled={isResumingThis}
+                              title="Trim orphan checkpoint state and re-run the failed turn"
+                              className="inline-flex items-center gap-1 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-200 backdrop-blur-sm transition-all duration-200 hover:bg-emerald-500/20 hover:text-emerald-100 active:scale-[0.97] disabled:opacity-50"
+                            >
+                              {isResumingThis ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <RotateCw className="h-3 w-3" />
+                              )}
+                              Resume
+                            </button>
+                          )}
+                          <StatusPill status={rt.status} />
+                        </div>
                       </div>
-                      <StatusPill status={rt.status} />
                     </div>
-                  </button>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Box>
@@ -493,6 +561,7 @@ function RoundtableDetailView({ id }: { id: string }) {
   const [messages, setMessages] = useState<RoundtableMessageInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [stopping, setStopping] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [userTurn, setUserTurn] = useState<{
     roundNumber: number;
     deadline: number;
@@ -653,6 +722,25 @@ function RoundtableDetailView({ id }: { id: string }) {
     }
   };
 
+  const handleResume = async () => {
+    setResuming(true);
+    try {
+      const result = await api.resumeRoundtable(id);
+      setData((prev) => (prev ? { ...prev, status: "running" } : prev));
+      const trimmed = result.trimmedMessages ?? 0;
+      toast(
+        trimmed > 0
+          ? `Roundtable resumed — trimmed ${trimmed} orphan message${trimmed === 1 ? "" : "s"}`
+          : "Roundtable resumed",
+        "info",
+      );
+    } catch (err: any) {
+      toast(err.message ?? "Failed to resume roundtable", "error");
+    } finally {
+      setResuming(false);
+    }
+  };
+
   const submitUserTurn = useCallback(
     async (content: string) => {
       if (submittingTurn) return;
@@ -748,8 +836,11 @@ function RoundtableDetailView({ id }: { id: string }) {
     <div className="space-bg relative flex h-[100dvh] flex-col overflow-hidden">
       <SpaceAmbient />
 
-      {/* Header */}
-      <header className="relative z-10 shrink-0 border-b border-white/5 bg-slate-950/50 backdrop-blur-xl">
+      {/* Header — z-30 so the NotificationBell popover (z-50 inside) renders
+          above the messages container (z-10) below. Sharing z-10 with the
+          messages would let them stack over the dropdown despite the inner
+          z-50, since they live in the same parent stacking context. */}
+      <header className="relative z-30 shrink-0 border-b border-white/5 bg-slate-950/50 backdrop-blur-xl">
         <div className="mx-auto flex max-w-5xl items-start justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex min-w-0 flex-1 items-start gap-3">
             <button
@@ -807,6 +898,21 @@ function RoundtableDetailView({ id }: { id: string }) {
                 Stop
               </button>
             )}
+            {data.status === "failed" && (
+              <button
+                onClick={handleResume}
+                disabled={resuming}
+                title="Trim any orphan checkpoint state and re-run the failed turn"
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-200 backdrop-blur-sm transition-all duration-200 hover:bg-emerald-500/20 hover:text-emerald-100 hover:shadow-[0_0_18px_-6px_rgba(16,185,129,0.65)] active:scale-[0.98] disabled:opacity-50"
+              >
+                {resuming ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RotateCw className="h-3.5 w-3.5" />
+                )}
+                Resume
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -847,22 +953,58 @@ function RoundtableDetailView({ id }: { id: string }) {
             </div>
           )}
 
-          {messages.length === 0 && data.status !== "completed" && (
-            <div className="flex items-center justify-center py-16">
-              <div className="text-center">
-                <div className="relative mx-auto mb-4 h-14 w-14">
-                  <div className="absolute inset-0 rounded-full bg-gradient-to-br from-indigo-500/40 via-violet-500/40 to-fuchsia-500/40 blur-xl aurora-glow" />
-                  <div className="absolute inset-0 animate-ping rounded-full bg-fuchsia-400/25" />
-                  <div className="relative flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_0_28px_-4px_rgba(168,85,247,0.75)] ring-1 ring-white/20">
-                    <MessagesSquare className="h-6 w-6" />
+          {messages.length === 0 &&
+            data.status !== "completed" &&
+            data.status !== "failed" && (
+              <div className="flex items-center justify-center py-16">
+                <div className="text-center">
+                  <div className="relative mx-auto mb-4 h-14 w-14">
+                    <div className="absolute inset-0 rounded-full bg-gradient-to-br from-indigo-500/40 via-violet-500/40 to-fuchsia-500/40 blur-xl aurora-glow" />
+                    <div className="absolute inset-0 animate-ping rounded-full bg-fuchsia-400/25" />
+                    <div className="relative flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_0_28px_-4px_rgba(168,85,247,0.75)] ring-1 ring-white/20">
+                      <MessagesSquare className="h-6 w-6" />
+                    </div>
+                  </div>
+                  <p className="text-sm font-medium text-white">
+                    Waiting for the first agent to speak
+                  </p>
+                  <p className="mt-1 text-xs text-indigo-200/60">
+                    Responses will stream in live
+                  </p>
+                </div>
+              </div>
+            )}
+
+          {data.status === "failed" && (
+            <div className="glass-panel-elevated animate-slide-up rounded-2xl border border-rose-400/30 p-5 shadow-[0_0_24px_-10px_rgba(244,63,94,0.55)]">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-500/15 ring-1 ring-rose-400/40 backdrop-blur-sm">
+                    <AlertTriangle className="h-4 w-4 text-rose-200" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-white">
+                      This roundtable failed mid-run
+                    </p>
+                    <p className="mt-0.5 text-[12px] text-indigo-200/70">
+                      {messages.length === 0
+                        ? "No turns completed before the failure. Resume to start over from round 1."
+                        : `Resuming will trim any orphan checkpoint state and re-run round ${data.currentRound + 1} starting with the agent that died.`}
+                    </p>
                   </div>
                 </div>
-                <p className="text-sm font-medium text-white">
-                  Waiting for the first agent to speak
-                </p>
-                <p className="mt-1 text-xs text-indigo-200/60">
-                  Responses will stream in live
-                </p>
+                <button
+                  onClick={handleResume}
+                  disabled={resuming}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-200 backdrop-blur-sm transition-all duration-200 hover:bg-emerald-500/20 hover:text-emerald-100 hover:shadow-[0_0_18px_-6px_rgba(16,185,129,0.65)] active:scale-[0.98] disabled:opacity-50"
+                >
+                  {resuming ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <RotateCw className="h-3.5 w-3.5" />
+                  )}
+                  Resume
+                </button>
               </div>
             </div>
           )}

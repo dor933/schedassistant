@@ -267,52 +267,169 @@ export async function roundtableCallModelNode(
   const modelWithTools = bindTools.call(model, tools);
 
   // ── Build LLM message array ───────────────────────────────────────────
+  //
+  // The roundtable thread is shared across all participating agents under one
+  // thread_id, so the checkpointer restores every prior turn into
+  // `stateMessages`. If we passed those AIMessages through verbatim, the
+  // current agent's LLM would read them as its own past output (an unnamed
+  // AIMessage means "this assistant" in chat-completion semantics) and
+  // could not distinguish "what others said" from "what I said".
+  //
+  // Fix: split state messages into per-turn blocks using the moderator
+  // HumanMessage as a divider (each carries `additional_kwargs.agentId` for
+  // its target agent — set by the worker). For blocks owned by another agent,
+  // collapse the entire block into a single named HumanMessage carrying the
+  // final reply text so attribution is unambiguous. Keep the current agent's
+  // own past blocks verbatim so its tool reasoning stays in scope, and keep
+  // the last block (the current turn) verbatim so its moderator HumanMessage
+  // still prompts the model.
+
+  const agentNameById = new Map<string, string>();
+  const agentOrder: { agentId: string; definition: string }[] =
+    (state as any).roundtableConfig?.agentOrder ?? [];
+  for (const a of agentOrder) {
+    if (a?.agentId) agentNameById.set(a.agentId, a.definition || a.agentId);
+  }
+
+  const messageType = (m: any): string | null => {
+    if (m == null || typeof m !== "object") return null;
+    if (typeof m._getType === "function") return m._getType();
+    return (m.role ?? m._type ?? null) as string | null;
+  };
+
+  const additionalKwargs = (m: any): Record<string, unknown> => {
+    if (m && typeof m === "object" && m.additional_kwargs && typeof m.additional_kwargs === "object") {
+      return m.additional_kwargs as Record<string, unknown>;
+    }
+    return {};
+  };
+
+  const isModerator = (m: any): boolean => {
+    if (m == null || typeof m !== "object" || m.name !== "roundtable_moderator") return false;
+    const t = messageType(m);
+    return t === "human" || t === "user";
+  };
+
+  type Block = {
+    ownerAgentId: string | null;
+    roundNumber: number | null;
+    moderator: BaseMessage | null;
+    body: BaseMessage[];
+  };
+
+  const blocks: Block[] = [];
+  const prelude: BaseMessage[] = [];
+  let cur: Block | null = null;
+  for (const msg of stateMessages) {
+    if (isModerator(msg)) {
+      if (cur) blocks.push(cur);
+      const akw = additionalKwargs(msg);
+      cur = {
+        ownerAgentId: typeof akw.agentId === "string" ? akw.agentId : null,
+        roundNumber: typeof akw.roundNumber === "number" ? akw.roundNumber : null,
+        moderator: msg,
+        body: [],
+      };
+    } else if (cur) {
+      cur.body.push(msg);
+    } else {
+      prelude.push(msg);
+    }
+  }
+  if (cur) blocks.push(cur);
+
   const llmMessages: BaseMessage[] = [new SystemMessage(systemPrompt)];
 
-  for (const msg of stateMessages) {
-    if (typeof (msg as any)._getType === "function") {
-      const name = (msg as any).name;
-      if (name && typeof name === "string") {
-        (msg as any).name = sanitizeName(name);
+  // Convert one state-message (BaseMessage instance OR serialized plain object)
+  // into a normalized BaseMessage and append it to llmMessages. Same logic the
+  // node used before block-grouping was added — preserves both shapes.
+  const pushNormalized = (msg: any): void => {
+    if (typeof msg?._getType === "function") {
+      if (msg.name && typeof msg.name === "string") {
+        (msg as any).name = sanitizeName(msg.name);
       }
       if (isAIMessage(msg) && Array.isArray(msg.content)) {
         (msg as any).content = stripThinkingSignatures(msg.content);
       }
       llmMessages.push(msg);
-    } else {
-      const m = msg as any;
-      const mType = m.role ?? m._type;
-      if (mType === "human" || mType === "user") {
-        llmMessages.push(
-          new HumanMessage({
-            content: m.content,
-            ...(m.name ? { name: sanitizeName(m.name) } : {}),
-          }),
-        );
-      } else if (mType === "assistant" || mType === "ai") {
-        llmMessages.push(
-          new AIMessage({
-            content: normalizeAssistantContentForOpenAI(m.content),
-            ...(Array.isArray(m.tool_calls) && m.tool_calls.length > 0
-              ? { tool_calls: m.tool_calls }
-              : {}),
-          }),
-        );
-      } else if (mType === "tool") {
-        llmMessages.push(
-          new ToolMessage({
-            content:
-              typeof m.content === "string"
-                ? m.content
-                : m.content != null && typeof m.content === "object"
-                  ? JSON.stringify(m.content)
-                  : String(m.content ?? ""),
-            tool_call_id:
-              typeof m.tool_call_id === "string" ? m.tool_call_id : "",
-          }),
-        );
-      }
+      return;
     }
+    const mType = msg?.role ?? msg?._type;
+    if (mType === "human" || mType === "user") {
+      llmMessages.push(
+        new HumanMessage({
+          content: msg.content,
+          ...(msg.name ? { name: sanitizeName(msg.name) } : {}),
+        }),
+      );
+    } else if (mType === "assistant" || mType === "ai") {
+      llmMessages.push(
+        new AIMessage({
+          content: normalizeAssistantContentForOpenAI(msg.content),
+          ...(Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0
+            ? { tool_calls: msg.tool_calls }
+            : {}),
+        }),
+      );
+    } else if (mType === "tool") {
+      llmMessages.push(
+        new ToolMessage({
+          content:
+            typeof msg.content === "string"
+              ? msg.content
+              : msg.content != null && typeof msg.content === "object"
+                ? JSON.stringify(msg.content)
+                : String(msg.content ?? ""),
+          tool_call_id:
+            typeof msg.tool_call_id === "string" ? msg.tool_call_id : "",
+        }),
+      );
+    }
+  };
+
+  // Pre-moderator messages (legacy threads or unexpected leading content)
+  // pass through verbatim — there is no turn ownership to assert for them.
+  for (const m of prelude) pushNormalized(m);
+
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    const isLast = i === blocks.length - 1;
+    const ownerKnown = block.ownerAgentId != null;
+    const isOwn = ownerKnown && block.ownerAgentId === agentId;
+
+    // Keep verbatim when:
+    //  - it is the current turn (last block) — its moderator message prompts the model
+    //  - the block is owned by this agent — preserve its own tool reasoning
+    //  - the block has no owner tag — legacy pre-fix data; preserve old behavior
+    if (isLast || isOwn || !ownerKnown) {
+      if (block.moderator) pushNormalized(block.moderator);
+      for (const m of block.body) pushNormalized(m);
+      continue;
+    }
+
+    // Other-agent block: collapse to one named HumanMessage with the final
+    // reply text. Tool-call interim AIMessages from other agents are not
+    // useful here and would be orphaned anyway (matching ToolMessages get
+    // dropped together with the block).
+    const finalAi = [...block.body].reverse().find((m: any) => {
+      const t = messageType(m);
+      if (t !== "ai" && t !== "assistant") return false;
+      const text = normalizeAssistantContentForOpenAI(m.content);
+      return text.trim().length > 0;
+    });
+    if (!finalAi) continue;
+    const text = normalizeAssistantContentForOpenAI((finalAi as any).content).trim();
+    if (text.length === 0) continue;
+    const ownerId = block.ownerAgentId as string;
+    const displayName = agentNameById.get(ownerId) ?? ownerId;
+    const roundLabel =
+      block.roundNumber != null ? ` — Round ${block.roundNumber + 1}` : "";
+    llmMessages.push(
+      new HumanMessage({
+        content: `[${displayName}${roundLabel} contribution]\n\n${text}`,
+        name: sanitizeName(displayName),
+      }),
+    );
   }
 
   const llmMessagesForProvider =

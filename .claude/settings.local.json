@@ -59,7 +59,10 @@
       "Read(//tmp/**)",
       "Bash(git log *)",
       "Bash(git add *)",
-      "Bash(awk NR>=1330 && NR<=1450 *)"
+      "Bash(awk NR>=1330 && NR<=1450 *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(echo \"user_app exit=$?\")",
+      "Bash(echo \"client exit=$?\")"
     ]
   },
   "enableAllProjectMcpServers": true,

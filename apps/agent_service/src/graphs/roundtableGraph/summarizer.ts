@@ -8,9 +8,15 @@ import {
   RoundtableAgent,
   RoundtableMessage,
 } from "@scheduling-agent/database";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { resolveModelSlug } from "../../chat/modelResolution";
 import { anthropicBaseConfig } from "../../chat/anthropicContextManagement";
 import { resolveOrgVendor } from "../../services/resolveOrgVendor";
+import {
+  observeWithContext,
+  getLangfuseCallbackHandler,
+  flushLangfuse,
+} from "../../langfuse";
 import { logger } from "../../logger";
 
 function getModel(
@@ -80,7 +86,10 @@ the transcript. Do not editorialize or add recommendations.`;
  * it respects the user's vendor/model choice without introducing a new
  * configuration surface.
  */
-export async function summarizeRoundtable(roundtableId: string): Promise<string> {
+export async function summarizeRoundtable(
+  roundtableId: string,
+  options: { userId?: number } = {},
+): Promise<string> {
   const roundtable = await Roundtable.findByPk(roundtableId);
   if (!roundtable) {
     throw new Error(`Roundtable ${roundtableId} not found`);
@@ -145,10 +154,43 @@ export async function summarizeRoundtable(roundtableId: string): Promise<string>
     `**Participants:**\n${participantLines.join("\n")}\n\n` +
     `**Transcript:**\n\n${transcriptLines.join("\n\n")}`;
 
-  const response = await model.invoke([
-    new SystemMessage(SYSTEM_PROMPT),
-    new HumanMessage(userPrompt),
-  ]);
+  const langfuseHandler = getLangfuseCallbackHandler(options.userId, {
+    roundtableId,
+    threadId: roundtable.threadId,
+    primaryAgentId,
+    modelSlug,
+    service: "agent_service",
+    graph: "roundtable_summary",
+  });
+
+  const response = await observeWithContext(
+    "roundtable_summary",
+    () =>
+      model.invoke(
+        [new SystemMessage(SYSTEM_PROMPT), new HumanMessage(userPrompt)],
+        langfuseHandler
+          ? ({
+              callbacks: [langfuseHandler],
+            } as RunnableConfig)
+          : undefined,
+      ),
+    {
+      roundtableId,
+      threadId: roundtable.threadId,
+      participantCount: agents.length,
+      messageCount: messages.length,
+      topicPreview:
+        typeof roundtable.topic === "string"
+          ? roundtable.topic.substring(0, 200)
+          : "",
+    },
+  );
+
+  try {
+    await flushLangfuse();
+  } catch {
+    /* flush errors are logged inside flushLangfuse */
+  }
 
   const raw = response.content;
   let text: string;

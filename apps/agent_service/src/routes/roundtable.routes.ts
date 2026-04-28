@@ -3,7 +3,10 @@ import { roundtableQueue } from "../queues/roundtable.bull";
 import { Roundtable } from "@scheduling-agent/database";
 import { logger } from "../logger";
 import { getRoundtableGraph } from "../deps";
-import { submitRoundtableUserTurn } from "../worker/roundtable.worker";
+import {
+  submitRoundtableUserTurn,
+  resumeRoundtable,
+} from "../worker/roundtable.worker";
 
 const router = Router();
 
@@ -90,6 +93,36 @@ router.post("/user-turn", async (req: Request, res: Response) => {
     return res.json({ ok: true });
   } catch (err: any) {
     logger.error("Roundtable user-turn failed", { error: err?.message });
+    return res.status(500).json({ error: err?.message ?? "Internal error" });
+  }
+});
+
+/**
+ * POST /api/roundtable/resume
+ * Resumes a roundtable that previously transitioned to `failed`. Trims any
+ * orphan trailing messages from the LangGraph checkpoint, flips status back
+ * to `running`, and re-enqueues the turn the run was on when it died.
+ */
+router.post("/resume", async (req: Request, res: Response) => {
+  try {
+    const { roundtableId } = req.body ?? {};
+    if (!roundtableId) {
+      return res.status(400).json({ error: "Missing roundtableId" });
+    }
+
+    const graph = getRoundtableGraph();
+    const result = await resumeRoundtable(graph, { roundtableId });
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.json({
+      ok: true,
+      agentId: result.agentId,
+      round: result.round,
+      trimmedMessages: result.trimmedMessages,
+    });
+  } catch (err: any) {
+    logger.error("Roundtable resume failed", { error: err?.message });
     return res.status(500).json({ error: err?.message ?? "Internal error" });
   }
 });

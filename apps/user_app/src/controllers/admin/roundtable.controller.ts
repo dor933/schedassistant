@@ -56,6 +56,20 @@ export class RoundtableController {
     }
   };
 
+  resume = async (req: Request, res: Response) => {
+    try {
+      const result = await this.service.resume(
+        req.params.id as string,
+        req.user!.userId,
+      );
+      return res.json(result);
+    } catch (err: any) {
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      logger.error("POST /roundtables/:id/resume error:", err);
+      return res.status(500).json({ error: err.message });
+    }
+  };
+
   stop = async (req: Request, res: Response) => {
     try {
       const result = await this.service.stop(req.params.id as string, req.user!.userId);

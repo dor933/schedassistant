@@ -8,6 +8,7 @@ router.get("/", controller.getAll);
 router.get("/:id", controller.getById);
 router.post("/", controller.create);
 router.post("/:id/stop", controller.stop);
+router.post("/:id/resume", controller.resume);
 router.post("/:id/user-turn", controller.submitUserTurn);
 
 export { router as roundtableRouter };

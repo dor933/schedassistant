@@ -957,6 +957,15 @@ export const admin = {
     request<{ ok: boolean }>(`/admin/roundtables/${id}/stop`, {
       method: "POST",
     }),
+  resumeRoundtable: (id: string) =>
+    request<{
+      ok: boolean;
+      agentId?: string;
+      round?: number;
+      trimmedMessages?: number;
+    }>(`/admin/roundtables/${id}/resume`, {
+      method: "POST",
+    }),
   submitRoundtableUserTurn: (id: string, content: string) =>
     request<{ ok: boolean }>(`/admin/roundtables/${id}/user-turn`, {
       method: "POST",
@@ -1013,6 +1022,8 @@ export interface RoundtableSummary {
   currentRound: number;
   includeUser: boolean;
   createdAt: string;
+  /** User id of the creator — only the creator may resume a failed roundtable. */
+  createdBy?: number;
 }
 
 export interface RoundtableAgentInfo {

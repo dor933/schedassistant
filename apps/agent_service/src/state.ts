@@ -1,4 +1,4 @@
-import { Annotation } from "@langchain/langgraph";
+import { Annotation, messagesStateReducer } from "@langchain/langgraph";
 import type { BaseMessage } from "@langchain/core/messages";
 import { AgentId, SessionFileEntry, UserId, UserIdentity } from "@scheduling-agent/types";
 
@@ -46,9 +46,16 @@ export const AgentAnnotation = Annotation.Root({
     default: () => "gpt-4o",
   }),
 
-  /** Conversation messages managed by the checkpointer. */
+  /**
+   * Conversation messages managed by the checkpointer.
+   *
+   * Uses LangGraph's `messagesStateReducer` so updates can append new messages,
+   * replace by id, OR remove specific messages via `RemoveMessage` (used by the
+   * roundtable resume flow to trim trailing orphan messages from a failed turn
+   * before re-enqueueing it).
+   */
   messages: Annotation<BaseMessage[]>({
-    reducer: (state, update) => [...state, ...update],
+    reducer: messagesStateReducer,
     default: () => [],
   }),
 

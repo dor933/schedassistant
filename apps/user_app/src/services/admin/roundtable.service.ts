@@ -264,6 +264,59 @@ export class RoundtableService {
     return { id: roundtable.id, threadId, status: "pending" };
   }
 
+  /**
+   * Resumes a roundtable that previously transitioned to `failed`. Forwards
+   * to agent_service which trims any orphan trailing messages from the
+   * LangGraph checkpoint and re-enqueues the turn that died. Only the
+   * roundtable's creator can resume it.
+   */
+  async resume(roundtableId: string, userId: UserId) {
+    const roundtable = await Roundtable.findByPk(roundtableId);
+    if (!roundtable) {
+      throw Object.assign(new Error("Roundtable not found"), { status: 404 });
+    }
+    if (roundtable.createdBy !== userId) {
+      throw Object.assign(new Error("Not authorized"), { status: 403 });
+    }
+    if (roundtable.status !== "failed") {
+      throw Object.assign(
+        new Error(
+          `Cannot resume roundtable with status "${roundtable.status}"`,
+        ),
+        { status: 400 },
+      );
+    }
+
+    try {
+      const res = await fetch(`${AGENT_SERVICE_URL}/api/roundtable/resume`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roundtableId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          (data as { error?: string })?.error ?? "Failed to resume roundtable",
+        );
+      }
+      return (await res.json()) as {
+        ok: boolean;
+        agentId?: string;
+        round?: number;
+        trimmedMessages?: number;
+      };
+    } catch (err: any) {
+      logger.error("Failed to resume roundtable", {
+        roundtableId,
+        error: err?.message,
+      });
+      throw Object.assign(
+        new Error(err?.message ?? "Failed to resume roundtable"),
+        { status: 502 },
+      );
+    }
+  }
+
   async stop(roundtableId: string, userId: UserId) {
     const roundtable = await Roundtable.findByPk(roundtableId);
     if (!roundtable) {
