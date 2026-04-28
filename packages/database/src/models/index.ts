@@ -13,3 +13,5 @@ export { ConversationMessage } from "./ConversationMessage";
 export { Roundtable } from "./Roundtable";
 export { RoundtableAgent } from "./RoundtableAgent";
 export { RoundtableMessage } from "./RoundtableMessage";
+export { ClientApplication } from "./ClientApplication";
+export { ApplicationAgentThread } from "./ApplicationAgentThread";

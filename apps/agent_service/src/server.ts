@@ -13,11 +13,13 @@ import { roundtableRouter } from "./routes/roundtable.routes";
 import { libraryRouter } from "./routes/library.routes";
 import { attachmentsRouter } from "./routes/attachments.routes";
 import { systemRouter } from "./routes/system.routes";
+import { applicationRouter } from "./routes/application.routes";
 
 export type CreateServerDeps = {
   agentChatQueue: Queue<AgentChatJobData, AgentChatJobResult, string>;
   graph: CompiledStateGraph<any, any, any>;
   roundtableGraph: CompiledStateGraph<any, any, any>;
+  applicationGraph: CompiledStateGraph<any, any, any>;
 };
 
 /**
@@ -41,6 +43,7 @@ export function createServer(deps: CreateServerDeps) {
   app.use("/api/library", libraryRouter);
   app.use("/api/attachments", attachmentsRouter);
   app.use("/api/system", systemRouter);
+  app.use("/api/application", applicationRouter);
 
   return app;
 }

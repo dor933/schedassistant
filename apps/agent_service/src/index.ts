@@ -12,6 +12,7 @@ import { sequelize, Agent } from "@scheduling-agent/database";
 import { createSchedulerGraph } from "./graphs/basicGraph/index";
 import { createEpicGraph } from "./graphs/epicGraph/index";
 import { createRoundtableGraph } from "./graphs/roundtableGraph/index";
+import { createApplicationGraph } from "./graphs/applicationGraph/index";
 import { createServer } from "./server";
 import { initializeLangfuse, isLangfuseConfigured, shutdownLangfuse } from "./langfuse";
 import {
@@ -89,7 +90,10 @@ async function main(): Promise<void> {
   const graph = await createSchedulerGraph();
   const epicGraph = await createEpicGraph();
   const roundtableGraph = await createRoundtableGraph();
-  logger.info("Agent graphs compiled with PostgresSaver checkpointer (basic + epic + roundtable)");
+  const applicationGraph = await createApplicationGraph();
+  logger.info(
+    "Agent graphs compiled (basic+epic+roundtable use PostgresSaver; application uses outer MemorySaver + inner PostgresSaver per stable thread)",
+  );
 
   // 3. BullMQ: queue events + workers.
   await agentChatQueueEvents.waitUntilReady();
@@ -110,7 +114,7 @@ async function main(): Promise<void> {
   }
 
   // 4. HTTP + Socket.IO server (chat enqueues jobs; results emitted via socket).
-  const app = createServer({ agentChatQueue, graph, roundtableGraph });
+  const app = createServer({ agentChatQueue, graph, roundtableGraph, applicationGraph });
   const httpServer = createHttpServer(app);
   attachAgentSocketIO(httpServer);
 

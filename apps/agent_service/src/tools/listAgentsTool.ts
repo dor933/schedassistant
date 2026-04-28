@@ -24,15 +24,17 @@ export function ListAgentsTool(callerAgentId: string) {
       }
 
       const where: any = {
-        // Exclude the calling agent and external (roundtable-only) agents from results
+        // Exclude the calling agent, external (roundtable-only) agents, and
+        // application agents (REST-triggered, not consultable peers — primaries
+        // reach them via `invoke_application_agent` instead).
         id: { [Op.ne]: callerAgentId },
-        type: { [Op.ne]: "external" },
+        type: { [Op.notIn]: ["external", "application"] },
         organizationId: callerAgent.organizationId,
       };
       if (query) {
         where[Op.and] = [
           { id: { [Op.ne]: callerAgentId } },
-          { type: { [Op.ne]: "external" } },
+          { type: { [Op.notIn]: ["external", "application"] } },
           { organizationId: callerAgent.organizationId },
           {
             [Op.or]: [

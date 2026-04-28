@@ -130,7 +130,7 @@ export interface UserIdentity {
 export type AgentId = string;
 
 /** Discriminator for the unified agents table. */
-export type AgentType = "primary" | "system" | "external";
+export type AgentType = "primary" | "system" | "external" | "application";
 
 export interface AgentAttributes {
   id: AgentId;
@@ -391,8 +391,13 @@ export interface EpisodicMemoryAttributes {
  *  - `google`: JIT-provisioned from Google Workspace SSO. No password is
  *    stored; identity is asserted by a valid Google id token matching the
  *    org's `googleWorkspaceDomain`.
+ *  - `client_app`: JIT-provisioned from an upstream client application that
+ *    invokes application agents on the user's behalf. No password is stored;
+ *    the client app owns auth and forwards the user's id to us. These users
+ *    cannot log in to the chat UI — they exist purely so deep-agent
+ *    conversation continuity can be keyed to a stable internal `users.id`.
  */
-export type AuthProvider = "local" | "google";
+export type AuthProvider = "local" | "google" | "client_app";
 
 export interface UserAttributes {
   id: UserId;
@@ -408,8 +413,10 @@ export interface UserAttributes {
   /** Which auth flow owns this user. Defaults to `local` for all pre-existing rows. */
   authProvider: AuthProvider;
   /**
-   * Stable provider-side user id (e.g. Google `sub`). Unique per
-   * `(authProvider, externalSub)`. Null for local users.
+   * Stable provider-side user id (e.g. Google `sub`, or the client app's
+   * user id). Unique per `(authProvider, externalSub)` for SSO and per
+   * `(clientApplicationId, externalSub)` for client-app users. Null for
+   * local users.
    */
   externalSub?: string | null;
   /**
@@ -419,8 +426,65 @@ export interface UserAttributes {
    * (both password and Google SSO).
    */
   lastLoginAt?: Date | null;
+  /**
+   * For `client_app`-provider users: the upstream application that JIT-mirrored
+   * this row. Null for native (`local`) and SSO (`google`) users.
+   */
+  clientApplicationId?: string | null;
+  /**
+   * Optional payload pushed by the upstream client app to enrich the agent's
+   * view of the user (e.g. role, plan, language). The agent may surface
+   * fields from this in prompts; never used for authentication.
+   */
+  externalMetadata?: Record<string, unknown> | null;
+  /** Last time we refreshed cached fields from the client app (JIT or webhook). */
+  externalSyncedAt?: Date | null;
+  /** Soft-delete marker. Set when the upstream app reports the user is gone. */
+  deletedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+// ─── Client Applications ────────────────────────────────────────────────────
+
+/** PK of `client_applications`. */
+export type ClientApplicationId = string;
+
+/**
+ * An upstream application authorised to invoke application agents on behalf
+ * of its end users. Rows hold the per-client API token (hashed) and own a
+ * namespace of mirrored users via `users.client_application_id` /
+ * `users.external_sub`.
+ */
+export interface ClientApplicationAttributes {
+  id: ClientApplicationId;
+  organizationId: OrganizationId;
+  name: string;
+  /** URL-safe identifier; used as the prefix when generating mirrored `user_name`s. */
+  slug: string;
+  /** Hashed (bcrypt/argon2) token. Null = client app not yet activated. */
+  apiTokenHash: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// ─── Application Agent Threads ──────────────────────────────────────────────
+
+/** PK of `application_agent_threads`. */
+export type ApplicationAgentThreadId = string;
+
+/**
+ * Stable LangGraph thread per (user, application_agent) pair. Looked up on
+ * every invocation so the same end-user resumes their existing conversation
+ * with each application agent across REST calls and primary-tool delegations.
+ */
+export interface ApplicationAgentThreadAttributes {
+  id: ApplicationAgentThreadId;
+  userId: UserId;
+  applicationAgentId: AgentId;
+  threadId: string;
+  createdAt: Date;
+  lastUsedAt: Date;
 }
 
 // ─── Core Memory ─────────────────────────────────────────────────────────────

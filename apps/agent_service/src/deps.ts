@@ -5,15 +5,18 @@ import type { CompiledStateGraph } from "@langchain/langgraph";
 let _agentChatQueue: Queue<AgentChatJobData, AgentChatJobResult, string>;
 let _graph: CompiledStateGraph<any, any, any>;
 let _roundtableGraph: CompiledStateGraph<any, any, any> | null = null;
+let _applicationGraph: CompiledStateGraph<any, any, any> | null = null;
 
 export function setDeps(deps: {
   agentChatQueue: Queue<AgentChatJobData, AgentChatJobResult, string>;
   graph: CompiledStateGraph<any, any, any>;
   roundtableGraph?: CompiledStateGraph<any, any, any>;
+  applicationGraph?: CompiledStateGraph<any, any, any>;
 }) {
   _agentChatQueue = deps.agentChatQueue;
   _graph = deps.graph;
   if (deps.roundtableGraph) _roundtableGraph = deps.roundtableGraph;
+  if (deps.applicationGraph) _applicationGraph = deps.applicationGraph;
 }
 
 export function getAgentChatQueue() {
@@ -29,4 +32,11 @@ export function getRoundtableGraph() {
     throw new Error("Roundtable graph has not been initialized");
   }
   return _roundtableGraph;
+}
+
+export function getApplicationGraph() {
+  if (!_applicationGraph) {
+    throw new Error("Application graph has not been initialized");
+  }
+  return _applicationGraph;
 }

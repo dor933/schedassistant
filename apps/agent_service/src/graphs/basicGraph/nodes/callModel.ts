@@ -40,6 +40,7 @@ import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
+import { InvokeApplicationAgentTool } from "../../../tools/invokeApplicationAgentTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
@@ -335,6 +336,8 @@ export async function callModelNode(
     tools.push(QueryDatabaseTool());
   if (has("send_file_to_user"))
     tools.push(SendFileToUserTool(agentId));
+  if (has("invoke_application_agent"))
+    tools.push(InvokeApplicationAgentTool(agentId, state.userId));
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),
   );

@@ -100,6 +100,25 @@ export function ConsultAgentTool(
         );
       }
 
+      // Application agents are stateless REST-triggered deep agents — they
+      // have no persistent thread to consult, and consulting them through the
+      // basic chat graph would strip their tools (query_database, etc.).
+      // Application-to-application chains are also intentionally blocked to
+      // prevent loops. Use `invoke_application_agent` instead from a primary.
+      if (targetAgent.type === "application") {
+        const label =
+          targetAgent.agentName?.trim() ||
+          targetAgent.slug ||
+          targetAgent.definition ||
+          targetAgentId;
+        return (
+          `Error: "${label}" is an APPLICATION agent, which cannot be reached via ` +
+          `\`consult_agent\`. Application agents are stateless REST-triggered ` +
+          `agents. Use \`invoke_application_agent\` with applicationAgentId="${targetAgentId}" ` +
+          `if you have that tool granted.`
+        );
+      }
+
       const graph = getGraph();
       const lockKey = `agent:thread:${targetAgentId}`;
       const agentLabel = targetAgent.definition || targetAgentId;

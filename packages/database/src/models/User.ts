@@ -16,6 +16,10 @@ type UserCreationAttributes = Optional<
   | "authProvider"
   | "externalSub"
   | "lastLoginAt"
+  | "clientApplicationId"
+  | "externalMetadata"
+  | "externalSyncedAt"
+  | "deletedAt"
 >;
 
 class User
@@ -32,6 +36,10 @@ class User
   declare authProvider: AuthProvider;
   declare externalSub: string | null;
   declare lastLoginAt: Date | null;
+  declare clientApplicationId: string | null;
+  declare externalMetadata: Record<string, unknown> | null;
+  declare externalSyncedAt: Date | null;
+  declare deletedAt: Date | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -90,6 +98,27 @@ User.init(
       type: DataTypes.DATE,
       allowNull: true,
       field: "last_login_at",
+    },
+    clientApplicationId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: "client_application_id",
+      references: { model: "client_applications", key: "id" },
+    },
+    externalMetadata: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      field: "external_metadata",
+    },
+    externalSyncedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "external_synced_at",
+    },
+    deletedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "deleted_at",
     },
     createdAt: {
       type: DataTypes.DATE,

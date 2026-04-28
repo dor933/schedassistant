@@ -2,6 +2,7 @@ import { RunnableConfig } from "@langchain/core/runnables";
 import { Op } from "sequelize";
 import { getLibraryPath, listLibraryFiles } from "../../../services/library.service";
 import { hasFilesystemMcp } from "../../../tools/hasFilesystemMcp";
+import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import {
   Agent,
   GroupMember,
@@ -201,6 +202,62 @@ export async function loadGoogleWorkspaceAgentSection(
 }
 
 /**
+ * Renders the "Available application agents" section listing every agent of
+ * type='application' in the org, with their description / instructions hint
+ * so the primary knows what each one is *for*.
+ *
+ * Returns "" when:
+ *   - the primary does not have the `invoke_application_agent` tool granted
+ *     (opt-in: admins enable per-primary via agent_available_tools), or
+ *   - the org has no application agents configured.
+ *
+ * Application agents are stateless REST-style specialists; the primary
+ * invokes them via `invoke_application_agent` with a pre-resolved UUID.
+ * Listing them in the prompt rather than relying on a discovery tool keeps
+ * the LLM aware of the option without an extra tool round-trip.
+ */
+export async function loadApplicationAgentsSection(
+  agentId: AgentId | null,
+  organizationId: string | null,
+): Promise<string> {
+  if (!agentId || !organizationId) return "";
+
+  // Opt-in: only render this section when the primary has been granted the
+  // tool. Otherwise it would advertise capabilities the agent can't actually
+  // use.
+  const slugs = await loadActiveToolSlugs(agentId);
+  if (!slugs.has("invoke_application_agent")) return "";
+
+  const apps = await Agent.findAll({
+    where: { organizationId, type: "application" },
+    attributes: ["id", "agentName", "description"],
+    order: [["agentName", "ASC"]],
+  });
+  if (apps.length === 0) return "";
+
+  const lines: string[] = [];
+  lines.push("## Available application agents");
+  lines.push(
+    "These are **application agents** — stateless, REST-style specialists in your " +
+      "organization that you can invoke via `invoke_application_agent` with the " +
+      "UUID below. Each is a one-shot call (no memory of prior turns) and returns " +
+      "its final answer inline. Pick the one whose stated goal matches the user's " +
+      "request; pass everything the agent needs in a single `request` string.",
+  );
+  lines.push("");
+  for (const a of apps) {
+    const name = a.agentName?.trim() || "(unnamed application agent)";
+    lines.push(`**${name}**`);
+    lines.push(`  - ID: \`${a.id}\``);
+    if (a.description?.trim()) {
+      lines.push(`  - Goal: ${a.description.trim()}`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
+/**
  * Renders a system-prompt section describing the shared organisation library —
  * a flat folder of admin-curated reference documents (policies, standards,
  * product briefs, domain cheat-sheets, etc.) that every agent in the org can
@@ -396,12 +453,14 @@ export async function buildContext(
     organizationSummarySection,
     googleWorkspaceAgentSection,
     librarySection,
+    applicationAgentsSection,
     agentHasFilesystemMcp,
   ] = await Promise.all([
     loadWebSearchAgentSection(agentOrganizationId),
     loadOrganizationSummarySection(agentOrganizationId),
     loadGoogleWorkspaceAgentSection(agentOrganizationId),
     loadLibrarySection(agentId),
+    loadApplicationAgentsSection(agentId, agentOrganizationId),
     hasFilesystemMcp(agentId),
   ]);
 
@@ -422,6 +481,7 @@ export async function buildContext(
     googleWorkspaceAgentSection,
     organizationSummarySection,
     librarySection,
+    applicationAgentsSection,
     coreMemory,
     checkpointLog.body,
     conversationLog.body,
@@ -736,6 +796,7 @@ function formatSystemPrompt(
   googleWorkspaceAgentSection: string,
   organizationSummarySection: string,
   librarySection: string,
+  applicationAgentsSection: string,
   coreMemory: string,
   checkpointLogBody: string,
   conversationLogBody: string,
@@ -819,9 +880,16 @@ function formatSystemPrompt(
     "NOT `list_system_agents`.**\n\n" +
     "**Summary:** Code changes → `delegate_to_epic_orchestrator`. " +
     "Code inspection / research / analysis → `delegate_to_deep_agent`. " +
-    "Quick questions to peers → `consult_agent`.",
+    "Quick questions to peers → `consult_agent`. " +
+    "Stateless application-specialist calls → `invoke_application_agent`.",
   );
   sections.push("");
+
+  const applicationAgentsTrim = applicationAgentsSection.trim();
+  if (applicationAgentsTrim.length > 0) {
+    sections.push(applicationAgentsTrim);
+    sections.push("");
+  }
 
   const webSearchTrim = webSearchAgentSection.trim();
   if (webSearchTrim.length > 0) {
