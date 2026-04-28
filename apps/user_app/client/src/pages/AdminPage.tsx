@@ -36,6 +36,7 @@ import {
   BookOpen,
   Upload,
   FileText,
+  Webhook,
 } from "lucide-react";
 import {
   admin,
@@ -1158,7 +1159,30 @@ export default function AdminPage() {
                     <Globe className="h-3 w-3" />
                     External
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewAgentType("application")}
+                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                      newAgentType === "application"
+                        ? "bg-white text-sky-700 shadow-sm ring-1 ring-sky-200"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    <Webhook className="h-3 w-3" />
+                    Application
+                  </button>
                 </div>
+                {newAgentType === "application" && (
+                  <p className="mt-1.5 text-[10px] leading-relaxed text-gray-500">
+                    REST-triggered deep agent. Invoked by an upstream client app via{" "}
+                    <code className="rounded bg-gray-100 px-1 py-0.5 text-[9px]">
+                      POST /api/application/&lt;id&gt;/invoke
+                    </code>{" "}
+                    — not via chat. The agent's <strong>instructions</strong> below become its
+                    dedicated system prompt; the <strong>description</strong> is shown to primary
+                    agents that have <code className="rounded bg-gray-100 px-1 py-0.5 text-[9px]">invoke_application_agent</code> granted.
+                  </p>
+                )}
               </div>
               <div>
                 <input
@@ -1585,6 +1609,26 @@ export default function AdminPage() {
                 ))}
                 {agents.filter((a) => a.type === "external").length === 0 && (
                   <p className="py-2 text-xs text-gray-400">No external agents yet.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Application Agents (REST-triggered, deepagents) */}
+            <div className="mt-4">
+              <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <Webhook className="h-3.5 w-3.5 text-sky-500" />
+                Application Agents
+                <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-500">
+                  {agents.filter((a) => a.type === "application").length}
+                </span>
+                <span className="ml-1 text-[9px] font-normal normal-case text-gray-400">REST endpoint</span>
+              </h3>
+              <div className="space-y-2.5">
+                {agents.filter((a) => a.type === "application").map((a) => (
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
+                ))}
+                {agents.filter((a) => a.type === "application").length === 0 && (
+                  <p className="py-2 text-xs text-gray-400">No application agents yet.</p>
                 )}
               </div>
             </div>

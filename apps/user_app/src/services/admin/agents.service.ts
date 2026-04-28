@@ -133,7 +133,7 @@ export class AgentsService {
     modelId?: string | null,
     skillIds?: number[],
     agentName?: string | null,
-    agentType?: "primary" | "system" | "external",
+    agentType?: "primary" | "system" | "external" | "application",
     toolIds?: number[],
     description?: string | null,
     organizationId?: string,

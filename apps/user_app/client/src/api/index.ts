@@ -433,7 +433,7 @@ export interface AgentToolLink {
   active: boolean;
 }
 
-export type AgentType = "primary" | "system" | "external";
+export type AgentType = "primary" | "system" | "external" | "application";
 
 export interface AdminAgent {
   id: string;
