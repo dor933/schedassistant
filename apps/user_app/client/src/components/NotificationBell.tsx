@@ -22,7 +22,20 @@ function formatRelative(iso: string): string {
   return `${d}d ago`;
 }
 
-export default function NotificationBell() {
+/**
+ * `align` controls how the dropdown panel anchors relative to the bell:
+ *  - "end"    (default): right edge of panel = right edge of bell. Best when
+ *                        the bell sits at the right edge of its container.
+ *  - "center"          : panel is horizontally centered under the bell. Use
+ *                        when other buttons (e.g. Stop / Resume) follow the
+ *                        bell, so the panel doesn't visually drift left of
+ *                        and overlap them.
+ */
+type NotificationBellProps = {
+  align?: "end" | "center";
+};
+
+export default function NotificationBell({ align = "end" }: NotificationBellProps = {}) {
   const navigate = useNavigate();
   const [items, setItems] = useState<InAppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -132,7 +145,13 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-[calc(100%+8px)] z-50 w-72 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.9)] backdrop-blur-xl sm:w-80">
+        <div
+          className={`absolute top-[calc(100%+8px)] z-50 w-72 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/95 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.9)] backdrop-blur-xl sm:w-80 ${
+            align === "center"
+              ? "left-1/2 -translate-x-1/2"
+              : "right-0"
+          }`}
+        >
           <div className="flex items-center justify-between gap-2 border-b border-white/5 px-4 py-3">
             <div className="flex items-center gap-2">
               <Bell className="h-3.5 w-3.5 text-indigo-300/80" />

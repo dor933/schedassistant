@@ -862,39 +862,46 @@ function RoundtableDetailView({ id }: { id: string }) {
               <ArrowLeft className="h-4 w-4" />
             </button>
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="truncate text-base font-semibold text-white sm:text-lg">
-                  {data.topic}
-                </h1>
-                <StatusPill status={data.status} />
-              </div>
+              {/* Row 1: topic title only */}
+              <h1 className="truncate text-base font-semibold text-white sm:text-lg">
+                {data.topic}
+              </h1>
+              {/* Row 2: status pill + round indicator (always together) */}
               <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-indigo-200/60">
+                <StatusPill status={data.status} />
                 <span className="inline-flex items-center gap-1">
                   <Hash className="h-3 w-3 text-indigo-300/70" />
                   Round {data.currentRound + 1} of {data.maxTurnsPerAgent}
                 </span>
-                <span className="text-indigo-300/30">·</span>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {data.agents.map((a) => {
-                    const accent = agentAccentMap.get(a.agentId);
-                    return (
+              </div>
+              {/* Row 3: participant chips on their own line so they get the
+                  full content width and never get crammed next to the status
+                  on mobile. */}
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {data.agents.map((a) => {
+                  const accent = agentAccentMap.get(a.agentId);
+                  return (
+                    <span
+                      key={a.agentId}
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 backdrop-blur-sm ${accent?.chip ?? "bg-white/[0.04] ring-white/10"} ${accent?.text ?? "text-indigo-100"}`}
+                    >
                       <span
-                        key={a.agentId}
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 backdrop-blur-sm ${accent?.chip ?? "bg-white/[0.04] ring-white/10"} ${accent?.text ?? "text-indigo-100"}`}
-                      >
-                        <span
-                          className={`h-1.5 w-1.5 rounded-full ${accent?.dot ?? "bg-indigo-300"}`}
-                        />
-                        {a.agentName}
-                      </span>
-                    );
-                  })}
-                </div>
+                        className={`h-1.5 w-1.5 rounded-full ${accent?.dot ?? "bg-indigo-300"}`}
+                      />
+                      {a.agentName}
+                    </span>
+                  );
+                })}
               </div>
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <NotificationBell />
+            {/* Center the dropdown under the bell when a Stop or Resume button
+                follows it — otherwise the panel anchors to the bell's right
+                edge and visually overlaps the sibling button on mobile. */}
+            <NotificationBell
+              align={isActive || data.status === "failed" ? "center" : "end"}
+            />
             {isActive && (
               <button
                 onClick={handleStop}
