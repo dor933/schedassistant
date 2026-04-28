@@ -560,6 +560,13 @@ function RoundtableDetailView({ id }: { id: string }) {
   const [data, setData] = useState<RoundtableDetail | null>(null);
   const [messages, setMessages] = useState<RoundtableMessageInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  // Where the discussion summary should render relative to the messages list:
+  //   - "top"    → summary already existed when we entered the roundtable
+  //                (post-completion review)
+  //   - "bottom" → summary arrived live via socket while we were watching
+  //                the roundtable; placed after the last message so the
+  //                conversation reads top-to-bottom in arrival order.
+  const [summaryPlacement, setSummaryPlacement] = useState<"top" | "bottom">("top");
   const [stopping, setStopping] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [userTurn, setUserTurn] = useState<{
@@ -581,6 +588,10 @@ function RoundtableDetailView({ id }: { id: string }) {
       const result = await api.getRoundtable(id);
       setData(result);
       setMessages(result.messages);
+      // Summary already present on entry → render at top (review mode).
+      // If it isn't there yet, default to "bottom" so any later live arrival
+      // appears after the messages we're watching.
+      setSummaryPlacement(result.summary ? "top" : "bottom");
       if (result.status === "waiting_for_user") {
         const activeUser =
           result.users.find((u) => u.turnsCompleted <= result.currentRound) ??
@@ -920,7 +931,12 @@ function RoundtableDetailView({ id }: { id: string }) {
       {/* Messages */}
       <div ref={scrollContainerRef} className="relative z-10 flex-1 overflow-y-auto dark-scroll">
         <div className="mx-auto max-w-5xl space-y-4 px-4 py-6 sm:px-6 lg:px-8">
-          {data.summary && (
+          {/* Discussion summary — rendered either at the top (review mode:
+              already present when we loaded the roundtable) or at the bottom
+              (live mode: arrived via socket while we were watching). The two
+              slots use the same markup; placement is controlled by
+              `summaryPlacement` set in `fetchData`. */}
+          {data.summary && summaryPlacement === "top" && (
             <div className="glass-panel-elevated animate-slide-up overflow-hidden rounded-2xl">
               <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-indigo-500/10 via-violet-500/10 to-fuchsia-500/10 px-5 py-3 backdrop-blur-sm">
                 <div className="flex items-center gap-2.5">
@@ -1088,6 +1104,42 @@ function RoundtableDetailView({ id }: { id: string }) {
               </div>
             );
           })}
+
+          {/* Live-arrival placement of the discussion summary — rendered after
+              the last message so the conversation reads top-to-bottom in
+              arrival order for users who watched it complete in real time. */}
+          {data.summary && summaryPlacement === "bottom" && (
+            <div className="glass-panel-elevated animate-slide-up overflow-hidden rounded-2xl">
+              <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-r from-indigo-500/10 via-violet-500/10 to-fuchsia-500/10 px-5 py-3 backdrop-blur-sm">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-[0_0_18px_-4px_rgba(168,85,247,0.7)] ring-1 ring-white/15">
+                    <ScrollText className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <h2 className="text-sm font-bold text-white">
+                      Discussion Summary
+                    </h2>
+                    <p className="text-[11px] text-indigo-200/60">
+                      Auto-generated when the roundtable ended
+                      {data.summaryGeneratedAt && (
+                        <>
+                          <span className="text-indigo-300/30"> · </span>
+                          {new Date(data.summaryGeneratedAt).toLocaleString()}
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-medium text-emerald-200 ring-1 ring-emerald-400/30 backdrop-blur-sm">
+                  <Sparkles className="h-3 w-3" />
+                  AI
+                </span>
+              </div>
+              <div className="chat-prose chat-prose-dark px-5 py-4 text-sm text-slate-100">
+                <Markdown remarkPlugins={[remarkGfm]}>{data.summary}</Markdown>
+              </div>
+            </div>
+          )}
 
           {data.status === "running" && messages.length > 0 && (
             <div className="flex items-center gap-2.5 rounded-xl border border-indigo-400/30 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-100 backdrop-blur-sm shadow-[0_0_18px_-8px_rgba(129,140,248,0.55)]">
