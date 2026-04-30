@@ -18,7 +18,10 @@
     RUN apk add --no-cache python3 py3-pip git bash curl wget libsodium-dev gcc musl-dev python3-dev su-exec github-cli docker-cli
     RUN pip3 install --break-system-packages uv pynacl
 
-    RUN npm install -g --unsafe-perm @modelcontextprotocol/server-filesystem mcp-shell @modelcontextprotocol/server-github @alisaitteke/docker-mcp @anthropic-ai/claude-code
+    # @openai/codex installs the `codex` binary used by the run_codex_cli tool
+    # and the codex-backed paths in cliExecution.ts. Same global-npm style as
+    # claude-code so both CLIs end up on PATH for the `agent` user.
+    RUN npm install -g --unsafe-perm @modelcontextprotocol/server-filesystem mcp-shell @modelcontextprotocol/server-github @alisaitteke/docker-mcp @anthropic-ai/claude-code @openai/codex
     COPY package.json ./
     COPY --from=builder /app/node_modules/ ./node_modules/
     COPY --from=builder /app/packages/ ./packages/
@@ -42,6 +45,12 @@
     # from the image directory into a fresh named volume on first creation.
     RUN mkdir -p /home/agent/.claude/agents
     COPY apps/agent_service/claude-config/ /home/agent/.claude/
+    # Pre-create /home/agent/.codex with agent ownership so the same
+    # named-volume-on-first-mount trick that protects /home/agent/.claude
+    # also gives codex a writable home for its session cache + auth.json.
+    # The codexAuthJson admin endpoint also chowns this dir at write time;
+    # creating it here means codex's first spawn doesn't have to.
+    RUN mkdir -p /home/agent/.codex
     RUN chown -R agent:agent /home/agent
     VOLUME ["/app/data"]
 

@@ -1,16 +1,31 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import { sequelize } from "../connection";
-import type { McpServerAttributes } from "@scheduling-agent/types";
+import type { McpServerAttributes, OrganizationId } from "@scheduling-agent/types";
 
-type McpServerCreationAttributes = Optional<McpServerAttributes, "id" | "createdAt" | "updatedAt" | "env">;
+type McpServerCreationAttributes = Optional<
+  McpServerAttributes,
+  | "id"
+  | "createdAt"
+  | "updatedAt"
+  | "env"
+  | "organizationId"
+  | "description"
+  | "scriptContent"
+>;
 
-class McpServer extends Model<McpServerAttributes, McpServerCreationAttributes> implements McpServerAttributes {
+class McpServer
+  extends Model<McpServerAttributes, McpServerCreationAttributes>
+  implements McpServerAttributes
+{
   declare id: number;
+  declare organizationId: OrganizationId | null;
   declare name: string;
+  declare description: string | null;
   declare transport: string;
   declare command: string;
   declare args: string[];
   declare env: Record<string, string> | null;
+  declare scriptContent: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -22,10 +37,18 @@ McpServer.init(
       autoIncrement: true,
       primaryKey: true,
     },
+    organizationId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: "organization_id",
+    },
     name: {
       type: DataTypes.STRING,
       allowNull: false,
-      unique: true,
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true,
     },
     transport: {
       type: DataTypes.STRING,
@@ -44,6 +67,11 @@ McpServer.init(
     env: {
       type: DataTypes.JSONB,
       allowNull: true,
+    },
+    scriptContent: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "script_content",
     },
     createdAt: {
       type: DataTypes.DATE,

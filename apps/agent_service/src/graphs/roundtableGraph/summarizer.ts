@@ -26,11 +26,10 @@ function getModel(
 ): BaseChatModel {
   switch (vendorSlug) {
     case "openai":
-      return new ChatOpenAI({ modelName: modelSlug, temperature: 0.2, apiKey });
+      return new ChatOpenAI({ modelName: modelSlug, apiKey });
     case "anthropic":
       return new ChatAnthropic({
         modelName: modelSlug,
-        temperature: 0.2,
         apiKey,
         ...(process.env.MERIDIAN_URL
           ? { anthropicApiUrl: process.env.MERIDIAN_URL }
@@ -38,7 +37,7 @@ function getModel(
         ...anthropicBaseConfig(),
       });
     case "google":
-      return new ChatGoogle({ model: modelSlug, temperature: 0.2, apiKey });
+      return new ChatGoogle({ model: modelSlug, apiKey });
     default:
       throw new Error(
         `Unsupported vendor "${vendorSlug}" for model "${modelSlug}"`,

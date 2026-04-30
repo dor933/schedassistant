@@ -1,5 +1,6 @@
 import { Agent } from "@scheduling-agent/database";
 import { loadOrganizationSummarySection } from "../../basicGraph/nodes/contextBuilder";
+import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import { logger } from "../../../logger";
 import { ApplicationAgentState } from "../state";
 
@@ -48,32 +49,53 @@ export async function applicationContextBuilderNode(
   // the infrastructure lands.
   const dedicatedInstructions = (agent.instructions ?? "").trim();
 
-  // Standard guidance on how this application agent talks to primary agents.
-  // Always appended (the consult tools are always bound) so the LLM knows the
-  // available channel and its constraints.
-  const interactionBlock = [
-    "## Talking to primary agents",
-    "You are an application agent — REST-triggered, stateless, one-shot per request. " +
-      "You can reach the organization's **primary agents** (orchestrators with their own " +
-      "memory and conversation history) when their expertise would help answer the user's " +
-      "question. The request you received represents a real end-user question forwarded " +
-      "by an upstream application that handles authentication; the user's identity is " +
-      "carried with you into any consultation.",
-    "",
-    "- Use `list_agents` to discover which primary agents exist (system, external, and " +
-      "other application agents are intentionally excluded — they are not consultable).",
-    "- Use `consult_agent` with the target agent's id to send a synchronous request and " +
-      "receive their answer inline. The target sees your request as `[Consultation request " +
-      "from another agent]`.",
-    "- Consultations are **synchronous** — your turn waits for the answer (up to ~5 min). " +
-      "Use them sparingly: only when the primary agent has memory, context, or specialist " +
-      "knowledge you genuinely need. For pure data lookups, prefer `query_database`.",
-    "- Do **not** attempt to consult system, external, or other application agents — those " +
-      "are blocked at the tool level.",
-    "",
-  ].join("\n");
+  // Guidance on how this application agent talks to primary agents — only
+  // appended when the admin has actually granted `consult_agent` and/or
+  // `list_agents` via the admin UI. Without those tools bound, telling the
+  // LLM the channel exists would cause hallucinated tool calls.
+  const activeSlugs = await loadActiveToolSlugs(agent.id, { applyDefaults: false });
+  const hasListAgents = activeSlugs.has("list_agents");
+  const hasConsultAgent = activeSlugs.has("consult_agent");
 
-  const systemPrompt = `${orgBlock}${dedicatedInstructions}\n\n${interactionBlock}`.trim();
+  let interactionBlock = "";
+  if (hasListAgents || hasConsultAgent) {
+    const lines: string[] = [
+      "## Talking to primary agents",
+      "You are an application agent — REST-triggered, stateless, one-shot per request. " +
+        "You can reach the organization's **primary agents** (orchestrators with their own " +
+        "memory and conversation history) when their expertise would help answer the user's " +
+        "question. The request you received represents a real end-user question forwarded " +
+        "by an upstream application that handles authentication; the user's identity is " +
+        "carried with you into any consultation.",
+      "",
+    ];
+    if (hasListAgents) {
+      lines.push(
+        "- Use `list_agents` to discover which primary agents exist (system, external, and " +
+          "other application agents are intentionally excluded — they are not consultable).",
+      );
+    }
+    if (hasConsultAgent) {
+      lines.push(
+        "- Use `consult_agent` with the target agent's id to send a synchronous request and " +
+          "receive their answer inline. The target sees your request as `[Consultation request " +
+          "from another agent]`.",
+        "- Consultations are **synchronous** — your turn waits for the answer (up to ~5 min). " +
+          "Use them sparingly: only when the primary agent has memory, context, or specialist " +
+          "knowledge you genuinely need. For pure data lookups, prefer `query_database`.",
+        "- Do **not** attempt to consult system, external, or other application agents — those " +
+          "are blocked at the tool level.",
+      );
+    }
+    lines.push("");
+    interactionBlock = lines.join("\n");
+  }
+
+  const systemPrompt = (
+    interactionBlock.length > 0
+      ? `${orgBlock}${dedicatedInstructions}\n\n${interactionBlock}`
+      : `${orgBlock}${dedicatedInstructions}`
+  ).trim();
 
   logger.info("ApplicationGraph: context built", {
     agentId,

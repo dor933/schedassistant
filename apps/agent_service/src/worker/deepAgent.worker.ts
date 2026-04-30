@@ -305,15 +305,14 @@ async function resolveModelForAgent(executorAgent: Agent) {
     case "anthropic":
       return new ChatAnthropic({
         modelName: slug,
-        temperature: 0.4,
         apiKey: vendor.apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
         ...anthropicBaseConfig(),
       });
     case "openai":
-      return new ChatOpenAI({ modelName: slug, temperature: 0.4, apiKey: vendor.apiKey });
+      return new ChatOpenAI({ modelName: slug, apiKey: vendor.apiKey });
     case "google":
-      return new ChatGoogle({ model: slug, temperature: 0.4, apiKey: vendor.apiKey });
+      return new ChatGoogle({ model: slug, apiKey: vendor.apiKey });
     default:
       return null;
   }

@@ -385,6 +385,25 @@ function formatEpicSystemPrompt(opts: {
     "attempt failed before it could finish — resume and complete the original task' stub. You don't " +
     "have to fabricate one.\n\n" +
 
+    "**Path C — a task is stuck at `in_progress` because the server crashed mid-run.**\n" +
+    "If the server process died mid-execution (crash, restart, OOM, deploy), the task's status was " +
+    "never updated past `in_progress` and the latest `task_executions` row is still `running`. " +
+    "`resolveNextRetryableTask` only sees `ready` and `failed` tasks — an orphaned `in_progress` " +
+    "task is invisible to it, so `execute_epic_task` will (incorrectly) report **'no actionable " +
+    "tasks'** even though the stage is clearly unfinished. Symptom signal: `get_epic_status` shows " +
+    "a task at `in_progress` but no Claude CLI run is actually live, and time has passed since " +
+    "`startedAt`.\n" +
+    "1. Call `reset_stuck_task` (optionally pass a short `reason`). It flips the latest " +
+    "`task_executions` row from `running` to `failed`, then flips the `agent_tasks` row from " +
+    "`in_progress` to `failed`, and explicitly pins the affected stage(s) and the epic at " +
+    "`in_progress` — it does **not** cascade `failed` upward, so the epic is **not** cancelled " +
+    "or marked failed. Only the task moves to `failed`.\n" +
+    "2. Call `execute_epic_task` — it picks up the now-`failed` task via Path B's fallback, " +
+    "auto-switches to retry mode, and resumes the previous Claude CLI session so prior context is " +
+    "preserved. No manual feedback needed; the system synthesizes a neutral resume stub.\n" +
+    "Use this **only** when the task is genuinely orphaned. Do not use it on a task whose CLI run " +
+    "is still in progress, or to bypass `request_stage_changes` for PR-review feedback.\n\n" +
+
     "**Per-task lifecycle (so the transitions are explicit):**\n" +
     "`pending` → `ready` (when previous stage clears) → `in_progress` (when `executeTask` runs) → " +
     "`completed` **or** `failed`. From `completed` or `failed`, either retry path above flips it back " +

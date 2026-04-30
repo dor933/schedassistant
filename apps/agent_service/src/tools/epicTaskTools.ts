@@ -13,6 +13,8 @@ import {
 import type {
   AgentTaskStatus,
   TaskStageStatus,
+  TaskExecutionStatus,
+  EpicTaskStatus,
   PrStatus,
 } from "@scheduling-agent/types";
 import { logger } from "../logger";
@@ -1635,6 +1637,166 @@ export function GetEpicTaskStagesAndTasksTool() {
         epicId: z.string().uuid().describe(
           "The id of the epic whose full structure you want — typically copied verbatim from " +
           "an earlier `search_epic_tasks_by_date` result the user has just confirmed.",
+        ),
+      }),
+    },
+  );
+}
+
+// ─── Reset a stuck (in_progress) task after a server crash ──────────────────
+
+/**
+ * Recovery tool for tasks left orphaned at `agent_tasks.status='in_progress'`
+ * (with `task_executions.status='running'`) because the server process died
+ * mid-execution — crash, restart, OOM, deploy. Without this tool the
+ * orchestrator has no way to free the task: `resolveNextRetryableTask` only
+ * picks up `ready` tasks (normal flow) and `failed` tasks (mid-stage failure
+ * recovery), so an `in_progress` task is invisible to it and `execute_epic_task`
+ * falsely reports "no actionable tasks".
+ *
+ * Recovery procedure (per stuck task, executed in order):
+ *   1. Update the latest `task_executions` row from `running` → `failed`,
+ *      set `completed_at`, and store the reset reason in the `error` column
+ *      so the lifecycle is consistent (no orphan running rows).
+ *   2. Flip `agent_tasks.status` from `in_progress` → `failed` and clear
+ *      `completed_at`. Routing it to `failed` (not `ready`) means
+ *      `resolveNextRetryableTask`'s failed-task fallback picks it up and
+ *      `execute_epic_task` auto-switches to retry mode with `--resume <prev
+ *      session>`, preserving prior CLI context.
+ *
+ * Why we deliberately do NOT call `propagateStatus`: it cascades `failed`
+ * upward — task `failed` → stage `failed` → epic `failed`. A `failed` epic is
+ * outside `resolveActiveEpic`'s `pending`/`in_progress` filter, which would
+ * effectively cancel the whole epic and prevent any further `execute_epic_task`
+ * call from finding it. Likewise `resolveNextRetryableTask`'s SQL requires the
+ * stage to be `in_progress`, so a `failed` stage would hide the task from the
+ * retry fallback. Instead we explicitly pin the affected stage(s) and the epic
+ * to `in_progress` after the task flip — that's the state the retry path needs.
+ */
+export function ResetStuckTaskTool() {
+  return tool(
+    async (input) => {
+      try {
+        const epic = await resolveActiveEpic();
+
+        const stuckTasks = await sequelize.query<AgentTask>(
+          `SELECT at.*
+             FROM agent_tasks at
+             JOIN task_stages ts ON at.task_stage_id = ts.id
+            WHERE ts.epic_task_id = :epicId
+              AND at.status = 'in_progress'
+            ORDER BY ts.sort_order, at.sort_order`,
+          { replacements: { epicId: epic.id }, type: QueryTypes.SELECT },
+        );
+
+        if (stuckTasks.length === 0) {
+          return (
+            `No stuck tasks found in epic "${epic.title}". No task is currently at ` +
+            `status='in_progress'. If you wanted to retry a 'failed' task, just call ` +
+            `execute_epic_task — it auto-detects mid-stage failures and switches into retry ` +
+            `mode on its own. If you wanted to retry a stage whose tasks are all 'completed' ` +
+            `(PR-review feedback), use request_stage_changes first.`
+          );
+        }
+
+        const reason =
+          input.reason?.trim() ||
+          "Server interrupted execution before the task could finish (crash, restart, or deploy).";
+        const errorNote = `Reset by orchestrator via reset_stuck_task: ${reason}`;
+
+        const resetTitles: string[] = [];
+        let executionsFlipped = 0;
+        for (const task of stuckTasks) {
+          const lastExec = await TaskExecution.findOne({
+            where: { agentTaskId: task.id },
+            order: [["attempt_number", "DESC"]],
+          });
+          if (lastExec && lastExec.status === ("running" as TaskExecutionStatus)) {
+            await lastExec.update({
+              status: "failed" as TaskExecutionStatus,
+              error: errorNote,
+              completedAt: new Date(),
+            });
+            executionsFlipped++;
+          }
+
+          await AgentTask.update(
+            { status: "failed" as AgentTaskStatus, completedAt: null },
+            { where: { id: task.id } },
+          );
+          resetTitles.push(`"${task.title}"`);
+        }
+
+        // Hold the stage(s) and epic at `in_progress` (do NOT call
+        // propagateStatus — it would cascade `failed` to the stage and the
+        // epic and lock the whole epic out of resolveActiveEpic).
+        const affectedStageIds = Array.from(
+          new Set(stuckTasks.map((t) => t.taskStageId)),
+        );
+        await TaskStage.update(
+          { status: "in_progress" as TaskStageStatus },
+          { where: { id: affectedStageIds } },
+        );
+        await EpicTask.update(
+          { status: "in_progress" as EpicTaskStatus },
+          { where: { id: epic.id } },
+        );
+
+        logger.warn("ResetStuckTaskTool: reset stuck tasks", {
+          epicId: epic.id,
+          epicTitle: epic.title,
+          taskCount: resetTitles.length,
+          executionsFlipped,
+          stageCount: affectedStageIds.length,
+          reason,
+        });
+
+        return (
+          `Reset ${resetTitles.length} stuck task(s) in epic "${epic.title}" ` +
+          `(epic and stage(s) preserved at 'in_progress' — NOT cancelled or failed): ` +
+          `${resetTitles.join(", ")}.\n\n` +
+          `- task_executions: flipped ${executionsFlipped} 'running' row(s) to 'failed' ` +
+          `(error: ${errorNote}).\n` +
+          `- agent_tasks: flipped from 'in_progress' to 'failed' and cleared completed_at.\n` +
+          `- Affected stage(s) pinned at 'in_progress' (${affectedStageIds.length} stage(s)).\n` +
+          `- Epic pinned at 'in_progress'.\n\n` +
+          `Next step: call execute_epic_task. resolveNextRetryableTask's failed-task fallback ` +
+          `will pick up the first reset task, the tool auto-switches to retry mode, and the ` +
+          `previous Claude CLI session is resumed so prior context is preserved. No manual ` +
+          `feedback is required — a neutral 'previous attempt failed before it could finish' ` +
+          `stub is synthesized when none is stored.`
+        );
+      } catch (err: any) {
+        logger.error("ResetStuckTaskTool: failed", { error: err.message });
+        return `Error resetting stuck task: ${err.message}`;
+      }
+    },
+    {
+      name: "reset_stuck_task",
+      description:
+        "Recovery tool — flips task(s) stuck at agent_tasks.status='in_progress' (with the latest " +
+        "task_executions row stuck at status='running') back into the retry pipeline after the server " +
+        "process died mid-execution (crash, restart, OOM, deploy). " +
+        "Symptom: get_epic_status shows a task at 'in_progress' but no Claude CLI run is actually " +
+        "live, and execute_epic_task reports 'no actionable tasks' even though the stage is clearly " +
+        "unfinished.\n\n" +
+        "What it does (per stuck task, in order):\n" +
+        "1. Marks the latest task_executions row 'failed' (was 'running') with the reset reason in " +
+        "the error column so no orphan running rows remain.\n" +
+        "2. Flips agent_tasks.status from 'in_progress' to 'failed' and clears completed_at.\n" +
+        "3. Re-runs propagateStatus so the stage / epic statuses recompute.\n\n" +
+        "After this returns, call execute_epic_task — it picks up the failed task via the existing " +
+        "mid-stage-failure fallback, auto-switches to retry mode, and resumes the previous Claude " +
+        "CLI session so prior context is preserved.\n\n" +
+        "Auto-resolves the active epic; takes no IDs.\n\n" +
+        "Do NOT use this tool for: normal failures (call execute_epic_task), completed tasks, or " +
+        "PR-review feedback (call request_stage_changes). Only for genuinely orphaned 'in_progress' " +
+        "tasks left over after a server crash.",
+      schema: z.object({
+        reason: z.string().optional().describe(
+          "Optional short reason explaining why the task is being reset (e.g. 'server restarted " +
+          "during deploy', 'process OOMed at 03:14'). Stored on the failed execution row's error " +
+          "column for audit. Defaults to a generic 'server interrupted execution' message.",
         ),
       }),
     },

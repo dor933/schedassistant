@@ -7,6 +7,7 @@ import {
   resolveOrCreateClientUser,
   type JitUserMetadata,
 } from "./clientApplicationUser.service";
+import { observeWithContext } from "../langfuse";
 import { logger } from "../logger";
 
 export type InvokeApplicationAgentInput = {
@@ -84,17 +85,32 @@ export async function invokeApplicationAgent(
   });
 
   try {
-    const finalState = (await graph.invoke(
+    // observeWithContext opens a parent Langfuse span for this whole request;
+    // the inner deep-agent's CallbackHandler (wired in applicationCallModel)
+    // attaches LLM/tool steps under it via OpenTelemetry context propagation.
+    // No-op when LANGFUSE_*_KEY env vars aren't set.
+    const finalState = (await observeWithContext(
+      "application_agent_invoke",
+      async () =>
+        graph.invoke(
+          {
+            agentId,
+            userId,
+            applicationThreadId: threadId,
+            request: input,
+          },
+          // The OUTER graph thread id is transient — we just need a unique value
+          // for MemorySaver. The inner deep agent uses `applicationThreadId` from
+          // state for its PostgresSaver, which is what actually matters.
+          { configurable: { thread_id: `outer-${threadId}-${Date.now()}` } },
+        ),
       {
         agentId,
+        agentName: agent.agentName,
         userId,
-        applicationThreadId: threadId,
-        request: input,
+        threadId,
+        inputLength: input.length,
       },
-      // The OUTER graph thread id is transient — we just need a unique value
-      // for MemorySaver. The inner deep agent uses `applicationThreadId` from
-      // state for its PostgresSaver, which is what actually matters.
-      { configurable: { thread_id: `outer-${threadId}-${Date.now()}` } },
     )) as ApplicationAgentState;
 
     if (finalState?.error) {

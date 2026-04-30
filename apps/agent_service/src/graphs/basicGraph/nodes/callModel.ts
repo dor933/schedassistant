@@ -41,6 +41,8 @@ import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskT
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { InvokeApplicationAgentTool } from "../../../tools/invokeApplicationAgentTool";
+import { RunClaudeCliTool, RunCodexCliTool } from "../../../tools/runCliTools";
+import { KillCliExecutionTool } from "../../../tools/killCliExecutionTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
@@ -146,17 +148,16 @@ function normalizeHistoryForOpenAI(msgs: BaseMessage[]): BaseMessage[] {
 function getModel(modelSlug: string, vendorSlug: string, apiKey: string): BaseChatModel {
   switch (vendorSlug) {
     case "openai":
-      return new ChatOpenAI({ modelName: modelSlug, temperature: 0.4, apiKey });
+      return new ChatOpenAI({ modelName: modelSlug, apiKey });
     case "anthropic":
       return new ChatAnthropic({
         modelName: modelSlug,
-        temperature: 0.4,
         apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
         ...anthropicBaseConfig(),
       });
     case "google":
-      return new ChatGoogle({ model: modelSlug, temperature: 0.4, apiKey });
+      return new ChatGoogle({ model: modelSlug, apiKey });
     default:
       throw new Error(`Unsupported vendor "${vendorSlug}" for model "${modelSlug}"`);
   }
@@ -338,6 +339,15 @@ export async function callModelNode(
     tools.push(SendFileToUserTool(agentId));
   if (has("invoke_application_agent"))
     tools.push(InvokeApplicationAgentTool(agentId, state.userId));
+  if (has("run_claude_cli"))
+    tools.push(RunClaudeCliTool(agentId, state.userId, threadId));
+  if (has("run_codex_cli"))
+    tools.push(RunCodexCliTool(agentId, state.userId, threadId));
+  // Independent slug — admins typically grant alongside `run_*_cli` so an
+  // agent can abort its own orphans, but they can opt out for read-only
+  // agents.
+  if (has("kill_cli_execution"))
+    tools.push(KillCliExecutionTool(agentId, state.userId));
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),
   );

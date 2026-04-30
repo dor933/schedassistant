@@ -114,17 +114,16 @@ async function getSummarizationLlm(agentId?: string | null): Promise<BaseChatMod
 
   switch (vendor.vendorSlug) {
     case "openai":
-      return new ChatOpenAI({ modelName: summarizationSlug, temperature: 0, apiKey: vendor.apiKey });
+      return new ChatOpenAI({ modelName: summarizationSlug, apiKey: vendor.apiKey });
     case "anthropic":
       return new ChatAnthropic({
         modelName: summarizationSlug,
-        temperature: 0,
         apiKey: vendor.apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
         ...anthropicBaseConfig(),
       });
     case "google":
-      return new ChatGoogle({ model: summarizationSlug, temperature: 0, apiKey: vendor.apiKey });
+      return new ChatGoogle({ model: summarizationSlug, apiKey: vendor.apiKey });
     default:
       throw new Error(`Unsupported vendor "${vendor.vendorSlug}" for session summarization`);
   }

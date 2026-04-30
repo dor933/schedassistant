@@ -280,15 +280,15 @@ export default function AgentCard({
               />
             </div>
 
-            {/* MCP Servers */}
+            {/* CLI MCP Access */}
             {(mcpLinks.length > 0 || (isSuperAdmin && allMcpServers.length > 0)) && (
             <div>
               <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                 <Plug className="h-3 w-3" />
-                MCP Servers
+                CLI MCP Access
               </label>
 
-              {/* Assigned MCP servers */}
+              {/* Assigned CLI MCP servers */}
               {mcpLinks.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
                   {mcpLinks.map((link) => {
@@ -325,7 +325,7 @@ export default function AgentCard({
                 </div>
               ) : (
                 <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 px-3 py-2 text-[11px] text-gray-400">
-                  No MCP servers assigned.
+                  No CLI MCP servers assigned.
                 </p>
               )}
 
@@ -344,7 +344,7 @@ export default function AgentCard({
                   <div className="mt-2">
                     <p className="mb-1 flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider text-indigo-400">
                       <ShieldCheck className="h-2.5 w-2.5" />
-                      Available to add
+                      Available CLI servers
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {available.map((s) => (
