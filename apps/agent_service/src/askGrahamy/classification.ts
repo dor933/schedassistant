@@ -69,32 +69,47 @@ The downstream system can answer when the message is anchored to one or more of:
   • a sector — must be exactly one of: ${CANONICAL_SECTORS.join(", ")}.
   • the current market regime / setup / VIX / macro state.
 
-Set isFollowUp = true when the message references a previous turn ("what about ...", "why?",
-"and the risks?", "is it still valid?", "compare it").
+Set isFollowUp = true when the message references a previous turn — short questions with
+no own anchor like "what about ...?", "why?", "and the risks?", "compare to peers", "compare it",
+"is it still valid?", "מה לגבי המתחרים", "ולמה?", or any pronoun-only reference back ("it", "this",
+"this one"). The user's language can be English, Hebrew, or any other — the test is semantic, not
+keyword.
 
-CRITICAL: even when isFollowUp = true, you MUST extract every symbol / sector / regime cue
-the user explicitly names in THIS message. Empty symbols / sectors / regimeRequested means
-"the user named none here" — never use empty arrays as a way to signal "look at prior context".
-The caller fills missing fields from prior context only when the message itself names none.
+ANCHOR INHERITANCE FOR FOLLOW-UPS (important):
+- If the message NAMES new anchors (a different ticker / sector / regime), use those new anchors
+  and DO NOT inherit from prior context.
+- If the message is anchor-less BUT "Prior turn context" is supplied, INHERIT lastSymbols and
+  lastSectors as this turn's symbols/sectors. lastIntent including the substring "regime" implies
+  regimeRequested=true. This lets the downstream pipeline fetch the right Research Objects so
+  the agent can give a real answer instead of falling back to memory only.
+- If the message is anchor-less AND no prior context exists, output intent="unknown".
 
-Examples:
-  • "what about jp morgan?"                       → isFollowUp=true, symbols=["JPM"], sectors=[], regimeRequested=false
-  • "what about jp morgan and the energy sector?" → isFollowUp=true, symbols=["JPM"], sectors=["Energy"], regimeRequested=false
-  • "and the risks?"                              → isFollowUp=true, symbols=[], sectors=[], regimeRequested=false
-  • "is the market risk-on?"                      → isFollowUp=false, symbols=[], sectors=[], regimeRequested=true
+Examples (with prior context lastSymbols=["NVDA"]):
+  • "what about jp morgan?"            → symbols=["JPM"], sectors=[], regimeRequested=false      (new anchor wins)
+  • "compare it to others"             → symbols=["NVDA"], sectors=[], regimeRequested=false     (inherit)
+  • "מה לגבי המתחרים שלה?"            → symbols=["NVDA"], sectors=[], regimeRequested=false     (inherit, Hebrew)
+  • "and the risks?"                   → symbols=["NVDA"], sectors=[], regimeRequested=false     (inherit)
+  • "is the market risk-on?"           → symbols=[], sectors=[], regimeRequested=true            (new regime anchor)
+  • "what about its sector?"           → symbols=["NVDA"], sectors=["Technology"], if NVDA's sector
+                                          is known to be Technology and prior lastSectors had it. If
+                                          unsure of sector, inherit symbols only.
+
+Without prior context:
+  • "what about jp morgan?"            → symbols=["JPM"], sectors=[], regimeRequested=false
+  • "and the risks?"                   → intent="unknown" (no anchor anywhere)
 
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
 stock_sector_regime, follow_up, unknown.
 
 Use intent = "unknown" only when the message is nonsensical, off-topic, or impossible to anchor
-to any stock / sector / regime even after considering prior context.
+to any stock / sector / regime EVEN AFTER inheritance from prior context.
 
 symbols, sectors, and regimeRequested must be consistent with the chosen intent.
 
 confidence:
-  • "high"  — a clear ticker / sector / regime is named.
-  • "medium" — inferred from a company name or follow-up context.
-  • "low"   — best guess; the caller may treat as unknown.
+  • "high"   — a clear ticker / sector / regime is named.
+  • "medium" — inferred from a company name OR inherited from prior context.
+  • "low"    — best guess; the caller may treat as unknown.
 
 Return ONLY the structured object — no prose.`;
 

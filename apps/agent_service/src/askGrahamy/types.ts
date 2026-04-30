@@ -60,6 +60,22 @@ export const askGrahamyClassifyRequestSchema = z.object({
   userId: z.string().trim().min(1),
   conversationId: z.string().trim().min(1).optional().nullable(),
   message: z.string().trim().min(1).max(4000),
+  /**
+   * Optional. The caller (StocksScanner) extracts the prior assistant
+   * message's anchors from `ask_messages.research_object_keys` + `intent`
+   * and passes them here so the classifier can resolve context-dependent
+   * follow-ups like "compare to peers", "why?", "what about its sector".
+   * Without this, those messages classify as `unknown` and no priors get
+   * fetched — answer quality degrades.
+   */
+  previousContext: z
+    .object({
+      lastSymbols: z.array(z.string()).default([]),
+      lastSectors: z.array(z.string()).default([]),
+      lastRegimeRequested: z.boolean().optional(),
+      lastIntent: z.string().optional(),
+    })
+    .optional(),
 });
 
 export type AskGrahamyClassifyRequest = z.infer<typeof askGrahamyClassifyRequestSchema>;

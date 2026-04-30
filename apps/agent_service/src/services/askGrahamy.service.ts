@@ -104,11 +104,27 @@ export async function classifyAskGrahamy(
   const conversationId = request.conversationId || crypto.randomUUID();
 
   try {
-    // Conversation memory now lives in PostgresSaver via the deep agent;
-    // the classifier no longer needs the JSON-file conversation store.
-    // Pure follow-ups arrive here with empty symbols/sectors and the
-    // downstream graph + agent resolves them via thread memory.
-    const classification = await classifyMessage(request.message);
+    // SS extracts the prior assistant turn's anchors from `ask_messages`
+    // and passes them as `previousContext`. The classifier uses them as
+    // hints so that anchor-less follow-ups ("compare to peers", "why?",
+    // "מה לגבי המתחרים") resolve to the prior turn's symbols/sectors
+    // instead of returning "unknown". Pure intra-conversation memory
+    // still lives in PostgresSaver inside the deep agent — this is just
+    // for fetching the right Research Objects on the SS side.
+    const previousContext = request.previousContext
+      ? {
+          conversationId,
+          userId: user.id,
+          lastSymbols: request.previousContext.lastSymbols ?? [],
+          lastSectors: request.previousContext.lastSectors ?? [],
+          lastIntent: request.previousContext.lastIntent as
+            | undefined
+            | import("../askGrahamy/types").Intent,
+          lastSuggestedFollowups: [] as string[],
+          updatedAt: new Date().toISOString(),
+        }
+      : undefined;
+    const classification = await classifyMessage(request.message, previousContext);
     return {
       ok: true,
       response: { conversationId, classification },
