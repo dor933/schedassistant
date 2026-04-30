@@ -34,5 +34,3 @@ export async function createApplicationGraph() {
   const checkpointer = new MemorySaver();
   return workflow.compile({ checkpointer });
 }
-
-export { workflow as applicationWorkflow };
