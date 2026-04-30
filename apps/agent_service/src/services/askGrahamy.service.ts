@@ -6,7 +6,6 @@ import {
 } from "./clientApplicationUser.service";
 import { runAskGrahamyGraph } from "../askGrahamy/graph";
 import { classifyMessage } from "../askGrahamy/classification";
-import { AskGrahamyConversationStore } from "../askGrahamy/conversationStore";
 import type {
   AskGrahamyClassifyRequest,
   AskGrahamyClassifyResponse,
@@ -103,14 +102,13 @@ export async function classifyAskGrahamy(
   });
 
   const conversationId = request.conversationId || crypto.randomUUID();
-  const conversationStore = new AskGrahamyConversationStore();
 
   try {
-    const previousContext = await conversationStore.load(
-      conversationId,
-      user.id,
-    );
-    const classification = await classifyMessage(request.message, previousContext);
+    // Conversation memory now lives in PostgresSaver via the deep agent;
+    // the classifier no longer needs the JSON-file conversation store.
+    // Pure follow-ups arrive here with empty symbols/sectors and the
+    // downstream graph + agent resolves them via thread memory.
+    const classification = await classifyMessage(request.message);
     return {
       ok: true,
       response: { conversationId, classification },

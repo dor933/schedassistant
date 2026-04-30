@@ -193,78 +193,17 @@ export async function classifyMessage(
   const symbols = uniqueUpper(raw.symbols).slice(0, 5);
   const sectors = unique(raw.sectors).slice(0, 5);
 
-  if (raw.isFollowUp) {
-    // Self-anchored short-circuit: the user phrased the turn as a follow-up
-    // ("what about ..."), but the message itself names a stock / sector /
-    // regime. The downstream graph can answer from this message alone — no
-    // prior-context dependency. Treat it like a fresh self-contained turn so
-    // we don't fall into the clarification path on what should be a clean
-    // first-turn-of-thread query.
-    const messageHasOwnAnchor =
-      symbols.length > 0 || sectors.length > 0 || raw.regimeRequested;
-    if (messageHasOwnAnchor) {
-      const inferred = inferIntent(symbols, sectors, raw.regimeRequested, false);
-      return {
-        intent: inferred,
-        symbols,
-        sectors,
-        regimeRequested: raw.regimeRequested,
-        isFollowUp: false,
-        requiresTools: toolsForIntent(inferred),
-        confidence: raw.confidence,
-        warnings: [],
-      };
-    }
-
-    const hasPrior =
-      !!previousContext &&
-      (previousContext.lastSymbols.length > 0 ||
-        previousContext.lastSectors.length > 0 ||
-        !!previousContext.lastIntent);
-    if (!hasPrior) {
-      return {
-        intent: "follow_up",
-        symbols: [],
-        sectors: [],
-        regimeRequested: false,
-        isFollowUp: true,
-        requiresTools: [],
-        confidence: "low",
-        warnings: ["Missing prior context for follow-up."],
-      };
-    }
-    const ctx = previousContext!;
-    const resolvedSymbols = symbols.length ? symbols : ctx.lastSymbols;
-    const resolvedSectors = sectors.length ? sectors : ctx.lastSectors;
-    const resolvedRegime =
-      raw.regimeRequested ||
-      ctx.lastIntent === "regime" ||
-      ctx.lastIntent === "stock_regime" ||
-      ctx.lastIntent === "sector_regime" ||
-      ctx.lastIntent === "stock_sector_regime";
-    const resolvedIntent = inferIntent(
-      resolvedSymbols,
-      resolvedSectors,
-      resolvedRegime,
-      true,
-    );
-    return {
-      intent: resolvedIntent,
-      symbols: resolvedSymbols,
-      sectors: resolvedSectors,
-      regimeRequested: resolvedRegime,
-      isFollowUp: true,
-      requiresTools: toolsForIntent(resolvedIntent),
-      // Promote pure-low to medium since prior context is rescuing the turn.
-      confidence: raw.confidence === "low" ? "medium" : raw.confidence,
-      warnings: [],
-    };
-  }
-
-  // Non-follow-up. Trust the LLM's "unknown" verdict, otherwise re-derive
-  // intent from the resolved (symbols, sectors, regime) tuple so requiresTools
-  // and intent stay consistent even if the model returned a mismatched label.
-  const inferred = inferIntent(symbols, sectors, raw.regimeRequested, false);
+  // Slimmed classifier — the deep agent's PostgresSaver thread carries
+  // conversation memory now, so we no longer need the follow-up self-
+  // rescue / prior-context-merge branch that the templated answer path
+  // depended on. The classifier just emits whichever symbols/sectors/regime
+  // the user explicitly named THIS turn. Pure follow-ups like "why?" with
+  // no anchors flow through with empty arrays — the downstream agent
+  // resolves them via thread memory.
+  const inferred = inferIntent(symbols, sectors, raw.regimeRequested, raw.isFollowUp);
+  // Trust the LLM's "unknown" verdict; otherwise re-derive intent from the
+  // resolved (symbols, sectors, regime) tuple so requiresTools and intent
+  // stay consistent even if the model returned a mismatched label.
   const intent: Intent = raw.intent === "unknown" ? "unknown" : inferred;
 
   return {
@@ -272,7 +211,7 @@ export async function classifyMessage(
     symbols,
     sectors,
     regimeRequested: raw.regimeRequested,
-    isFollowUp: false,
+    isFollowUp: raw.isFollowUp,
     requiresTools: toolsForIntent(intent),
     confidence: raw.confidence,
     warnings:
