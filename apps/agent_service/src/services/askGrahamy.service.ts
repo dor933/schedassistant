@@ -124,7 +124,23 @@ export async function classifyAskGrahamy(
           updatedAt: new Date().toISOString(),
         }
       : undefined;
+    logger.info("Ask Grahamy classify", {
+      userId: user.id,
+      conversationId,
+      messagePreview: request.message.slice(0, 80),
+      previousContextSupplied: !!previousContext,
+      previousContextSymbols: previousContext?.lastSymbols ?? [],
+      previousContextSectors: previousContext?.lastSectors ?? [],
+    });
     const classification = await classifyMessage(request.message, previousContext);
+    logger.info("Ask Grahamy classify result", {
+      conversationId,
+      intent: classification.intent,
+      symbols: classification.symbols,
+      sectors: classification.sectors,
+      confidence: classification.confidence,
+      isFollowUp: classification.isFollowUp,
+    });
     return {
       ok: true,
       response: { conversationId, classification },
