@@ -56,9 +56,12 @@ export function runMoatGuard<T>(value: T): MoatGuardResult<T> {
     cleaned = true;
   }) as T;
 
-  if (cleaned) {
-    warnings.push("MOAT guard removed or redacted internal-only fields.");
-  }
+  // Note: deliberately do NOT push a user-facing warning when scrubbing
+  // happens. That detail is internal diagnostics — the `result: "cleaned"`
+  // discriminator below is preserved on the response (as
+  // `meta.moatGuardResult`) for telemetry / observability, and the graph
+  // logs `moatGuardResult` on every turn. Surfacing it as a "Warnings"
+  // bullet to end users was confusing without adding value.
 
   return {
     value: scrubbed,
