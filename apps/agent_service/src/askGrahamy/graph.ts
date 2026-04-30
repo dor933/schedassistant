@@ -265,15 +265,17 @@ function buildMeta(
   researchObjectCacheStats?: import("./types").ResponseMeta["researchObjectCache"],
   researchObjectsUpdated: import("./types").CachedResearchObject[] = [],
 ): ResponseMeta {
-  const sourcesUsed = ["daily_brief", "metadata", "clusters", "track_record", "transparency"]
-    .filter((name) => !!snapshots[name as keyof SnapshotBundle])
-    .map((name) => ({ type: "snapshot" as const, name }));
+  // Only research objects are "sources" the answer was actually grounded in.
+  // Snapshots are background scaffolding the graph fetches for system-prompt
+  // context — the agent never quotes them, so listing them as numbered
+  // citations in the UI was misleading. Snapshot fetch state is still
+  // captured in `freshness` / `upstreamLatency` for telemetry.
   const researchSources = researchObjects.map((item) => ({
     type: "research" as const,
     name: item.cacheKey,
   }));
   return {
-    sourcesUsed: [...sourcesUsed, ...researchSources],
+    sourcesUsed: researchSources,
     freshness: snapshots.freshness ?? {},
     warnings: Array.from(
       new Set([
