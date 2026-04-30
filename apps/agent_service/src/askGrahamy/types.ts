@@ -320,4 +320,7 @@ export const EMPTY_PUBLIC_RESEARCH_VIEW: PublicResearchView = {
   warnings: [],
 };
 
-export const DEFAULT_DISCLAIMER = "This is not financial advice.";
+// Empty by design — the disclaimer was removed per product decision. Kept
+// as an exported constant so consumers (graph.ts, answerTemplates.ts) keep
+// compiling; SS-side `formatAskGrahamyAnswer` skips appending when empty.
+export const DEFAULT_DISCLAIMER = "";
