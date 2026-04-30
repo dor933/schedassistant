@@ -6,7 +6,7 @@ import { logger } from "../logger";
 import {
   buildArchitectureOverviewPrompt,
   MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
-} from "./architectureOverviewPrompt";
+} from "./architectureOverviewPrompt.service";
 import { runCliExecution } from "../utils/cliExecution";
 
 // ─── Env configuration ──────────────────────────────────────────────────────

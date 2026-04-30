@@ -31,7 +31,7 @@ import { logger } from "../logger";
 import {
   buildArchitectureOverviewPrompt,
   MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
-} from "../services/architectureOverviewPrompt";
+} from "../services/architectureOverviewPrompt.service";
 import {
   runCliExecution,
   CliBusyError,
