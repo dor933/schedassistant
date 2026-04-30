@@ -25,7 +25,7 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
-import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
+import { resolveOrgVendor } from "../../../services/resolveOrgVendor.service";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
 import { ListCronJobsTool } from "../../../tools/listCronJobsTool";
 import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
@@ -51,12 +51,15 @@ import {
   ForceApproveStagePrTool,
   ApproveStageTool,
   RequestStageChangesTool,
+  ResetStuckTaskTool,
   CancelEpicTool,
   SearchEpicTasksByDateTool,
   GetEpicTaskStagesAndTasksTool,
   parseContinuationMarker,
 } from "../../../tools/epicTaskTools";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
+import { RunClaudeCliTool, RunCodexCliTool } from "../../../tools/runCliTools";
+import { KillCliExecutionTool } from "../../../tools/killCliExecutionTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
@@ -78,20 +81,19 @@ function sanitizeName(raw: string): string {
 
 function getModel(modelSlug: string, vendorSlug: string, apiKey: string): BaseChatModel {
   if (vendorSlug === "openai") {
-    return new ChatOpenAI({ modelName: modelSlug, apiKey, temperature: 0.2 });
+    return new ChatOpenAI({ modelName: modelSlug, apiKey });
   }
   if (vendorSlug === "anthropic") {
     return new ChatAnthropic({
       modelName: modelSlug,
       apiKey,
-      temperature: 0.2,
       ...anthropicBaseConfig(),
     });
   }
   if (vendorSlug === "google") {
-    return new ChatGoogle({ model: modelSlug, apiKey, temperature: 0.2 });
+    return new ChatGoogle({ model: modelSlug, apiKey });
   }
-  return new ChatOpenAI({ modelName: modelSlug, apiKey, temperature: 0.2 });
+  return new ChatOpenAI({ modelName: modelSlug, apiKey });
 }
 
 function rawVendorErrorText(err: unknown): string {
@@ -214,6 +216,7 @@ export async function epicCallModelNode(
     ForceApproveStagePrTool(),
     ApproveStageTool(),
     RequestStageChangesTool(),
+    ResetStuckTaskTool(),
     CancelEpicTool(),
     ...mcpTools,
   ];
@@ -237,6 +240,12 @@ export async function epicCallModelNode(
     tools.push(SearchEpicTasksByDateTool());
   if (has("get_epic_task_stages_and_tasks"))
     tools.push(GetEpicTaskStagesAndTasksTool());
+  if (has("run_claude_cli"))
+    tools.push(RunClaudeCliTool(agentId, state.userId, threadId));
+  if (has("run_codex_cli"))
+    tools.push(RunCodexCliTool(agentId, state.userId, threadId));
+  if (has("kill_cli_execution"))
+    tools.push(KillCliExecutionTool(agentId, state.userId));
 
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

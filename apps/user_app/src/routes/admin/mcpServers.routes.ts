@@ -1,12 +1,14 @@
 import { Router } from "express";
 import { McpServersController } from "../../controllers/admin/mcpServers.controller";
+import { requireSuperAdmin } from "../../middlewares/requireSuperAdmin";
 
 const router = Router();
 const controller = new McpServersController();
 
-// MCP server mutations are intentionally omitted — the registry is a
-// platform-wide resource managed out-of-band via direct DB access.
-// See `mcpServers.controller.ts` for rationale.
 router.get("/", controller.getAll);
+router.post("/", requireSuperAdmin, controller.create);
+router.patch("/:id", requireSuperAdmin, controller.update);
+router.delete("/:id", requireSuperAdmin, controller.remove);
+router.post("/:id/install", requireSuperAdmin, controller.install);
 
 export { router as mcpServersRouter };

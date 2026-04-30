@@ -22,18 +22,27 @@ const DEFAULT_TOOL_SLUGS = new Set([
  * Agents must be explicitly granted access to powerful tools like
  * `delegate_to_deep_agent`, `delegate_to_epic_orchestrator`, or `query_database`
  * via the `agent_available_tools` table.
+ *
+ * Pass `{ applyDefaults: false }` to opt out of the default-tool fallback —
+ * callers (e.g. the application graph) that require fully-explicit tool
+ * assignment use this so primary-consultation tools (`consult_agent`,
+ * `list_agents`) are bound only when the admin has granted them.
  */
 export async function loadActiveToolSlugs(
   agentId: string | null | undefined,
+  options: { applyDefaults?: boolean } = {},
 ): Promise<Set<string>> {
-  if (!agentId) return DEFAULT_TOOL_SLUGS;
+  const applyDefaults = options.applyDefaults ?? true;
+  const emptyFallback = applyDefaults ? DEFAULT_TOOL_SLUGS : new Set<string>();
+
+  if (!agentId) return emptyFallback;
 
   const links = await AgentAvailableTool.findAll({
     where: { agentId },
     attributes: ["toolId", "active"],
   });
 
-  if (links.length === 0) return DEFAULT_TOOL_SLUGS;
+  if (links.length === 0) return emptyFallback;
 
   const activeToolIds = links.filter((l) => l.active).map((l) => l.toolId);
   if (activeToolIds.length === 0) return new Set();

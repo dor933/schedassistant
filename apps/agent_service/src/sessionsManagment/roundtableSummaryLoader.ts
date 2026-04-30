@@ -68,6 +68,10 @@ export async function loadRecentRoundtableSummaries(
 
 /**
  * Formats roundtable summaries into a system prompt section.
+ *
+ * The saved summary already contains its own "## Topic" section, so avoid
+ * repeating the full roundtable topic before it. Keep the completion timestamp
+ * outside the summary so the agent can judge freshness.
  * Returns empty string if there are no summaries.
  */
 export function formatRoundtableSummariesSection(
@@ -76,19 +80,18 @@ export function formatRoundtableSummariesSection(
   if (summaries.length === 0) return "";
 
   const lines: string[] = [
-    "## Recent roundtable discussions",
-    "You recently participated in multi-agent roundtable discussions. " +
-    "Below are the summaries. If the user asks about these discussions, " +
-    "use this information to answer accurately.",
+    "## Recent roundtable summaries",
+    "These are summaries from completed multi-agent roundtables you participated in. " +
+    "Use them as past context when relevant.",
     "",
   ];
 
   for (const s of summaries) {
-    lines.push(`### ${s.topic}`);
-    lines.push(`_Completed: ${new Date(s.completedAt).toLocaleDateString()}_\n`);
-    lines.push(s.summary);
+    lines.push(`_Handled: ${new Date(s.completedAt).toISOString()}_`);
+    lines.push("");
+    lines.push(s.summary.trim());
     lines.push("");
   }
 
-  return lines.join("\n");
+  return lines.join("\n").trimEnd();
 }

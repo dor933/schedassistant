@@ -192,16 +192,32 @@ export interface AgentAttributes {
 
 export interface McpServerAttributes {
   id: number;
-  /** Unique display name for this MCP server (e.g. "bash", "github"). */
+  /**
+   * Owning tenant. `null` = platform-shared (curated public registry,
+   * read-only in the UI, installable into any org). Non-null = private to
+   * that organization; only super_admins of that org may mutate.
+   */
+  organizationId: OrganizationId | null;
+  /** Display name. Unique per (organization_id, name); also unique among null-org rows. */
   name: string;
+  /** Optional human-readable summary shown in the public-registry browser. */
+  description: string | null;
   /** Transport protocol — currently only "stdio" is supported. */
   transport: string;
-  /** CLI command to launch the server (e.g. "npx", "uvx"). */
+  /** CLI command to launch the server (e.g. "npx", "uvx", "node"). */
   command: string;
   /** Arguments passed to the command. */
   args: string[];
   /** Optional environment variables. Placeholders like `{{VAR}}` are resolved at runtime. */
   env: Record<string, string> | null;
+  /**
+   * Inline JS source for "custom script" MCPs. When set, the admin pastes
+   * the server's source into the UI; the controller writes it to
+   * `/home/agent/.codex/mcp-scripts/<id>.js`, sets `command="node"`, and
+   * sets `args=["/home/agent/.codex/mcp-scripts/<id>.js"]` automatically.
+   * Only super_admins can create or edit a row with a non-null script.
+   */
+  scriptContent: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -703,6 +719,11 @@ export interface TaskExecutionAttributes {
   attemptNumber: number;
   status: TaskExecutionStatus;
   cliSessionId: string | null;
+  /**
+   * FK to `cli_executions.id` for the underlying CLI subprocess this attempt
+   * spawned. Nullable for rows predating the cli_executions ledger.
+   */
+  cliExecutionId: CliExecutionId | null;
   prompt: string | null;
   result: string | null;
   error: string | null;
@@ -717,6 +738,72 @@ export interface TaskDependencyAttributes {
   taskId: AgentTaskId;
   dependsOnTaskId: AgentTaskId;
   createdAt: Date;
+}
+
+// ─── CLI Executions (provider-agnostic) ─────────────────────────────────────
+
+export type CliExecutionId = string;
+
+/** Which CLI binary this row describes. New providers add a value here. */
+export type CliProvider = "claude" | "codex";
+
+/**
+ * Lifecycle of a single CLI invocation.
+ * - "running":   spawn succeeded, process still alive (or row not yet finalized).
+ * - "completed": process exited 0 and we parsed a result.
+ * - "failed":    process exited non-zero, or we couldn't parse the output.
+ * - "killed":    swept on startup as a stale `running` row, or explicitly aborted.
+ */
+export type CliExecutionStatus = "running" | "completed" | "failed" | "killed";
+
+/** What part of the system spawned this CLI run. Used for filtering / billing. */
+export type CliInvokedVia =
+  | "epic_orchestrator"     // executeTask() / continueRemainingTasks()
+  | "architecture_overview" // generateArchitectureOverview()
+  | "run_cli_tool";         // RunClaudeCliTool / RunCodexCliTool grant
+
+export interface CliExecutionAttributes {
+  id: CliExecutionId;
+  provider: CliProvider;
+  /**
+   * Agent that triggered the run. Nullable so admin-triggered runs (e.g.
+   * the repo "generate architecture overview" endpoint) can be recorded
+   * without faking an attribution.
+   */
+  agentId: AgentId | null;
+  userId: UserId | null;
+  threadId: string | null;
+  /** Optional link back to the epic task that triggered this run. */
+  agentTaskId: AgentTaskId | null;
+  cwd: string;
+  prompt: string;
+  systemPrompt: string | null;
+  /** Resolved CLI agent name (`--agent-name` for claude). Provider may not use it. */
+  cliAgentName: string | null;
+  /** Concrete model id reported by the CLI's structured output, when available. */
+  model: string | null;
+  /** Session id captured from the CLI's structured output (provider-opaque). */
+  sessionId: string | null;
+  /** Set when this run resumed a prior `cli_executions.session_id`. */
+  parentSessionId: string | null;
+  status: CliExecutionStatus;
+  result: string | null;
+  stderr: string | null;
+  exitCode: number | null;
+  /** OS pid of the CLI process. Used by the cross-provider busy check / kill. */
+  pid: number | null;
+  costUsd: number | null;
+  durationMs: number | null;
+  /** Provider-specific. Claude reports it; codex generally doesn't. */
+  numTurns: number | null;
+  isError: boolean | null;
+  invokedVia: CliInvokedVia;
+  /** Provider-specific extras (flags, profile, reasoning_effort, allowedTools, …). */
+  providerMetadata: Record<string, unknown>;
+  startedAt: Date;
+  completedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 // ─── Agent Cron Jobs ─────────────────────────────────────────────────────────

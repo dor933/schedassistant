@@ -16,7 +16,7 @@ import {
   LLMModel,
   McpServer,
 } from "@scheduling-agent/database";
-import { resolveOrgVendorByOrg } from "../services/resolveOrgVendor";
+import { resolveOrgVendorByOrg } from "../services/resolveOrgVendor.service";
 import { loadOrganizationSummarySection } from "../graphs/basicGraph/nodes/contextBuilder";
 import {
   DEEP_AGENT_QUEUE_NAME,
@@ -305,15 +305,14 @@ async function resolveModelForAgent(executorAgent: Agent) {
     case "anthropic":
       return new ChatAnthropic({
         modelName: slug,
-        temperature: 0.4,
         apiKey: vendor.apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
         ...anthropicBaseConfig(),
       });
     case "openai":
-      return new ChatOpenAI({ modelName: slug, temperature: 0.4, apiKey: vendor.apiKey });
+      return new ChatOpenAI({ modelName: slug, apiKey: vendor.apiKey });
     case "google":
-      return new ChatGoogle({ model: slug, temperature: 0.4, apiKey: vendor.apiKey });
+      return new ChatGoogle({ model: slug, apiKey: vendor.apiKey });
     default:
       return null;
   }
@@ -370,483 +369,483 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
       await observeWithContext(
         "deep_agent_run",
         async () => {
-      try {
-        // Load executor agent config
-        const executorAgent = await Agent.findByPk(executorAgentId);
-        if (!executorAgent) {
-          throw new Error(`Executor agent ${executorAgentId} not found`);
-        }
-
-        // Resolve a fully configured LangChain model instance (with API key + proxy)
-        let chatModel = await resolveModelForAgent(executorAgent);
-        if (!chatModel) {
-          throw new Error(
-            `Cannot resolve any model for executor agent "${executorAgentId}" ` +
-            `(modelId=${executorAgent.modelId}, modelSlug=${executorAgent.modelSlug})`,
-          );
-        }
-
-        // Check if this agent uses Google Search grounding, Tavily search,
-        // or Google Workspace (Gmail / Calendar / Drive) tools. The Google
-        // Workspace tools are bound ONLY to the dedicated
-        // `google_workspace_agent` system agent
-        // (toolConfig.useGoogleWorkspaceTools). Durable workspace/library
-        // reads and writes ride on the filesystem MCP when the executor has
-        // it attached — no dedicated workspace tools are injected here.
-        const tc = executorAgent.toolConfig as Record<string, unknown> | null;
-        const useGoogleSearch = !!tc?.googleSearch;
-        const useTavily = !!tc?.useTavily;
-        const useGoogleWorkspaceTools = !!tc?.useGoogleWorkspaceTools;
-
-        // Organization-wide grounding prepended to every executor's prompt.
-        const orgSummarySection = await loadOrganizationSummarySection(
-          executorAgent.organizationId ?? null,
-        );
-        const orgSummaryBlock = orgSummarySection.trim().length > 0
-          ? `${orgSummarySection.trim()}\n\n`
-          : "";
-
-        // Use the executor agent's constant userId for memory scoping.
-        const deepAgentUserId = executorAgent.userId ?? userId;
-        const threadId = crypto.randomUUID();
-
-        let resultText: string;
-
-        if (useGoogleSearch) {
-          // ── Google Search agent: invoke the model directly with grounding ──
-          // We skip createDeepAgent entirely because it binds its own built-in
-          // tools to the model, which conflicts with ChatGoogle's googleSearch.
-          const googleModel = (chatModel as ChatGoogle).bindTools([{ googleSearch: {} }]);
-
-          logger.info("DeepAgent: invoking Google Search agent directly", {
-            delegationId,
-            modelSlug: executorAgent.modelSlug,
-            threadId,
-          });
-
-          const langfuseHandler = getLangfuseCallbackHandler(userId, {
-            threadId,
-            delegationId,
-            executorAgentId,
-            service: "deep_agent",
-          });
-
-          const response = await withTimeout(
-            googleModel.invoke(
-              [
-                new SystemMessage(`${orgSummaryBlock}${executorAgent.instructions!}`),
-                new HumanMessage(request),
-              ],
-              langfuseHandler ? { callbacks: [langfuseHandler] } : undefined,
-            ),
-            DEEP_AGENT_TIMEOUT_MS,
-          );
-
-          await flushLangfuse();
-
-          resultText =
-            typeof response.content === "string"
-              ? response.content
-              : response.content
-                ? JSON.stringify(response.content)
-                : "The web search agent did not produce a response.";
-        } else {
-          // ── Standard deep agent path ──
-          // Load active MCP tools available to this executor agent, EXCLUDING
-          // the filesystem MCP. Primary agents use that MCP directly, but deep
-          // agents must not: its `read_file` / `write_file` / `edit_file`
-          // tool names collide with deepagents' built-in virtual-FS tools,
-          // which silently routed writes to memory and caused ENOENT on
-          // subsequent `get_file_info` calls. The deep agent instead gets
-          // real-disk file access via a `FilesystemBackend` rooted at the
-          // caller's workspace (see `backend` below).
-          const mcpLinks = await AgentAvailableMcpServer.findAll({
-            where: { agentId: executorAgent.id, active: true },
-            attributes: ["mcpServerId"],
-          });
-          const rawMcpServerIds = mcpLinks.map((l) => l.mcpServerId);
-          const fsMcpRow = rawMcpServerIds.length > 0
-            ? await McpServer.findOne({
-                where: { name: FILESYSTEM_MCP_NAME },
-                attributes: ["id"],
-              })
-            : null;
-          const mcpServerIds = fsMcpRow
-            ? rawMcpServerIds.filter((id) => id !== fsMcpRow.id)
-            : rawMcpServerIds;
-          const mcpTools = mcpServerIds.length > 0
-            ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${executorAgentId}`)
-            : [];
-
-          const skillTools = systemAgentSkillTools(executorAgent.id);
-
-          // Caller's persistent workspace directory — the deep agent gets
-          // mounted here via its filesystem backend (below). System executor
-          // agents have no workspace of their own (workspace_path is NULL per
-          // migration 20240101000084); they always act on the caller's
-          // directory. If the caller has none, the backend falls back to the
-          // default StateBackend (ephemeral in-memory) and file writes will
-          // not persist.
-          let callerWorkspacePath: string | null = null;
-          if (callerAgentId) {
-            const callerAgent = await Agent.findByPk(callerAgentId, {
-              attributes: ["id", "workspacePath"],
-            });
-            callerWorkspacePath = callerAgent?.workspacePath ?? null;
-          }
-
-          // Caller's per-thread session workspace folder under
-          // `<callerWorkspacePath>/threads/<callerThreadId>/`. Only computed
-          // when both bits are present — without them, manifest capture is
-          // not possible (no scoping bucket and no thread to attribute to).
-          // The folder is ensured eagerly so the deep agent can `ls
-          // /threads/<id>` and find an existing place to drop files.
-          const callerSessionWorkspacePath = resolveSessionWorkspacePath(
-            callerWorkspacePath,
-            callerThreadId ?? null,
-          );
-          if (callerSessionWorkspacePath) {
-            try {
-              await ensureSessionWorkspace(callerSessionWorkspacePath);
-            } catch (err) {
-              logger.warn("DeepAgent: failed to ensure caller session workspace", {
-                delegationId,
-                callerSessionWorkspacePath,
-                error: err instanceof Error ? err.message : String(err),
-              });
+          try {
+            // Load executor agent config
+            const executorAgent = await Agent.findByPk(executorAgentId);
+            if (!executorAgent) {
+              throw new Error(`Executor agent ${executorAgentId} not found`);
             }
-          }
 
-          // Load configurable tools gated by agent_available_tools (same as callModel)
-          const activeSlugs = await loadActiveToolSlugs(executorAgent.id);
-          const has = (slug: string) => activeSlugs.has(slug);
-          const configurableTools: any[] = [];
-          if (has("query_database")) configurableTools.push(QueryDatabaseTool());
-          if (has("consult_agent"))
-            configurableTools.push(ConsultAgentTool(executorAgent.id, userId, groupId ?? null, singleChatId ?? null));
-          if (has("list_agents")) configurableTools.push(ListAgentsTool(executorAgent.id));
-          if (has("list_system_agents")) configurableTools.push(ListSystemAgentsTool(executorAgent.id));
+            // Resolve a fully configured LangChain model instance (with API key + proxy)
+            let chatModel = await resolveModelForAgent(executorAgent);
+            if (!chatModel) {
+              throw new Error(
+                `Cannot resolve any model for executor agent "${executorAgentId}" ` +
+                `(modelId=${executorAgent.modelId}, modelSlug=${executorAgent.modelSlug})`,
+              );
+            }
 
-          // Google Workspace (Gmail / Calendar / Drive) tools — bound ONLY to
-          // the dedicated `google_workspace_agent` system agent
-          // (tool_config.useGoogleWorkspaceTools). Executor/system agents do
-          // NOT own scope grants themselves; they inherit from the caller, so
-          // we key the permission check to callerAgentId. If the caller lacks
-          // the grant, the tool returns a deny message at invocation time.
-          const googleAgentTools = useGoogleWorkspaceTools ? googleTools(callerAgentId) : [];
+            // Check if this agent uses Google Search grounding, Tavily search,
+            // or Google Workspace (Gmail / Calendar / Drive) tools. The Google
+            // Workspace tools are bound ONLY to the dedicated
+            // `google_workspace_agent` system agent
+            // (toolConfig.useGoogleWorkspaceTools). Durable workspace/library
+            // reads and writes ride on the filesystem MCP when the executor has
+            // it attached — no dedicated workspace tools are injected here.
+            const tc = executorAgent.toolConfig as Record<string, unknown> | null;
+            const useGoogleSearch = !!tc?.googleSearch;
+            const useTavily = !!tc?.useTavily;
+            const useGoogleWorkspaceTools = !!tc?.useGoogleWorkspaceTools;
 
-          // Tavily web-search tool — injected for the dedicated Tavily-backed
-          // web-search system agent (toolConfig.useTavily=true). Tavily is a
-          // LangChain-native tool so, unlike Brave, it does NOT come in via
-          // MCP; we just add it to the tools array directly.
-          const tavilyTools = useTavily ? [TavilySearchTool()] : [];
+            // Organization-wide grounding prepended to every executor's prompt.
+            const orgSummarySection = await loadOrganizationSummarySection(
+              executorAgent.organizationId ?? null,
+            );
+            const orgSummaryBlock = orgSummarySection.trim().length > 0
+              ? `${orgSummarySection.trim()}\n\n`
+              : "";
 
-          const allTools = [
-            ...mcpTools,
-            ...skillTools,
-            ...configurableTools,
-            ...googleAgentTools,
-            ...tavilyTools,
-          ];
+            // Use the executor agent's constant userId for memory scoping.
+            const deepAgentUserId = executorAgent.userId ?? userId;
+            const threadId = crypto.randomUUID();
 
-          logger.info("DeepAgent: creating agent", {
-            delegationId,
-            modelSlug: executorAgent.modelSlug,
-            executorAgentUserId: deepAgentUserId,
-            threadId,
-            toolCount: allTools.length,
-          });
+            let resultText: string;
 
-          // Workspace + library guidance — emitted when the caller actually
-          // has a workspace directory. When set, we mount a `CompositeBackend`
-          // (below) whose default backend is the caller's workspace on disk,
-          // plus a read-only `/library/*` route to the admin-curated org
-          // library. All the deep agent's built-in file tools (`read_file` /
-          // `write_file` / `edit_file` / `ls` / `grep` / `glob`) operate
-          // against this backend — no virtual in-memory FS, no filesystem MCP.
-          const perThreadSection = callerThreadId
-            ? (
-                `\n### Per-thread session folder (\`/threads/${callerThreadId}/\`)\n` +
-                `A subfolder \`/threads/${callerThreadId}/\` exists at your workspace root for this ` +
-                `delegation's calling thread. **Write content-rich, durable artifacts (plans, briefs, large ` +
-                `analyses, research dumps) inside this folder, not at the workspace root.** Writes here are ` +
-                `captured into the caller's session manifest, summarised when the thread closes, and indexed ` +
-                `for vector retrieval — so a future session can recover them via \`recall_episodic_memory\` → ` +
-                `\`get_thread_summary\` → \`read_session_file\`. Writes elsewhere in the workspace are still ` +
-                `saved but won't appear in the per-thread manifest.\n`
-              )
-            : "";
-          const workspaceSection = callerWorkspacePath
-            ? (
-                `## Caller workspace (your sandboxed filesystem)\n` +
-                `Your file tools — \`read_file\`, \`write_file\`, \`edit_file\`, \`ls\`, \`grep\`, \`glob\` — are ` +
-                `pre-bound to the caller's workspace directory. You do NOT need (and will not be told) the on-disk ` +
-                `path of that directory; from your point of view, the workspace IS your filesystem root. Writes ` +
-                `persist across tasks; the orchestrator that delegated to you reads the same directory.\n\n` +
-                `- **Allowed file formats — writes are restricted to \`.md\` and \`.txt\` only.** Any other ` +
-                `extension (.json, .csv, .pdf, .xlsx, …) is rejected by the backend before it touches disk. ` +
-                `Render structured data as Markdown (tables, fenced code blocks, front-matter) inside a ` +
-                `\`.md\` file when you need it.\n` +
-                `- **Paths — use bare or root-relative names only**: pass \`notes.md\` or \`/notes.md\`. Both ` +
-                `resolve to the workspace root. Subdirectories work the same way: \`reports/q1.md\` or ` +
-                `\`/reports/q1.md\`.\n` +
-                `- **Never** prefix a path with anything that looks like a host directory (no \`/app/...\`, no ` +
-                `\`/home/...\`, no \`/workspaces/...\`, no \`/data/...\`). If the orchestrator's task message ` +
-                `mentions such a path, treat it as context and write/read using the bare filename relative to your ` +
-                `root. Doing otherwise will create a duplicated nested directory inside your workspace and the ` +
-                `file will not appear where the orchestrator expects.\n` +
-                `- Paths containing \`..\` are rejected.\n` +
-                `- **Orient first**: call \`ls\` on \`/\` before you start, and \`read_file\` anything that looks ` +
-                `relevant — the orchestrator or prior specialists may have left context.\n` +
-                perThreadSection +
-                `\n### Org library (\`/library/*\`, read-only)\n` +
-                `Admin-curated reference documents are mounted at the virtual path \`/library/\`. Use \`ls /library\` ` +
-                `to browse, \`read_file /library/<name>\` to read, and \`grep\` with \`path=/library\` to search. ` +
-                `Consult before answering questions about internal policies, terminology, or procedures. Writes and ` +
-                `edits under \`/library/*\` are rejected by the backend — do not attempt them.\n\n` +
-                `### Required: self-report workspace writes\n` +
-                `At the very end of your final response to the orchestrator, include a top-level section titled ` +
-                `exactly \`## Workspace writes\` listing every file you created, edited, moved, or deleted outside ` +
-                `\`/library/\`. One bullet per file (path relative to the workspace root) with a one-line summary ` +
-                `of what it contains or why you changed it. If you made no workspace changes, include the section ` +
-                `with a single bullet \`- (none)\`. The orchestrator relies on this to know what changed.\n\n`
-              )
-            : "";
+            if (useGoogleSearch) {
+              // ── Google Search agent: invoke the model directly with grounding ──
+              // We skip createDeepAgent entirely because it binds its own built-in
+              // tools to the model, which conflicts with ChatGoogle's googleSearch.
+              const googleModel = (chatModel as ChatGoogle).bindTools([{ googleSearch: {} }]);
 
-          // Create the deep agent. When the caller has a workspace, mount a
-          // `CompositeBackend`: the default route is a sandboxed
-          // `FilesystemBackend` at the caller's workspace (virtualMode=true,
-          // so `..` traversal is rejected), and `/library/*` routes to a
-          // `ReadOnlyFilesystemBackend` at the org library. We deliberately
-          // do NOT attach the filesystem MCP (filtered above) — its
-          // `read_file` / `write_file` / `edit_file` tool names collide with
-          // the deepagents built-ins, which caused writes to land in memory
-          // and subsequent `get_file_info` calls to return ENOENT.
-          const checkpointer = new MemorySaver();
-          // When the caller passed its threadId AND has a workspace, route
-          // the default filesystem through `InstrumentedFilesystemBackend` so
-          // writes inside `/threads/<callerThreadId>/` flow into the
-          // per-thread session manifest. Without `callerThreadId` we still
-          // mount the workspace via `RestrictedExtensionFilesystemBackend`
-          // so the .md/.txt write-extension policy still fires, just without
-          // manifest capture.
-          const defaultBackend = callerWorkspacePath
-            ? (callerThreadId && callerSessionWorkspacePath
-                ? new InstrumentedFilesystemBackend({
+              logger.info("DeepAgent: invoking Google Search agent directly", {
+                delegationId,
+                modelSlug: executorAgent.modelSlug,
+                threadId,
+              });
+
+              const langfuseHandler = getLangfuseCallbackHandler(userId, {
+                threadId,
+                delegationId,
+                executorAgentId,
+                service: "deep_agent",
+              });
+
+              const response = await withTimeout(
+                googleModel.invoke(
+                  [
+                    new SystemMessage(`${orgSummaryBlock}${executorAgent.instructions!}`),
+                    new HumanMessage(request),
+                  ],
+                  langfuseHandler ? { callbacks: [langfuseHandler] } : undefined,
+                ),
+                DEEP_AGENT_TIMEOUT_MS,
+              );
+
+              await flushLangfuse();
+
+              resultText =
+                typeof response.content === "string"
+                  ? response.content
+                  : response.content
+                    ? JSON.stringify(response.content)
+                    : "The web search agent did not produce a response.";
+            } else {
+              // ── Standard deep agent path ──
+              // Load active MCP tools available to this executor agent, EXCLUDING
+              // the filesystem MCP. Primary agents use that MCP directly, but deep
+              // agents must not: its `read_file` / `write_file` / `edit_file`
+              // tool names collide with deepagents' built-in virtual-FS tools,
+              // which silently routed writes to memory and caused ENOENT on
+              // subsequent `get_file_info` calls. The deep agent instead gets
+              // real-disk file access via a `FilesystemBackend` rooted at the
+              // caller's workspace (see `backend` below).
+              const mcpLinks = await AgentAvailableMcpServer.findAll({
+                where: { agentId: executorAgent.id, active: true },
+                attributes: ["mcpServerId"],
+              });
+              const rawMcpServerIds = mcpLinks.map((l) => l.mcpServerId);
+              const fsMcpRow = rawMcpServerIds.length > 0
+                ? await McpServer.findOne({
+                  where: { name: FILESYSTEM_MCP_NAME },
+                  attributes: ["id"],
+                })
+                : null;
+              const mcpServerIds = fsMcpRow
+                ? rawMcpServerIds.filter((id) => id !== fsMcpRow.id)
+                : rawMcpServerIds;
+              const mcpTools = mcpServerIds.length > 0
+                ? await getMcpToolsByServerIds(mcpServerIds, `system-agent:${executorAgentId}`)
+                : [];
+
+              const skillTools = systemAgentSkillTools(executorAgent.id);
+
+              // Caller's persistent workspace directory — the deep agent gets
+              // mounted here via its filesystem backend (below). System executor
+              // agents have no workspace of their own (workspace_path is NULL per
+              // migration 20240101000084); they always act on the caller's
+              // directory. If the caller has none, the backend falls back to the
+              // default StateBackend (ephemeral in-memory) and file writes will
+              // not persist.
+              let callerWorkspacePath: string | null = null;
+              if (callerAgentId) {
+                const callerAgent = await Agent.findByPk(callerAgentId, {
+                  attributes: ["id", "workspacePath"],
+                });
+                callerWorkspacePath = callerAgent?.workspacePath ?? null;
+              }
+
+              // Caller's per-thread session workspace folder under
+              // `<callerWorkspacePath>/threads/<callerThreadId>/`. Only computed
+              // when both bits are present — without them, manifest capture is
+              // not possible (no scoping bucket and no thread to attribute to).
+              // The folder is ensured eagerly so the deep agent can `ls
+              // /threads/<id>` and find an existing place to drop files.
+              const callerSessionWorkspacePath = resolveSessionWorkspacePath(
+                callerWorkspacePath,
+                callerThreadId ?? null,
+              );
+              if (callerSessionWorkspacePath) {
+                try {
+                  await ensureSessionWorkspace(callerSessionWorkspacePath);
+                } catch (err) {
+                  logger.warn("DeepAgent: failed to ensure caller session workspace", {
+                    delegationId,
+                    callerSessionWorkspacePath,
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                }
+              }
+
+              // Load configurable tools gated by agent_available_tools (same as callModel)
+              const activeSlugs = await loadActiveToolSlugs(executorAgent.id);
+              const has = (slug: string) => activeSlugs.has(slug);
+              const configurableTools: any[] = [];
+              if (has("query_database")) configurableTools.push(QueryDatabaseTool());
+              if (has("consult_agent"))
+                configurableTools.push(ConsultAgentTool(executorAgent.id, userId, groupId ?? null, singleChatId ?? null));
+              if (has("list_agents")) configurableTools.push(ListAgentsTool(executorAgent.id));
+              if (has("list_system_agents")) configurableTools.push(ListSystemAgentsTool(executorAgent.id));
+
+              // Google Workspace (Gmail / Calendar / Drive) tools — bound ONLY to
+              // the dedicated `google_workspace_agent` system agent
+              // (tool_config.useGoogleWorkspaceTools). Executor/system agents do
+              // NOT own scope grants themselves; they inherit from the caller, so
+              // we key the permission check to callerAgentId. If the caller lacks
+              // the grant, the tool returns a deny message at invocation time.
+              const googleAgentTools = useGoogleWorkspaceTools ? googleTools(callerAgentId) : [];
+
+              // Tavily web-search tool — injected for the dedicated Tavily-backed
+              // web-search system agent (toolConfig.useTavily=true). Tavily is a
+              // LangChain-native tool so, unlike Brave, it does NOT come in via
+              // MCP; we just add it to the tools array directly.
+              const tavilyTools = useTavily ? [TavilySearchTool()] : [];
+
+              const allTools = [
+                ...mcpTools,
+                ...skillTools,
+                ...configurableTools,
+                ...googleAgentTools,
+                ...tavilyTools,
+              ];
+
+              logger.info("DeepAgent: creating agent", {
+                delegationId,
+                modelSlug: executorAgent.modelSlug,
+                executorAgentUserId: deepAgentUserId,
+                threadId,
+                toolCount: allTools.length,
+              });
+
+              // Workspace + library guidance — emitted when the caller actually
+              // has a workspace directory. When set, we mount a `CompositeBackend`
+              // (below) whose default backend is the caller's workspace on disk,
+              // plus a read-only `/library/*` route to the admin-curated org
+              // library. All the deep agent's built-in file tools (`read_file` /
+              // `write_file` / `edit_file` / `ls` / `grep` / `glob`) operate
+              // against this backend — no virtual in-memory FS, no filesystem MCP.
+              const perThreadSection = callerThreadId
+                ? (
+                  `\n### Per-thread session folder (\`/threads/${callerThreadId}/\`)\n` +
+                  `A subfolder \`/threads/${callerThreadId}/\` exists at your workspace root for this ` +
+                  `delegation's calling thread. **Write content-rich, durable artifacts (plans, briefs, large ` +
+                  `analyses, research dumps) inside this folder, not at the workspace root.** Writes here are ` +
+                  `captured into the caller's session manifest, summarised when the thread closes, and indexed ` +
+                  `for vector retrieval — so a future session can recover them via \`recall_episodic_memory\` → ` +
+                  `\`get_thread_summary\` → \`read_session_file\`. Writes elsewhere in the workspace are still ` +
+                  `saved but won't appear in the per-thread manifest.\n`
+                )
+                : "";
+              const workspaceSection = callerWorkspacePath
+                ? (
+                  `## Caller workspace (your sandboxed filesystem)\n` +
+                  `Your file tools — \`read_file\`, \`write_file\`, \`edit_file\`, \`ls\`, \`grep\`, \`glob\` — are ` +
+                  `pre-bound to the caller's workspace directory. You do NOT need (and will not be told) the on-disk ` +
+                  `path of that directory; from your point of view, the workspace IS your filesystem root. Writes ` +
+                  `persist across tasks; the orchestrator that delegated to you reads the same directory.\n\n` +
+                  `- **Allowed file formats — writes are restricted to \`.md\` and \`.txt\` only.** Any other ` +
+                  `extension (.json, .csv, .pdf, .xlsx, …) is rejected by the backend before it touches disk. ` +
+                  `Render structured data as Markdown (tables, fenced code blocks, front-matter) inside a ` +
+                  `\`.md\` file when you need it.\n` +
+                  `- **Paths — use bare or root-relative names only**: pass \`notes.md\` or \`/notes.md\`. Both ` +
+                  `resolve to the workspace root. Subdirectories work the same way: \`reports/q1.md\` or ` +
+                  `\`/reports/q1.md\`.\n` +
+                  `- **Never** prefix a path with anything that looks like a host directory (no \`/app/...\`, no ` +
+                  `\`/home/...\`, no \`/workspaces/...\`, no \`/data/...\`). If the orchestrator's task message ` +
+                  `mentions such a path, treat it as context and write/read using the bare filename relative to your ` +
+                  `root. Doing otherwise will create a duplicated nested directory inside your workspace and the ` +
+                  `file will not appear where the orchestrator expects.\n` +
+                  `- Paths containing \`..\` are rejected.\n` +
+                  `- **Orient first**: call \`ls\` on \`/\` before you start, and \`read_file\` anything that looks ` +
+                  `relevant — the orchestrator or prior specialists may have left context.\n` +
+                  perThreadSection +
+                  `\n### Org library (\`/library/*\`, read-only)\n` +
+                  `Admin-curated reference documents are mounted at the virtual path \`/library/\`. Use \`ls /library\` ` +
+                  `to browse, \`read_file /library/<name>\` to read, and \`grep\` with \`path=/library\` to search. ` +
+                  `Consult before answering questions about internal policies, terminology, or procedures. Writes and ` +
+                  `edits under \`/library/*\` are rejected by the backend — do not attempt them.\n\n` +
+                  `### Required: self-report workspace writes\n` +
+                  `At the very end of your final response to the orchestrator, include a top-level section titled ` +
+                  `exactly \`## Workspace writes\` listing every file you created, edited, moved, or deleted outside ` +
+                  `\`/library/\`. One bullet per file (path relative to the workspace root) with a one-line summary ` +
+                  `of what it contains or why you changed it. If you made no workspace changes, include the section ` +
+                  `with a single bullet \`- (none)\`. The orchestrator relies on this to know what changed.\n\n`
+                )
+                : "";
+
+              // Create the deep agent. When the caller has a workspace, mount a
+              // `CompositeBackend`: the default route is a sandboxed
+              // `FilesystemBackend` at the caller's workspace (virtualMode=true,
+              // so `..` traversal is rejected), and `/library/*` routes to a
+              // `ReadOnlyFilesystemBackend` at the org library. We deliberately
+              // do NOT attach the filesystem MCP (filtered above) — its
+              // `read_file` / `write_file` / `edit_file` tool names collide with
+              // the deepagents built-ins, which caused writes to land in memory
+              // and subsequent `get_file_info` calls to return ENOENT.
+              const checkpointer = new MemorySaver();
+              // When the caller passed its threadId AND has a workspace, route
+              // the default filesystem through `InstrumentedFilesystemBackend` so
+              // writes inside `/threads/<callerThreadId>/` flow into the
+              // per-thread session manifest. Without `callerThreadId` we still
+              // mount the workspace via `RestrictedExtensionFilesystemBackend`
+              // so the .md/.txt write-extension policy still fires, just without
+              // manifest capture.
+              const defaultBackend = callerWorkspacePath
+                ? (callerThreadId && callerSessionWorkspacePath
+                  ? new InstrumentedFilesystemBackend({
                     rootDir: callerWorkspacePath,
                     virtualMode: true,
                     threadId: callerThreadId,
                     sessionWorkspacePath: callerSessionWorkspacePath,
                     source: `deep_agent:${executorAgentId}`,
                   })
-                : new RestrictedExtensionFilesystemBackend({
+                  : new RestrictedExtensionFilesystemBackend({
                     rootDir: callerWorkspacePath,
                     virtualMode: true,
                   }))
-            : null;
-          const backend = defaultBackend
-            ? new CompositeBackend(defaultBackend, {
-                "/library": new ReadOnlyFilesystemBackend({
-                  rootDir: getLibraryPath(),
-                  virtualMode: true,
-                }),
-              })
-            : undefined;
-          const agent = createDeepAgent({
-            model: chatModel as any,
-            tools: allTools as any[],
-            ...(backend ? { backend } : {}),
-            systemPrompt:
-              `${orgSummaryBlock}` +
-              `You are ${executorAgent.agentName}, an executor agent — a specialist responsible for carrying out tasks ` +
-              `delegated to you by orchestrator agents.\n\n` +
-              `${executorAgent.instructions}\n\n` +
-              `## Task Guidelines\n` +
-              `- Break complex tasks into steps using your todo list\n` +
-              `- Be thorough and detailed in your execution\n` +
-              `- Use your tools (MCP servers, file operations, etc.) to gather real data and produce real results\n` +
-              `- Structure your response clearly with sections\n` +
-              `- Include all relevant findings, data, and reasoning\n\n` +
-              `${workspaceSection}`,
-            checkpointer,
-          });
+                : null;
+              const backend = defaultBackend
+                ? new CompositeBackend(defaultBackend, {
+                  "/library": new ReadOnlyFilesystemBackend({
+                    rootDir: getLibraryPath(),
+                    virtualMode: true,
+                  }),
+                })
+                : undefined;
+              const agent = createDeepAgent({
+                model: chatModel as any,
+                tools: allTools as any[],
+                ...(backend ? { backend } : {}),
+                systemPrompt:
+                  `${orgSummaryBlock}` +
+                  `You are ${executorAgent.agentName}, an executor agent — a specialist responsible for carrying out tasks ` +
+                  `delegated to you by orchestrator agents.\n\n` +
+                  `${executorAgent.instructions}\n\n` +
+                  `## Task Guidelines\n` +
+                  `- Break complex tasks into steps using your todo list\n` +
+                  `- Be thorough and detailed in your execution\n` +
+                  `- Use your tools (MCP servers, file operations, etc.) to gather real data and produce real results\n` +
+                  `- Structure your response clearly with sections\n` +
+                  `- Include all relevant findings, data, and reasoning\n\n` +
+                  `${workspaceSection}`,
+                checkpointer,
+              });
 
-          // Invoke with fresh thread but constant user identity.
-          // Wrapped with timeout and recursion limit to prevent runaway executions.
-          const langfuseHandler = getLangfuseCallbackHandler(userId, {
-            threadId,
-            delegationId,
-            executorAgentId,
-            service: "deep_agent",
-          });
+              // Invoke with fresh thread but constant user identity.
+              // Wrapped with timeout and recursion limit to prevent runaway executions.
+              const langfuseHandler = getLangfuseCallbackHandler(userId, {
+                threadId,
+                delegationId,
+                executorAgentId,
+                service: "deep_agent",
+              });
 
-          // Bake Langfuse callbacks into the agent via withConfig so they
-          // propagate to all inner LangGraph nodes (LLM calls, tool calls, etc.).
-          const tracedAgent = langfuseHandler
-            ? agent.withConfig({ callbacks: [langfuseHandler] })
-            : agent;
+              // Bake Langfuse callbacks into the agent via withConfig so they
+              // propagate to all inner LangGraph nodes (LLM calls, tool calls, etc.).
+              const tracedAgent = langfuseHandler
+                ? agent.withConfig({ callbacks: [langfuseHandler] })
+                : agent;
 
-          const result = await withTimeout(
-            tracedAgent.invoke(
+              const result = await withTimeout(
+                tracedAgent.invoke(
+                  {
+                    messages: [{ role: "user" as const, content: request }],
+                  },
+                  {
+                    configurable: {
+                      thread_id: threadId,
+                      user_id: String(deepAgentUserId),
+                    },
+                    recursionLimit: DEEP_AGENT_RECURSION_LIMIT,
+                  },
+                ),
+                DEEP_AGENT_TIMEOUT_MS,
+              );
+
+              // Flush traces before extracting result (safety net if worker crashes later)
+              await flushLangfuse();
+
+              // Extract the final response
+              const messages: any[] = Array.isArray(result.messages)
+                ? result.messages
+                : [];
+              const lastAi = [...messages]
+                .reverse()
+                .find(
+                  (m: any) =>
+                    (typeof m._getType === "function" && m._getType() === "ai") ||
+                    m.role === "assistant",
+                );
+
+              resultText =
+                typeof lastAi?.content === "string"
+                  ? lastAi.content
+                  : lastAi?.content
+                    ? JSON.stringify(lastAi.content)
+                    : "The executor agent did not produce a response.";
+            }
+
+            // Mark as completed
+            await DeepAgentDelegation.update(
               {
-                messages: [{ role: "user" as const, content: request }],
+                status: "completed",
+                result: resultText,
+                completedAt: new Date(),
               },
-              {
-                configurable: {
-                  thread_id: threadId,
-                  user_id: String(deepAgentUserId),
-                },
-                recursionLimit: DEEP_AGENT_RECURSION_LIMIT,
-              },
-            ),
-            DEEP_AGENT_TIMEOUT_MS,
-          );
-
-          // Flush traces before extracting result (safety net if worker crashes later)
-          await flushLangfuse();
-
-          // Extract the final response
-          const messages: any[] = Array.isArray(result.messages)
-            ? result.messages
-            : [];
-          const lastAi = [...messages]
-            .reverse()
-            .find(
-              (m: any) =>
-                (typeof m._getType === "function" && m._getType() === "ai") ||
-                m.role === "assistant",
+              { where: { id: delegationId } },
             );
 
-          resultText =
-            typeof lastAi?.content === "string"
-              ? lastAi.content
-              : lastAi?.content
-                ? JSON.stringify(lastAi.content)
-                : "The executor agent did not produce a response.";
-        }
+            logger.info("DeepAgent: completed", {
+              delegationId,
+              resultLen: resultText.length,
+              threadId,
+            });
 
-        // Mark as completed
-        await DeepAgentDelegation.update(
-          {
-            status: "completed",
-            result: resultText,
-            completedAt: new Date(),
-          },
-          { where: { id: delegationId } },
-        );
+            // In syncMode the caller is blocking via waitUntilFinished — skip the callback.
+            // Note: when the executor has filesystem MCP + a caller workspace, its
+            // own final message already includes a `## Workspace writes` section
+            // per the system prompt, so the caller sees what changed without a
+            // server-side recorder.
+            if (!job.data.syncMode) {
+              const label = executorAgent.agentName || executorAgent.definition || executorAgentId;
+              const callbackResult = truncateResult(resultText);
+              await agentChatQueue.add("delegation_result", {
+                userId,
+                message:
+                  `[Executor Agent Result — Delegation ${delegationId}]\n` +
+                  `Executor: ${label} (${executorAgentId})\n` +
+                  `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
+                  `## Result\n${callbackResult}`,
+                requestId: `delegation-${delegationId}`,
+                groupId: groupId ?? null,
+                singleChatId: singleChatId ?? null,
+                agentId: callerAgentId,
+                mentionsAgent: true,
+                displayName: `system:${executorAgentId}`,
+              } as any);
 
-        logger.info("DeepAgent: completed", {
-          delegationId,
-          resultLen: resultText.length,
-          threadId,
-        });
+              logger.info("DeepAgent: enqueued delegation_result callback", {
+                delegationId,
+                callerAgentId,
+              });
+            }
 
-        // In syncMode the caller is blocking via waitUntilFinished — skip the callback.
-        // Note: when the executor has filesystem MCP + a caller workspace, its
-        // own final message already includes a `## Workspace writes` section
-        // per the system prompt, so the caller sees what changed without a
-        // server-side recorder.
-        if (!job.data.syncMode) {
-          const label = executorAgent.agentName || executorAgent.definition || executorAgentId;
-          const callbackResult = truncateResult(resultText);
-          await agentChatQueue.add("delegation_result", {
-            userId,
-            message:
-              `[Executor Agent Result — Delegation ${delegationId}]\n` +
-              `Executor: ${label} (${executorAgentId})\n` +
-              `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
-              `## Result\n${callbackResult}`,
-            requestId: `delegation-${delegationId}`,
-            groupId: groupId ?? null,
-            singleChatId: singleChatId ?? null,
-            agentId: callerAgentId,
-            mentionsAgent: true,
-            displayName: `system:${executorAgentId}`,
-          } as any);
+            return resultText;
+          } catch (err: any) {
+            const isTimeout = err instanceof DeepAgentTimeoutError;
+            const isRecursionLimit =
+              err?.message?.includes("recursion limit") ||
+              err?.message?.includes("Recursion limit");
 
-          logger.info("DeepAgent: enqueued delegation_result callback", {
-            delegationId,
-            callerAgentId,
-          });
-        }
+            // Retry transient errors (rate limits, network) with exponential backoff
+            const attemptsMade = (job.attemptsMade ?? 0) + 1;
+            if (isTransientError(err) && attemptsMade <= DEEP_AGENT_MAX_RETRIES) {
+              const backoffMs = Math.min(1000 * Math.pow(2, attemptsMade), 30_000);
+              logger.warn("DeepAgent: transient error, will retry", {
+                delegationId,
+                executorAgentId,
+                attempt: attemptsMade,
+                maxRetries: DEEP_AGENT_MAX_RETRIES,
+                backoffMs,
+                error: err?.message,
+              });
+              // Re-throw to let BullMQ handle the retry with configured backoff
+              throw err;
+            }
 
-        return resultText;
-      } catch (err: any) {
-        const isTimeout = err instanceof DeepAgentTimeoutError;
-        const isRecursionLimit =
-          err?.message?.includes("recursion limit") ||
-          err?.message?.includes("Recursion limit");
+            let failureReason: string;
+            if (isTimeout) {
+              failureReason =
+                `The executor agent timed out after ${Math.round(DEEP_AGENT_TIMEOUT_MS / 1000)} seconds. ` +
+                `The task may be too complex or the agent got stuck in a loop.`;
+            } else if (isRecursionLimit) {
+              failureReason =
+                `The executor agent reached the maximum number of processing steps (${DEEP_AGENT_RECURSION_LIMIT}). ` +
+                `The task may need to be broken into smaller pieces.`;
+            } else {
+              failureReason = err?.message ?? "Unknown error";
+            }
 
-        // Retry transient errors (rate limits, network) with exponential backoff
-        const attemptsMade = (job.attemptsMade ?? 0) + 1;
-        if (isTransientError(err) && attemptsMade <= DEEP_AGENT_MAX_RETRIES) {
-          const backoffMs = Math.min(1000 * Math.pow(2, attemptsMade), 30_000);
-          logger.warn("DeepAgent: transient error, will retry", {
-            delegationId,
-            executorAgentId,
-            attempt: attemptsMade,
-            maxRetries: DEEP_AGENT_MAX_RETRIES,
-            backoffMs,
-            error: err?.message,
-          });
-          // Re-throw to let BullMQ handle the retry with configured backoff
-          throw err;
-        }
+            logger.error("DeepAgent: job failed", {
+              delegationId,
+              executorAgentId,
+              error: failureReason,
+              isTimeout,
+              isRecursionLimit,
+              attempt: attemptsMade,
+            });
 
-        let failureReason: string;
-        if (isTimeout) {
-          failureReason =
-            `The executor agent timed out after ${Math.round(DEEP_AGENT_TIMEOUT_MS / 1000)} seconds. ` +
-            `The task may be too complex or the agent got stuck in a loop.`;
-        } else if (isRecursionLimit) {
-          failureReason =
-            `The executor agent reached the maximum number of processing steps (${DEEP_AGENT_RECURSION_LIMIT}). ` +
-            `The task may need to be broken into smaller pieces.`;
-        } else {
-          failureReason = err?.message ?? "Unknown error";
-        }
+            // Mark as failed
+            await DeepAgentDelegation.update(
+              {
+                status: "failed",
+                error: failureReason,
+                completedAt: new Date(),
+              },
+              { where: { id: delegationId } },
+            );
 
-        logger.error("DeepAgent: job failed", {
-          delegationId,
-          executorAgentId,
-          error: failureReason,
-          isTimeout,
-          isRecursionLimit,
-          attempt: attemptsMade,
-        });
+            if (!job.data.syncMode) {
+              await agentChatQueue.add("delegation_result", {
+                userId,
+                message:
+                  `[Executor Agent Failed — Delegation ${delegationId}]\n` +
+                  `Executor: ${executorAgentId}\n` +
+                  `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
+                  `## Failure\n${failureReason}\n\n` +
+                  `Please inform the user about this failure and suggest alternatives ` +
+                  `(e.g. breaking the task into smaller parts, trying a different approach, or retrying later).`,
+                requestId: `delegation-${delegationId}`,
+                groupId: groupId ?? null,
+                singleChatId: singleChatId ?? null,
+                agentId: callerAgentId,
+                mentionsAgent: true,
+                displayName: `system:${executorAgentId}`,
+              } as any);
+            }
 
-        // Mark as failed
-        await DeepAgentDelegation.update(
-          {
-            status: "failed",
-            error: failureReason,
-            completedAt: new Date(),
-          },
-          { where: { id: delegationId } },
-        );
-
-        if (!job.data.syncMode) {
-          await agentChatQueue.add("delegation_result", {
-            userId,
-            message:
-              `[Executor Agent Failed — Delegation ${delegationId}]\n` +
-              `Executor: ${executorAgentId}\n` +
-              `Task: ${request.substring(0, 200)}${request.length > 200 ? "..." : ""}\n\n` +
-              `## Failure\n${failureReason}\n\n` +
-              `Please inform the user about this failure and suggest alternatives ` +
-              `(e.g. breaking the task into smaller parts, trying a different approach, or retrying later).`,
-            requestId: `delegation-${delegationId}`,
-            groupId: groupId ?? null,
-            singleChatId: singleChatId ?? null,
-            agentId: callerAgentId,
-            mentionsAgent: true,
-            displayName: `system:${executorAgentId}`,
-          } as any);
-        }
-
-        // Re-throw so syncMode callers (waitUntilFinished) see the failure.
-        throw new Error(failureReason);
-      }
+            // Re-throw so syncMode callers (waitUntilFinished) see the failure.
+            throw new Error(failureReason);
+          }
         }, // end observeWithContext fn
         { delegationId, executorAgentId, callerAgentId, userId },
       ); // end observeWithContext

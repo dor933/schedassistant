@@ -33,6 +33,10 @@ import { cronAgentQueue, cronAgentQueueEvents } from "./queues/cronAgent.bull";
 import { roundtableQueueEvents } from "./queues/roundtable.bull";
 import { attachAgentSocketIO } from "./socket";
 import { loadIntoEnv as loadClaudeOauthTokenIntoEnv } from "./services/claudeOauthToken.service";
+import { loadIntoEnv as loadCodexAuthTokenIntoEnv } from "./services/codexAuthToken.service";
+import { renderCodexConfigToml } from "./services/codexConfigToml.service";
+import { renderClaudeMcpConfig } from "./services/claudeMcpConfig.service";
+import { markStaleRunningExecutions } from "./utils/cliExecution";
 import { logger } from "./logger";
 
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -44,6 +48,11 @@ async function main(): Promise<void> {
   // process.env so every spawned `claude` CLI inherits CLAUDE_CODE_OAUTH_TOKEN
   // via `agentSpawnEnv()` and skips the interactive login.
   loadClaudeOauthTokenIntoEnv();
+
+  // Same pattern for the Codex CLI's OPENAI_API_KEY (separate admin endpoint,
+  // separate file under /home/agent/.codex). No-op if not configured — codex
+  // can still fall back to ~/.codex/auth.json from `codex login`.
+  loadCodexAuthTokenIntoEnv();
 
   if (isLangfuseConfigured()) {
     try {
@@ -59,6 +68,36 @@ async function main(): Promise<void> {
   // 1. Verify database connectivity.
   await sequelize.authenticate();
   logger.info("Database connection OK");
+
+  // Sweep cli_executions rows orphaned by a previous container life. The OS
+  // process is gone, but the row would still say running and incorrectly
+  // gate new spawns through the busy check (DB-side accounting). Idempotent.
+  try {
+    await markStaleRunningExecutions();
+  } catch (err) {
+    logger.warn("cli_executions startup sweep failed (non-fatal)", {
+      error: String(err),
+    });
+  }
+
+  // Codex reads MCP server definitions from ~/.codex/config.toml, not from
+  // env or CLI flags. Re-render from the DB on boot so restarts pick up the
+  // current MCP registry even if the named volume was just initialized.
+  try {
+    await renderCodexConfigToml();
+  } catch (err) {
+    logger.warn("Codex config.toml startup render failed (non-fatal)", {
+      error: String(err),
+    });
+  }
+
+  try {
+    await renderClaudeMcpConfig();
+  } catch (err) {
+    logger.warn("Claude MCP config startup render failed (non-fatal)", {
+      error: String(err),
+    });
+  }
 
   // 1a. Ensure the shared library directory exists. Admins upload reference
   // docs here via /api/library; every agent can read them as common context.

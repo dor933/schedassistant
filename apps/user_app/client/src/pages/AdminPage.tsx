@@ -81,6 +81,26 @@ export function formatUserIdentityPreview(
   }
 }
 
+type McpFormState = {
+  name: string;
+  description: string;
+  command: string;
+  argsText: string;
+  envText: string;
+  scriptContent: string;
+  mode: "command" | "script";
+};
+
+const emptyMcpForm: McpFormState = {
+  name: "",
+  description: "",
+  command: "",
+  argsText: "",
+  envText: "",
+  scriptContent: "",
+  mode: "command",
+};
+
 // ─── Branch picker (compact custom dropdown with git branch icon) ────────────
 
 function BranchPicker({
@@ -222,7 +242,33 @@ export default function AdminPage() {
     masked: string | null;
     updatedAt: string | null;
   } | null>(null);
+  // System-wide Codex CLI API key — super_admin only. Same lifecycle as the
+  // Claude OAuth token but persisted on a sibling file under /home/agent/.codex
+  // and exported as OPENAI_API_KEY so spawned `codex` CLIs authenticate
+  // without `codex login` inside the container.
+  const [codexApiKey, setCodexApiKey] = useState<{
+    configured: boolean;
+    masked: string | null;
+    updatedAt: string | null;
+  } | null>(null);
+  // Codex ChatGPT-account login blob — sibling of codexApiKey but covers the
+  // OAuth path (paste of `~/.codex/auth.json` from a workstation that ran
+  // `codex login`). Codex prefers this file over the API key when both exist.
+  const [codexAuthJson, setCodexAuthJson] = useState<{
+    configured: boolean;
+    accountIdSuffix: string | null;
+    accessTokenMasked: string | null;
+    hasRefreshToken: boolean;
+    hasOpenaiApiKey: boolean;
+    lastRefresh: string | null;
+    updatedAt: string | null;
+  } | null>(null);
   const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
+  const [mcpForm, setMcpForm] = useState<McpFormState>(emptyMcpForm);
+  const [editingMcpId, setEditingMcpId] = useState<number | null>(null);
+  const [mcpSaving, setMcpSaving] = useState(false);
+  const [mcpDeletingId, setMcpDeletingId] = useState<number | null>(null);
+  const [mcpInstallingId, setMcpInstallingId] = useState<number | null>(null);
   const [webSearchStatus, setWebSearchStatus] =
     useState<AdminWebSearchStatus | null>(null);
   const [webSearchSwitching, setWebSearchSwitching] = useState(false);
@@ -330,7 +376,7 @@ export default function AdminPage() {
     try {
       // Vendor API keys are super_admin-only. Use .catch(() => []) so regular
       // admins don't surface the 403 as a page-level error.
-      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak, org, lib, claudeTok] = await Promise.all([
+      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak, org, lib, claudeTok, codexKey, codexAuth] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
@@ -357,6 +403,8 @@ export default function AdminPage() {
         // super_admin-only: regular admins get a 403 here, swallow it so the
         // page still loads.
         admin.getClaudeOauthToken().catch(() => null),
+        admin.getCodexApiKey().catch(() => null),
+        admin.getCodexAuthJson().catch(() => null),
       ]);
       setUsers(u);
       if (org) {
@@ -375,6 +423,8 @@ export default function AdminPage() {
       setVendorApiKeys(vak);
       setLibraryFiles(lib.files ?? []);
       setClaudeOauthToken(claudeTok);
+      setCodexApiKey(codexKey);
+      setCodexAuthJson(codexAuth);
       // System agents are delegated to by primary agents — they never own a
       // group / roundtable themselves. External agents are roundtable-only.
       if (!newGroupAgentId) {
@@ -748,6 +798,130 @@ export default function AdminPage() {
     }
   }
 
+  function resetMcpForm() {
+    setMcpForm(emptyMcpForm);
+    setEditingMcpId(null);
+  }
+
+  function parseMcpArgs(text: string): string[] {
+    return text
+      .split(/\r?\n/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+
+  function parseMcpEnv(text: string): Record<string, string> | null {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      throw new Error("MCP env must be valid JSON.");
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("MCP env must be a JSON object.");
+    }
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!key.trim() || typeof value !== "string") {
+        throw new Error("MCP env values must be strings.");
+      }
+    }
+    return parsed as Record<string, string>;
+  }
+
+  function startEditMcp(server: AdminMcpServer) {
+    setEditingMcpId(server.id);
+    setMcpForm({
+      name: server.name,
+      description: server.description ?? "",
+      command: server.isScript ? "" : server.command,
+      argsText: (server.args ?? []).join("\n"),
+      envText: server.env ? JSON.stringify(server.env, null, 2) : "",
+      scriptContent: server.scriptContent ?? "",
+      mode: server.isScript ? "script" : "command",
+    });
+  }
+
+  async function handleSaveMcpServer() {
+    if (mcpSaving) return;
+    const name = mcpForm.name.trim();
+    if (!name) {
+      setError("CLI MCP server name is required.");
+      return;
+    }
+
+    setMcpSaving(true);
+    try {
+      const env = parseMcpEnv(mcpForm.envText);
+      const payload: any = {
+        name,
+        description: mcpForm.description.trim() || null,
+        transport: "stdio",
+        env,
+      };
+
+      if (mcpForm.mode === "script") {
+        if (!mcpForm.scriptContent.trim()) {
+          setError("Custom JS script is required.");
+          return;
+        }
+        payload.scriptContent = mcpForm.scriptContent;
+      } else {
+        if (!mcpForm.command.trim()) {
+          setError("MCP command is required.");
+          return;
+        }
+        payload.command = mcpForm.command.trim();
+        payload.args = parseMcpArgs(mcpForm.argsText);
+        const previous = mcpServers.find((s) => s.id === editingMcpId);
+        if (previous?.isScript) payload.scriptContent = null;
+      }
+
+      if (editingMcpId) {
+        await admin.updateMcpServer(editingMcpId, payload);
+        toast("CLI MCP server updated.", "success");
+      } else {
+        await admin.createMcpServer(payload);
+        toast("CLI MCP server created.", "success");
+      }
+      resetMcpForm();
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to save CLI MCP server.");
+    } finally {
+      setMcpSaving(false);
+    }
+  }
+
+  async function handleDeleteMcpServer(server: AdminMcpServer) {
+    if (!window.confirm(`Delete CLI MCP server "${server.name}"?`)) return;
+    setMcpDeletingId(server.id);
+    try {
+      await admin.deleteMcpServer(server.id);
+      if (editingMcpId === server.id) resetMcpForm();
+      toast("CLI MCP server deleted.", "success");
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to delete CLI MCP server.");
+    } finally {
+      setMcpDeletingId(null);
+    }
+  }
+
+  async function handleInstallMcpServer(server: AdminMcpServer) {
+    setMcpInstallingId(server.id);
+    try {
+      await admin.installMcpServer(server.id);
+      toast(`Installed "${server.name}".`, "success");
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to install CLI MCP server.");
+    } finally {
+      setMcpInstallingId(null);
+    }
+  }
+
   function flash(msg: string) {
     toast(msg, "success");
   }
@@ -1058,6 +1232,10 @@ export default function AdminPage() {
   const btnPrimary =
     "inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:shadow-md hover:shadow-indigo-200/50 active:scale-[0.98] disabled:opacity-50 disabled:shadow-none";
 
+  const ownedMcpServers = mcpServers.filter((s) => s.organizationId !== null);
+  const publicMcpServers = mcpServers.filter((s) => s.organizationId === null);
+  const installedMcpNames = new Set(ownedMcpServers.map((s) => s.name));
+
   if (!user || user.role !== "admin" && user.role !== "super_admin") return null;
 
   return (
@@ -1235,12 +1413,12 @@ export default function AdminPage() {
                 rows={3}
                 className={inputClass + " font-mono text-xs"}
               />
-              {/* MCP Servers */}
+              {/* CLI MCP Access */}
               {mcpServers.length > 0 && (
               <div>
                 <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                   <Plug className="h-3 w-3" />
-                  MCP Servers
+                  CLI MCP Access
                 </label>
                 <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
                   {mcpServers.map((s) => {
@@ -2232,56 +2410,246 @@ export default function AdminPage() {
             <VendorApiKeysCard
               vendorApiKeys={vendorApiKeys}
               claudeOauthToken={claudeOauthToken}
+              codexApiKey={codexApiKey}
+              codexAuthJson={codexAuthJson}
               reload={reload}
               setError={setError}
             />
           )}
 
-          {/* MCP Servers — platform-wide registry, read-only in the UI.
-              Mutations happen out-of-band via direct DB (see mcpServers.controller.ts). */}
+          {/* Claude/Codex CLI MCP registry */}
           {user?.role === "super_admin" && (
-          <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
-            <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
-              <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 text-white shadow-sm">
-                <Plug className="h-4 w-4" />
-              </div>
-              MCP Servers
-              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
-                {mcpServers.length}
-              </span>
-              <span className="ml-1 text-[10px] font-normal text-gray-400">(platform registry — managed out-of-band)</span>
-            </h2>
+            <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+              <h2 className="mb-5 flex flex-wrap items-center gap-2.5 text-sm font-bold text-gray-900">
+                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 text-white shadow-sm">
+                  <Plug className="h-4 w-4" />
+                </div>
+                CLI MCP Servers
+                <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-violet-600 ring-1 ring-violet-100">
+                  Claude / Codex
+                </span>
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-500">
+                  {ownedMcpServers.length} private / {publicMcpServers.length} public
+                </span>
+              </h2>
 
-            {/* Existing servers list (read-only — registry is platform-wide) */}
-            <div className="grid w-full min-w-0 grid-cols-1 gap-2.5 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
-              {mcpServers.map((s) => (
-                <div
-                  key={s.id}
-                  className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-3.5 shadow-glass transition-all duration-200 hover:shadow-md"
-                >
-                  <div className="flex min-w-0 items-start gap-3">
-                    <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-purple-100 text-violet-600">
-                      <Terminal className="h-4 w-4" />
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+                <div className="min-w-0 space-y-4">
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-gray-500">
+                        Private CLI Servers
+                      </h3>
+                      {editingMcpId && (
+                        <button
+                          type="button"
+                          onClick={resetMcpForm}
+                          className="text-xs font-semibold text-gray-500 hover:text-gray-900"
+                        >
+                          Cancel edit
+                        </button>
+                      )}
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-gray-900 truncate">{s.name}</p>
-                      <p className="mt-0.5 font-mono text-[10px] text-gray-400 break-all">
-                        {s.command} {s.args.join(" ")}
-                      </p>
-                      <span className="mt-1 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-semibold text-violet-500 uppercase">
-                        {s.transport}
-                      </span>
+                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                      {ownedMcpServers.map((s) => (
+                        <div
+                          key={s.id}
+                          className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-3.5 shadow-glass"
+                        >
+                          <div className="flex min-w-0 items-start gap-3">
+                            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-violet-100 to-purple-100 text-violet-600">
+                              {s.isScript ? <FileText className="h-4 w-4" /> : <Terminal className="h-4 w-4" />}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex min-w-0 items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-gray-900">{s.name}</p>
+                                  {s.description && (
+                                    <p className="mt-0.5 line-clamp-2 text-[11px] text-gray-500">{s.description}</p>
+                                  )}
+                                </div>
+                                <div className="flex flex-shrink-0 items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => startEditMcp(s)}
+                                    className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                                    title="Edit CLI MCP server"
+                                  >
+                                    <Pencil className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteMcpServer(s)}
+                                    disabled={mcpDeletingId === s.id}
+                                    className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                                    title="Delete CLI MCP server"
+                                  >
+                                    {mcpDeletingId === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                                  </button>
+                                </div>
+                              </div>
+                              <p className="mt-2 break-all font-mono text-[10px] text-gray-400">
+                                {s.isScript ? "custom JS script" : `${s.command} ${s.args.join(" ")}`}
+                              </p>
+                              <span className="mt-2 inline-block rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-semibold uppercase text-violet-500">
+                                {s.isScript ? "script" : s.transport}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {ownedMcpServers.length === 0 && (
+                        <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 p-5 text-center text-xs text-gray-400 sm:col-span-2">
+                          No private CLI MCP servers yet.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <h3 className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+                      Shared CLI Templates
+                    </h3>
+                    <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                      {publicMcpServers.map((s) => {
+                        const installed = installedMcpNames.has(s.name);
+                        return (
+                          <div
+                            key={s.id}
+                            className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-3.5 shadow-glass"
+                          >
+                            <div className="flex min-w-0 items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-gray-900">{s.name}</p>
+                                {s.description && (
+                                  <p className="mt-0.5 line-clamp-2 text-[11px] text-gray-500">{s.description}</p>
+                                )}
+                                <p className="mt-1 break-all font-mono text-[10px] text-gray-400">
+                                  {s.command} {s.args.join(" ")}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleInstallMcpServer(s)}
+                                disabled={installed || mcpInstallingId === s.id}
+                                className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-violet-50 px-2.5 py-1.5 text-[11px] font-semibold text-violet-700 ring-1 ring-violet-100 transition-all hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {mcpInstallingId === s.id ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : installed ? (
+                                  <CheckCircle2 className="h-3 w-3" />
+                                ) : (
+                                  <Download className="h-3 w-3" />
+                                )}
+                                {installed ? "Installed" : "Install"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {publicMcpServers.length === 0 && (
+                        <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50/70 p-5 text-center text-xs text-gray-400 sm:col-span-2">
+                          No shared CLI MCP templates are available.
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
-              ))}
-              {mcpServers.length === 0 && (
-                <p className="col-span-full py-6 text-center text-xs text-gray-400">
-                  No MCP servers configured yet.
-                </p>
-              )}
+
+                <div className="min-w-0 rounded-xl border border-gray-200/70 bg-white p-4 shadow-glass">
+                  <h3 className="mb-3 text-sm font-bold text-gray-900">
+                    {editingMcpId ? "Edit CLI MCP Server" : "Add CLI MCP Server"}
+                  </h3>
+                  <div className="mb-3 grid grid-cols-2 rounded-xl bg-gray-100 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setMcpForm((p) => ({ ...p, mode: "command" }))}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${mcpForm.mode === "command" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
+                    >
+                      Command
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMcpForm((p) => ({ ...p, mode: "script" }))}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all ${mcpForm.mode === "script" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-800"}`}
+                    >
+                      Custom JS
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <input
+                      value={mcpForm.name}
+                      onChange={(e) => setMcpForm((p) => ({ ...p, name: e.target.value }))}
+                      placeholder="Name"
+                      className={inputClass}
+                    />
+                    <input
+                      value={mcpForm.description}
+                      onChange={(e) => setMcpForm((p) => ({ ...p, description: e.target.value }))}
+                      placeholder="Description"
+                      className={inputClass}
+                    />
+
+                    {mcpForm.mode === "command" ? (
+                      <>
+                        <input
+                          value={mcpForm.command}
+                          onChange={(e) => setMcpForm((p) => ({ ...p, command: e.target.value }))}
+                          placeholder="Command, e.g. npx"
+                          className={inputClass + " font-mono"}
+                        />
+                        <textarea
+                          value={mcpForm.argsText}
+                          onChange={(e) => setMcpForm((p) => ({ ...p, argsText: e.target.value }))}
+                          placeholder={"Arguments, one per line\n-y\n@modelcontextprotocol/server-filesystem\n/app/data"}
+                          rows={4}
+                          className={inputClass + " font-mono text-xs"}
+                        />
+                      </>
+                    ) : (
+                      <textarea
+                        value={mcpForm.scriptContent}
+                        onChange={(e) => setMcpForm((p) => ({ ...p, scriptContent: e.target.value }))}
+                        placeholder="Paste the Node.js MCP server script used by the CLI"
+                        rows={10}
+                        className={inputClass + " font-mono text-xs"}
+                      />
+                    )}
+
+                    <textarea
+                      value={mcpForm.envText}
+                      onChange={(e) => setMcpForm((p) => ({ ...p, envText: e.target.value }))}
+                      placeholder='Env JSON, e.g. {"GITHUB_TOKEN":"{{GITHUB_TOKEN}}"}'
+                      rows={3}
+                      className={inputClass + " font-mono text-xs"}
+                    />
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSaveMcpServer}
+                        disabled={mcpSaving}
+                        className={btnPrimary}
+                      >
+                        {mcpSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                        {editingMcpId ? "Save" : "Create"}
+                      </button>
+                      {editingMcpId && (
+                        <button
+                          type="button"
+                          onClick={resetMcpForm}
+                          className="inline-flex items-center gap-2 rounded-xl bg-gray-100 px-4 py-2.5 text-sm font-semibold text-gray-700 transition-all hover:bg-gray-200"
+                        >
+                          <X className="h-4 w-4" />
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
           )}
 
           {/* Skills library — platform-wide catalog, read-only in the UI. */}
@@ -2783,6 +3151,8 @@ interface VendorApiKeyEntry {
 function VendorApiKeysCard({
   vendorApiKeys,
   claudeOauthToken,
+  codexApiKey,
+  codexAuthJson,
   reload,
   setError,
 }: {
@@ -2790,6 +3160,20 @@ function VendorApiKeysCard({
   claudeOauthToken: {
     configured: boolean;
     masked: string | null;
+    updatedAt: string | null;
+  } | null;
+  codexApiKey: {
+    configured: boolean;
+    masked: string | null;
+    updatedAt: string | null;
+  } | null;
+  codexAuthJson: {
+    configured: boolean;
+    accountIdSuffix: string | null;
+    accessTokenMasked: string | null;
+    hasRefreshToken: boolean;
+    hasOpenaiApiKey: boolean;
+    lastRefresh: string | null;
     updatedAt: string | null;
   } | null;
   reload: () => Promise<void>;
@@ -2801,16 +3185,15 @@ function VendorApiKeysCard({
         <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-white shadow-sm">
           <KeyRound className="h-4 w-4" />
         </div>
-        API Keys
+        Credentials
         <span className="ml-1 text-[10px] font-normal text-gray-400">
-          (your organization&apos;s vendor credentials)
+          (your organization&apos;s vendor and CLI credentials)
         </span>
       </h2>
       <p className="mb-5 text-xs text-gray-500">
         These keys are used by every agent in your organization when it calls
-        the corresponding vendor. Keys are stored server-side — the raw value
-        is never sent back to the browser; rotate by entering a new key and
-        saving.
+        the corresponding vendor. CLI credentials are stored server-side on the
+        agent service; raw values are never sent back to the browser.
       </p>
 
       <div className="grid w-full min-w-0 grid-cols-1 gap-3 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
@@ -2824,6 +3207,16 @@ function VendorApiKeysCard({
         ))}
         <ClaudeOauthTokenRow
           entry={claudeOauthToken}
+          reload={reload}
+          setError={setError}
+        />
+        <CodexAuthJsonRow
+          entry={codexAuthJson}
+          reload={reload}
+          setError={setError}
+        />
+        <CodexApiKeyRow
+          entry={codexApiKey}
           reload={reload}
           setError={setError}
         />
@@ -3100,6 +3493,438 @@ function ClaudeOauthTokenRow({
             onChange={(e) => setDraft(e.target.value)}
             placeholder="Paste OAuth token"
             className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || !draft.trim()}
+              onClick={handleSave}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+              Save
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setEditing(false);
+                setDraft("");
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+            >
+              <X className="h-3 w-3" />
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Codex CLI API key (super_admin only, system-wide) ────────────────────────
+//
+// Sibling of `ClaudeOauthTokenRow`. The agent_service container persists the
+// key to /home/agent/.codex/.api-key and exports it as OPENAI_API_KEY at
+// startup so every spawned `codex` CLI authenticates without `codex login`
+// inside the container. Token lifecycle is identical to the Claude OAuth row;
+// the only differences are wording ("API key" vs "OAuth token") and the env
+// var name we surface.
+
+function CodexApiKeyRow({
+  entry,
+  reload,
+  setError,
+}: {
+  entry: { configured: boolean; masked: string | null; updatedAt: string | null } | null;
+  reload: () => Promise<void>;
+  setError: (msg: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const safeEntry = entry ?? { configured: false, masked: null, updatedAt: null };
+
+  async function handleSave() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setError("API key cannot be empty. Use Remove to clear it.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await admin.setCodexApiKey(trimmed);
+      setDraft("");
+      setEditing(false);
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to save key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDelete() {
+    setBusy(true);
+    try {
+      await admin.deleteCodexApiKey();
+      setDraft("");
+      setEditing(false);
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to remove key.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const tooltip =
+    "Fallback OpenAI API key for the Codex CLI. Saved on the agent_service " +
+    "container and exported as OPENAI_API_KEY. Use auth.json for ChatGPT-account " +
+    "Codex login; Codex prefers auth.json when both are configured.";
+
+  return (
+    <div className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600"
+          title={tooltip}
+        >
+          <Terminal className="h-4 w-4" />
+        </div>
+        <span
+          className="min-w-0 truncate text-sm font-semibold text-gray-900"
+          title={tooltip}
+        >
+          Codex CLI API Key Fallback
+        </span>
+        {safeEntry.configured ? (
+          <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+            Configured
+          </span>
+        ) : (
+          <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
+            Missing
+          </span>
+        )}
+      </div>
+
+      <p className="mt-2 text-[11px] leading-relaxed text-gray-500" title={tooltip}>
+        Fallback: sets <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
+          OPENAI_API_KEY
+        </code> on the agent_service container so the spawned <code>codex</code>{" "}
+        CLI can authenticate when no auth.json is configured.
+      </p>
+
+      {safeEntry.configured && safeEntry.masked && (
+        <div className="mt-2 font-mono text-[11px] text-gray-500">{safeEntry.masked}</div>
+      )}
+
+      {!editing ? (
+        <div className="mt-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            <Pencil className="h-3 w-3" />
+            {safeEntry.configured ? "Replace" : "Set key"}
+          </button>
+          {safeEntry.configured && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleDelete}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              Remove
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          <input
+            type="password"
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Paste OpenAI API key"
+            className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={busy || !draft.trim()}
+              onClick={handleSave}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+              Save
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setEditing(false);
+                setDraft("");
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+            >
+              <X className="h-3 w-3" />
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Codex CLI auth.json (super_admin only, system-wide) ──────────────────────
+//
+// The ChatGPT-account login path. After a super_admin runs `codex login` on
+// their workstation, they paste the contents of `~/.codex/auth.json` here.
+// The agent_service writes it to /home/agent/.codex/auth.json (chowned to
+// `agent` so the spawned codex can read it directly — codex doesn't accept
+// an env-var equivalent for this credential bundle). Codex prefers
+// auth.json over OPENAI_API_KEY when both are present.
+
+function CodexAuthJsonRow({
+  entry,
+  reload,
+  setError,
+}: {
+  entry: {
+    configured: boolean;
+    accountIdSuffix: string | null;
+    accessTokenMasked: string | null;
+    hasRefreshToken: boolean;
+    hasOpenaiApiKey: boolean;
+    lastRefresh: string | null;
+    updatedAt: string | null;
+  } | null;
+  reload: () => Promise<void>;
+  setError: (msg: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const safeEntry =
+    entry ?? {
+      configured: false,
+      accountIdSuffix: null,
+      accessTokenMasked: null,
+      hasRefreshToken: false,
+      hasOpenaiApiKey: false,
+      lastRefresh: null,
+      updatedAt: null,
+    };
+
+  async function handleSave() {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      setError("auth.json cannot be empty. Paste the full file or use Remove to clear it.");
+      return;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        setError("auth.json must be a JSON object.");
+        return;
+      }
+    } catch (err: any) {
+      setError(`auth.json is not valid JSON: ${err?.message ?? err}`);
+      return;
+    }
+    setBusy(true);
+    try {
+      await admin.setCodexAuthJson(trimmed);
+      setDraft("");
+      setEditing(false);
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to save auth.json.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFileSelected(file: File | null) {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const text = await file.text();
+      const trimmed = text.trim();
+      if (!trimmed) {
+        setError("Selected auth.json file is empty.");
+        return;
+      }
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setError("auth.json must be a JSON object.");
+          return;
+        }
+      } catch (err: any) {
+        setError(`Selected auth.json is not valid JSON: ${err?.message ?? err}`);
+        return;
+      }
+      setDraft(trimmed);
+      setEditing(true);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to read auth.json file.");
+    } finally {
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleDelete() {
+    setBusy(true);
+    try {
+      await admin.deleteCodexAuthJson();
+      setDraft("");
+      setEditing(false);
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to remove auth.json.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const tooltip =
+    "Codex CLI ChatGPT-account login. Upload or paste the contents of ~/.codex/auth.json " +
+    "from a workstation where you've already run `codex login`. The agent_service " +
+    "writes it to /home/agent/.codex/auth.json with owner=agent so the spawned " +
+    "codex can read it. Codex prefers this over OPENAI_API_KEY when both exist.";
+
+  return (
+    <div className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <div
+          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600"
+          title={tooltip}
+        >
+          <Terminal className="h-4 w-4" />
+        </div>
+        <span
+          className="min-w-0 truncate text-sm font-semibold text-gray-900"
+          title={tooltip}
+        >
+          Codex CLI Login File
+        </span>
+        {safeEntry.configured ? (
+          <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+            Configured
+          </span>
+        ) : (
+          <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
+            Missing
+          </span>
+        )}
+      </div>
+
+      <p className="mt-2 text-[11px] leading-relaxed text-gray-500" title={tooltip}>
+        Writes <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
+          /home/agent/.codex/auth.json
+        </code>{" "}
+        from the contents of your workstation&apos;s file. Run{" "}
+        <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
+          codex login
+        </code>{" "}
+        locally first, then upload or paste{" "}
+        <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
+          ~/.codex/auth.json
+        </code>{" "}
+        below.
+      </p>
+
+      {safeEntry.configured && (
+        <div className="mt-2 space-y-0.5 font-mono text-[11px] text-gray-500">
+          {safeEntry.accountIdSuffix && (
+            <div>
+              <span className="text-gray-400">account:</span>{" "}
+              {safeEntry.accountIdSuffix}
+            </div>
+          )}
+          {safeEntry.accessTokenMasked && (
+            <div>
+              <span className="text-gray-400">access_token:</span>{" "}
+              {safeEntry.accessTokenMasked}
+            </div>
+          )}
+          <div>
+            <span className="text-gray-400">refresh_token:</span>{" "}
+            {safeEntry.hasRefreshToken ? "present" : "—"}
+            {"  "}
+            <span className="text-gray-400">api_key:</span>{" "}
+            {safeEntry.hasOpenaiApiKey ? "present" : "—"}
+          </div>
+          {safeEntry.lastRefresh && (
+            <div>
+              <span className="text-gray-400">last_refresh:</span>{" "}
+              {safeEntry.lastRefresh}
+            </div>
+          )}
+        </div>
+      )}
+
+      {!editing ? (
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".json,application/json"
+            className="hidden"
+            onChange={(e) => {
+              void handleFileSelected(e.target.files?.[0] ?? null);
+            }}
+          />
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+            Upload file
+          </button>
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+          >
+            <FileText className="h-3 w-3" />
+            Paste JSON
+          </button>
+          {safeEntry.configured && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleDelete}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+              Remove
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          <textarea
+            autoFocus
+            spellCheck={false}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder='{"OPENAI_API_KEY": null, "tokens": {"id_token": "…", "access_token": "…", "refresh_token": "…", "account_id": "…"}, "last_refresh": "…"}'
+            rows={8}
+            className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 font-mono text-[11px] focus:border-amber-400 focus:outline-none"
           />
           <div className="flex items-center gap-2">
             <button

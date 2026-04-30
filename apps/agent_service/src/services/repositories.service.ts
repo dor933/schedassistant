@@ -6,7 +6,8 @@ import { logger } from "../logger";
 import {
   buildArchitectureOverviewPrompt,
   MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
-} from "./architectureOverviewPrompt";
+} from "./architectureOverviewPrompt.service";
+import { runCliExecution } from "../utils/cliExecution";
 
 // ─── Env configuration ──────────────────────────────────────────────────────
 
@@ -92,46 +93,48 @@ export interface RepoResult {
 
 // ─── Private helpers ────────────────────────────────────────────────────────
 
-/** Invoke Claude CLI with spawnSync to avoid shell escaping issues with the prompt. */
-function runClaudeArchitecture(cwd: string, prompt: string): string {
+/**
+ * Admin-triggered "generate architecture overview" — runs Claude CLI through
+ * the shared engine (`utils/cliExecution.ts`), which handles spawning under
+ * `su-exec agent`, env injection (HOME=/home/agent + CLAUDE_CODE_OAUTH_TOKEN),
+ * the cross-provider busy lock, and persisting a `cli_executions` row.
+ *
+ * `agentId=null` because this path is invoked by an admin from the repo UI
+ * and isn't tied to a specific agent's work.
+ */
+async function runClaudeArchitecture(cwd: string, prompt: string): Promise<string> {
   logger.info("runClaudeArchitecture: spawning", { cwd, promptLen: prompt.length });
 
-  const result = spawnSync("su-exec", [
-    "agent", "claude",
-    "-p", prompt,
-    "--dangerously-skip-permissions",
-    "--max-turns", "35",
-  ], {
-    cwd,
-    // HOME must be pinned to the `agent` user's home so claude writes its
-    // session file under /home/agent/.claude (writable by agent) rather than
-    // inheriting HOME=/root from the root-owned agent_service process.
-    env: { ...process.env, HOME: "/home/agent" },
-    encoding: "utf-8",
-    timeout: 600_000,
-    maxBuffer: 8 * 1024 * 1024,
-  });
+  const result = await runCliExecution(
+    {
+      cwd,
+      prompt,
+      timeoutMs: 600_000,
+      providerOpts: { maxTurns: 35 },
+    },
+    {
+      provider: "claude",
+      agentId: null,
+      invokedVia: "architecture_overview",
+    },
+  );
 
-  if (result.error) {
-    logger.error("runClaudeArchitecture: spawn error", { error: result.error.message });
-    throw result.error;
-  }
-
-  const stdout = (result.stdout ?? "").trim();
-  const stderr = (result.stderr ?? "").trim();
-
-  if (result.status !== 0) {
-    // Surface stdout too — the Claude CLI prints auth/config errors there,
-    // not on stderr, so logging only stderr hides the real cause.
+  if (result.status !== "completed") {
+    // Surface stdout-as-resultText too — the Claude CLI prints auth/config
+    // errors there, not on stderr, so logging only stderr hides the real cause.
     logger.error("runClaudeArchitecture: non-zero exit", {
-      code: result.status,
-      stdout: stdout.slice(0, 2000),
-      stderr: stderr.slice(0, 2000),
+      cliExecutionId: result.executionId,
+      exitCode: result.exitCode,
+      status: result.status,
+      stdout: (result.resultText ?? "").slice(0, 2000),
+      stderr: (result.stderr ?? "").slice(0, 2000),
     });
-    const detail = stderr || stdout || "(no output)";
-    throw new Error(`claude exited with code ${result.status}: ${detail}`);
+    const detail = result.stderr?.trim() || result.resultText?.trim() || "(no output)";
+    throw new Error(
+      `claude exited with code ${result.exitCode ?? "?"} (${result.status}): ${detail}`,
+    );
   }
-  return stdout;
+  return (result.resultText ?? "").trim();
 }
 
 /**
@@ -697,7 +700,7 @@ export class RepositoriesService {
     const prompt = buildArchitectureOverviewPrompt(currentOverview);
 
     try {
-      const result = runClaudeArchitecture(repo.localPath, prompt);
+      const result = await runClaudeArchitecture(repo.localPath, prompt);
 
       if (!result || result.length < 20) {
         throw new RepoServiceError(500, "Claude returned an empty or too-short architecture overview.");

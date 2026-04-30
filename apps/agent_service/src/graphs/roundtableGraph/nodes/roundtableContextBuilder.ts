@@ -12,15 +12,18 @@ import {
   resolveSessionWorkspacePath,
   ensureSessionWorkspace,
 } from "../../../workspace/sessionWorkspace";
+import {
+  loadRecentRoundtableSummaries,
+  formatRoundtableSummariesSection,
+} from "../../../sessionsManagment/roundtableSummaryLoader";
 
 /**
  * LangGraph node: assembles the system prompt for a roundtable agent turn.
  *
  * Much lighter than the basic-graph context builder — it loads the current
- * agent's core instructions plus roundtable-specific briefing, but omits
- * group/single-chat context, user-identity memory, episodic retrieval,
- * conversation logs, and session summaries (all of which are irrelevant
- * inside a multi-agent roundtable discussion).
+ * agent's core instructions plus roundtable-specific briefing and recent
+ * roundtable summaries, but omits group/single-chat context, user-identity
+ * memory, episodic retrieval, conversation logs, and session summaries.
  */
 export async function roundtableContextBuilderNode(
   state: AgentState,
@@ -71,10 +74,16 @@ export async function roundtableContextBuilderNode(
     sections.push(`# You are ${displayName}\n`);
 
     // ── Organization summary + workspace agent (shared grounding) ──
-    const [orgSummarySection, googleWorkspaceAgentSection, librarySection] = await Promise.all([
+    const [
+      orgSummarySection,
+      googleWorkspaceAgentSection,
+      librarySection,
+      recentRoundtableSummaries,
+    ] = await Promise.all([
       loadOrganizationSummarySection(agentOrganizationId),
       loadGoogleWorkspaceAgentSection(agentOrganizationId),
       loadLibrarySection(agentId),
+      loadRecentRoundtableSummaries(agentId, { limit: 2 }),
     ]);
     if (orgSummarySection.trim().length > 0) {
       sections.push(orgSummarySection);
@@ -131,6 +140,30 @@ export async function roundtableContextBuilderNode(
         `- Turns remaining for you after this one: **${turnsRemaining}**\n`,
       );
 
+      sections.push("### Your memory is your own — and so is everyone else's");
+      sections.push(
+        "**You are entering this roundtable with your own private memory and your own private data.** " +
+        "Every other agent at the table is in the same situation: each has had separate conversations " +
+        "with the user, accessed different tools, and stored different facts at different points in time. " +
+        "Treat this as a first-class fact about the discussion:\n\n" +
+        "- **Your knowledge may be stale.** Another agent may have spoken with the user more recently and " +
+        "received corrections, updates, or new decisions that you have never seen. If something you " +
+        "believe contradicts what another agent says, consider that they may simply have fresher data — " +
+        "ask them when they learned it before defending your version.\n" +
+        "- **Your knowledge may be uniquely fresh.** You may hold facts, user preferences, recent decisions, " +
+        "or tool results that no one else at the table has access to. Do not assume the others know what " +
+        "you know — **proactively share** anything that is relevant to the topic, even if it feels obvious " +
+        "to you.\n" +
+        "- **Always timestamp your knowledge.** When you contribute a fact, decision, or piece of context " +
+        "from your own memory or tools, state **exactly when** it was captured (e.g. *\"as of yesterday's " +
+        "1:1 with the user\"*, *\"from a calendar query I ran 2 minutes ago\"*, *\"the user told me this on " +
+        "2026-04-15\"*). Without an explicit timestamp, the other agents have no way to compare your " +
+        "information against their own potentially older or newer versions.\n" +
+        "- **Reconcile, don't overwrite.** When two agents disagree, the goal is to figure out *whose data " +
+        "is more recent and why* — not to assume the loudest agent is right.\n",
+      );
+      sections.push("");
+
       sections.push("### Discussion guidelines");
       sections.push(
         "- Read what other agents have said in the conversation history and **build on their contributions**.\n" +
@@ -149,6 +182,14 @@ export async function roundtableContextBuilderNode(
           `and remember they speak last in each round.\n`,
         );
       }
+    }
+
+    const recentRoundtableSection = formatRoundtableSummariesSection(
+      recentRoundtableSummaries,
+    );
+    if (recentRoundtableSection) {
+      sections.push(recentRoundtableSection);
+      sections.push("");
     }
 
     // ── Agent notes ─────────────────────────────────────────────────────

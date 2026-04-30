@@ -62,7 +62,9 @@
       "Bash(awk NR>=1330 && NR<=1450 *)",
       "Bash(echo \"exit=$?\")",
       "Bash(echo \"user_app exit=$?\")",
-      "Bash(echo \"client exit=$?\")"
+      "Bash(echo \"client exit=$?\")",
+      "WebFetch(domain:developers.openai.com)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   },
   "enableAllProjectMcpServers": true,

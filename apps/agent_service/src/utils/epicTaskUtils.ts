@@ -1,4 +1,4 @@
-import { spawn, execSync, spawnSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 import fs from "node:fs";
 import { QueryTypes } from "sequelize";
 import {
@@ -31,7 +31,11 @@ import { logger } from "../logger";
 import {
   buildArchitectureOverviewPrompt,
   MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
-} from "../services/architectureOverviewPrompt";
+} from "../services/architectureOverviewPrompt.service";
+import {
+  runCliExecution,
+  CliBusyError,
+} from "./cliExecution";
 
 // The agent_service container runs as root, but Claude CLI (and gh) must run
 // as the non-root `agent` user via `su-exec`. `su-exec` inherits env unchanged,
@@ -1111,38 +1115,46 @@ export async function preExecutionSync(
  * invoking — the CLI just reads the working tree as it finds it. In practice
  * this is always the repo's default branch, so the stored overview describes
  * the canonical/merged state of the repo.
+ *
+ * `agentId` attributes the run to the orchestrator agent that created the
+ * epic; pass `null` for admin-triggered manual refreshes.
  */
 async function generateArchitectureOverview(
   repo: Repository,
   cwd: string,
+  agentId: AgentId | null,
 ): Promise<void> {
   const currentOverview = repo.architectureOverview?.trim() || "(none)";
   const prompt = buildArchitectureOverviewPrompt(currentOverview);
 
   try {
-    const cliResult = spawnSync("su-exec", [
-      "agent", "claude",
-      "-p", prompt,
-      "--dangerously-skip-permissions",
-      "--max-turns", "35",
-    ], {
-      cwd,
-      env: agentSpawnEnv(),
-      encoding: "utf-8",
-      timeout: 600_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    if (cliResult.error) throw cliResult.error;
-    if (cliResult.status !== 0) {
-      throw new Error(cliResult.stderr?.trim() || `claude exited with code ${cliResult.status}`);
-    }
-    const result = (cliResult.stdout ?? "").trim();
+    const result = await runCliExecution(
+      {
+        cwd,
+        prompt,
+        timeoutMs: 600_000,
+        providerOpts: { maxTurns: 35 },
+      },
+      {
+        provider: "claude",
+        agentId,
+        invokedVia: "architecture_overview",
+      },
+    );
 
-    if (result && result.length > 20) {
+    if (result.status !== "completed") {
+      throw new Error(
+        result.stderr?.trim() ||
+          `claude exited with code ${result.exitCode ?? "?"} (status ${result.status})`,
+      );
+    }
+
+    const text = (result.resultText ?? "").trim();
+    if (text && text.length > 20) {
       const stored =
-        result.length > MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS
-          ? result.slice(0, MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS)
-          : result;
+        text.length > MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS
+          ? text.slice(0, MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS)
+          : text;
       const previous = repo.architectureOverview;
       await repo.update({ architectureOverview: stored });
       logger.info("generateArchitectureOverview: updated architecture overview", {
@@ -1150,6 +1162,7 @@ async function generateArchitectureOverview(
         repoName: repo.name,
         previousLength: previous?.length ?? 0,
         newLength: stored.length,
+        cliExecutionId: result.executionId,
       });
     }
   } catch (err) {
@@ -1179,6 +1192,7 @@ async function generateArchitectureOverview(
  */
 export async function refreshArchitectureOverviewOnDefault(
   repo: Repository,
+  agentId: AgentId | null,
 ): Promise<void> {
   if (!repo.localPath) return;
 
@@ -1222,7 +1236,7 @@ export async function refreshArchitectureOverviewOnDefault(
       } catch {
         // Repo may have <10 commits — nothing to compare against.
         if (!hasArchitecture) {
-          await generateArchitectureOverview(repo, cwd);
+          await generateArchitectureOverview(repo, cwd, agentId);
         }
         return;
       }
@@ -1231,7 +1245,7 @@ export async function refreshArchitectureOverviewOnDefault(
     if (!diffNameOnly) {
       // No recent structural activity — only generate if we have nothing stored.
       if (!hasArchitecture) {
-        await generateArchitectureOverview(repo, cwd);
+        await generateArchitectureOverview(repo, cwd, agentId);
       }
       return;
     }
@@ -1246,7 +1260,7 @@ export async function refreshArchitectureOverviewOnDefault(
     }
 
     // ── 3. Analyze and update architecture ──
-    await generateArchitectureOverview(repo, cwd);
+    await generateArchitectureOverview(repo, cwd, agentId);
   } catch (err) {
     logger.warn("refreshArchitectureOverviewOnDefault: architecture check failed", {
       repoId: repo.id,
@@ -1366,6 +1380,25 @@ export async function executeTask(
   });
   if (!task) throw new Error(`Agent task ${taskId} not found`);
 
+  // Resolve the agent that owns this task's epic, for cli_executions
+  // attribution. Best-effort — a missing epic just means the row gets
+  // recorded with agentId=null, which is allowed.
+  let agentId: AgentId | null = null;
+  try {
+    const stage = (task as { stage?: TaskStage } | null)?.stage;
+    if (stage?.epicTaskId) {
+      const epic = await EpicTask.findByPk(stage.epicTaskId, {
+        attributes: ["id", "agent_id"],
+      });
+      agentId = (epic?.agentId as AgentId | undefined) ?? null;
+    }
+  } catch (err: any) {
+    logger.warn("executeTask: failed to resolve epic agentId", {
+      taskId,
+      error: err?.message,
+    });
+  }
+
   // Update task status to in_progress
   await task.update({
     status: "in_progress" as AgentTaskStatus,
@@ -1378,29 +1411,6 @@ export async function executeTask(
 
   // Create execution record (stores the exact prompt sent to the CLI)
   const execution = await startExecution(taskId, { prompt });
-
-  const args = [
-    "-p",
-    prompt,
-    "--dangerously-skip-permissions",
-    "--output-format",
-    "json",
-  ];
-
-  if (options.resumeSessionId) {
-    args.push("--resume", options.resumeSessionId);
-  }
-
-  // Default to effectively unlimited turns — the CLI's built-in default (~21) is too low for complex tasks
-  args.push("--max-turns", String(options.maxTurns ?? 200));
-
-  if (options.systemPrompt) {
-    args.push("--append-system-prompt", options.systemPrompt);
-  }
-
-  if (options.agentName) {
-    args.push("--agent-name", options.agentName);
-  }
 
   logger.info("Executing agent task via Claude CLI", {
     taskId,
@@ -1426,211 +1436,185 @@ export async function executeTask(
     });
   }
 
-  return new Promise<TaskExecution>((resolve, reject) => {
-    const child = spawn("su-exec", ["agent", "claude", ...args], {
-      cwd: options.cwd,
-      env: agentSpawnEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
+  // Run the CLI subprocess via the engine. The engine owns spawn, the
+  // cross-provider busy check, the cli_executions row, output parsing, and
+  // kill-on-timeout. We layer epic-flow concerns (auto-commit, git diff,
+  // task_executions row, summary path, --resume retry) on top of its result.
+  let engineResult: Awaited<ReturnType<typeof runCliExecution>>;
+  try {
+    engineResult = await runCliExecution(
+      {
+        cwd: options.cwd,
+        prompt,
+        systemPrompt: options.systemPrompt,
+        resumeSessionId: options.resumeSessionId,
+        providerOpts: {
+          maxTurns: options.maxTurns ?? 200,
+          agentName: options.agentName,
+          allowedTools: options.allowedTools,
+        },
+      },
+      {
+        provider: "claude",
+        agentId,
+        agentTaskId: taskId,
+        cliAgentName: options.agentName ?? null,
+        invokedVia: "epic_orchestrator",
+      },
+    );
+  } catch (err: any) {
+    if (err instanceof CliBusyError) {
+      // Surface the structured busy-info to the logs so operators can
+      // correlate the conflicting run by execution id, agent, and elapsed
+      // time without grepping stdout.
+      logger.warn("executeTask: CLI busy — failing task", {
+        taskId,
+        executionId: execution.id,
+        busyKind: err.kind,
+        busyProvider: err.busyProvider,
+        busyPid: err.busyPid,
+        busyExecutionId: err.busyExecution?.id ?? null,
+        busyAgentId: err.busyExecution?.agentId ?? null,
+        busyStartedAt: err.busyExecution?.startedAt ?? null,
+      });
+    } else {
+      logger.error("executeTask: engine spawn error", {
+        taskId,
+        executionId: execution.id,
+        error: err?.message,
+      });
+    }
+    await failExecution(execution.id, { error: err?.message ?? String(err) });
+    await updateTaskStatus(taskId, "failed");
+    const updated = await TaskExecution.findByPk(execution.id);
+    return updated!;
+  }
+
+  // Pin the task_executions row to the underlying cli_executions row + carry
+  // over the captured session id (used for `--resume` on retry).
+  try {
+    await execution.update({
+      cliExecutionId: engineResult.executionId,
+      cliSessionId: engineResult.sessionId,
     });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (data: Buffer) => {
-      stdout += data.toString();
+  } catch (linkErr: any) {
+    logger.warn("executeTask: failed to link cli_execution_id (non-fatal)", {
+      executionId: execution.id,
+      cliExecutionId: engineResult.executionId,
+      error: linkErr?.message,
     });
+  }
 
-    child.stderr.on("data", (data: Buffer) => {
-      stderr += data.toString();
-    });
+  // Treat as success when the CLI exited cleanly OR when it exited non-zero
+  // but still produced output (the "max turns reached" case — the executor
+  // got somewhere useful before being cut off, and the diff/result are
+  // worth keeping).
+  const wasSuccess = engineResult.status === "completed";
+  const hasUsableOutput = !!engineResult.resultText.trim();
 
-    child.on("close", async (code) => {
+  if (wasSuccess || (engineResult.status === "failed" && hasUsableOutput)) {
+    const metadata: Record<string, unknown> = {
+      session_id: engineResult.sessionId,
+      cost_usd: engineResult.costUsd,
+      duration_ms: engineResult.durationMs,
+      num_turns: engineResult.numTurns,
+      is_error: engineResult.isError,
+    };
+    if (!wasSuccess) {
+      metadata.exitCode = engineResult.exitCode;
+      metadata.warning =
+        engineResult.stderr || `exit code ${engineResult.exitCode}`;
+    }
+
+    // Safety-net auto-commit only on the clean success path. The max-turns
+    // case would have left the executor mid-thought; auto-committing those
+    // changes wholesale risks shipping half-finished work without intent.
+    if (wasSuccess) {
       try {
-        if (code === 0) {
-          let resultText: string;
-          let sessionId: string | null = null;
-          let metadata: Record<string, unknown> = {};
-
-          try {
-            const parsed = JSON.parse(stdout);
-            resultText = parsed.result ?? stdout;
-            sessionId = parsed.session_id ?? null;
-            metadata = {
-              session_id: parsed.session_id,
-              cost_usd: parsed.cost_usd,
-              duration_ms: parsed.duration_ms,
-              num_turns: parsed.num_turns,
-              is_error: parsed.is_error,
-            };
-          } catch {
-            resultText = stdout;
-          }
-
-          // Safety-net: if the CLI left uncommitted changes behind, stage and
-          // commit them ourselves so the stage's PR push has something to ship.
-          // The architecture context already instructs the executor to commit,
-          // but we can't rely on that alone — a stray `git add -A && git commit`
-          // here is cheap insurance against an empty-diff PR.
-          try {
-            const autoCommitResult = ensureWorkingTreeCommitted(
-              options.cwd,
-              task.title,
-            );
-            if (autoCommitResult.committed) {
-              metadata.auto_committed = true;
-              metadata.auto_commit_message = autoCommitResult.message;
-              logger.info("executeTask: auto-committed leftover changes", {
-                taskId,
-                cwd: options.cwd,
-                message: autoCommitResult.message,
-              });
-            }
-          } catch (commitErr: any) {
-            logger.warn("executeTask: safety-net auto-commit failed", {
-              taskId,
-              cwd: options.cwd,
-              error: commitErr?.message,
-            });
-          }
-
-          // Capture git diff after successful execution — diffs against the
-          // pre-run HEAD snapshot so commits made during this task still show
-          // up in git_diff / git_diff_stat.
-          try {
-            const gitDiff = captureGitDiff(options.cwd, preRunSha);
-            metadata.git_diff_stat = gitDiff.diffStat;
-            metadata.git_diff = gitDiff.fullDiff;
-            metadata.git_recent_commits = gitDiff.recentCommits;
-            if (preRunSha) metadata.git_diff_base_sha = preRunSha;
-          } catch (diffErr: any) {
-            logger.warn("Failed to capture git diff after task execution", {
-              taskId,
-              error: diffErr.message,
-            });
-          }
-
-          await completeExecution(execution.id, {
-            result: resultText,
-            metadata,
-          });
-
-          if (sessionId) {
-            await execution.update({ cliSessionId: sessionId });
-          }
-
-          // Persist the per-task summary file path so retrieval tools
-          // (`get_epic_task_stages_and_tasks`) can fan out the latest summary via
-          // `send_file_to_user`. Idempotent — overwrites the prior value on
-          // every retry, which is exactly what the user wants ("most updated
-          // and relevant file"). No-op when caller didn't pass a path or
-          // when the CLI ignored the instruction (file missing on disk).
-          if (options.expectedSummaryFilePath) {
-            await recordTaskSummaryFilePath(taskId, options.expectedSummaryFilePath);
-          }
-
-          await updateTaskStatus(taskId, "completed");
-
-          const updated = await TaskExecution.findByPk(execution.id);
-          resolve(updated!);
-        } else {
-          logger.warn("Claude CLI exited with non-zero code", {
+        const autoCommitResult = ensureWorkingTreeCommitted(
+          options.cwd,
+          task.title,
+        );
+        if (autoCommitResult.committed) {
+          metadata.auto_committed = true;
+          metadata.auto_commit_message = autoCommitResult.message;
+          logger.info("executeTask: auto-committed leftover changes", {
             taskId,
-            executionId: execution.id,
-            code,
-            stderrPreview: stderr.slice(0, 1000),
-            stdoutPreview: stdout.slice(0, 1000),
+            cwd: options.cwd,
+            message: autoCommitResult.message,
           });
-
-          // "Reached max turns" or similar — CLI may still have produced useful output
-          if (stdout.trim()) {
-            let resultText: string;
-            let sessionId: string | null = null;
-            let metadata: Record<string, unknown> = { exitCode: code, warning: stderr || `exit code ${code}` };
-
-            try {
-              const parsed = JSON.parse(stdout);
-              resultText = parsed.result ?? stdout;
-              sessionId = parsed.session_id ?? null;
-              metadata = {
-                ...metadata,
-                session_id: parsed.session_id,
-                cost_usd: parsed.cost_usd,
-                duration_ms: parsed.duration_ms,
-                num_turns: parsed.num_turns,
-                is_error: parsed.is_error,
-              };
-            } catch {
-              resultText = stdout;
-            }
-
-            try {
-              const gitDiff = captureGitDiff(options.cwd, preRunSha);
-              metadata.git_diff_stat = gitDiff.diffStat;
-              metadata.git_diff = gitDiff.fullDiff;
-              if (preRunSha) metadata.git_diff_base_sha = preRunSha;
-              metadata.git_recent_commits = gitDiff.recentCommits;
-            } catch (diffErr: any) {
-              logger.warn("Failed to capture git diff after task execution", { taskId, error: diffErr.message });
-            }
-
-            await completeExecution(execution.id, { result: resultText, metadata });
-            if (sessionId) await execution.update({ cliSessionId: sessionId });
-            await updateTaskStatus(taskId, "completed");
-
-            const updated = await TaskExecution.findByPk(execution.id);
-            resolve(updated!);
-          } else {
-            const errorMsg = stderr || `Claude CLI exited with code ${code}`;
-
-            // If --resume failed because the session no longer exists, retry without it.
-            // Swap in the caller-provided fresh-session prompt so the new (memoryless)
-            // session doesn't receive a continuation-style prompt that references
-            // "what you previously changed".
-            if (
-              options.resumeSessionId &&
-              (errorMsg.includes("No conversation found") || stdout.includes("No conversation found"))
-            ) {
-              logger.warn("Session not found — retrying without --resume", {
-                taskId,
-                sessionId: options.resumeSessionId,
-                usingFreshPrompt: !!options.freshPromptFallback,
-              });
-              // Clean up the failed execution before retrying
-              await failExecution(execution.id, { error: "Session expired — retrying fresh" });
-
-              try {
-                const retryResult = await executeTask(taskId, {
-                  ...options,
-                  resumeSessionId: undefined,
-                  promptOverride: options.freshPromptFallback ?? options.promptOverride,
-                  freshPromptFallback: undefined,
-                });
-                resolve(retryResult);
-              } catch (retryErr) {
-                reject(retryErr);
-              }
-              return;
-            }
-
-            await failExecution(execution.id, { error: errorMsg });
-            await updateTaskStatus(taskId, "failed");
-
-            const updated = await TaskExecution.findByPk(execution.id);
-            resolve(updated!);
-          }
         }
-      } catch (err) {
-        reject(err);
+      } catch (commitErr: any) {
+        logger.warn("executeTask: safety-net auto-commit failed", {
+          taskId,
+          cwd: options.cwd,
+          error: commitErr?.message,
+        });
       }
+    }
+
+    try {
+      const gitDiff = captureGitDiff(options.cwd, preRunSha);
+      metadata.git_diff_stat = gitDiff.diffStat;
+      metadata.git_diff = gitDiff.fullDiff;
+      metadata.git_recent_commits = gitDiff.recentCommits;
+      if (preRunSha) metadata.git_diff_base_sha = preRunSha;
+    } catch (diffErr: any) {
+      logger.warn("Failed to capture git diff after task execution", {
+        taskId,
+        error: diffErr.message,
+      });
+    }
+
+    await completeExecution(execution.id, {
+      result: engineResult.resultText,
+      metadata,
     });
 
-    child.on("error", async (err) => {
-      logger.error("Claude CLI spawn error", { taskId, error: err.message });
-      await failExecution(execution.id, { error: err.message });
-      await updateTaskStatus(taskId, "failed");
-      reject(err);
+    if (options.expectedSummaryFilePath) {
+      await recordTaskSummaryFilePath(taskId, options.expectedSummaryFilePath);
+    }
+
+    await updateTaskStatus(taskId, "completed");
+    const updated = await TaskExecution.findByPk(execution.id);
+    return updated!;
+  }
+
+  // Hard failure (no usable output) or killed-by-timeout. If we were
+  // resuming a session that the CLI couldn't find, retry fresh — swap in
+  // the caller-provided standalone prompt so the new (memoryless) session
+  // doesn't receive a continuation-style prompt that references
+  // "what you previously changed".
+  const isMissingSession =
+    !!options.resumeSessionId &&
+    ((engineResult.stderr ?? "").includes("No conversation found") ||
+      (engineResult.resultText ?? "").includes("No conversation found"));
+
+  if (isMissingSession) {
+    logger.warn("Session not found — retrying without --resume", {
+      taskId,
+      sessionId: options.resumeSessionId,
+      usingFreshPrompt: !!options.freshPromptFallback,
     });
-  });
+    await failExecution(execution.id, {
+      error: "Session expired — retrying fresh",
+    });
+    return executeTask(taskId, {
+      ...options,
+      resumeSessionId: undefined,
+      promptOverride: options.freshPromptFallback ?? options.promptOverride,
+      freshPromptFallback: undefined,
+    });
+  }
+
+  const errorMsg =
+    engineResult.stderr?.trim() ||
+    `Claude CLI exited with code ${engineResult.exitCode ?? "?"} (status ${engineResult.status})`;
+
+  await failExecution(execution.id, { error: errorMsg });
+  await updateTaskStatus(taskId, "failed");
+  const updated = await TaskExecution.findByPk(execution.id);
+  return updated!;
 }
 
 // ─── Bulk Epic Creation ──────────────────────────────────────────────────────
@@ -1721,7 +1705,7 @@ export async function createEpicWithPlan(data: {
         where: { id: data.repositoryIds as unknown as string[] },
       });
       for (const repo of planRepos) {
-        await refreshArchitectureOverviewOnDefault(repo);
+        await refreshArchitectureOverviewOnDefault(repo, data.agentId);
       }
     }
 

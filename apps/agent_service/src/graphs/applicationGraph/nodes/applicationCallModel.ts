@@ -5,11 +5,15 @@ import { ChatGoogle } from "@langchain/google";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { Agent, LLMModel } from "@scheduling-agent/database";
 
-import { resolveOrgVendorByOrg } from "../../../services/resolveOrgVendor";
+import { resolveOrgVendorByOrg } from "../../../services/resolveOrgVendor.service";
 import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
+import { RunClaudeCliTool, RunCodexCliTool } from "../../../tools/runCliTools";
+import { KillCliExecutionTool } from "../../../tools/killCliExecutionTool";
+import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
+import { getLangfuseCallbackHandler, flushLangfuse } from "../../../langfuse";
 import { logger } from "../../../logger";
 import { ApplicationAgentState } from "../state";
 
@@ -107,15 +111,14 @@ async function resolveModelForApplicationAgent(applicationAgent: Agent) {
     case "anthropic":
       return new ChatAnthropic({
         modelName: slug,
-        temperature: 0.4,
         apiKey: vendor.apiKey,
         ...(process.env.MERIDIAN_URL ? { anthropicApiUrl: process.env.MERIDIAN_URL } : {}),
         ...anthropicBaseConfig(),
       });
     case "openai":
-      return new ChatOpenAI({ modelName: slug, temperature: 0.4, apiKey: vendor.apiKey });
+      return new ChatOpenAI({ modelName: slug, apiKey: vendor.apiKey });
     case "google":
-      return new ChatGoogle({ model: slug, temperature: 0.4, apiKey: vendor.apiKey });
+      return new ChatGoogle({ model: slug, apiKey: vendor.apiKey });
     default:
       return null;
   }
@@ -167,20 +170,26 @@ export async function applicationCallModelNode(
   }
 
   // v1 tool set:
-  //   - query_database: read-only SQL access (per requirement)
-  //   - list_agents:    discover primary peers in the org (filters out
-  //                     external + application by design)
-  //   - consult_agent:  synchronously consult a primary agent on the user's
-  //                     behalf. Requires a real userId — guaranteed by the
-  //                     REST controller, which rejects requests without one.
-  //                     Application targets are blocked inside the tool.
+  //   - query_database: read-only SQL access (per requirement, always bound).
+  //   - list_agents / consult_agent: gated by `agent_available_tools` — application
+  //     agents must be granted these explicitly via the admin UI; we deliberately
+  //     opt out of the default-tool fallback so a freshly-created application
+  //     agent cannot reach primary agents until the admin grants it access.
   // groupId / singleChatId are null because application invocations have no
   // chat scope; the consult-target's reply is returned inline regardless.
-  const tools = [
-    QueryDatabaseTool(),
-    ListAgentsTool(agentId),
-    ConsultAgentTool(agentId, state.userId, null, null),
-  ];
+  const activeSlugs = await loadActiveToolSlugs(agentId, { applyDefaults: false });
+  const has = (slug: string) => activeSlugs.has(slug);
+
+  const tools: any[] = [QueryDatabaseTool()];
+  if (has("list_agents")) tools.push(ListAgentsTool(agentId));
+  if (has("consult_agent"))
+    tools.push(ConsultAgentTool(agentId, state.userId, null, null));
+  if (has("run_claude_cli"))
+    tools.push(RunClaudeCliTool(agentId, state.userId, state.applicationThreadId));
+  if (has("run_codex_cli"))
+    tools.push(RunCodexCliTool(agentId, state.userId, state.applicationThreadId));
+  if (has("kill_cli_execution"))
+    tools.push(KillCliExecutionTool(agentId, state.userId));
 
   const innerThreadId = state.applicationThreadId;
   const checkpointer = getInnerDeepAgentCheckpointer();
@@ -201,9 +210,24 @@ export async function applicationCallModelNode(
     checkpointer,
   });
 
+  // Bake Langfuse callbacks into the agent via withConfig so they propagate
+  // to all inner LangGraph nodes (LLM calls, tool calls, etc.). The parent
+  // span is opened by `observeWithContext` in application.service; this
+  // handler attaches its observations underneath via OTel context propagation.
+  // Returns null (and `tracedAgent === agent`) when Langfuse isn't configured.
+  const langfuseHandler = getLangfuseCallbackHandler(state.userId ?? undefined, {
+    agentId,
+    agentName: applicationAgent.agentName,
+    innerThreadId,
+    service: "application_agent",
+  });
+  const tracedAgent = langfuseHandler
+    ? agent.withConfig({ callbacks: [langfuseHandler] })
+    : agent;
+
   try {
     const result = await withTimeout(
-      agent.invoke(
+      tracedAgent.invoke(
         {
           messages: [{ role: "user" as const, content: request }],
         },
@@ -221,6 +245,10 @@ export async function applicationCallModelNode(
       ),
       APPLICATION_AGENT_TIMEOUT_MS,
     );
+
+    // Flush traces before returning so observations land even if the outer
+    // request handler crashes after this point.
+    await flushLangfuse();
 
     const messages: any[] = Array.isArray(result.messages) ? result.messages : [];
     const lastAi = [...messages]

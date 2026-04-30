@@ -16,7 +16,7 @@ import { resolveModelSlug } from "../../../chat/modelResolution";
 import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
-import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
+import { resolveOrgVendor } from "../../../services/resolveOrgVendor.service";
 
 import { EditUserIdentityTool } from "../../../tools/editUserIdentityTool";
 import { EditAgentNameTool } from "../../../tools/agentNameTool";
@@ -34,6 +34,8 @@ import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
+import { RunClaudeCliTool, RunCodexCliTool } from "../../../tools/runCliTools";
+import { KillCliExecutionTool } from "../../../tools/killCliExecutionTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
@@ -50,11 +52,10 @@ function getModel(
 ): BaseChatModel {
   switch (vendorSlug) {
     case "openai":
-      return new ChatOpenAI({ modelName: modelSlug, temperature: 0.4, apiKey });
+      return new ChatOpenAI({ modelName: modelSlug, apiKey });
     case "anthropic":
       return new ChatAnthropic({
         modelName: modelSlug,
-        temperature: 0.4,
         apiKey,
         ...(process.env.MERIDIAN_URL
           ? { anthropicApiUrl: process.env.MERIDIAN_URL }
@@ -62,7 +63,7 @@ function getModel(
         ...anthropicBaseConfig(),
       });
     case "google":
-      return new ChatGoogle({ model: modelSlug, temperature: 0.4, apiKey });
+      return new ChatGoogle({ model: modelSlug, apiKey });
     default:
       throw new Error(
         `Unsupported vendor "${vendorSlug}" for model "${modelSlug}"`,
@@ -250,6 +251,12 @@ export async function roundtableCallModelNode(
     tools.push(ListRepositoriesTool());
   if (has("query_database"))
     tools.push(QueryDatabaseTool());
+  if (has("run_claude_cli"))
+    tools.push(RunClaudeCliTool(agentId, state.userId, threadId));
+  if (has("run_codex_cli"))
+    tools.push(RunCodexCliTool(agentId, state.userId, threadId));
+  if (has("kill_cli_execution"))
+    tools.push(KillCliExecutionTool(agentId, state.userId));
 
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

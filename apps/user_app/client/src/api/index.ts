@@ -486,12 +486,32 @@ export interface AdminAgent {
 
 export interface AdminMcpServer {
   id: number;
+  /** `null` = platform-shared (read-only); non-null = owned by this org. */
+  organizationId: string | null;
   name: string;
+  description: string | null;
   transport: string;
   command: string;
   args: string[];
   env?: Record<string, string> | null;
+  /** Present only on rows backed by an inline JS script. Masked from non-super-admins. */
+  scriptContent?: string | null;
+  /** Whether the row's command/args are managed via a custom script (UI hint). */
+  isScript: boolean;
 }
+
+export interface CreateMcpServerInput {
+  name: string;
+  description?: string | null;
+  transport?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string> | null;
+  /** Inline JS source. When set, command/args are auto-managed. Super_admin only. */
+  scriptContent?: string | null;
+}
+
+export type UpdateMcpServerInput = Partial<CreateMcpServerInput>;
 
 export interface AdminTool {
   id: number;
@@ -603,6 +623,26 @@ export const admin = {
   getUsers: () => request<AdminUser[]>("/admin/users"),
   getAgents: () => request<AdminAgent[]>("/admin/agents"),
   getMcpServers: () => request<AdminMcpServer[]>("/admin/mcp-servers"),
+  createMcpServer: (data: CreateMcpServerInput) =>
+    request<AdminMcpServer>("/admin/mcp-servers", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  updateMcpServer: (id: number, data: UpdateMcpServerInput) =>
+    request<AdminMcpServer>(`/admin/mcp-servers/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  deleteMcpServer: (id: number) =>
+    request<{ ok: true }>(`/admin/mcp-servers/${id}`, {
+      method: "DELETE",
+    }),
+  /** Copy a platform-shared row into the caller's org. */
+  installMcpServer: (id: number, name?: string) =>
+    request<AdminMcpServer>(`/admin/mcp-servers/${id}/install`, {
+      method: "POST",
+      body: JSON.stringify(name ? { name } : {}),
+    }),
   getSkills: () => request<AdminSkill[]>("/admin/skills"),
   getTools: () =>
     request<AdminTool[]>("/admin/tools"),
@@ -751,6 +791,65 @@ export const admin = {
       "/admin/claude-oauth-token",
       { method: "DELETE" },
     ),
+
+  // ── Codex CLI API key (super_admin only, system-wide) ─────────────────────
+  // Same model as the Claude OAuth token: persisted on the agent_service
+  // container under /home/agent/.codex/.api-key and exported as OPENAI_API_KEY
+  // so every spawned `codex` CLI authenticates without `codex login` inside
+  // the container.
+  getCodexApiKey: () =>
+    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
+      "/admin/codex-api-key",
+    ),
+  setCodexApiKey: (token: string) =>
+    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
+      "/admin/codex-api-key",
+      { method: "PUT", body: JSON.stringify({ token }) },
+    ),
+  deleteCodexApiKey: () =>
+    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
+      "/admin/codex-api-key",
+      { method: "DELETE" },
+    ),
+
+  // ── Codex CLI auth.json (super_admin only, system-wide) ──────────────────
+  // Full ChatGPT-account login blob (id_token, access_token, refresh_token,
+  // account_id, last_refresh, optional OPENAI_API_KEY). Persisted on the
+  // agent_service container at /home/agent/.codex/auth.json so the spawned
+  // `codex` CLI reads it directly. The status response masks every secret.
+  getCodexAuthJson: () =>
+    request<{
+      configured: boolean;
+      accountIdSuffix: string | null;
+      accessTokenMasked: string | null;
+      hasRefreshToken: boolean;
+      hasOpenaiApiKey: boolean;
+      lastRefresh: string | null;
+      updatedAt: string | null;
+    }>("/admin/codex-auth-json"),
+  setCodexAuthJson: (blob: string) =>
+    request<{
+      configured: boolean;
+      accountIdSuffix: string | null;
+      accessTokenMasked: string | null;
+      hasRefreshToken: boolean;
+      hasOpenaiApiKey: boolean;
+      lastRefresh: string | null;
+      updatedAt: string | null;
+    }>("/admin/codex-auth-json", {
+      method: "PUT",
+      body: JSON.stringify({ blob }),
+    }),
+  deleteCodexAuthJson: () =>
+    request<{
+      configured: boolean;
+      accountIdSuffix: string | null;
+      accessTokenMasked: string | null;
+      hasRefreshToken: boolean;
+      hasOpenaiApiKey: boolean;
+      lastRefresh: string | null;
+      updatedAt: string | null;
+    }>("/admin/codex-auth-json", { method: "DELETE" }),
 
   // ── Projects & Repositories ───────────────────────────────────────────────
   getProjects: () => request<AdminProject[]>("/admin/projects"),
