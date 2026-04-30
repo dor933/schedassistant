@@ -1,11 +1,7 @@
 import crypto from "node:crypto";
 import { logger } from "../logger";
 import { classifyMessage, type ClassifyOptions } from "./classification";
-import {
-  buildSafeErrorAnswer,
-  buildUnknownAnswer,
-  DEFAULT_FOLLOWUPS,
-} from "./answerTemplates";
+import { buildSafeErrorAnswer } from "./answerTemplates";
 import { runMoatGuard } from "./moatGuard";
 import { compilePublicResearchView } from "./publicResearch";
 import { buildResearchObjects } from "./researchObjectBuilder";
@@ -81,16 +77,13 @@ export async function runAskGrahamyGraph(
       await classifyIntent(state, options.classifier);
     }
 
-    // Static stub for "I don't understand the question" — skip the deep
-    // agent entirely so we don't hallucinate without anchors.
-    if (state.classification?.intent === "unknown") {
-      const unknown = buildUnknownAnswer();
-      state.answer = unknown.answer;
-      state.publicResearchView = unknown.researchView;
-      state.ui = unknown.ui;
-      state.meta = buildMeta([], {}, state.warnings, state.classification);
-      return await finalizeResponse(state, unknown.answerType);
-    }
+    // We deliberately do NOT short-circuit on `intent === "unknown"` here.
+    // With the deep agent + PostgresSaver thread memory, a turn with no
+    // freshly-named anchors is most often a legitimate follow-up like
+    // "what are the risks?" / "ומה הסיכונים?" — the agent has the prior
+    // turn(s) in memory and can answer. For genuinely off-topic first turns
+    // ("what's the weather?"), the agent's system prompt grounds it and it
+    // redirects to a stock/sector question naturally.
 
     await fetchBaseSnapshots(state, snapshotClient);
     selectTools(state);
@@ -125,7 +118,11 @@ export async function runAskGrahamyGraph(
     state.ui = {
       cards: [],
       tables: [],
-      suggestedFollowups: DEFAULT_FOLLOWUPS,
+      // Use the agent-generated, conversation-aware follow-ups. If the agent
+      // didn't emit any (parse miss / model skipped the section), leave the
+      // array empty rather than falling back to a generic hardcoded list —
+      // a generic list would defeat the point of context-aware suggestions.
+      suggestedFollowups: grahamy.suggestedFollowups,
     };
     state.meta = buildMeta(
       state.selectedTools ?? [],
