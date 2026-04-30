@@ -1,7 +1,7 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 import { logger } from "../logger";
-import { resolveOrgVendorByOrg } from "../services/resolveOrgVendor";
+import { resolveOrgVendorByOrg } from "../services/resolveOrgVendor.service";
 import {
   INTENTS,
   type Classification,

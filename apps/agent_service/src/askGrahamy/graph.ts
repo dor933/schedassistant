@@ -14,6 +14,7 @@ import {
   type AskGrahamyRequest,
   type AskGrahamyResponse,
   type AskGrahamyState,
+  type CachedResearchObject,
   type Classification,
   type ResponseMeta,
   type SnapshotBundle,
@@ -31,20 +32,35 @@ export type RunAskGrahamyGraphOptions = {
 
 export async function runAskGrahamyGraph(
   request: AskGrahamyRequest,
+  internalUserId: number,
   options: RunAskGrahamyGraphOptions = {},
 ): Promise<AskGrahamyResponse> {
+  // The upstream caller (StocksScanner) may have already classified the
+  // message and pre-loaded its existing research objects via
+  // `POST /api/ask-grahamy/classify` + a local `research_objects` lookup.
+  // When supplied, we skip the LLM classify step and treat the prior objects
+  // as already-cached for the per-key build loop.
+  const suppliedClassification =
+    (request as { classification?: Classification }).classification;
+  const suppliedPriorObjects =
+    (request as { priorResearchObjects?: CachedResearchObject[] }).priorResearchObjects;
+
   const state: AskGrahamyState = {
-    userId: request.userId,
+    internalUserId,
     conversationId: request.conversationId ?? undefined,
     message: request.message,
     warnings: [],
+    classification: suppliedClassification,
+    priorResearchObjects: suppliedPriorObjects,
   };
   const snapshotClient = options.snapshotClient ?? new GrahamySnapshotClient();
   const conversationStore = options.conversationStore ?? new AskGrahamyConversationStore();
 
   try {
     await loadConversationContext(state, conversationStore);
-    await classifyIntent(state, options.classifier);
+    if (!state.classification) {
+      await classifyIntent(state, options.classifier);
+    }
 
     if (state.classification?.intent === "follow_up" && state.classification.warnings.length) {
       const clarification = buildClarificationAnswer();
@@ -72,7 +88,7 @@ export async function runAskGrahamyGraph(
     return await finalizeResponse(state, conversationStore);
   } catch (err) {
     logger.error("Ask Grahamy graph failed", {
-      userId: state.userId,
+      userId: state.internalUserId,
       conversationId: state.conversationId,
       messageId: state.messageId,
       error: err instanceof Error ? err.message : String(err),
@@ -95,7 +111,7 @@ async function loadConversationContext(
 ): Promise<void> {
   state.conversationId = state.conversationId || crypto.randomUUID();
   state.messageId = crypto.randomUUID();
-  state.previousContext = await conversationStore.load(state.conversationId, state.userId);
+  state.previousContext = await conversationStore.load(state.conversationId, state.internalUserId);
 }
 
 async function classifyIntent(
@@ -137,8 +153,10 @@ async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
     classification: state.classification ?? EMPTY_CLASSIFICATION,
     snapshots: state.snapshots ?? {},
     toolOutputs: state.toolOutputs ?? {},
+    priorResearchObjects: state.priorResearchObjects ?? [],
   });
   state.researchObjects = result.objects;
+  state.researchObjectsUpdated = result.objectsUpdated;
   state.researchObjectCacheStats = result.stats;
   state.warnings.push(...result.warnings);
 }
@@ -164,6 +182,7 @@ function compileAnswerObject(state: AskGrahamyState): void {
     classification,
     state.researchObjects ?? [],
     state.researchObjectCacheStats,
+    state.researchObjectsUpdated ?? [],
   );
 }
 
@@ -180,6 +199,7 @@ async function finalizeResponse(
     classification,
     state.researchObjects ?? [],
     state.researchObjectCacheStats,
+    state.researchObjectsUpdated ?? [],
   );
   const response: AskGrahamyResponse = {
     conversationId: state.conversationId ?? crypto.randomUUID(),
@@ -201,14 +221,14 @@ async function finalizeResponse(
   const publicResearchView = guard.value.research.publicResearchView;
   await conversationStore.persistTurn({
     conversationId: guard.value.conversationId,
-    userId: state.userId,
+    userId: state.internalUserId,
     classification: guard.value.classification,
     publicResearchView: isPublicResearchView(publicResearchView) ? publicResearchView : undefined,
     ui: guard.value.ui,
   });
 
   logger.info("Ask Grahamy turn completed", {
-    userId: state.userId,
+    userId: state.internalUserId,
     conversationId: guard.value.conversationId,
     messageId: guard.value.messageId,
     intent: guard.value.classification.intent,
@@ -231,6 +251,7 @@ function buildMeta(
   classification: Classification,
   researchObjects: import("./types").CachedResearchObject[] = [],
   researchObjectCacheStats?: import("./types").ResponseMeta["researchObjectCache"],
+  researchObjectsUpdated: import("./types").CachedResearchObject[] = [],
 ): ResponseMeta {
   const sourcesUsed = ["daily_brief", "metadata", "clusters", "track_record", "transparency"]
     .filter((name) => !!snapshots[name as keyof SnapshotBundle])
@@ -246,6 +267,7 @@ function buildMeta(
     toolsUsed,
     researchObjectKeys: researchObjects.map((item) => item.cacheKey),
     researchObjectCache: researchObjectCacheStats,
+    researchObjectsUpdated: researchObjectsUpdated.length ? researchObjectsUpdated : undefined,
     upstreamLatency: snapshots.latencyMs,
   };
 }

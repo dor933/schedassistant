@@ -11,7 +11,7 @@ import {
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { resolveModelSlug } from "../../chat/modelResolution";
 import { anthropicBaseConfig } from "../../chat/anthropicContextManagement";
-import { resolveOrgVendor } from "../../services/resolveOrgVendor";
+import { resolveOrgVendor } from "../../services/resolveOrgVendor.service";
 import {
   observeWithContext,
   getLangfuseCallbackHandler,
@@ -169,8 +169,8 @@ export async function summarizeRoundtable(
         [new SystemMessage(SYSTEM_PROMPT), new HumanMessage(userPrompt)],
         langfuseHandler
           ? ({
-              callbacks: [langfuseHandler],
-            } as RunnableConfig)
+            callbacks: [langfuseHandler],
+          } as RunnableConfig)
           : undefined,
       ),
     {

@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
-import { AskGrahamyConversationStore } from "./conversationStore";
-import { runAskGrahamyGraph } from "./graph";
-import { GrahamySnapshotClient } from "./snapshotClient";
+import { AskGrahamyConversationStore } from "../conversationStore";
+import { runAskGrahamyGraph } from "../graph";
+import { GrahamySnapshotClient } from "../snapshotClient";
 
 test("runs the graph end to end over mocked snapshots", async () => {
   const fetchImpl = async (url: string) => {
@@ -33,6 +33,7 @@ test("runs the graph end to end over mocked snapshots", async () => {
   const storePath = path.join(os.tmpdir(), `ask-grahamy-test-${Date.now()}.json`);
   const response = await runAskGrahamyGraph(
     { userId: "u1", conversationId: null, message: "What do you think about NVDA?" },
+    1,
     {
       snapshotClient: new GrahamySnapshotClient({ baseUrl: "http://grahamy.test", fetchImpl: fetchImpl as typeof fetch }),
       conversationStore: new AskGrahamyConversationStore(storePath),

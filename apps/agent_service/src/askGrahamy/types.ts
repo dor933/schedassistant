@@ -29,13 +29,45 @@ export const TOOL_NAMES = [
   "get_homepage_focus_context",
 ] as const;
 
+// Classification + priorResearchObjects are passthrough records — the
+// upstream caller (StocksScanner) is trusted (auth'd via the application
+// token), and the structured-output classifier and our own DB shape have
+// already validated these. We re-cast on the consumer side.
+const passthroughRecord = z.object({}).passthrough();
+
 export const askGrahamyRequestSchema = z.object({
+  userId: z.string().trim().min(1),
+  conversationId: z.string().trim().min(1).optional().nullable(),
+  message: z.string().trim().min(1).max(4000),
+  /**
+   * Optional. When the caller has already classified the message via
+   * `POST /api/ask-grahamy/classify`, it supplies the result here so we
+   * skip the LLM classify call. Absent → agent_service classifies internally.
+   */
+  classification: passthroughRecord.optional(),
+  /**
+   * Optional. Existing research objects the caller already has cached for
+   * the classified anchors. agent_service uses these when cache_key matches
+   * a classified key, and only builds (via v6 SQL) what the caller didn't
+   * supply. Absent or empty → every classified key is built from scratch.
+   */
+  priorResearchObjects: z.array(passthroughRecord).optional(),
+});
+
+export type AskGrahamyRequest = z.infer<typeof askGrahamyRequestSchema>;
+
+export const askGrahamyClassifyRequestSchema = z.object({
   userId: z.string().trim().min(1),
   conversationId: z.string().trim().min(1).optional().nullable(),
   message: z.string().trim().min(1).max(4000),
 });
 
-export type AskGrahamyRequest = z.infer<typeof askGrahamyRequestSchema>;
+export type AskGrahamyClassifyRequest = z.infer<typeof askGrahamyClassifyRequestSchema>;
+
+export type AskGrahamyClassifyResponse = {
+  conversationId: string;
+  classification: Classification;
+};
 
 export type Intent = (typeof INTENTS)[number];
 export type AnswerType = (typeof ANSWER_TYPES)[number];
@@ -77,7 +109,12 @@ export type FreshnessMetadata = {
 
 export type ConversationContext = {
   conversationId: string;
-  userId: string;
+  /**
+   * Internal `users.id` of the conversation owner. Resolved at the HTTP
+   * boundary via `resolveOrCreateClientUser` from the upstream client app's
+   * external user id; never the raw external value.
+   */
+  userId: number;
   lastSymbols: string[];
   lastSectors: string[];
   lastIntent?: Intent;
@@ -195,12 +232,25 @@ export type ResponseMeta = {
     misses: number;
     writes: number;
   };
+  /**
+   * Subset of research objects that were freshly built this turn (cache
+   * misses where agent_service ran the v6 SQL and bucketed the result in
+   * memory). agent_service does NOT persist these; the upstream client
+   * (StocksScanner) is responsible for writing them to its `research_objects`
+   * table + Redis after receiving the response. Empty when every key was a
+   * cache hit.
+   */
+  researchObjectsUpdated?: CachedResearchObject[];
   upstreamLatency?: Partial<Record<SnapshotName, number>>;
   moatGuardResult?: "clean" | "cleaned" | "failed";
 };
 
 export type AskGrahamyState = {
-  userId: string;
+  /**
+   * Internal `users.id` (resolved at the HTTP boundary). Anchors conversation
+   * lookup, persistence, and downstream FKs. Never the raw external id.
+   */
+  internalUserId: number;
   conversationId?: string;
   message: string;
   messageId?: string;
@@ -209,7 +259,18 @@ export type AskGrahamyState = {
   snapshots?: SnapshotBundle;
   selectedTools?: ToolName[];
   toolOutputs?: ToolOutputs;
+  /**
+   * Research objects supplied by the upstream caller (StocksScanner), one
+   * per anchor it already had in its `research_objects` table for the
+   * current asOfDate. Used as the "is it cached?" check during build —
+   * keys present here are reused as-is; missing keys are built from v6 SQL.
+   */
+  priorResearchObjects?: CachedResearchObject[];
   researchObjects?: CachedResearchObject[];
+  /** Subset of `researchObjects` that need persistence by the upstream caller —
+   * either freshly built this turn or augmented with new fields. Cache hits
+   * (used as-is from priorResearchObjects) are NOT included. */
+  researchObjectsUpdated?: CachedResearchObject[];
   researchObjectCacheStats?: {
     hits: number;
     misses: number;

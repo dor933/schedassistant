@@ -14,7 +14,7 @@ import { Thread } from "@scheduling-agent/database";
 import { SessionSummary, SessionFileEntry } from "@scheduling-agent/types";
 import { resolveModelSlug } from "../../chat/modelResolution";
 import { anthropicBaseConfig } from "../../chat/anthropicContextManagement";
-import { resolveOrgVendor } from "../../services/resolveOrgVendor";
+import { resolveOrgVendor } from "../../services/resolveOrgVendor.service";
 
 /**
  * Zod schema for the structured output returned by the LLM during
@@ -30,20 +30,20 @@ const sessionSummarizationSchema = z.object({
     .enum(["high", "medium", "low"])
     .describe(
       "How confident you are that this summary accurately captures the key facts and decisions. " +
-        "'high' = all key facts were explicitly stated and unambiguous. " +
-        "'medium' = some details required inference or the conversation was partially ambiguous. " +
-        "'low' = significant portions were unclear, contradictory, or required guesswork.",
+      "'high' = all key facts were explicitly stated and unambiguous. " +
+      "'medium' = some details required inference or the conversation was partially ambiguous. " +
+      "'low' = significant portions were unclear, contradictory, or required guesswork.",
     ),
   chunks: z
     .array(z.string())
     .describe(
       "An array of high-value, semantically self-contained text chunks (3-8 sentences each) " +
-        "suitable for long-term vector retrieval. " +
-        "Only include chunks that contain genuinely important, reusable knowledge — " +
-        "facts, decisions, preferences, domain insights, or actionable outcomes worth preserving. " +
-        "Omit small talk, pleasantries, routine acknowledgements, and anything that would not " +
-        "be useful when retrieved months later. Return an empty array if nothing qualifies. " +
-        "Do NOT include content from the per-session files — those get their own summaries via `fileSummaries`.",
+      "suitable for long-term vector retrieval. " +
+      "Only include chunks that contain genuinely important, reusable knowledge — " +
+      "facts, decisions, preferences, domain insights, or actionable outcomes worth preserving. " +
+      "Omit small talk, pleasantries, routine acknowledgements, and anything that would not " +
+      "be useful when retrieved months later. Return an empty array if nothing qualifies. " +
+      "Do NOT include content from the per-session files — those get their own summaries via `fileSummaries`.",
     ),
   fileSummaries: z
     .array(
@@ -52,20 +52,20 @@ const sessionSummarizationSchema = z.object({
           .string()
           .describe(
             "The exact relative path of one of the files listed in the <files> block of the input. " +
-              "Use the path verbatim — do not invent, normalise, or rename paths.",
+            "Use the path verbatim — do not invent, normalise, or rename paths.",
           ),
         summary: z
           .string()
           .describe(
             "2-4 sentence content summary of what this file holds (topic, key facts, why it matters). " +
-              "Written as natural prose so it works as both a human reference and a vector-search target.",
+            "Written as natural prose so it works as both a human reference and a vector-search target.",
           ),
       }),
     )
     .describe(
       "One entry per file from the <files> block of the input. " +
-        "Skip a file ONLY if you cannot infer anything about it from the conversation — never fabricate. " +
-        "Return an empty array when the <files> block was empty.",
+      "Skip a file ONLY if you cannot infer anything about it from the conversation — never fabricate. " +
+      "Return an empty array when the <files> block was empty.",
     ),
 });
 

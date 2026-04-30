@@ -16,7 +16,7 @@ import { resolveModelSlug } from "../../../chat/modelResolution";
 import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
-import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
+import { resolveOrgVendor } from "../../../services/resolveOrgVendor.service";
 
 import { EditUserIdentityTool } from "../../../tools/editUserIdentityTool";
 import { EditAgentNameTool } from "../../../tools/agentNameTool";

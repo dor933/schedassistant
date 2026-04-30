@@ -19,7 +19,7 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { resolveModelSlug } from "../../../chat/modelResolution";
 import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
-import { resolveOrgVendor } from "../../../services/resolveOrgVendor";
+import { resolveOrgVendor } from "../../../services/resolveOrgVendor.service";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import { EditUserIdentityTool } from "../../../tools/editUserIdentityTool";

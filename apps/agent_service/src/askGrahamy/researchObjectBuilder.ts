@@ -1,11 +1,6 @@
 import { logger } from "../logger";
 import { isRecord, stringValue } from "./snapshotClient";
 import { runResearchQuery } from "./researchQueryClient";
-import {
-  buildResearchObjectCacheKey,
-  getCachedResearchObject,
-  setCachedResearchObject,
-} from "./researchObjectCache";
 import type {
   CachedResearchObject,
   Classification,
@@ -17,8 +12,36 @@ import type {
   ToolOutputs,
 } from "./types";
 
+export function buildResearchObjectCacheKey(
+  objectType: "STOCK" | "SECTOR" | "REGIME",
+  anchor: string,
+  asOfDate: string,
+): string {
+  return `${objectType}:${anchor.toUpperCase()}:${asOfDate}`;
+}
+
+/** Index prior objects by cache_key for O(1) lookup during the build loop. */
+function indexPriorObjects(
+  priors: CachedResearchObject[] | undefined,
+): Map<string, CachedResearchObject> {
+  const index = new Map<string, CachedResearchObject>();
+  if (!priors) return index;
+  for (const obj of priors) {
+    if (!obj?.cacheKey) continue;
+    index.set(obj.cacheKey, obj);
+  }
+  return index;
+}
+
 export type ResearchObjectBuildResult = {
+  /** Every object used to compose the answer (prior + freshly built). */
   objects: CachedResearchObject[];
+  /**
+   * Subset of `objects` that need persistence by the upstream caller —
+   * either freshly built this turn or augmented with new fields. Cache
+   * hits (used as-is from priorResearchObjects) are NOT included.
+   */
+  objectsUpdated: CachedResearchObject[];
   stats: { hits: number; misses: number; writes: number };
   warnings: string[];
 };
@@ -27,24 +50,29 @@ export async function buildResearchObjects(input: {
   classification: Classification;
   snapshots: SnapshotBundle;
   toolOutputs: ToolOutputs;
+  /** Research objects the upstream caller already had cached for the
+   * current asOfDate — skip the v6 SQL build for any cache_key found here. */
+  priorResearchObjects?: CachedResearchObject[];
 }): Promise<ResearchObjectBuildResult> {
-  const { classification, snapshots, toolOutputs } = input;
+  const { classification, snapshots, toolOutputs, priorResearchObjects } = input;
   const stats = { hits: 0, misses: 0, writes: 0 };
   const warnings: string[] = [];
   const objects: CachedResearchObject[] = [];
+  const objectsUpdated: CachedResearchObject[] = [];
+  const priorIndex = indexPriorObjects(priorResearchObjects);
 
   if (!isResearchDbConfigured()) {
-    return { objects, stats, warnings };
+    return { objects, objectsUpdated, stats, warnings };
   }
 
   const asOfDate = researchObjectDate(snapshots.freshness);
 
   for (const symbol of classification.symbols) {
     const cacheKey = buildResearchObjectCacheKey("STOCK", symbol, asOfDate);
-    const cached = await getCachedResearchObject<CachedResearchObject>(cacheKey);
-    if (cached) {
+    const prior = priorIndex.get(cacheKey);
+    if (prior) {
       stats.hits += 1;
-      objects.push({ ...cached.value, source: "redis" });
+      objects.push(prior);
       continue;
     }
 
@@ -57,7 +85,7 @@ export async function buildResearchObjects(input: {
         snapshotContext: toolOutputs.get_stock_snapshot_context,
       });
       objects.push(stockObject);
-      await setCachedResearchObject(cacheKey, stockObject);
+      objectsUpdated.push(stockObject);
       stats.writes += 1;
     } catch (err) {
       const message = `Research Object query failed for ${symbol}.`;
@@ -71,10 +99,10 @@ export async function buildResearchObjects(input: {
 
   for (const sector of classification.sectors) {
     const cacheKey = buildResearchObjectCacheKey("SECTOR", sector, asOfDate);
-    const cached = await getCachedResearchObject<CachedResearchObject>(cacheKey);
-    if (cached) {
+    const prior = priorIndex.get(cacheKey);
+    if (prior) {
       stats.hits += 1;
-      objects.push({ ...cached.value, source: "redis" });
+      objects.push(prior);
       continue;
     }
 
@@ -87,7 +115,7 @@ export async function buildResearchObjects(input: {
         snapshotContext: toolOutputs.get_sector_snapshot_context,
       });
       objects.push(sectorObject);
-      await setCachedResearchObject(cacheKey, sectorObject);
+      objectsUpdated.push(sectorObject);
       stats.writes += 1;
     } catch (err) {
       const message = `Sector Research Object query failed for ${sector}.`;
@@ -103,10 +131,10 @@ export async function buildResearchObjects(input: {
     const regime = inferRegime(toolOutputs.get_market_context, objects);
     if (regime) {
       const cacheKey = buildResearchObjectCacheKey("REGIME", "MARKET", asOfDate);
-      const cached = await getCachedResearchObject<CachedResearchObject>(cacheKey);
-      if (cached) {
+      const prior = priorIndex.get(cacheKey);
+      if (prior) {
         stats.hits += 1;
-        objects.push({ ...cached.value, source: "redis" });
+        objects.push(prior);
       } else {
         stats.misses += 1;
         try {
@@ -116,7 +144,7 @@ export async function buildResearchObjects(input: {
             freshness: snapshots.freshness ?? {},
           });
           objects.push(regimeObject);
-          await setCachedResearchObject(cacheKey, regimeObject);
+          objectsUpdated.push(regimeObject);
           stats.writes += 1;
         } catch (err) {
           warnings.push(`Regime Research Object query failed for ${regime}.`);
@@ -129,7 +157,7 @@ export async function buildResearchObjects(input: {
     }
   }
 
-  return { objects, stats, warnings };
+  return { objects, objectsUpdated, stats, warnings };
 }
 
 export function stockContextFromResearchObjects(

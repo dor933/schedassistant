@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyMessage, type ClassifierOutput } from "./classification";
+import { classifyMessage, type ClassifierOutput } from "../classification";
 
 const stub = (out: ClassifierOutput) => async () => out;
 
@@ -63,7 +63,7 @@ test("resolves follow-up against previous context", async () => {
     "Why?",
     {
       conversationId: "c1",
-      userId: "u1",
+      userId: 1,
       lastSymbols: ["NVDA"],
       lastSectors: [],
       lastIntent: "stock",

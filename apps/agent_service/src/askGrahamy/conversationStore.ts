@@ -16,7 +16,7 @@ export class AskGrahamyConversationStore {
     this.storePath = storePath;
   }
 
-  async load(conversationId: string | undefined | null, userId: string): Promise<ConversationContext | undefined> {
+  async load(conversationId: string | undefined | null, userId: number): Promise<ConversationContext | undefined> {
     if (!conversationId) return undefined;
     const store = await this.readStore();
     const context = store.conversations[conversationId];
@@ -26,7 +26,7 @@ export class AskGrahamyConversationStore {
 
   async persistTurn(input: {
     conversationId: string;
-    userId: string;
+    userId: number;
     classification: Classification;
     publicResearchView?: PublicResearchView;
     ui?: UiHints;

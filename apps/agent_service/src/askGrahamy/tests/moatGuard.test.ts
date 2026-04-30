@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runMoatGuard } from "./moatGuard";
+import { runMoatGuard } from "../moatGuard";
 
 test("removes forbidden fields recursively and redacts forbidden text", () => {
   const result = runMoatGuard({

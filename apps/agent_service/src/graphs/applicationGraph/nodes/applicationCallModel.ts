@@ -5,7 +5,7 @@ import { ChatGoogle } from "@langchain/google";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { Agent, LLMModel } from "@scheduling-agent/database";
 
-import { resolveOrgVendorByOrg } from "../../../services/resolveOrgVendor";
+import { resolveOrgVendorByOrg } from "../../../services/resolveOrgVendor.service";
 import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";

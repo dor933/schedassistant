@@ -20,7 +20,16 @@ const QUERY_FILES: Record<ResearchQueryName, string> = {
   query_v6a_sector_live: "query_v6a_sector_live.sql",
 };
 
-const DEFAULT_QUERIES_DIR = "/home/office/.openclaw/shared-tools/grahamy/queries";
+/**
+ * The .sql files live in `./queries` co-located with this module. In dev
+ * (ts-node from src/) `__dirname` is `apps/agent_service/src/askGrahamy/`;
+ * in prod (compiled, run from dist/) it's `apps/agent_service/dist/askGrahamy/`.
+ * The Dockerfile copies the `queries/` folder into `dist/askGrahamy/` after
+ * the TypeScript build so both paths resolve.
+ *
+ * `GRAHAMY_QUERIES_DIR` env override remains for ad-hoc deployments / tests.
+ */
+const DEFAULT_QUERIES_DIR = path.join(__dirname, "queries");
 
 const queryTextCache = new Map<ResearchQueryName, string>();
 
