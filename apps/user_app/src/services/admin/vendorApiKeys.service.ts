@@ -8,6 +8,7 @@ const ALLOWED_KEY_TYPES: readonly OrganizationVendorKeyType[] = [
   "api_key",
   "oauth_token",
   "auth_object",
+  "embedding",
 ] as const;
 
 function isAllowedKeyType(value: unknown): value is OrganizationVendorKeyType {
