@@ -17,6 +17,7 @@ import { runCodexInRepo } from "../chat/codex/codexInRepo";
 import { loadCodexAuthObjectForAgent } from "../utils/codexAuthJson.service";
 import { resolveOrgVendor } from "../utils/resolveOrgVendor.service";
 import { resolveModelSlug } from "../chat/modelResolution";
+import { ensureSessionWorkspace } from "../workspace/sessionWorkspace";
 import type {
   AgentTaskStatus,
   TaskStageStatus,
@@ -99,7 +100,11 @@ export function ListProjectsTool(userId: number) {
 
 /**
  * Tool for the orchestrator to list repositories within a project.
- * Should be called before creating an epic to confirm which repos are relevant.
+ *
+ * Returns ONLY a lightweight index (id, name, default branch) so the
+ * orchestrator can pick the relevant repos without bloating the model
+ * context. Use `get_repository` to fetch the full record (URL, local path,
+ * architecture overview, setup instructions) for a single repo.
  */
 export function ListRepositoriesTool() {
   return tool(
@@ -113,27 +118,14 @@ export function ListRepositoriesTool() {
           return `Project "${project.name}" has no repositories configured. Add repositories before creating an epic task.`;
         }
 
-        // Show project-level context if available
-        let result = `Project "${project.name}" has ${repos.length} repository(ies):\n`;
-        if (project.techStack) result += `Tech stack: ${project.techStack}\n`;
-        if (project.architectureOverview) result += `Architecture: ${project.architectureOverview}\n`;
-        result += "\n";
-
+        let result = `Project "${project.name}" has ${repos.length} repository(ies):\n\n`;
         for (const r of repos) {
-          result += `- **${r.name}** (ID: ${r.id})`;
-          result += `\n  URL: ${r.url}`;
-          result += `\n  Default branch: ${r.defaultBranch ?? "main"}`;
-          if (r.localPath) result += `\n  Local path: ${r.localPath}`;
-          else result += `\n  ⚠ No local path configured — set localPath before executing tasks`;
-          if (r.architectureOverview) result += `\n  Architecture: ${r.architectureOverview}`;
-          if (r.setupInstructions) result += `\n  Setup: ${r.setupInstructions}`;
-          result += "\n";
+          result += `- **${r.name}** (ID: ${r.id}, branch: ${r.defaultBranch ?? "main"})\n`;
         }
 
-        result += "\nAll repositories are LOCAL clones on this machine. The executor runs commands locally via Claude CLI — ";
-        result += "it does NOT access GitHub remotely.\n";
-        result += "When creating an epic task, specify the repositoryIds for only the repos relevant to the task. ";
-        result += "The architecture context and localPath from selected repos will be automatically injected into the CLI executor.";
+        result += "\nThis is an index only — call `get_repository` with one of the IDs above to fetch the full record ";
+        result += "(URL, local path, architecture overview, setup instructions). ";
+        result += "When creating an epic task, specify the repositoryIds for only the repos relevant to the task.";
         return result;
       } catch (err: any) {
         return `Error listing repositories: ${err.message}`;
@@ -142,13 +134,56 @@ export function ListRepositoriesTool() {
     {
       name: "list_repositories",
       description:
-        "List all repositories within a project. " +
-        "Use this after identifying the project to determine which repositories are relevant for the epic task. " +
-        "Only repositories relevant to the task should be included in the epic — this controls which repo context " +
-        "(architecture docs, special instructions, etc.) gets fetched for the executor agents. " +
+        "List all repositories within a project. Returns ONLY an index (id, name, default branch) — " +
+        "no architecture overview, URL, local path, or setup instructions. Use this to pick which repo(s) " +
+        "are relevant, then call `get_repository` for the full record of each one you need. " +
         "If it's not clear which repos are needed, show the list to the user and ask.",
       schema: z.object({
         projectId: z.string().uuid().describe("The project ID to list repositories for"),
+      }),
+    },
+  );
+}
+
+/**
+ * Tool for the orchestrator to fetch the full record of a single repository.
+ *
+ * Companion to `list_repositories` — that tool returns only IDs; this one
+ * returns the heavy fields (URL, local path, architecture overview, setup
+ * instructions) for one repo at a time so the orchestrator only pays the
+ * context cost for repos it actually selects.
+ */
+export function GetRepositoryTool() {
+  return tool(
+    async (input) => {
+      try {
+        const repo = await Repository.findByPk(input.repositoryId);
+        if (!repo) return `Error: Repository ${input.repositoryId} not found.`;
+
+        let result = `**${repo.name}** (ID: ${repo.id})\n`;
+        result += `- URL: ${repo.url}\n`;
+        result += `- Default branch: ${repo.defaultBranch ?? "main"}\n`;
+        if (repo.localPath) result += `- Local path: ${repo.localPath}\n`;
+        else result += `- ⚠ No local path configured — set localPath before executing tasks\n`;
+        if (repo.architectureOverview) result += `\nArchitecture overview:\n${repo.architectureOverview}\n`;
+        if (repo.setupInstructions) result += `\nSetup instructions:\n${repo.setupInstructions}\n`;
+
+        result += "\nThis repository is a LOCAL clone on this machine. The executor runs commands locally via Claude CLI — ";
+        result += "it does NOT access GitHub remotely.";
+        return result;
+      } catch (err: any) {
+        return `Error fetching repository: ${err.message}`;
+      }
+    },
+    {
+      name: "get_repository",
+      description:
+        "Fetch the full record for a single repository by ID — URL, local path, default branch, " +
+        "architecture overview, and setup instructions. Call this after `list_repositories` for each repo " +
+        "you actually need detail on. The architecture context and localPath returned here are what gets " +
+        "injected into the executor agents when an epic task runs.",
+      schema: z.object({
+        repositoryId: z.string().uuid().describe("The repository ID to fetch (from `list_repositories`)"),
       }),
     },
   );
@@ -165,9 +200,16 @@ export function CreateEpicPlanTool(userId: number, agentId: string) {
         // the system — across all users and projects. The Epic Orchestrator is
         // a shared singleton agent with a single per-agent thread lock, so
         // exactly one epic can run at a time, system-wide.
+        //
+        // `failed` is intentionally included here (matches `resolveActiveEpic`):
+        // failure is per-task and recoverable, so a `failed`-status epic still
+        // holds the singleton slot — it must be resumed via the existing retry
+        // path or explicitly cancelled via `cancel_epic` before a new epic can
+        // be created. (Legacy rows from before the propagation rule was
+        // changed may still sit at `failed`; same handling applies.)
         const activeEpic = await EpicTask.findOne({
           where: {
-            status: ["pending", "in_progress"],
+            status: ["pending", "in_progress", "failed"],
           },
           order: [["createdAt", "DESC"]],
         });
@@ -860,11 +902,10 @@ const CODEX_PLAN_SYSTEM_PROMPT =
 
 const CODEX_EXECUTE_SYSTEM_PROMPT_BASE =
   "You are an engineering agent executing one task in a multi-stage epic " +
-  "workflow. You are running in workspace-write sandbox mode inside the " +
-  "repository's working directory — you may Read, Write, Edit, run shell " +
-  "commands, and apply patches. The orchestrator has already synced the " +
-  "stage's feature branch; commit your changes locally as you finish " +
-  "logical units of work.\n\n" +
+  "workflow inside the repository's working directory — you may Read, Write, " +
+  "Edit, run shell commands, and apply patches. The orchestrator has already " +
+  "synced the stage's feature branch; commit your changes locally as you " +
+  "finish logical units of work.\n\n" +
   "Constraints:\n" +
   "- Stay strictly within the task's scope. Do not refactor unrelated code, " +
   "rename files for cosmetics, or 'improve' code outside the task.\n" +
@@ -899,6 +940,43 @@ async function resolveCodexAgentCredential(
     authObject,
     modelSlug,
   };
+}
+
+/**
+ * Mirrors the rule the regular Codex SDK runner already uses
+ * (`codexSdkRunner.ts:662-679`): an agent's `allow_sdk_bash` column gates
+ * the sandbox mode for any Codex run on its behalf. TRUE → full shell
+ * access (`danger-full-access`), FALSE → workspace-bounded
+ * (`workspace-write`). Migration 126 flipped the column default to TRUE
+ * for both vendors, so absence-of-row is treated as TRUE; admins opt OUT
+ * for restricted agents.
+ *
+ * Runtime relevance: when the agent_service container can't host
+ * bubblewrap (e.g. Docker without `seccomp:unconfined`, no
+ * `kernel.unprivileged_userns_clone`), `workspace-write` fails every
+ * shell + write inside Codex with `bwrap: No permissions to create a new
+ * namespace`. `danger-full-access` skips bubblewrap entirely — the
+ * container itself is the trust boundary — so trusted agents can still
+ * execute. Picking the mode from the DB rather than hardcoding it makes
+ * the deployment-level isolation choice explicit at the
+ * agent-permissions layer instead of silently locking up at runtime.
+ */
+async function resolveCodexExecuteSandboxMode(
+  agentId: string,
+): Promise<"workspace-write" | "danger-full-access"> {
+  try {
+    const agentRow = await Agent.findByPk(agentId, {
+      attributes: ["allowSdkBash"],
+    });
+    const allowBash = agentRow?.allowSdkBash !== false;
+    return allowBash ? "danger-full-access" : "workspace-write";
+  } catch (err: any) {
+    logger.warn(
+      "resolveCodexExecuteSandboxMode: agent lookup failed — defaulting to workspace-write",
+      { agentId, error: err?.message },
+    );
+    return "workspace-write";
+  }
 }
 
 /**
@@ -982,8 +1060,9 @@ export function PlanEpicTaskCodexTool(callerAgentId: string) {
         if (!plan) {
           return (
             `Codex returned an empty plan. The model halted without ` +
-            `producing output — try a higher-capacity model, or skip the ` +
-            `plan phase and go directly to \`start_epic_task_codex\`.`
+            `producing output — retry, or try a higher-capacity model. ` +
+            `\`start_epic_task_codex\` requires a plan and will refuse to ` +
+            `run without one.`
           );
         }
 
@@ -992,9 +1071,9 @@ export function PlanEpicTaskCodexTool(callerAgentId: string) {
           `Repository cwd: \`${cwd}\` (read-only scan completed)\n\n` +
           `${plan}\n\n` +
           `---\n` +
-          `Pass this plan to \`start_epic_task_codex\` via the \`plan\` ` +
-          `parameter when you're ready to execute. The execute step runs ` +
-          `the same model with workspace-write sandbox to apply the changes.`
+          `Pass this plan VERBATIM to \`start_epic_task_codex\` via the ` +
+          `\`plan\` parameter to execute. The execute step runs the same ` +
+          `model with workspace-write sandbox to apply the changes.`
         );
       } catch (err: any) {
         logger.error("PlanEpicTask: failed", {
@@ -1007,11 +1086,13 @@ export function PlanEpicTaskCodexTool(callerAgentId: string) {
     {
       name: "plan_epic_task",
       description:
-        "Optional read-only scout for the next ready epic task. Runs Codex against the repo " +
-        "with the sandbox pinned to read-only and asks for a structured Markdown plan (steps, " +
-        "files to modify, risks, validation). Does NOT mark the task in_progress or modify any " +
-        "files — pure inspection. Use BEFORE `start_epic_task_codex` for consequential tasks " +
-        "(migrations, user-visible changes); skip for trivial edits.",
+        "Required read-only planning pass for the next ready epic task. Runs Codex against the " +
+        "repo with the sandbox pinned to read-only and asks for a structured Markdown plan " +
+        "(steps, files to modify, risks, validation). Does NOT mark the task in_progress or " +
+        "modify any files — pure inspection.\n\n" +
+        "**Call ORDER is fixed:** call this FIRST, then pass its returned Markdown into " +
+        "`start_epic_task_codex` via the `plan` parameter. `start_epic_task_codex` will refuse " +
+        "to run without a plan — there is no \"skip planning\" path on the Codex flow.",
       schema: z.object({}),
     },
   );
@@ -1021,15 +1102,25 @@ export function PlanEpicTaskCodexTool(callerAgentId: string) {
  * Begin work on the next ready task via the Codex SDK. Auto-resolves the
  * active epic + task, runs `preExecutionSync` (stage branch checkout),
  * marks the task in_progress, snapshots HEAD, then runs ONE Codex SDK
- * session with `sandboxMode: "workspace-write"` against the repo. Codex
- * plans + executes inside its own loop; we just capture the result.
+ * session against the repo. Codex plans + executes inside its own loop;
+ * we just capture the result.
+ *
+ * Sandbox mode is picked from the orchestrator agent's `allow_sdk_bash`
+ * column via `resolveCodexExecuteSandboxMode` — TRUE → `danger-full-
+ * access`, FALSE → `workspace-write`. Same rule the regular Codex SDK
+ * runner uses for chat turns (codexSdkRunner.ts:662-679), so an agent's
+ * trust level is consistent across "talk to me" and "execute an epic
+ * task on my behalf" surfaces.
  *
  * After this returns, the orchestrator MUST call `complete_epic_task` to
  * finalize (capture diff, mark status, persist summary, emit
  * EPIC_CONTINUATION marker) — same lifecycle finalize as the Anthropic
  * sub-agent path uses.
  */
-export function StartEpicTaskCodexTool(callerAgentId: string) {
+export function StartEpicTaskCodexTool(
+  callerAgentId: string,
+  sessionCtx?: { threadId: string; sessionWorkspacePath: string | null },
+) {
   return tool(
     async (input) => {
       try {
@@ -1043,11 +1134,40 @@ export function StartEpicTaskCodexTool(callerAgentId: string) {
           );
         }
 
-        const { epic, cwd, next } = await resolveActiveEpicRepoCwd();
+        const { epic, cwd: repoCwd, next } = await resolveActiveEpicRepoCwd();
+
+        // Resolve stage kind up front — drives cwd selection (plan stages
+        // write deliverables into the per-thread session folder; code_change
+        // stages write code into the repo). `next.stage` is not eager-loaded
+        // by `resolveNextRetryableTask`, so do an explicit lookup here.
+        const stage = await TaskStage.findByPk(next.taskStageId);
+        const stageKind = stage?.kind ?? "code_change";
+
+        // Per-thread session folder (where plan-stage deliverables live).
+        // For code_change stages this is still surfaced to codex in the
+        // prompt as a scratch/notes target, but cwd stays at the repo so
+        // `git`/edit/commit flows remain natural.
+        const sessionWorkspacePath = sessionCtx?.sessionWorkspacePath ?? null;
+        if (sessionWorkspacePath) {
+          // Idempotent: creates `<workspacePath>/threads/<threadId>/` if it
+          // doesn't already exist + chowns to `agent` so codex (su-exec'd to
+          // agent) can write inside it without EACCES.
+          await ensureSessionWorkspace(sessionWorkspacePath);
+        }
+
+        const isPlanStage = stageKind === "plan";
+        const cwd =
+          isPlanStage && sessionWorkspacePath
+            ? sessionWorkspacePath
+            : repoCwd;
 
         // Lifecycle preflight (same shape as the Anthropic StartEpicTaskTool):
         // sync the stage branch, mark in_progress, snapshot HEAD onto the
         // execution row's metadata so complete_epic_task can diff against it.
+        // `preExecutionSync` and the HEAD snapshot run against the REPO,
+        // regardless of the codex cwd — plan stages still need a stage
+        // branch (so any commits/PR review hooks line up), and the
+        // pre/post-run diff is always anchored on the repo's HEAD.
         await preExecutionSync(epic.id, next.id);
         await next.update({
           status: "in_progress" as AgentTaskStatus,
@@ -1057,45 +1177,95 @@ export function StartEpicTaskCodexTool(callerAgentId: string) {
 
         let preRunSha: string | null = null;
         try {
-          preRunSha = gitAsAgent(cwd, ["rev-parse", "HEAD"]) || null;
+          preRunSha = gitAsAgent(repoCwd, ["rev-parse", "HEAD"]) || null;
         } catch (err: any) {
           logger.warn("StartEpicTaskCodex: failed to snapshot HEAD (non-fatal)", {
             taskId: next.id,
-            cwd,
+            cwd: repoCwd,
             error: err?.message,
           });
         }
+
+        const plan = input.plan.trim();
 
         const execution = await startExecution(next.id, {
           prompt: next.description ?? next.title,
           metadata: {
             ...(preRunSha ? { pre_run_sha: preRunSha } : {}),
             executor: "codex",
-            ...(input.plan ? { plan: input.plan } : {}),
+            stage_kind: stageKind,
+            cwd,
+            ...(sessionWorkspacePath ? { session_workspace_path: sessionWorkspacePath } : {}),
+            plan,
           },
         });
 
-        // Compose the system prompt. When the orchestrator passes a plan
-        // (typical when `plan_epic_task` ran first), append it as a
-        // mandatory blueprint — telling Codex it's already been thought
-        // through and to follow the steps rather than re-derive them.
-        const systemPrompt = input.plan
-          ? `${CODEX_EXECUTE_SYSTEM_PROMPT_BASE}\n\n` +
-            `## Pre-approved plan to follow\n` +
-            `An earlier read-only scout produced this plan. Treat it as the ` +
-            `blueprint for execution — deviate only if you find the repo ` +
-            `state contradicts an assumption in the plan, and explicitly note ` +
-            `the deviation in your final summary.\n\n` +
-            `${input.plan.trim()}`
-          : CODEX_EXECUTE_SYSTEM_PROMPT_BASE;
+        // Build the system prompt. Always carry the pre-approved plan; then
+        // append a per-stage-kind addendum spelling out where writes are
+        // allowed. With cwd=session-folder for plan stages, codex's
+        // relative-path Reads land in the session folder (mostly empty), so
+        // the prompt names the repo's absolute path as the read target.
+        // For code_change stages cwd is the repo (as before), and the
+        // session folder is offered as a scratch/notes target by absolute
+        // path — code edits still go inside cwd.
+        const planAddendum =
+          `## Pre-approved plan to follow\n` +
+          `An earlier read-only scout produced this plan. Treat it as the ` +
+          `blueprint for execution — deviate only if you find the repo ` +
+          `state contradicts an assumption in the plan, and explicitly note ` +
+          `the deviation in your final summary.\n\n` +
+          plan;
 
-        const userPrompt =
-          `Task title: ${next.title}\n\n` +
-          `Task description:\n${next.description ?? "(no description)"}\n\n` +
-          `Epic context: ${epic.title}\n\n` +
-          `Execute the task end-to-end. Make the file edits, run any ` +
-          `relevant tests/checks, and commit logical units locally as you ` +
-          `go. Finish with the \`## Files changed\` summary.`;
+        const writeBoundaryAddendum = isPlanStage
+          ? `## Write boundary (plan stage)\n` +
+            `This is a PLAN stage — research-only, no code changes. Your cwd ` +
+            `is the per-thread session workspace, not the product repo:\n` +
+            `- **Write target (cwd):** \`${cwd}\` — put every deliverable ` +
+            `(\`.md\` markdown reports, notes, structured findings) here. ` +
+            `Use relative paths or this absolute path — both resolve to the ` +
+            `same place.\n` +
+            `- **Read target (repo):** \`${repoCwd}\` — read the codebase ` +
+            `using ABSOLUTE paths via \`Read\`/\`Glob\`/\`Grep\`. Do NOT ` +
+            `modify, create, or delete any file inside \`${repoCwd}\`. The ` +
+            `repo is read-only for this stage by convention.\n` +
+            `- Do NOT run \`git\`, \`npm\`, build, or test commands — this ` +
+            `stage produces a written deliverable, not a code change.`
+          : `## Write boundary (code-change stage)\n` +
+            `Your cwd is the product repo:\n` +
+            `- **Write target (cwd):** \`${cwd}\` — apply code edits here ` +
+            `and commit logical units as you go.` +
+            (sessionWorkspacePath
+              ? `\n- **Optional scratch / notes target:** absolute path ` +
+                `\`${sessionWorkspacePath}\` is the per-thread session folder ` +
+                `— if you want to drop intermediate research notes, design ` +
+                `sketches, or anything that is NOT part of the code change, ` +
+                `write \`.md\`/\`.txt\` files there with absolute paths. ` +
+                `Anything you write inside cwd will end up in the PR; ` +
+                `anything you write to the session folder will not.`
+              : "");
+
+        const systemPrompt =
+          `${CODEX_EXECUTE_SYSTEM_PROMPT_BASE}\n\n` +
+          `${planAddendum}\n\n` +
+          writeBoundaryAddendum;
+
+        const userPrompt = isPlanStage
+          ? `Task title: ${next.title}\n\n` +
+            `Task description:\n${next.description ?? "(no description)"}\n\n` +
+            `Epic context: ${epic.title}\n\n` +
+            `Repository to inspect (read-only): \`${repoCwd}\`\n\n` +
+            `Produce your deliverable as a Markdown file inside the session ` +
+            `workspace (your cwd). Use a descriptive filename. End your ` +
+            `final response with a \`## Files changed\` section listing ` +
+            `every file you wrote.`
+          : `Task title: ${next.title}\n\n` +
+            `Task description:\n${next.description ?? "(no description)"}\n\n` +
+            `Epic context: ${epic.title}\n\n` +
+            `Execute the task end-to-end. Make the file edits, run any ` +
+            `relevant tests/checks, and commit logical units locally as you ` +
+            `go. Finish with the \`## Files changed\` summary.`;
+
+        const sandboxMode = await resolveCodexExecuteSandboxMode(callerAgentId);
 
         const result = await runCodexInRepo({
           apiKey: cred.apiKey,
@@ -1104,23 +1274,27 @@ export function StartEpicTaskCodexTool(callerAgentId: string) {
           systemPrompt,
           userPrompt,
           cwd,
-          sandboxMode: "workspace-write",
+          sandboxMode,
           observeName: "codex_start_epic_task",
         });
 
         const finalText = (result.finalText ?? "").trim();
 
-        const stage = (next as any).stage as TaskStage | undefined;
         const stageLabel = stage
           ? `Stage "${stage.title}" (${stage.kind})`
-          : "Stage (unknown)";
+          : `Stage (kind: ${stageKind})`;
 
         return (
           `# Codex Execution Complete: ${next.title}\n\n` +
           `**${stageLabel}**\n\n` +
           `Working directory: \`${cwd}\`\n` +
+          (isPlanStage
+            ? `Read target (repo): \`${repoCwd}\`\n`
+            : sessionWorkspacePath
+              ? `Scratch / notes folder: \`${sessionWorkspacePath}\`\n`
+              : "") +
           `Branch base SHA: ${preRunSha ?? "(unknown)"}\n` +
-          `Plan supplied: ${input.plan ? "yes" : "no"}\n\n` +
+          `Sandbox mode: \`${sandboxMode}\`\n\n` +
           `## Codex final output\n` +
           `${finalText || "(no output)"}\n\n` +
           `---\n` +
@@ -1141,19 +1315,21 @@ export function StartEpicTaskCodexTool(callerAgentId: string) {
       name: "start_epic_task_codex",
       description:
         "Execute the next ready epic task via the Codex SDK. Auto-resolves the epic + task. " +
-        "Runs ONE Codex session against the repo with workspace-write sandbox — codex plans " +
-        "internally and applies file edits within its own loop. Optionally seed it with a plan " +
-        "from `plan_epic_task` for consequential tasks. After this returns, call " +
-        "`complete_epic_task` to finalize (capture diff, mark status, emit continuation). " +
+        "Runs ONE Codex session against the repo with workspace-write sandbox and applies file " +
+        "edits within its own loop.\n\n" +
+        "**Call ORDER is fixed:** first `plan_epic_task` (Codex's read-only planning pass) to " +
+        "produce a Markdown plan, THEN this tool with that plan passed in `plan`. The plan is " +
+        "REQUIRED — this tool does not run without one. After this returns, call " +
+        "`complete_epic_task` to finalize (capture diff, mark status, emit continuation).\n\n" +
         "**Codex-vendor orchestrators only — use `start_epic_task` on Anthropic.**",
       schema: z.object({
         plan: z
           .string()
-          .optional()
+          .min(1)
           .describe(
-            "Optional Markdown plan from a prior `plan_epic_task` call. When supplied, codex " +
-            "treats it as the blueprint for execution. Skip for trivial tasks where planning " +
-            "would be overkill.",
+            "Required. Markdown plan produced by a prior `plan_epic_task` call (Codex's read-only " +
+            "planning pass for this same task). Codex will treat it as the blueprint for execution. " +
+            "Do not pass null or an empty string — call `plan_epic_task` first if you don't have a plan yet.",
           ),
       }),
     },
@@ -2204,14 +2380,13 @@ export function GetEpicTaskStagesAndTasksTool() {
  *      `execute_epic_task` auto-switches to retry mode with `--resume <prev
  *      session>`, preserving prior CLI context.
  *
- * Why we deliberately do NOT call `propagateStatus`: it cascades `failed`
- * upward — task `failed` → stage `failed` → epic `failed`. A `failed` epic is
- * outside `resolveActiveEpic`'s `pending`/`in_progress` filter, which would
- * effectively cancel the whole epic and prevent any further `execute_epic_task`
- * call from finding it. Likewise `resolveNextRetryableTask`'s SQL requires the
- * stage to be `in_progress`, so a `failed` stage would hide the task from the
- * retry fallback. Instead we explicitly pin the affected stage(s) and the epic
- * to `in_progress` after the task flip — that's the state the retry path needs.
+ * `propagateStatus` no longer cascades `failed` up — failure is per-TASK
+ * only — so calling it here would correctly leave the stage and epic at
+ * `in_progress`. We still pin them explicitly after the task flip as a
+ * belt-and-suspenders measure: stages with stuck tasks may have been at
+ * `pending` if the crash happened mid-startup, and the retry path requires
+ * `ts.status='in_progress'` for `resolveNextRetryableTask`'s failed-task
+ * fallback to find the task.
  */
 export function ResetStuckTaskTool() {
   return tool(

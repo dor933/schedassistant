@@ -65,7 +65,10 @@
       "Bash(echo \"client exit=$?\")",
       "WebFetch(domain:developers.openai.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(xargs -I{} sh -c 'grep -l \"skill\\\\|Skill\" \"/home/office/Dev/schedassistant/packages/database/migrations/{}\" 2>/dev/null')"
+      "Bash(xargs -I{} sh -c 'grep -l \"skill\\\\|Skill\" \"/home/office/Dev/schedassistant/packages/database/migrations/{}\" 2>/dev/null')",
+      "Bash(git mv *)",
+      "Bash(git rm *)",
+      "Read(//home/office/.codex/**)"
     ]
   },
   "enableAllProjectMcpServers": true,

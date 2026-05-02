@@ -31,6 +31,7 @@ import type { Request, Response } from "express";
 import { logger } from "../logger";
 import { verifyTurnToken, type TurnTokenClaims } from "../chat/codex/codexBridgeAuth";
 import { lookup } from "../chat/toolRegistry";
+import { observeToolCall } from "../langfuse";
 
 const MAX_TOOL_RESULT_CHARS = 10_000;
 
@@ -268,7 +269,17 @@ export class InternalToolsController {
     let text: string;
     let isError = false;
     try {
-      const rawResult = await tool.invoke(args);
+      // Codex SDK invokes our LangChain tools by HTTP-calling this
+      // controller through its `mcp_server` bridge container. The call
+      // arrives outside any LangChain RunnableConfig context, so the
+      // CallbackHandler from the parent `agent_chat_turn` observation
+      // doesn't see it. Wrap with observeToolCall so the OpenTelemetry
+      // active context (still alive on the originating worker thread
+      // via the turn token's registryId) attaches the tool span under
+      // the same parent in Langfuse.
+      const rawResult = await observeToolCall(toolName, args, () =>
+        tool.invoke(args),
+      );
       text = coerceToolResultToString(rawResult);
     } catch (err) {
       isError = true;

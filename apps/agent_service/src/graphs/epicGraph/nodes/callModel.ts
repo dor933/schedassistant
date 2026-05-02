@@ -49,6 +49,7 @@ import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import {
   ListProjectsTool,
   ListRepositoriesTool,
+  GetRepositoryTool,
   CreateEpicPlanTool,
   StartEpicTaskTool,
   PlanEpicTaskCodexTool,
@@ -74,6 +75,7 @@ import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
 import { runAnthropicAgentSdk, shouldUseAgentSdk } from "../../../chat/anthropic/agentSdkRunner";
 import { runOpenAiCodexSdk, shouldUseCodexSdk } from "../../../chat/codex/codexSdkRunner";
 import { buildSubAgentDefinitions } from "../../../utils/buildSubAgentDefinitions.service";
+import { observeToolCall } from "../../../langfuse";
 
 // Cap the orchestrator's tool-call chain per chat turn. This is the EPIC
 // orchestrator, which legitimately chains many tool calls: setup checks
@@ -239,7 +241,13 @@ export async function epicCallModelNode(
     ...(vendor.vendorSlug === "anthropic"
       ? [StartEpicTaskTool(agentId)]
       : vendor.vendorSlug === "openai"
-        ? [PlanEpicTaskCodexTool(agentId), StartEpicTaskCodexTool(agentId)]
+        ? [
+            PlanEpicTaskCodexTool(agentId),
+            StartEpicTaskCodexTool(agentId, {
+              threadId,
+              sessionWorkspacePath: state.sessionWorkspacePath ?? null,
+            }),
+          ]
         : []),
     CompleteEpicTaskTool({
       threadId,
@@ -271,6 +279,8 @@ export async function epicCallModelNode(
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))
     tools.push(ListRepositoriesTool());
+  if (has("get_repository"))
+    tools.push(GetRepositoryTool());
   if (has("send_file_to_user"))
     tools.push(SendFileToUserTool(agentId));
   if (has("search_epic_tasks_by_date"))
@@ -462,7 +472,16 @@ export async function epicCallModelNode(
           content = `Error: unknown tool "${tc.name ?? ""}".`;
         } else {
           try {
-            const rawResult = await t.invoke(tc.args ?? {});
+            // Tool execution surfaces in Langfuse as a child span of
+            // `agent_chat_turn` (or whichever parent observation is
+            // active) so retry-loop tool calls — list_skills,
+            // get_skill, get_epic_status, etc. — show up alongside the
+            // generation spans in the trace.
+            const rawResult = await observeToolCall(
+              tc.name ?? "unknown_tool",
+              tc.args ?? {},
+              () => t.invoke(tc.args ?? {}),
+            );
             if (typeof rawResult === "string") {
               content = rawResult;
             } else if (Array.isArray(rawResult) && rawResult.length > 0 && typeof rawResult[0] === "string") {

@@ -257,6 +257,80 @@ export function getTrace(): { id: string | undefined } {
 }
 
 /**
+ * Wraps a single tool execution as a child span under the active
+ * observation. Used by the legacy `bindTools` loops in basic/epic/
+ * roundtable graphs AND by the SDK MCP bridges (Anthropic adapter,
+ * Codex internal-tools controller) so every place a `StructuredTool`
+ * actually runs emits a Langfuse span — input = the tool args, output
+ * = the tool's text result.
+ *
+ * Why this exists separately from `observeWithContext`:
+ *   - Span name is conventional (`tool: <name>`) so tool-execution
+ *     spans are visually distinct from generic observations.
+ *   - No `flushLangfuse` after each call — the parent observation
+ *     (typically `agent_chat_turn` / `roundtable_turn`) flushes once at
+ *     the end. With multiple tool calls per turn, per-call flushes are
+ *     wasted network round-trips.
+ *   - Errors are recorded on the span before rethrowing so a failing
+ *     tool still shows up in the trace instead of disappearing under
+ *     the parent's exception.
+ *
+ * No-op when Langfuse isn't configured. Never breaks the caller — if
+ * the span SDK throws for any reason, the underlying `fn()` still runs
+ * and its result/exception is returned/rethrown unchanged.
+ */
+export async function observeToolCall<T>(
+  toolName: string,
+  args: unknown,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!isLangfuseConfigured()) return fn();
+  try {
+    return await startActiveObservation(
+      `tool: ${toolName}`,
+      async (span: LangfuseSpan) => {
+        try {
+          span.update({ input: args });
+        } catch {
+          /* tracing must never break the call */
+        }
+        try {
+          const output = await fn();
+          try {
+            const serialized =
+              typeof output === "object" && output !== null
+                ? JSON.parse(JSON.stringify(output))
+                : output;
+            span.update({ output: serialized });
+          } catch {
+            span.update({ output: { result: String(output) } });
+          }
+          return output;
+        } catch (err) {
+          try {
+            span.update({
+              output: {
+                error: err instanceof Error ? err.message : String(err),
+              },
+            });
+          } catch {
+            /* swallow */
+          }
+          throw err;
+        }
+      },
+    );
+  } catch (outerErr) {
+    // If the tracing layer itself blew up, fall back to the raw call so
+    // observability never blocks execution.
+    if (outerErr instanceof Error && outerErr.message.includes("startActiveObservation")) {
+      return fn();
+    }
+    throw outerErr;
+  }
+}
+
+/**
  * Emits a Langfuse "generation" span for one LLM call. Use this from
  * the SDK runners — once per assistant turn (Anthropic SDK `assistant`
  * event, Codex SDK `agent_message` item) — so each round trip shows

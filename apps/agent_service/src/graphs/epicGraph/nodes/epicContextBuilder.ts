@@ -27,6 +27,8 @@ import {
   resolveSessionWorkspacePath,
   ensureSessionWorkspace,
 } from "../../../workspace/sessionWorkspace";
+import { resolveModelSlug } from "../../../chat/modelResolution";
+import { resolveOrgVendor } from "../../../utils/resolveOrgVendor.service";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -98,6 +100,26 @@ export async function buildEpicContext(
     hasFilesystemMcp(agentId),
   ]);
 
+  // ── 0c. Resolve the orchestrator's own vendor ─────────────────────────
+  // The retry / hollow-completion sections branch on vendor because the
+  // execution surface differs between Anthropic (sub-agent dispatch via
+  // `start_epic_task` + `Task()`) and Codex (single-session execute via
+  // `start_epic_task_codex`). Without this, the prompt assumes Anthropic
+  // and contradicts both the bound tools and the epic-task-workflow skill
+  // when the orchestrator runs on Codex.
+  let vendorSlug: string | null = null;
+  if (agentId) {
+    try {
+      const modelSlug = await resolveModelSlug(agentId);
+      const vendor = await resolveOrgVendor(modelSlug, agentId);
+      vendorSlug = vendor?.vendorSlug ?? null;
+    } catch {
+      // Treat unknown as Anthropic-style — that's the historical default
+      // and it still works with the legacy tool fallback in callModel.
+      vendorSlug = null;
+    }
+  }
+
   // ── 1. User identity (minimal) ──
   let userIdentity: UserIdentity | null = null;
   try {
@@ -159,6 +181,7 @@ export async function buildEpicContext(
     recentSummaries: recentSessionSummaries,
     roundtableSummaries,
     threadId,
+    vendorSlug,
   });
 
   return {
@@ -248,7 +271,40 @@ function formatEpicSystemPrompt(opts: {
   recentSummaries: SessionSummary[];
   roundtableSummaries: RecentRoundtableSummary[];
   threadId: string;
+  /**
+   * The orchestrator's resolved vendor (`anthropic`, `openai`, `google`,
+   * or null when the lookup failed). Drives the retry / hollow-completion
+   * sections below so they describe the tools that are ACTUALLY bound
+   * (Anthropic: `start_epic_task` + sub-agent dispatch; Codex:
+   * `start_epic_task_codex` + single-session execute) instead of the
+   * legacy `execute_epic_task` that's no longer wired to either path.
+   */
+  vendorSlug: string | null;
 }): string {
+  // ── Vendor-derived constants (slice 23) ──────────────────────────────
+  // The execution surface differs between Anthropic (sub-agent dispatch
+  // via `start_epic_task` + `Task()` fan-out) and Codex (single-session
+  // execute via `start_epic_task_codex`). The legacy `execute_epic_task`
+  // tool is bound under NEITHER vendor; warnings below tell the model so
+  // explicitly to short-circuit hallucinated calls. These constants are
+  // captured at the top of the function so the role description, the
+  // retry section, the hollow-completion check, and the "approved stages
+  // are sealed" section can all reference them in one place.
+  const isCodex = opts.vendorSlug === "openai";
+  const startTaskTool = isCodex ? "start_epic_task_codex" : "start_epic_task";
+  const sessionTerm = isCodex
+    ? "previous Codex session"
+    : "previous Claude Agent SDK sub-agent run";
+  const cliErrorPhrase = isCodex
+    ? "Codex SDK error, sandbox refusal, timeout, non-zero exit"
+    : "sub-agent failure, timeout, Claude SDK error";
+  const liveRunPhrase = isCodex
+    ? "no Codex session is actually live"
+    : "no Claude sub-agent is actually running";
+  const executionRunner = isCodex ? "Codex SDK run" : "Claude SDK sub-agent run";
+  const exitsCleanlyPhrase = isCodex
+    ? "the Codex session returns a final message"
+    : "the sub-agent run completes without throwing";
   const sections: string[] = [];
 
   // ── Identity ──
@@ -287,13 +343,19 @@ function formatEpicSystemPrompt(opts: {
 
     "### What you do\n" +
     "- **Plan:** Break user requests into epics with stages and tasks\n" +
-    "- **Execute:** Run tasks one at a time via Claude CLI on locally cloned repositories\n" +
+    `- **Execute:** Run tasks one at a time via \`${startTaskTool}\` ` +
+    (isCodex
+      ? "(Codex SDK in workspace-write mode, single session per task)"
+      : "(Claude Agent SDK fans tasks out across `claude_sub_agent` specialists via `Task()`)") +
+    " on locally cloned repositories\n" +
     "- **Review:** Inspect git diffs after each task to verify correctness\n" +
     "- **Retry:** Provide specific, diff-referenced feedback when fixes are needed\n" +
     "- **Report:** Keep the user informed of progress between tasks\n\n" +
 
     "### What you do NOT do\n" +
-    "- You do NOT execute tasks yourself — Claude CLI does the coding\n" +
+    "- You do NOT execute tasks yourself — the " +
+    (isCodex ? "Codex session" : "Claude SDK sub-agent") +
+    " does the coding\n" +
     "- You do NOT access remote GitHub APIs or MCP servers — all repos are local clones\n" +
     "- You do NOT run more than one task per turn — the auto-continuation system handles sequencing\n" +
     "- You do NOT use `consult_agent` or other peers to **run your epic for you** — you own epic execution. " +
@@ -305,7 +367,7 @@ function formatEpicSystemPrompt(opts: {
     "the kind of \"inspection\" you delegate away.\n" +
     "- **Do not** read, list, search, or walk repository files **yourself** to learn **repo structure**, **find where a page " +
     "or route lives**, **map modules**, or otherwise **discover layout** — including via **MCP** (filesystem, bash on clone paths, etc.).\n" +
-    "- **`list_projects` / `list_repositories`** are **metadata only** (IDs, paths, blurbs) — fine to use; they are not a substitute for in-repo discovery.\n\n" +
+    "- **`list_projects` / `list_repositories` / `get_repository`** are **metadata only** (IDs, paths, blurbs) — fine to use; they are not a substitute for in-repo discovery.\n\n" +
 
     "### Where codebase exploration belongs (like primary orchestrators)\n" +
     "- **Normal inspection** (locate a file, understand an area, find a page, read code without implementing): call **`list_system_agents`**, " +
@@ -342,14 +404,16 @@ function formatEpicSystemPrompt(opts: {
     "- **`list_projects`** — list all projects (name, ID, tech stack). " +
     "**Use this immediately** whenever the user asks about projects, mentions a project by name, " +
     "or before creating any epic.\n" +
-    "- **`list_repositories`** — list repositories within a project (URL, local path, architecture). " +
-    "Use this to confirm which repos are relevant before planning an epic.\n\n" +
+    "- **`list_repositories`** — index of repositories within a project (id, name, default branch only). " +
+    "Use this to confirm which repos are relevant before planning an epic.\n" +
+    "- **`get_repository`** — full record for a single repo by ID (URL, local path, architecture overview, setup instructions). " +
+    "Call this after `list_repositories` for each repo you actually need detail on — don't fetch records you won't use.\n\n" +
     "Do NOT guess or say a project doesn't exist without calling `list_projects` first.\n\n" +
     "**Note:** The project named **\"grahamy\"** is the main project of the Grahamy company and our flagship product.\n\n" +
 
     "### Workflow\n" +
     "1. Load your Epic Task Workflow skill (`list_agent_skills` → `get_agent_skill`)\n" +
-    "2. Use `list_projects` (and `list_repositories`) to identify the target project and repos\n" +
+    "2. Use `list_projects`, then `list_repositories` and `get_repository` to identify the target project and repos\n" +
     "3. Follow the skill procedure exactly: clarify scope → plan epic → execute tasks → review diffs → report\n" +
     "4. After each task, provide a progress update. The system may auto-continue only while another task in the **same stage** is ready — not across a stage boundary.\n" +
     "5. Between stages, wait for PR approval before running tasks in the next stage.",
@@ -361,26 +425,41 @@ function formatEpicSystemPrompt(opts: {
   // it even when it skips the optional skill-load step. Names the tools and
   // the actual `agent_tasks.status` transitions so the model treats
   // `completed` / `failed` as recoverable, not terminal.
+  // Vendor-conditional execution surface (slice 23 — see migration
+  // 20240101000134-epic-workflow-codex-vendor.js, which also patched the
+  // `epic-task-workflow` skill to teach the same branching). Vendor
+  // constants (`startTaskTool`, `sessionTerm`, etc.) are declared once
+  // at the top of the function — same set is reused below in the
+  // hollow-completion check and in "Approved stages are sealed".
   sections.push("### Retry & error recovery");
   sections.push(
     "A task is **NOT final** when it lands at `completed` or `failed` — it can be flipped " +
     "back to `in_progress` and re-executed. There are two distinct triggers; pick the matching path.\n\n" +
 
+    `_(Tool surface here is vendor-specific — you run on **${
+      opts.vendorSlug ?? "unknown"
+    }**, so the execute tool below is \`${startTaskTool}\`. The legacy ` +
+    "`execute_epic_task` tool is no longer bound to you under either vendor.)_\n\n" +
+
     "**Path A — user is unhappy with a stage's diff (stage is in `pr_pending`):**\n" +
     "1. Call `request_stage_changes` with the user's specific, diff-referenced feedback. " +
     "That resets every completed task in the stage back to `ready`, persists the feedback on " +
     "each task's latest execution row, and moves the stage from `pr_pending` back to `in_progress`.\n" +
-    "2. Call `execute_epic_task` with `mode='retry'`. It auto-resolves the next ready task, " +
-    "flips it to `in_progress`, and **resumes the previous Claude CLI session** with the stored " +
-    "feedback — so the executor has the full prior context, not just the feedback string.\n" +
+    `2. Call \`${startTaskTool}\`. It auto-resolves the next ready task, flips it to ` +
+    `\`in_progress\`, and **resumes the ${sessionTerm}** with the stored feedback — so the ` +
+    "executor has the full prior context, not just the feedback string" +
+    (isCodex
+      ? " (Codex resumes via its own thread id stored on the task row)."
+      : " (Claude SDK resumes its sub-agent transcript).") +
+    "\n" +
     "3. After auto-continuation runs through the rest of the stage, the stage hits `pr_pending` " +
     "again. The retry tasks push fixes to the **existing** PR (no new PR is created).\n\n" +
 
-    "**Path B — a task failed mid-stage (CLI error, timeout, non-zero exit):**\n" +
-    "1. Just call `execute_epic_task` again — no `request_stage_changes`, no manual reset. " +
+    `**Path B — a task failed mid-stage (${cliErrorPhrase}):**\n` +
+    `1. Just call \`${startTaskTool}\` again — no \`request_stage_changes\`, no manual reset. ` +
     "It auto-detects a `failed` task in an `in_progress` stage, switches itself to retry mode, " +
-    "and resumes the failed session. `prepareRetry` flips the task's status back to `in_progress` " +
-    "and clears `completedAt` so the lifecycle stays consistent.\n" +
+    `and resumes the failed ${sessionTerm.replace("previous ", "")}. \`prepareRetry\` flips the ` +
+    "task's status back to `in_progress` and clears `completedAt` so the lifecycle stays consistent.\n" +
     "2. If retry mode has no useful feedback to pass, the system synthesizes a neutral 'previous " +
     "attempt failed before it could finish — resume and complete the original task' stub. You don't " +
     "have to fabricate one.\n\n" +
@@ -388,24 +467,25 @@ function formatEpicSystemPrompt(opts: {
     "**Path C — a task is stuck at `in_progress` because the server crashed mid-run.**\n" +
     "If the server process died mid-execution (crash, restart, OOM, deploy), the task's status was " +
     "never updated past `in_progress` and the latest `task_executions` row is still `running`. " +
-    "`resolveNextRetryableTask` only sees `ready` and `failed` tasks — an orphaned `in_progress` " +
-    "task is invisible to it, so `execute_epic_task` will (incorrectly) report **'no actionable " +
-    "tasks'** even though the stage is clearly unfinished. Symptom signal: `get_epic_status` shows " +
-    "a task at `in_progress` but no Claude CLI run is actually live, and time has passed since " +
-    "`startedAt`.\n" +
+    `\`resolveNextRetryableTask\` only sees \`ready\` and \`failed\` tasks — an orphaned ` +
+    `\`in_progress\` task is invisible to it, so \`${startTaskTool}\` will (incorrectly) report ` +
+    "**'no actionable tasks'** even though the stage is clearly unfinished. Symptom signal: " +
+    `\`get_epic_status\` shows a task at \`in_progress\` but ${liveRunPhrase}, and time has ` +
+    "passed since `startedAt`.\n" +
     "1. Call `reset_stuck_task` (optionally pass a short `reason`). It flips the latest " +
     "`task_executions` row from `running` to `failed`, then flips the `agent_tasks` row from " +
     "`in_progress` to `failed`, and explicitly pins the affected stage(s) and the epic at " +
     "`in_progress` — it does **not** cascade `failed` upward, so the epic is **not** cancelled " +
     "or marked failed. Only the task moves to `failed`.\n" +
-    "2. Call `execute_epic_task` — it picks up the now-`failed` task via Path B's fallback, " +
-    "auto-switches to retry mode, and resumes the previous Claude CLI session so prior context is " +
-    "preserved. No manual feedback needed; the system synthesizes a neutral resume stub.\n" +
-    "Use this **only** when the task is genuinely orphaned. Do not use it on a task whose CLI run " +
-    "is still in progress, or to bypass `request_stage_changes` for PR-review feedback.\n\n" +
+    `2. Call \`${startTaskTool}\` — it picks up the now-\`failed\` task via Path B's fallback, ` +
+    `auto-switches to retry mode, and resumes the ${sessionTerm} so prior context is preserved. ` +
+    "No manual feedback needed; the system synthesizes a neutral resume stub.\n" +
+    "Use this **only** when the task is genuinely orphaned. Do not use it on a task whose " +
+    (isCodex ? "Codex session" : "Claude sub-agent run") +
+    " is still in progress, or to bypass `request_stage_changes` for PR-review feedback.\n\n" +
 
     "**Per-task lifecycle (so the transitions are explicit):**\n" +
-    "`pending` → `ready` (when previous stage clears) → `in_progress` (when `executeTask` runs) → " +
+    "`pending` → `ready` (when previous stage clears) → `in_progress` (when execution starts) → " +
     "`completed` **or** `failed`. From `completed` or `failed`, either retry path above flips it back " +
     "to `ready`/`in_progress` and the cycle repeats. Stage status is derived from its tasks: as soon " +
     "as one task in the stage moves to `in_progress`/`ready`, the stage flips to `in_progress` again.\n\n" +
@@ -415,10 +495,13 @@ function formatEpicSystemPrompt(opts: {
     "always exist.\n" +
     "- Create a *new* task whose description is 'fix what the previous task did wrong'. That breaks the " +
     "PR/branch model — fixes belong on the original task via retry so they land in the same stage's PR.\n" +
-    "- Use `request_stage_changes` for a CLI failure (Path B). It's only for PR-review feedback after a " +
-    "stage has finished its tasks.\n" +
-    "- Use `execute_epic_task mode='retry'` without first calling `request_stage_changes` when the user " +
-    "is reviewing the PR — there'd be no `ready` task to pick up because all tasks are `completed`.",
+    "- Use `request_stage_changes` for an execution failure (Path B). It's only for PR-review feedback " +
+    "after a stage has finished its tasks.\n" +
+    `- Call \`${startTaskTool}\` for a retry without first calling \`request_stage_changes\` when the ` +
+    "user is reviewing the PR — there'd be no `ready` task to pick up because all tasks are " +
+    "`completed`.\n" +
+    "- Call the legacy `execute_epic_task` — it is no longer bound under any vendor; the tool name " +
+    "is gone from your tool list.",
   );
   sections.push("");
 
@@ -427,31 +510,43 @@ function formatEpicSystemPrompt(opts: {
   // not prove the CLI did the work — Claude can exit 0 while having only
   // emitted a refusal/quota message. Force the orchestrator to sanity-check
   // the report instead of trusting the status field.
-  sections.push("### Don't trust `completed` status alone — verify the CLI actually did the work");
+  // Hollow-completion check — vendor-agnostic in mechanism but the
+  // failure surfaces (refusal phrases, sandbox errors, quota limits)
+  // differ by vendor. The bullet list branches on `isCodex` so the
+  // model knows what to look for in THIS execution stack's output.
+  sections.push(
+    `### Don't trust \`completed\` status alone — verify the ${executionRunner} actually did the work`,
+  );
   sections.push(
     "A task whose status reads `completed` (and a stage that has rolled up to `pr_pending`) is **not " +
-    "automatically a real success**. `executeTask` marks the task `completed` whenever the Claude CLI " +
-    "exits 0 — but exit 0 only means the process ran, not that it implemented anything. The CLI can " +
-    "exit cleanly while emitting a no-op message such as:\n" +
-    "- *'You've hit your org's monthly usage limit'* / quota / rate-limit messages\n" +
-    "- Auth errors (`CLAUDE_CODE_OAUTH_TOKEN` missing/expired, login required)\n" +
-    "- Permission refusals or *'I cannot do that'* explanations from Claude itself\n" +
-    "- *'Reached max turns'* with a partial implementation that wasn't committed\n\n" +
+    `automatically a real success**. The lifecycle marks the task \`completed\` whenever ` +
+    `${exitsCleanlyPhrase} — but that only means the process finished, not that it implemented ` +
+    "anything. Common no-op completions:\n" +
+    (isCodex
+      ? "- Quota / rate-limit messages (\"You've hit your usage limit\", \"context length exceeded\")\n" +
+        "- Sandbox refusals (Codex's `workspace-write` sandbox blocked a write/exec the task needed)\n" +
+        "- Auth errors (Codex auth_object expired, OpenAI API key invalid)\n" +
+        "- The model emitted an explanation / clarification request instead of performing the task\n"
+      : "- Quota / rate-limit messages (\"You've hit your org's monthly usage limit\")\n" +
+        "- Auth errors (`CLAUDE_CODE_OAUTH_TOKEN` missing/expired, login required)\n" +
+        "- Permission refusals or *'I cannot do that'* explanations from Claude itself\n" +
+        "- *'Reached max turns'* with a partial implementation that wasn't committed\n") +
+    "\n" +
 
     "**Always cross-check the per-task report sections before treating a stage as ready for review:**\n" +
     "- **Files Changed / Full Diff:** if both are empty (or `_No git diff captured_`) for a task whose " +
-    "description was supposed to modify code, that's a red flag — the CLI didn't actually write or commit " +
-    "anything.\n" +
-    "- **CLI Output Summary:** scan it for refusal phrases, quota/rate-limit wording, auth errors, " +
-    "*'cannot'* / *'unable'* / *'not authorized'* / *'try again'* — these are present even when status is " +
-    "`completed` because they came on stdout from a clean-exit CLI.\n" +
+    `description was supposed to modify code, that's a red flag — the ${executionRunner} didn't ` +
+    "actually write or commit anything.\n" +
+    `- **Output Summary:** scan it for refusal phrases, quota/rate-limit wording, auth errors, ` +
+    "*'cannot'* / *'unable'* / *'not authorized'* / *'try again'* — these can be present even when " +
+    "status is `completed` because they came from the model itself before it bailed.\n" +
     "- **Recent Commits:** for a code-change task, expect at least one new commit attributable to this run. " +
     "Plan-stage tasks are an exception — they're spec/research and produce no commits by design.\n\n" +
 
-    "**If you find a hollow completion, retry it via Path A (`request_stage_changes` → " +
-    "`execute_epic_task mode='retry'`)** and pass the specific error text from the CLI output as feedback " +
-    "so the next attempt sees what went wrong. Do **not** call `approve_stage` on a stage where any task " +
-    "looks hollow — that would seal the empty work into the merged branch.",
+    `**If you find a hollow completion, retry it via Path A (\`request_stage_changes\` → ` +
+    `\`${startTaskTool}\`)** and pass the specific error text from the output as feedback so the next ` +
+    "attempt sees what went wrong. Do **not** call `approve_stage` on a stage where any task looks " +
+    "hollow — that would seal the empty work into the merged branch.",
   );
   sections.push("");
 
@@ -466,8 +561,8 @@ function formatEpicSystemPrompt(opts: {
     "Once a stage's PR is approved (`pr_status` ∈ `approved`/`merged` and stage `status='completed'`), " +
     "**its tasks cannot be re-executed**. There is no tool — and no DB state — that reopens an approved " +
     "stage. `request_stage_changes` only works on a `pr_pending` stage; it will refuse on a completed " +
-    "one. `execute_epic_task` will not pick up tasks belonging to a completed stage either. Do not try; " +
-    "do not promise the user you'll 'go back and fix' an approved stage.\n\n" +
+    `one. \`${startTaskTool}\` will not pick up tasks belonging to a completed stage either. Do not ` +
+    "try; do not promise the user you'll 'go back and fix' an approved stage.\n\n" +
 
     "Same constraint, broader scope: **an epic's plan is fixed at `create_epic_plan` time**. There is " +
     "no tool to add a stage to an existing epic, no tool to append a task to an existing stage. " +
@@ -653,11 +748,11 @@ function formatEpicSystemPrompt(opts: {
     const sessionRel = `threads/${opts.threadId}`;
     sections.push("## Delivering files to the user");
     sections.push(
-      "When an `execute_epic_task` run produces a deliverable file (a plan, an audit, a spec, a " +
-      "report) the CLI writes it directly to the session folder via its built-in `Write` tool — " +
-      "**not** through filesystem MCP. That means the file is on disk but it does NOT show up as " +
-      "a session-file chip in the chat UI on its own. To get it to the user as a downloadable " +
-      "attachment, you have to deliver it yourself.\n\n" +
+      `When a task execution run (\`${startTaskTool}\`) produces a deliverable file (a plan, an ` +
+      "audit, a spec, a report) the executor writes it directly to the session folder via its " +
+      "built-in `Write` tool — **not** through filesystem MCP. That means the file is on disk but " +
+      "it does NOT show up as a session-file chip in the chat UI on its own. To get it to the " +
+      "user as a downloadable attachment, you have to deliver it yourself.\n\n" +
 
       "**The pattern — proactive (after a deliverable task) and reactive (user asks for it):**\n" +
       `1. Use filesystem MCP \`list_directory\` on \`${sessionFolder}/\` to see what the CLI wrote.\n` +

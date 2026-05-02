@@ -59,7 +59,7 @@ import { agentSkillTools } from "../tools/skillsTools";
 import { ConsultAgentTool } from "../tools/consultAgentTool";
 import { ListAgentsTool } from "../tools/listAgentsTool";
 import { ListSystemAgentsTool } from "../tools/listSystemAgentsTool";
-import { ListProjectsTool, ListRepositoriesTool } from "../tools/epicTaskTools";
+import { ListProjectsTool, ListRepositoriesTool, GetRepositoryTool } from "../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../tools/queryDatabaseTool";
 import { SendFileToUserTool } from "../tools/sendFileTool";
 import { TavilySearchTool } from "../tools/tavilySearchTool";
@@ -144,6 +144,8 @@ async function buildSubAgentTools(
     tools.push(ListProjectsTool(ctx.userId));
   if (has("list_repositories"))
     tools.push(ListRepositoriesTool());
+  if (has("get_repository"))
+    tools.push(GetRepositoryTool());
   if (has("query_database"))
     tools.push(QueryDatabaseTool());
   if (has("send_file_to_user"))

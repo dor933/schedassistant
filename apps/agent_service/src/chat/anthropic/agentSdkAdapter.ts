@@ -26,6 +26,7 @@ import { z } from "zod";
 
 import { loadClaudeAgentSdk } from "./agentSdkLoader";
 import { logger } from "../../logger";
+import { observeToolCall } from "../../langfuse";
 
 /**
  * Server name used in the SDK's `mcpServers` map. Tool names exposed to the
@@ -258,7 +259,16 @@ export async function createAgentToolsMcpServer(
       async (args: Record<string, unknown>) => {
         let text: string;
         try {
-          const rawResult = await t.invoke(args ?? {});
+          // The Claude Agent SDK calls into this MCP-bridged tool
+          // outside any LangChain RunnableConfig, so the LangChain
+          // CallbackHandler that `executeChatTurn` attaches to the
+          // graph never sees this invocation. Wrap explicitly with
+          // observeToolCall so every Anthropic-vendor tool call
+          // (list_agent_skills, get_agent_skill, recall_episodic_memory,
+          // ...) shows up under the active parent span in Langfuse.
+          const rawResult = await observeToolCall(t.name, args ?? {}, () =>
+            t.invoke(args ?? {}),
+          );
           text = coerceToolResultToString(rawResult);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

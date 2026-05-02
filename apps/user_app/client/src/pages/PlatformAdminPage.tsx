@@ -1145,28 +1145,40 @@ function SkillRow({
             )}
           </div>
         </div>
-        {!skill.locked && (
-          <div className="flex flex-shrink-0 items-center gap-2">
-            <GhostButton onClick={() => setEditing((v) => !v)}>
-              {editing ? (
-                <>
-                  <X className="h-3.5 w-3.5" /> Cancel
-                </>
-              ) : (
-                <>
-                  <Pencil className="h-3.5 w-3.5" /> Edit
-                </>
-              )}
-            </GhostButton>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <GhostButton onClick={() => setEditing((v) => !v)}>
+            {editing ? (
+              <>
+                <X className="h-3.5 w-3.5" /> Cancel
+              </>
+            ) : (
+              <>
+                <Pencil className="h-3.5 w-3.5" /> Edit
+              </>
+            )}
+          </GhostButton>
+          {!skill.locked && (
             <DangerButton onClick={() => onDelete(skill.id)}>
               <Trash2 className="h-3.5 w-3.5" /> Delete
             </DangerButton>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {editing && (
         <div className="border-t border-slate-800 bg-slate-950/40 p-4">
+          {skill.locked && (
+            <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-400/30 bg-amber-500/[0.06] px-3 py-2 text-xs text-amber-200">
+              <Lock className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              <span>
+                This skill is seed-managed. Editing the body is allowed, but the slug{" "}
+                <code className="rounded bg-slate-800/70 px-1 py-0.5 font-mono text-[11px] text-slate-300">
+                  {skill.slug ?? "—"}
+                </code>{" "}
+                stays immutable so downstream code that references it by slug keeps working.
+              </span>
+            </div>
+          )}
           {err && (
             <div className="mb-3">
               <ErrorBanner message={err} onDismiss={() => setErr("")} />

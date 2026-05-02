@@ -22,8 +22,7 @@ export type ClassifyAskGrahamyResult =
   | { ok: false; status: number; error: string };
 
 /**
- * REST entry orchestration for `/api/ask-grahamy`. Mirrors the
- * `application.service.invokeApplicationAgentForExternalUser` shape:
+ * REST entry orchestration for `/api/ask-grahamy`:
  *
  *   1. Resolves the default `client_applications` row (configured via
  *      DEFAULT_CLIENT_APPLICATION_ID) — the upstream caller has already been

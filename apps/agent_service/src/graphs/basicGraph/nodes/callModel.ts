@@ -43,7 +43,7 @@ import {
 } from "../../../tools/roundtableRecallTools";
 import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
-import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
+import { ListProjectsTool, ListRepositoriesTool, GetRepositoryTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { InvokeApplicationAgentTool } from "../../../tools/invokeApplicationAgentTool";
@@ -54,6 +54,7 @@ import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
 import { runAnthropicAgentSdk, shouldUseAgentSdk } from "../../../chat/anthropic/agentSdkRunner";
 import { runOpenAiCodexSdk, shouldUseCodexSdk } from "../../../chat/codex/codexSdkRunner";
 import { buildSubAgentDefinitions } from "../../../utils/buildSubAgentDefinitions.service";
+import { observeToolCall } from "../../../langfuse";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 10;
@@ -353,6 +354,8 @@ export async function callModelNode(
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))
     tools.push(ListRepositoriesTool());
+  if (has("get_repository"))
+    tools.push(GetRepositoryTool());
   if (has("query_database"))
     tools.push(QueryDatabaseTool());
   if (has("send_file_to_user"))
@@ -533,7 +536,14 @@ export async function callModelNode(
           content = `Error: unknown tool "${tc.name ?? ""}".`;
         } else {
           try {
-            const rawResult = await t.invoke(tc.args ?? {});
+            // Wrap in observeToolCall so the tool execution shows up in
+            // Langfuse as a child span of `agent_chat_turn` with the
+            // model's tool args as input and the tool's text output.
+            const rawResult = await observeToolCall(
+              tc.name ?? "unknown_tool",
+              tc.args ?? {},
+              () => t.invoke(tc.args ?? {}),
+            );
             if (typeof rawResult === "string") {
               content = rawResult;
             } else if (
