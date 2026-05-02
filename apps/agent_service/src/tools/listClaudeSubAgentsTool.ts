@@ -12,8 +12,9 @@ import { Op } from "sequelize";
  *     `delegate_to_deep_agent` / `sync_delegate_to_deep_agent` (queued
  *     deep-agent worker path).
  *   - `list_claude_sub_agents` returns `type: "claude_sub_agent"` rows
- *     reachable via the Claude Agent SDK's native `Task("<slug>", ...)`
- *     tool. They run inline inside the primary's SDK session.
+ *     reachable via the Claude Agent SDK's native `Task("<agent id>", ...)`
+ *     tool and `start_epic_task` → `assignments[].id`. They run inline
+ *     inside the primary's SDK session.
  *
  * The two pools are disjoint by design — see slice-17 docs in
  * `services/buildSubAgentDefinitions.service.ts` and the system-prompt
@@ -68,8 +69,6 @@ export function ListClaudeSubAgentsTool(callerAgentId: string) {
           : "No Claude sub-agents are attached to you yet. Ask an administrator to assign one in Admin → Agents → Sub-agent assignments.";
       }
 
-      // Batch-load MCP servers + models so the listing matches what the SDK
-      // actually exposes the model to.
       const agentIds = agents.map((a) => a.id);
       const mcpLinks = await AgentAvailableMcpServer.findAll({
         where: { agentId: { [Op.in]: agentIds }, active: true },
@@ -109,16 +108,13 @@ export function ListClaudeSubAgentsTool(callerAgentId: string) {
         "",
       ];
       for (const a of agents) {
-        // The SDK exposes each sub-agent under its admin-set slug when
-        // present, falling back to a deterministic `csa_<uuid>` synthetic
-        // slug that the runner generates (see
-        // `buildSubAgentDefinitions.service.ts`). We mirror the same
-        // fallback here so the slug shown to the model is the slug it
-        // actually has to pass to `Task(...)`.
         const sdkSlug = a.slug ?? `csa_${a.id.replace(/-/g, "_")}`;
+        const displayName = a.agentName ?? sdkSlug;
         const modelDisplay = modelSlugById.get(a.modelId ?? "") ?? "inherited";
-        lines.push(`**${a.agentName ?? sdkSlug}**`);
-        lines.push(`  - Slug for \`Task\`: \`${sdkSlug}\``);
+        lines.push(`**${displayName}**`);
+        lines.push(
+          `  - Id for \`start_epic_task\` / \`Task\`: \`${a.id}\``,
+        );
         lines.push(`  - Model: ${modelDisplay}`);
         if (a.description) {
           lines.push(`  - Description: ${a.description}`);
@@ -131,8 +127,9 @@ export function ListClaudeSubAgentsTool(callerAgentId: string) {
       }
 
       lines.push(
-        'Invoke a sub-agent via `Task("<slug>", "<task description>")` — this runs inline in your turn and returns the result synchronously. ' +
-        "Do NOT pass these slugs to `delegate_to_deep_agent` (different pool — that's for system agents).",
+        'Invoke a sub-agent via `Task("<sub-agent id>", "<task description>")` — this runs inline in your turn and returns the result synchronously. ' +
+        "Use the same id in `start_epic_task` → `assignments[].id`. " +
+        "Do NOT pass these ids to `delegate_to_deep_agent` (different pool — that's for system agents).",
       );
 
       return lines.join("\n");
@@ -141,8 +138,8 @@ export function ListClaudeSubAgentsTool(callerAgentId: string) {
       name: "list_claude_sub_agents",
       description:
         "List the Claude sub-agents currently attached to YOU (your owned `claude_sub_agent` rows). " +
-        "These are reachable via the SDK's `Task` tool — call this BEFORE invoking `Task` to discover " +
-        "which sub-agents exist and their slugs. **Distinct from `list_system_agents`**: that lists " +
+        "Each entry is identified by **database id** for `start_epic_task` and `Task` — call this BEFORE " +
+        "invoking those tools to discover which sub-agents exist. **Distinct from `list_system_agents`**: that lists " +
         "executors reachable via `delegate_to_deep_agent` (different pool, different runtime).",
       schema: z.object({
         query: z
