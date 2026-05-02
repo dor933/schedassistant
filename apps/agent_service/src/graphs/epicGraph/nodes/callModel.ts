@@ -232,12 +232,13 @@ export async function epicCallModelNode(
     //     plan, the orchestrator then fans out via `Task("<slug>", ...)`
     //     calls in parallel.
     //   - OpenAI / Codex vendor: optional `plan_epic_task` (read-only
-    //     scout) + `start_epic_task_codex` (workspace-write execute).
+    //     scout) + `start_epic_task_codex` (detached workspace-write execute).
     //     One Codex session does the whole task end-to-end inside its
     //     own loop — no sub-agent fan-out (Codex SDK doesn't have a
     //     parallel-Task equivalent and concurrent codex sessions on
-    //     one repo race on the git index).
-    // `complete_epic_task` is shared — same lifecycle finalize for both.
+    //     one repo race on the git index). Codex auto-finalizes server-side;
+    //     poll `get_epic_status` — do not pair with `complete_epic_task`.
+    // `complete_epic_task` finalizes the Anthropic (`start_epic_task`) path only.
     ...(vendor.vendorSlug === "anthropic"
       ? [StartEpicTaskTool(agentId)]
       : vendor.vendorSlug === "openai"
@@ -246,6 +247,9 @@ export async function epicCallModelNode(
             StartEpicTaskCodexTool(agentId, {
               threadId,
               sessionWorkspacePath: state.sessionWorkspacePath ?? null,
+              userId,
+              groupId: state.groupId,
+              singleChatId: state.singleChatId,
             }),
           ]
         : []),

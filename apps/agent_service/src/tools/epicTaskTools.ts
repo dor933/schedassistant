@@ -26,6 +26,7 @@ import type {
   PrStatus,
 } from "@scheduling-agent/types";
 import { logger } from "../logger";
+import { agentChatQueue } from "../queues/agentChat.bull";
 import {
   listProjects,
   getProject,
@@ -364,6 +365,184 @@ interface InProgressExecutionContext {
   epicId: string;
   cwd: string;
   preRunSha: string | null;
+}
+
+/**
+ * Shared finalize path for `complete_epic_task` and server-side Codex auto-finalize.
+ */
+async function finalizeEpicTaskExecution(params: {
+  ctx: InProgressExecutionContext;
+  epicAgentId: string | null | undefined;
+  summary: string;
+  status: "completed" | "failed";
+  failureReason: string | null;
+  conversationCtx?: { threadId: string; userId: number };
+  executionMetadataPatch?: Record<string, unknown>;
+}): Promise<{ heading: string; summary: string; continuation: string }> {
+  const { ctx, epicAgentId, summary, status, failureReason, conversationCtx, executionMetadataPatch } =
+    params;
+  const { task, execution, cwd, preRunSha } = ctx;
+
+  const metadata: Record<string, unknown> = { ...(executionMetadataPatch ?? {}) };
+  if (preRunSha) metadata.pre_run_sha_at_start = preRunSha;
+  if (status === "completed") {
+    try {
+      const autoCommit = ensureWorkingTreeCommitted(cwd, task.title);
+      if (autoCommit.committed) {
+        metadata.auto_committed = true;
+        metadata.auto_commit_message = autoCommit.message;
+      }
+    } catch (err: any) {
+      logger.warn("finalizeEpicTaskExecution: safety-net auto-commit failed", {
+        taskId: task.id,
+        cwd,
+        error: err?.message,
+      });
+    }
+  }
+
+  try {
+    const gitDiff = captureGitDiff(cwd, preRunSha);
+    metadata.git_diff_stat = gitDiff.diffStat;
+    metadata.git_diff = gitDiff.fullDiff;
+    metadata.git_recent_commits = gitDiff.recentCommits;
+    if (preRunSha) metadata.git_diff_base_sha = preRunSha;
+  } catch (err: any) {
+    logger.warn("finalizeEpicTaskExecution: failed to capture git diff", {
+      taskId: task.id,
+      error: err?.message,
+    });
+  }
+
+  if (status === "completed") {
+    await completeExecution(execution.id, {
+      result: summary,
+      metadata,
+    });
+  } else {
+    await failExecution(execution.id, {
+      error: failureReason!,
+      metadata: { ...metadata, summary },
+    });
+  }
+  await updateTaskStatus(task.id, status as AgentTaskStatus);
+
+  if (conversationCtx?.threadId && conversationCtx?.userId !== undefined && epicAgentId) {
+    const summaryPath = await buildTaskSummaryFilePath({
+      agentId: epicAgentId,
+      threadId: conversationCtx.threadId,
+      taskId: task.id,
+    });
+    if (summaryPath) {
+      try {
+        fs.mkdirSync(path.dirname(summaryPath), { recursive: true });
+        const header =
+          `# ${task.title}\n\n` +
+          `**Status:** ${status}` +
+          (failureReason ? `\n**Failure reason:** ${failureReason}` : "") +
+          `\n\n`;
+        fs.writeFileSync(summaryPath, header + summary, "utf8");
+        await recordTaskSummaryFilePath(task.id, summaryPath);
+      } catch (err: any) {
+        logger.warn("finalizeEpicTaskExecution: summary file write failed", {
+          taskId: task.id,
+          summaryPath,
+          error: err?.message,
+        });
+      }
+    }
+  }
+
+  const continuation = await appendContinuationMarker(task.id);
+  const heading =
+    status === "completed" ? `# Task Completed: ${task.title}` : `# Task Failed: ${task.title}`;
+  return { heading, summary, continuation };
+}
+
+/**
+ * After a background Codex finalize, enqueue the same continuation signals the epic graph
+ * would have produced from a `complete_epic_task` tool result (marker → auto-run; otherwise
+ * PR/plan follow-up text).
+ */
+async function enqueueEpicPostCodexFinalizeTurn(opts: {
+  epicUserId: number;
+  agentId: string;
+  groupId: string | null;
+  singleChatId: string | null;
+  continuationSuffix: string;
+}): Promise<void> {
+  const markerPayload = parseContinuationMarker(opts.continuationSuffix);
+  try {
+    if (markerPayload) {
+      const contRequestId = `epic-continuation-${markerPayload.epicId}-${Date.now()}`;
+      await agentChatQueue.add("epic_continuation", {
+        userId: opts.epicUserId,
+        message:
+          `[Automatic continuation] Task "${markerPayload.completedTaskTitle}" completed successfully. ` +
+          `${markerPayload.remainingTasks} task(s) remain in the active epic. ` +
+          `Call \`get_epic_status\`, then continue with the next ready task (\`plan_epic_task\` / ` +
+          `\`start_epic_task_codex\` as appropriate for the Codex vendor flow). Provide a brief progress update.`,
+        requestId: contRequestId,
+        groupId: opts.groupId,
+        singleChatId: opts.singleChatId,
+        agentId: opts.agentId,
+        mentionsAgent: true,
+        displayName: "System",
+      } as any);
+      logger.info("enqueueEpicPostCodexFinalizeTurn: continuation marker job enqueued", {
+        epicId: markerPayload.epicId,
+        contRequestId,
+      });
+      return;
+    }
+
+    const trimmed = opts.continuationSuffix.trim();
+    if (trimmed) {
+      const contRequestId = `epic-codex-finalize-followup-${Date.now()}`;
+      await agentChatQueue.add("epic_codex_finalize_followup", {
+        userId: opts.epicUserId,
+        message:
+          `[Codex execution finished — task finalized server-side]\n\n` + trimmed,
+        requestId: contRequestId,
+        groupId: opts.groupId,
+        singleChatId: opts.singleChatId,
+        agentId: opts.agentId,
+        mentionsAgent: true,
+        displayName: "System",
+      } as any);
+      logger.info("enqueueEpicPostCodexFinalizeTurn: non-marker follow-up enqueued", {
+        contRequestId,
+      });
+    }
+  } catch (err: any) {
+    logger.error("enqueueEpicPostCodexFinalizeTurn: failed to enqueue", {
+      error: err?.message,
+    });
+  }
+}
+
+/** True when an in_progress task has a running Codex execution flagged in metadata. */
+async function epicHasDetachedCodexInflight(epicId: string): Promise<boolean> {
+  const task = await AgentTask.findOne({
+    where: { status: "in_progress" as AgentTaskStatus },
+    include: [
+      {
+        model: TaskStage,
+        as: "stage",
+        where: { epicTaskId: epicId },
+        required: true,
+      },
+    ],
+    order: [["startedAt", "DESC"]],
+  });
+  if (!task) return false;
+
+  const exec = await TaskExecution.findOne({
+    where: { agentTaskId: task.id, status: "running" as TaskExecutionStatus },
+    order: [["attemptNumber", "DESC"]],
+  });
+  const meta = (exec?.metadata ?? {}) as Record<string, unknown>;
+  return !!(exec && meta.codex_run_in_flight === true);
 }
 
 /**
@@ -722,96 +901,15 @@ export function CompleteEpicTaskTool(conversationCtx?: {
           );
         }
 
-        // Auto-commit (success path only). Mirrors what executeTask did
-        // for the CLI flow — the sub-agents may have left dirty working
-        // tree state and we want a clean tip-of-branch to diff against
-        // and PR-open from.
-        const metadata: Record<string, unknown> = {};
-        if (preRunSha) metadata.pre_run_sha_at_start = preRunSha;
-        if (status === "completed") {
-          try {
-            const autoCommit = ensureWorkingTreeCommitted(cwd, task.title);
-            if (autoCommit.committed) {
-              metadata.auto_committed = true;
-              metadata.auto_commit_message = autoCommit.message;
-            }
-          } catch (err: any) {
-            logger.warn("CompleteEpicTask: safety-net auto-commit failed", {
-              taskId: task.id,
-              cwd,
-              error: err?.message,
-            });
-          }
-        }
-
-        // Diff capture — same shape executeTask emitted, so downstream
-        // PR-creation / review tools see identical metadata structure.
-        try {
-          const gitDiff = captureGitDiff(cwd, preRunSha);
-          metadata.git_diff_stat = gitDiff.diffStat;
-          metadata.git_diff = gitDiff.fullDiff;
-          metadata.git_recent_commits = gitDiff.recentCommits;
-          if (preRunSha) metadata.git_diff_base_sha = preRunSha;
-        } catch (err: any) {
-          logger.warn("CompleteEpicTask: failed to capture git diff", {
-            taskId: task.id,
-            error: err?.message,
-          });
-        }
-
-        if (status === "completed") {
-          await completeExecution(execution.id, {
-            result: summary,
-            metadata,
-          });
-        } else {
-          await failExecution(execution.id, {
-            error: failureReason!,
-            metadata: { ...metadata, summary },
-          });
-        }
-        await updateTaskStatus(task.id, status as AgentTaskStatus);
-
-        // Persist the per-task summary file so the orchestrator can
-        // surface the work later via `send_file_to_user`. Same path
-        // shape `buildTaskSummaryFilePath` produces (current threadId
-        // wins) — overwrites any prior attempt's file.
-        if (
-          conversationCtx?.threadId &&
-          conversationCtx?.userId !== undefined &&
-          epic?.agentId
-        ) {
-          const summaryPath = await buildTaskSummaryFilePath({
-            agentId: epic.agentId,
-            threadId: conversationCtx.threadId,
-            taskId: task.id,
-          });
-          if (summaryPath) {
-            try {
-              fs.mkdirSync(path.dirname(summaryPath), { recursive: true });
-              const header =
-                `# ${task.title}\n\n` +
-                `**Status:** ${status}` +
-                (failureReason ? `\n**Failure reason:** ${failureReason}` : "") +
-                `\n\n`;
-              fs.writeFileSync(summaryPath, header + summary, "utf8");
-              await recordTaskSummaryFilePath(task.id, summaryPath);
-            } catch (err: any) {
-              logger.warn("CompleteEpicTask: summary file write failed", {
-                taskId: task.id,
-                summaryPath,
-                error: err?.message,
-              });
-            }
-          }
-        }
-
-        const continuation = await appendContinuationMarker(task.id);
-        const heading =
-          status === "completed"
-            ? `# Task Completed: ${task.title}`
-            : `# Task Failed: ${task.title}`;
-        return `${heading}\n\n${summary}${continuation}`;
+        const { heading, summary: sum, continuation } = await finalizeEpicTaskExecution({
+          ctx,
+          epicAgentId: epic?.agentId,
+          summary,
+          status,
+          failureReason,
+          conversationCtx,
+        });
+        return `${heading}\n\n${sum}${continuation}`;
       } catch (err: any) {
         logger.error("CompleteEpicTask: failed", {
           error: err?.message,
@@ -1099,27 +1197,23 @@ export function PlanEpicTaskCodexTool(callerAgentId: string) {
 }
 
 /**
- * Begin work on the next ready task via the Codex SDK. Auto-resolves the
- * active epic + task, runs `preExecutionSync` (stage branch checkout),
- * marks the task in_progress, snapshots HEAD, then runs ONE Codex SDK
- * session against the repo. Codex plans + executes inside its own loop;
- * we just capture the result.
+ * Begin work on the next ready task via the Codex SDK. After fast preflight
+ * (sync branch, mark in_progress, snapshot HEAD, execution row, session folder),
+ * returns immediately while Codex runs in a detached continuation so MCP tool
+ * timeouts cannot strand in-flight work. The server auto-finalizes when Codex
+ * finishes (same steps as `complete_epic_task`) and enqueues continuation.
  *
- * Sandbox mode is picked from the orchestrator agent's `allow_sdk_bash`
- * column via `resolveCodexExecuteSandboxMode` — TRUE → `danger-full-
- * access`, FALSE → `workspace-write`. Same rule the regular Codex SDK
- * runner uses for chat turns (codexSdkRunner.ts:662-679), so an agent's
- * trust level is consistent across "talk to me" and "execute an epic
- * task on my behalf" surfaces.
- *
- * After this returns, the orchestrator MUST call `complete_epic_task` to
- * finalize (capture diff, mark status, persist summary, emit
- * EPIC_CONTINUATION marker) — same lifecycle finalize as the Anthropic
- * sub-agent path uses.
+ * Sandbox mode follows `resolveCodexExecuteSandboxMode` (allow_sdk_bash).
  */
 export function StartEpicTaskCodexTool(
   callerAgentId: string,
-  sessionCtx?: { threadId: string; sessionWorkspacePath: string | null },
+  sessionCtx?: {
+    threadId: string;
+    sessionWorkspacePath: string | null;
+    userId?: number;
+    groupId?: string | null;
+    singleChatId?: string | null;
+  },
 ) {
   return tool(
     async (input) => {
@@ -1134,40 +1228,64 @@ export function StartEpicTaskCodexTool(
           );
         }
 
-        const { epic, cwd: repoCwd, next } = await resolveActiveEpicRepoCwd();
+        const epic = await resolveActiveEpic();
+        let next = await resolveNextRetryableTask(epic.id);
+        if (!next) {
+          if (await epicHasDetachedCodexInflight(epic.id)) {
+            return (
+              `Codex is already executing for the current in-progress task (detached server-side — ` +
+              `an MCP tool timeout does not stop it). **Do not call \`start_epic_task_codex\` again.** ` +
+              `Poll \`get_epic_status\` about once per minute until that task shows \`completed\` or ` +
+              `\`failed\`. The server finalizes automatically when Codex finishes — you must **not** ` +
+              `call \`complete_epic_task\` for this path.`
+            );
+          }
+          throw new Error(
+            `No tasks are ready to execute on epic "${epic.title}" (status: ${epic.status}).`,
+          );
+        }
 
-        // Resolve stage kind up front — drives cwd selection (plan stages
-        // write deliverables into the per-thread session folder; code_change
-        // stages write code into the repo). `next.stage` is not eager-loaded
-        // by `resolveNextRetryableTask`, so do an explicit lookup here.
+        const inflightExec = await TaskExecution.findOne({
+          where: { agentTaskId: next.id, status: "running" as TaskExecutionStatus },
+          order: [["attemptNumber", "DESC"]],
+        });
+        const inflightMeta = (inflightExec?.metadata ?? {}) as Record<string, unknown>;
+        if (inflightExec && inflightMeta.codex_run_in_flight === true) {
+          return (
+            `Codex is already running for task "${next.title}" (\`task_executions\` still marked ` +
+            `in-flight). **Do not start again** — poll \`get_epic_status\` ~every minute until the ` +
+            `task reaches \`completed\` or \`failed\`.`
+          );
+        }
+
+        const withRepos = await EpicTask.findByPk(epic.id, {
+          include: [{ model: Repository, as: "repositories" }],
+        });
+        const repos = ((withRepos as any)?.repositories ?? []) as Repository[];
+        const repo = repos.find((r) => r.localPath);
+        if (!repo?.localPath) {
+          throw new Error(
+            `Cannot run codex tool — no repository has a localPath configured for epic "${epic.title}".`,
+          );
+        }
+        const repoCwd = repo.localPath;
+
+        const epicFull = await EpicTask.findByPk(epic.id, {
+          attributes: ["id", "agentId", "userId"],
+        });
+
         const stage = await TaskStage.findByPk(next.taskStageId);
         const stageKind = stage?.kind ?? "code_change";
 
-        // Per-thread session folder (where plan-stage deliverables live).
-        // For code_change stages this is still surfaced to codex in the
-        // prompt as a scratch/notes target, but cwd stays at the repo so
-        // `git`/edit/commit flows remain natural.
         const sessionWorkspacePath = sessionCtx?.sessionWorkspacePath ?? null;
         if (sessionWorkspacePath) {
-          // Idempotent: creates `<workspacePath>/threads/<threadId>/` if it
-          // doesn't already exist + chowns to `agent` so codex (su-exec'd to
-          // agent) can write inside it without EACCES.
           await ensureSessionWorkspace(sessionWorkspacePath);
         }
 
         const isPlanStage = stageKind === "plan";
         const cwd =
-          isPlanStage && sessionWorkspacePath
-            ? sessionWorkspacePath
-            : repoCwd;
+          isPlanStage && sessionWorkspacePath ? sessionWorkspacePath : repoCwd;
 
-        // Lifecycle preflight (same shape as the Anthropic StartEpicTaskTool):
-        // sync the stage branch, mark in_progress, snapshot HEAD onto the
-        // execution row's metadata so complete_epic_task can diff against it.
-        // `preExecutionSync` and the HEAD snapshot run against the REPO,
-        // regardless of the codex cwd — plan stages still need a stage
-        // branch (so any commits/PR review hooks line up), and the
-        // pre/post-run diff is always anchored on the repo's HEAD.
         await preExecutionSync(epic.id, next.id);
         await next.update({
           status: "in_progress" as AgentTaskStatus,
@@ -1197,17 +1315,10 @@ export function StartEpicTaskCodexTool(
             cwd,
             ...(sessionWorkspacePath ? { session_workspace_path: sessionWorkspacePath } : {}),
             plan,
+            codex_run_in_flight: true,
           },
         });
 
-        // Build the system prompt. Always carry the pre-approved plan; then
-        // append a per-stage-kind addendum spelling out where writes are
-        // allowed. With cwd=session-folder for plan stages, codex's
-        // relative-path Reads land in the session folder (mostly empty), so
-        // the prompt names the repo's absolute path as the read target.
-        // For code_change stages cwd is the repo (as before), and the
-        // session folder is offered as a scratch/notes target by absolute
-        // path — code edits still go inside cwd.
         const planAddendum =
           `## Pre-approved plan to follow\n` +
           `An earlier read-only scout produced this plan. Treat it as the ` +
@@ -1267,25 +1378,137 @@ export function StartEpicTaskCodexTool(
 
         const sandboxMode = await resolveCodexExecuteSandboxMode(callerAgentId);
 
-        const result = await runCodexInRepo({
-          apiKey: cred.apiKey,
-          authObject: cred.authObject,
-          model: cred.modelSlug,
-          systemPrompt,
-          userPrompt,
-          cwd,
-          sandboxMode,
-          observeName: "codex_start_epic_task",
-        });
+        const conversationCtxFinalize =
+          sessionCtx?.threadId && sessionCtx?.userId !== undefined
+            ? { threadId: sessionCtx.threadId, userId: sessionCtx.userId }
+            : undefined;
 
-        const finalText = (result.finalText ?? "").trim();
+        const taskIdForBg = next.id;
+        const executionIdForBg = execution.id;
+        const epicIdForBg = epic.id;
+
+        void Promise.resolve().then(() =>
+          (async () => {
+            try {
+              const result = await runCodexInRepo({
+                apiKey: cred.apiKey,
+                authObject: cred.authObject,
+                model: cred.modelSlug,
+                systemPrompt,
+                userPrompt,
+                cwd,
+                sandboxMode,
+                observeName: "codex_start_epic_task",
+              });
+
+              const finalText = (result.finalText ?? "").trim();
+              const summary = finalText || "(Codex finished with no final text.)";
+
+              const execReload = await TaskExecution.findByPk(executionIdForBg);
+              const taskReload = await AgentTask.findByPk(taskIdForBg);
+              if (!execReload || !taskReload) {
+                logger.error("StartEpicTaskCodex: detached finalize missing task/execution row", {
+                  executionId: executionIdForBg,
+                  taskId: taskIdForBg,
+                });
+                return;
+              }
+
+              const fin = await finalizeEpicTaskExecution({
+                ctx: {
+                  task: taskReload,
+                  execution: execReload,
+                  epicId: epicIdForBg,
+                  cwd: repoCwd,
+                  preRunSha,
+                },
+                epicAgentId: epicFull?.agentId,
+                summary,
+                status: "completed",
+                failureReason: null,
+                conversationCtx: conversationCtxFinalize,
+                executionMetadataPatch: { codex_run_in_flight: false },
+              });
+
+              if (
+                epicFull?.userId != null &&
+                epicFull.agentId &&
+                sessionCtx?.userId !== undefined
+              ) {
+                await enqueueEpicPostCodexFinalizeTurn({
+                  epicUserId: epicFull.userId,
+                  agentId: epicFull.agentId,
+                  groupId: sessionCtx.groupId ?? null,
+                  singleChatId: sessionCtx.singleChatId ?? null,
+                  continuationSuffix: fin.continuation,
+                });
+              }
+            } catch (err: any) {
+              logger.error("StartEpicTaskCodex: detached codex run failed", {
+                taskId: taskIdForBg,
+                executionId: executionIdForBg,
+                error: err?.message,
+                stack: err?.stack,
+              });
+              try {
+                const execReload = await TaskExecution.findByPk(executionIdForBg);
+                const taskReload = await AgentTask.findByPk(taskIdForBg);
+                if (!execReload || !taskReload) return;
+
+                if (execReload.status !== "running") {
+                  logger.warn("StartEpicTaskCodex: execution already finalized after error", {
+                    executionId: executionIdForBg,
+                  });
+                  return;
+                }
+
+                const failSummary =
+                  `Codex execution failed: ${err?.message ?? String(err)}`;
+                const finFail = await finalizeEpicTaskExecution({
+                  ctx: {
+                    task: taskReload,
+                    execution: execReload,
+                    epicId: epicIdForBg,
+                    cwd: repoCwd,
+                    preRunSha,
+                  },
+                  epicAgentId: epicFull?.agentId,
+                  summary: failSummary,
+                  status: "failed",
+                  failureReason: err?.message ?? String(err),
+                  conversationCtx: conversationCtxFinalize,
+                  executionMetadataPatch: { codex_run_in_flight: false },
+                });
+
+                if (
+                  epicFull?.userId != null &&
+                  epicFull.agentId &&
+                  sessionCtx?.userId !== undefined
+                ) {
+                  await enqueueEpicPostCodexFinalizeTurn({
+                    epicUserId: epicFull.userId,
+                    agentId: epicFull.agentId,
+                    groupId: sessionCtx.groupId ?? null,
+                    singleChatId: sessionCtx.singleChatId ?? null,
+                    continuationSuffix: finFail.continuation,
+                  });
+                }
+              } catch (finalizeErr: any) {
+                logger.error("StartEpicTaskCodex: failed to finalize after codex error", {
+                  taskId: taskIdForBg,
+                  error: finalizeErr?.message,
+                });
+              }
+            }
+          })(),
+        );
 
         const stageLabel = stage
           ? `Stage "${stage.title}" (${stage.kind})`
           : `Stage (kind: ${stageKind})`;
 
         return (
-          `# Codex Execution Complete: ${next.title}\n\n` +
+          `# Codex execution started (detached): ${next.title}\n\n` +
           `**${stageLabel}**\n\n` +
           `Working directory: \`${cwd}\`\n` +
           (isPlanStage
@@ -1294,14 +1517,14 @@ export function StartEpicTaskCodexTool(
               ? `Scratch / notes folder: \`${sessionWorkspacePath}\`\n`
               : "") +
           `Branch base SHA: ${preRunSha ?? "(unknown)"}\n` +
-          `Sandbox mode: \`${sandboxMode}\`\n\n` +
-          `## Codex final output\n` +
-          `${finalText || "(no output)"}\n\n` +
-          `---\n` +
-          `Now call \`complete_epic_task\` with an aggregated summary (you ` +
-          `can lift it from the \`## Files changed\` section above) and ` +
-          `\`status: "completed"\` to finalize the task. ` +
-          `Execution ID: \`${execution.id}\`.`
+          `Sandbox mode: \`${sandboxMode}\`\n` +
+          `Execution ID: \`${execution.id}\`\n\n` +
+          `Codex is running **server-side** outside this tool call's lifetime — MCP timeouts will ` +
+          `not cancel it. **Poll \`get_epic_status\` about once per minute** until this task shows ` +
+          `\`completed\` or \`failed\`. The server auto-finalizes (git diff, execution row, task ` +
+          `status, per-task summary file, continuation) — **do not** call \`complete_epic_task\` ` +
+          `for this Codex path. If this tool appeared to fail with no output, ignore that — keep ` +
+          `polling until the task terminal state appears in \`get_epic_status\`.`
         );
       } catch (err: any) {
         logger.error("StartEpicTaskCodex: failed", {
@@ -1315,13 +1538,13 @@ export function StartEpicTaskCodexTool(
       name: "start_epic_task_codex",
       description:
         "Execute the next ready epic task via the Codex SDK. Auto-resolves the epic + task. " +
-        "Runs ONE Codex session against the repo with workspace-write sandbox and applies file " +
-        "edits within its own loop.\n\n" +
-        "**Call ORDER is fixed:** first `plan_epic_task` (Codex's read-only planning pass) to " +
-        "produce a Markdown plan, THEN this tool with that plan passed in `plan`. The plan is " +
-        "REQUIRED — this tool does not run without one. After this returns, call " +
-        "`complete_epic_task` to finalize (capture diff, mark status, emit continuation).\n\n" +
-        "**Codex-vendor orchestrators only — use `start_epic_task` on Anthropic.**",
+        "After fast setup, starts ONE Codex workspace-write session **in the background** and " +
+        "returns immediately so MCP client timeouts do not abort long runs.\n\n" +
+        "**Call ORDER:** first `plan_epic_task`, then pass its Markdown into `plan`. Required.\n\n" +
+        "**After this returns:** poll `get_epic_status` ~every minute until the task is `completed` " +
+        "or `failed`. Do **not** call `complete_epic_task` — the server finalizes automatically when " +
+        "Codex finishes. If the tool errors or returns empty due to MCP timeout, keep polling anyway.\n\n" +
+        "**Codex-vendor only — use `start_epic_task` on Anthropic.**",
       schema: z.object({
         plan: z
           .string()
