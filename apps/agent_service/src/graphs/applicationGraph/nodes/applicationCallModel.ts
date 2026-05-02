@@ -5,13 +5,11 @@ import { ChatGoogle } from "@langchain/google";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { Agent, LLMModel } from "@scheduling-agent/database";
 
-import { resolveOrgVendorByOrg } from "../../../services/resolveOrgVendor.service";
-import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
+import { resolveOrgVendorByOrg } from "../../../utils/resolveOrgVendor.service";
+import { anthropicBaseConfig } from "../../../chat/anthropic/anthropicContextManagement";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
-import { RunClaudeCliTool, RunCodexCliTool } from "../../../tools/runCliTools";
-import { KillCliExecutionTool } from "../../../tools/killCliExecutionTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import { getLangfuseCallbackHandler, flushLangfuse } from "../../../langfuse";
 import { logger } from "../../../logger";
@@ -184,12 +182,6 @@ export async function applicationCallModelNode(
   if (has("list_agents")) tools.push(ListAgentsTool(agentId));
   if (has("consult_agent"))
     tools.push(ConsultAgentTool(agentId, state.userId, null, null));
-  if (has("run_claude_cli"))
-    tools.push(RunClaudeCliTool(agentId, state.userId, state.applicationThreadId));
-  if (has("run_codex_cli"))
-    tools.push(RunCodexCliTool(agentId, state.userId, state.applicationThreadId));
-  if (has("kill_cli_execution"))
-    tools.push(KillCliExecutionTool(agentId, state.userId));
 
   const innerThreadId = state.applicationThreadId;
   const checkpointer = getInnerDeepAgentCheckpointer();

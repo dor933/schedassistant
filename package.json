@@ -10,7 +10,6 @@
     "build:types": "npm run build --workspace=@scheduling-agent/types",
     "build:database": "npm run build --workspace=@scheduling-agent/database",
     "build:agent": "npm run build --workspace=agent_service",
-    "build:mcp": "npm run build --workspace=mcp_server",
     "migrate": "npm run migrate --workspace=@scheduling-agent/database"
   },
   "engines": {

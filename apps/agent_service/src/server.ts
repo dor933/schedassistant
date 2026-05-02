@@ -15,6 +15,7 @@ import { attachmentsRouter } from "./routes/attachments.routes";
 import { systemRouter } from "./routes/system.routes";
 import { applicationRouter } from "./routes/application.routes";
 import { askGrahamyRouter } from "./routes/askGrahamy.routes";
+import { internalRouter } from "./routes/internal.routes";
 
 export type CreateServerDeps = {
   agentChatQueue: Queue<AgentChatJobData, AgentChatJobResult, string>;
@@ -46,6 +47,11 @@ export function createServer(deps: CreateServerDeps) {
   app.use("/api/system", systemRouter);
   app.use("/api/application", applicationRouter);
   app.use("/api/ask-grahamy", askGrahamyRouter);
+
+  // Service-to-service: mounted at /internal so it's distinct from every
+  // browser-reachable /api surface. Only mcp_server should ever hit this,
+  // authenticated by per-turn JWT (see codexBridgeAuth + InternalToolsController).
+  app.use("/internal", internalRouter);
 
   return app;
 }

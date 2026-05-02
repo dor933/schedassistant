@@ -11,6 +11,8 @@ type OrganizationCreationAttributes = Optional<
   | "webSearchAgentId"
   | "googleWorkspaceDomain"
   | "googleClientId"
+  | "embeddingModelId"
+  | "embeddingDimension"
   | "createdAt"
   | "updatedAt"
 >;
@@ -27,6 +29,8 @@ class Organization
   declare webSearchAgentId: string | null;
   declare googleWorkspaceDomain: string | null;
   declare googleClientId: string | null;
+  declare embeddingModelId: string | null;
+  declare embeddingDimension: number | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -70,6 +74,16 @@ Organization.init(
       type: DataTypes.STRING,
       allowNull: true,
       field: "google_client_id",
+    },
+    embeddingModelId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: "embedding_model_id",
+    },
+    embeddingDimension: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      field: "embedding_dimension",
     },
     createdAt: {
       type: DataTypes.DATE,

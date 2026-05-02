@@ -132,7 +132,7 @@ After the epic is created, tasks within the first stage will begin executing aut
 | \`get_epic_status\` | Check epic/stage/task progress |
 | \`review_task_diff\` | Inspect git diff, status, log, or branch comparison in a repo |
 | \`update_stage_pr\` | Link a PR URL to a stage after creating it |
-| \`run_command\` | Run shell commands (git, gh) via the **bash MCP** — use for pushing branches and creating PRs |
+| \`run_command\` | Run shell commands (git, gh) via the SDK \`Bash\` tool — use for pushing branches and creating PRs |
 
 ---
 

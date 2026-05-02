@@ -3,6 +3,7 @@ import { CallbackHandler } from "@langfuse/langchain";
 import {
   observe,
   startActiveObservation,
+  startObservation,
   getActiveTraceId,
   updateActiveObservation,
   getLangfuseTracerProvider,
@@ -255,9 +256,92 @@ export function getTrace(): { id: string | undefined } {
   };
 }
 
+/**
+ * Emits a Langfuse "generation" span for one LLM call. Use this from
+ * the SDK runners — once per assistant turn (Anthropic SDK `assistant`
+ * event, Codex SDK `agent_message` item) — so each round trip shows
+ * up in Langfuse with input/output/tokens, matching what the legacy
+ * LangChain CallbackHandler produced on the ChatOpenAI/ChatAnthropic
+ * path. Span nests under the active OTel observation, so when the
+ * runner wraps its work in `observeWithContext` the per-turn
+ * generations slot under the same parent the legacy path used.
+ *
+ * No-op when Langfuse is unconfigured. Internal failures are logged at
+ * warn — tracing must never break a caller.
+ */
+export function recordSdkGeneration(opts: {
+  name: string;
+  model?: string | null;
+  input?: unknown;
+  output?: unknown;
+  usage?: Record<string, number>;
+  metadata?: Record<string, unknown>;
+}): void {
+  if (!isLangfuseConfigured()) return;
+  try {
+    const span = startObservation(
+      opts.name,
+      {
+        ...(opts.input !== undefined ? { input: opts.input } : {}),
+        ...(opts.output !== undefined ? { output: opts.output } : {}),
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(opts.usage ? { usageDetails: opts.usage } : {}),
+        ...(opts.metadata ? { metadata: opts.metadata } : {}),
+      },
+      { asType: "generation" },
+    );
+    span.end();
+  } catch (error) {
+    logWarn("Failed to record SDK generation span", {
+      name: opts.name,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * Emits a Langfuse "tool" span for one tool invocation. Same parity
+ * goal as `recordSdkGeneration` — every tool call the SDK runner
+ * dispatches gets a tool span with input args, output text, and an
+ * error level when the call failed. Mirrors the per-tool spans the
+ * LangChain CallbackHandler produced from `chain_tool_start` /
+ * `chain_tool_end` events.
+ *
+ * Nests under the active OTel observation. No-op when Langfuse is
+ * unconfigured. Logs at warn on internal failure; never throws.
+ */
+export function recordSdkToolCall(opts: {
+  name: string;
+  input?: unknown;
+  output?: unknown;
+  isError?: boolean;
+  metadata?: Record<string, unknown>;
+}): void {
+  if (!isLangfuseConfigured()) return;
+  try {
+    const span = startObservation(
+      opts.name,
+      {
+        ...(opts.input !== undefined ? { input: opts.input } : {}),
+        ...(opts.output !== undefined ? { output: opts.output } : {}),
+        ...(opts.isError ? { level: "ERROR" as const } : {}),
+        ...(opts.metadata ? { metadata: opts.metadata } : {}),
+      },
+      { asType: "tool" },
+    );
+    span.end();
+  } catch (error) {
+    logWarn("Failed to record SDK tool span", {
+      name: opts.name,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export {
   observe,
   startActiveObservation,
+  startObservation,
   getActiveTraceId,
   updateActiveObservation,
 };

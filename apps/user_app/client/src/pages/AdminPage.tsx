@@ -21,6 +21,7 @@ import {
   X,
   Loader2,
   CheckCircle2,
+  XCircle,
   KeyRound,
   Plug,
   Terminal,
@@ -56,6 +57,8 @@ import {
   type WebSearchChoice,
   type AdminOrganization,
   type LibraryFile,
+  type OrgEmbeddingChoice,
+  type EmbeddingCatalogEntry,
 } from "../api";
 import { VendorIcon } from "../components/VendorModelBadge";
 import UserCard from "../components/UserCard";
@@ -200,10 +203,66 @@ function BranchPicker({
 }
 
 
+// ── Admin tab definitions ─────────────────────────────────────────────────
+//
+// The admin page used to render every section as one long stack. With the
+// number of cards growing past a dozen (slices 14-17 added vendor keys,
+// embedding model, sub-agent assignments, etc.) the page became hard to
+// scan. The vertical tab bar splits the surface into five logical groups
+// so an admin can land directly on the slice they care about.
+type AdminTabId =
+  | "agents"
+  | "people"
+  | "organization"
+  | "integrations"
+  | "catalog";
+
+interface AdminTab {
+  id: AdminTabId;
+  label: string;
+  description: string;
+  icon: typeof Bot;
+}
+
+const ADMIN_TABS: AdminTab[] = [
+  {
+    id: "agents",
+    label: "Agents",
+    description: "Create, configure, and assign agents",
+    icon: Bot,
+  },
+  {
+    id: "people",
+    label: "Users & Groups",
+    description: "Members, group conversations",
+    icon: Users2,
+  },
+  {
+    id: "organization",
+    label: "Organization",
+    description: "Summary, library, credentials, embedding",
+    icon: Building2,
+  },
+  {
+    id: "integrations",
+    label: "Integrations",
+    description: "MCP servers, projects, repositories",
+    icon: Plug,
+  },
+  {
+    id: "catalog",
+    label: "Catalog",
+    description: "Skills and models reference",
+    icon: BookOpen,
+  },
+];
+
 export default function AdminPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  const [activeAdminTab, setActiveAdminTab] = useState<AdminTabId>("agents");
 
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [organization, setOrganization] = useState<AdminOrganization | null>(null);
@@ -232,37 +291,29 @@ export default function AdminPage() {
       hasApiKey: boolean;
       masked: string | null;
       updatedAt: string | null;
+      keys: {
+        keyType: "api_key" | "oauth_token" | "auth_object" | "embedding";
+        masked: string;
+        updatedAt: string | null;
+      }[];
     }[]
   >([]);
-  // System-wide Claude Code OAuth token — super_admin only. Persisted on the
-  // agent_service container and inherited by every spawned `claude` CLI via
-  // CLAUDE_CODE_OAUTH_TOKEN, so admins skip `su-exec agent claude /login`.
-  const [claudeOauthToken, setClaudeOauthToken] = useState<{
-    configured: boolean;
-    masked: string | null;
-    updatedAt: string | null;
-  } | null>(null);
   // System-wide Codex CLI API key — super_admin only. Same lifecycle as the
   // Claude OAuth token but persisted on a sibling file under /home/agent/.codex
   // and exported as OPENAI_API_KEY so spawned `codex` CLIs authenticate
   // without `codex login` inside the container.
-  const [codexApiKey, setCodexApiKey] = useState<{
-    configured: boolean;
-    masked: string | null;
-    updatedAt: string | null;
-  } | null>(null);
-  // Codex ChatGPT-account login blob — sibling of codexApiKey but covers the
-  // OAuth path (paste of `~/.codex/auth.json` from a workstation that ran
-  // `codex login`). Codex prefers this file over the API key when both exist.
-  const [codexAuthJson, setCodexAuthJson] = useState<{
-    configured: boolean;
-    accountIdSuffix: string | null;
-    accessTokenMasked: string | null;
-    hasRefreshToken: boolean;
-    hasOpenaiApiKey: boolean;
-    lastRefresh: string | null;
-    updatedAt: string | null;
-  } | null>(null);
+  // Embedding configuration (slice 15). `choice` is the org's current
+  // pick + setup status; `catalog` is the read-only list of models the
+  // admin can choose from. Both load lazily for super-admins; non-admins
+  // never see the card.
+  const [embeddingChoice, setEmbeddingChoice] =
+    useState<OrgEmbeddingChoice | null>(null);
+  const [embeddingCatalog, setEmbeddingCatalog] = useState<
+    EmbeddingCatalogEntry[]
+  >([]);
+  // The Codex ChatGPT-account login blob is now per-org — it lives on the
+  // OpenAI row in `vendorApiKeys` as `keyType: "auth_object"`, set/cleared
+  // through the same vendor-api-keys flow as every other vendor credential.
   const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
   const [mcpForm, setMcpForm] = useState<McpFormState>(emptyMcpForm);
   const [editingMcpId, setEditingMcpId] = useState<number | null>(null);
@@ -376,7 +427,23 @@ export default function AdminPage() {
     try {
       // Vendor API keys are super_admin-only. Use .catch(() => []) so regular
       // admins don't surface the 403 as a page-level error.
-      const [u, a, g, m, r, mcp, sk, tl, proj, ws, vak, org, lib, claudeTok, codexKey, codexAuth] = await Promise.all([
+      const [
+        u,
+        a,
+        g,
+        m,
+        r,
+        mcp,
+        sk,
+        tl,
+        proj,
+        ws,
+        vak,
+        org,
+        lib,
+        embChoice,
+        embCatalog,
+      ] = await Promise.all([
         admin.getUsers(),
         admin.getAgents(),
         admin.getGroups(),
@@ -396,15 +463,21 @@ export default function AdminPage() {
               hasApiKey: boolean;
               masked: string | null;
               updatedAt: string | null;
+              keys: {
+                keyType: "api_key" | "oauth_token" | "auth_object" | "embedding";
+                masked: string;
+                updatedAt: string | null;
+              }[];
             }[],
         ),
         admin.getOrganization().catch(() => null),
         admin.getLibraryFiles().catch(() => ({ files: [] as LibraryFile[] })),
         // super_admin-only: regular admins get a 403 here, swallow it so the
         // page still loads.
-        admin.getClaudeOauthToken().catch(() => null),
-        admin.getCodexApiKey().catch(() => null),
-        admin.getCodexAuthJson().catch(() => null),
+        admin.getEmbeddingChoice().catch(() => null),
+        admin
+          .getEmbeddingModelCatalog()
+          .catch(() => [] as EmbeddingCatalogEntry[]),
       ]);
       setUsers(u);
       if (org) {
@@ -422,9 +495,8 @@ export default function AdminPage() {
       setWebSearchStatus(ws);
       setVendorApiKeys(vak);
       setLibraryFiles(lib.files ?? []);
-      setClaudeOauthToken(claudeTok);
-      setCodexApiKey(codexKey);
-      setCodexAuthJson(codexAuth);
+      setEmbeddingChoice(embChoice);
+      setEmbeddingCatalog(embCatalog);
       // System agents are delegated to by primary agents — they never own a
       // group / roundtable themselves. External agents are roundtable-only.
       if (!newGroupAgentId) {
@@ -1281,7 +1353,66 @@ export default function AdminPage() {
         </Stack>
 
         <Stack component="section" className="w-full min-w-0 space-y-6 sm:space-y-8">
-        <Box className="grid w-full min-w-0 grid-cols-1 gap-5 sm:gap-6 lg:gap-8 lg:[grid-template-columns:repeat(2,minmax(0,1fr))] [&>*]:min-w-0">
+        {/* Two-pane shell — fixed-width vertical tab bar on the left, the
+            active tab's stacked cards on the right. Collapses to a horizontal
+            scrolling pill row on small screens so the bar never crowds the
+            content. */}
+        <Box className="grid w-full min-w-0 grid-cols-1 gap-5 sm:gap-6 lg:gap-8 lg:[grid-template-columns:240px_minmax(0,1fr)] [&>*]:min-w-0">
+          <nav
+            aria-label="Admin sections"
+            className="flex w-full min-w-0 lg:sticky lg:top-20 lg:h-fit"
+          >
+            {/* Mobile: horizontal scrolling pill list. Desktop: vertical
+                rail with rich descriptions. */}
+            <div className="flex w-full gap-1.5 overflow-x-auto rounded-2xl border border-gray-200/60 bg-white/80 p-2 shadow-glass backdrop-blur-sm lg:flex-col lg:gap-1 lg:overflow-visible">
+              {ADMIN_TABS.map((tab) => {
+                const Icon = tab.icon;
+                const isActive = activeAdminTab === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveAdminTab(tab.id)}
+                    aria-current={isActive ? "page" : undefined}
+                    className={`group flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2 text-left transition-all duration-200 lg:whitespace-normal ${
+                      isActive
+                        ? "bg-gradient-to-r from-indigo-50 to-violet-50 text-indigo-700 ring-1 ring-indigo-200 shadow-sm"
+                        : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors ${
+                        isActive
+                          ? "bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm"
+                          : "bg-gray-100 text-gray-500 group-hover:bg-white group-hover:text-gray-700"
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold">
+                        {tab.label}
+                      </span>
+                      <span
+                        className={`hidden text-[10px] leading-tight lg:block ${
+                          isActive ? "text-indigo-500" : "text-gray-400"
+                        }`}
+                      >
+                        {tab.description}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </nav>
+
+          {/* Active tab's content. Single-column stack so each card gets
+              the full content width — the previous lg:grid-cols-2 layout
+              cramped cards with the tab nav also taking column space. */}
+          <div className="flex w-full min-w-0 flex-col gap-5 sm:gap-6">
+          {activeAdminTab === "agents" && (
+          <>
           {/* Agents — z-10 so ModelSelector menus paint above the Groups card below (same grid column on lg) */}
           <div className="relative z-10 w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
@@ -1300,7 +1431,7 @@ export default function AdminPage() {
                 <label className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                   Agent Type
                 </label>
-                <div className="grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-gray-50/80 p-0.5 sm:grid-cols-4">
+                <div className="grid grid-cols-2 gap-1 rounded-lg border border-gray-200 bg-gray-50/80 p-0.5 sm:grid-cols-5">
                   <button
                     type="button"
                     onClick={() => setNewAgentType("primary")}
@@ -1324,6 +1455,19 @@ export default function AdminPage() {
                   >
                     <Cpu className="h-3 w-3" />
                     System
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewAgentType("claude_sub_agent")}
+                    className={`inline-flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-150 ${
+                      newAgentType === "claude_sub_agent"
+                        ? "bg-white text-fuchsia-700 shadow-sm ring-1 ring-fuchsia-200"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                    title="Claude Agent SDK first-class sub-agent. Owned by exactly one Anthropic-vendor primary at a time; passed in the SDK's `agents:` parameter."
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    Sub-agent
                   </button>
                   <button
                     type="button"
@@ -1359,6 +1503,16 @@ export default function AdminPage() {
                     — not via chat. The agent's <strong>instructions</strong> below become its
                     dedicated system prompt; the <strong>description</strong> is shown to primary
                     agents that have <code className="rounded bg-gray-100 px-1 py-0.5 text-[9px]">invoke_application_agent</code> granted.
+                  </p>
+                )}
+                {newAgentType === "claude_sub_agent" && (
+                  <p className="mt-1.5 text-[10px] leading-relaxed text-gray-500">
+                    Claude Agent SDK first-class sub-agent. Lives in the SDK&apos;s{" "}
+                    <code className="rounded bg-gray-100 px-1 py-0.5 text-[9px]">agents:</code>{" "}
+                    map for one Anthropic-vendor primary. After creation, attach
+                    it to a primary in the <strong>Sub-agent assignments</strong> card
+                    below. Switching the owner primary off Anthropic auto-detaches
+                    every sub-agent it owns.
                   </p>
                 )}
               </div>
@@ -1684,85 +1838,236 @@ export default function AdminPage() {
               </div>
             )}
 
+            {/* Claude Sub-Agent Assignments — slice 17. Each claude_sub_agent
+                row is owned by exactly ONE Anthropic-vendor primary at a
+                time (or NULL = unassigned/available). Switching the owner
+                primary off Anthropic auto-detaches every sub-agent it
+                owns; that detachment also flows here on the next reload.
+                Renders unconditionally (with an empty-state row when no
+                sub-agents exist) so the feature is discoverable before
+                the admin creates their first one. */}
+            <div className="mb-4">
+              <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <Sparkles className="h-3.5 w-3.5 text-fuchsia-500" />
+                Sub-agent assignments
+                <span className="ml-1 text-[9px] font-normal normal-case text-gray-400">
+                  Claude Agent SDK first-class sub-agents · one Anthropic primary each
+                </span>
+              </h3>
+              <p className="mb-2 text-[11px] text-gray-500">
+                Each sub-agent is exposed via the Claude Agent SDK&apos;s{" "}
+                <code className="rounded bg-gray-100 px-1 py-0.5 text-[10px]">
+                  agents:
+                </code>{" "}
+                parameter to one primary at a time. Choose{" "}
+                <strong>Unassigned</strong> to release it back to the pool.
+                Only Anthropic-vendor primaries are listed; switching a
+                primary&apos;s model away from Anthropic auto-detaches its
+                sub-agents.
+              </p>
+              <div className="overflow-hidden rounded-xl border border-gray-200/80 bg-white">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-gray-50 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                    <tr>
+                      <th className="px-3 py-2">Sub-agent</th>
+                      <th className="px-3 py-2">Description</th>
+                      <th className="px-3 py-2 w-64">Owner primary</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {agents.filter((a) => a.type === "claude_sub_agent").length === 0 ? (
+                      <tr>
+                        <td
+                          colSpan={3}
+                          className="px-3 py-6 text-center text-[11px] text-gray-500"
+                        >
+                          No Claude sub-agents yet. Use the{" "}
+                          <strong>Create new agent</strong> form above with
+                          type{" "}
+                          <span className="inline-flex items-center gap-1 rounded bg-fuchsia-50 px-1.5 py-0.5 text-[10px] font-semibold text-fuchsia-700 ring-1 ring-fuchsia-200">
+                            <Sparkles className="h-2.5 w-2.5" />
+                            Sub-agent
+                          </span>{" "}
+                          — created sub-agents will appear here for
+                          assignment to an Anthropic-vendor primary.
+                        </td>
+                      </tr>
+                    ) : (
+                      agents
+                        .filter((a) => a.type === "claude_sub_agent")
+                        .map((sa) => {
+                          const ownerValue = sa.owningPrimaryAgentId ?? "";
+                          const label =
+                            sa.agentName?.trim() ||
+                            sa.definition?.trim() ||
+                            sa.id;
+                          // Filter the dropdown to primaries running on
+                          // an Anthropic-vendor model. The server is the
+                          // source of truth here — this client filter is
+                          // ergonomics so admins don't pick a primary
+                          // that the backend will reject.
+                          const anthropicPrimaries = agents.filter((p) => {
+                            if (p.type !== "primary") return false;
+                            if (!p.modelId) return false;
+                            const m = models.find((mm) => mm.id === p.modelId);
+                            return m?.vendor?.slug === "anthropic";
+                          });
+                          return (
+                            <tr key={sa.id} className="hover:bg-gray-50/60">
+                              <td className="px-3 py-2 align-top">
+                                <div className="font-semibold text-gray-800">
+                                  {label}
+                                </div>
+                                <div className="text-[10px] text-gray-400">
+                                  {sa.id}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 align-top text-gray-600">
+                                {sa.description?.trim() || (
+                                  <span className="text-gray-400 italic">
+                                    no description
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 align-top">
+                                <select
+                                  value={ownerValue}
+                                  disabled={sa.isLocked}
+                                  onChange={(e) =>
+                                    handleAssignSystemAgentOwner(
+                                      sa.id,
+                                      e.target.value === ""
+                                        ? null
+                                        : e.target.value,
+                                    )
+                                  }
+                                  className="w-full rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs focus:border-fuchsia-400 focus:outline-none disabled:bg-gray-100 disabled:text-gray-400"
+                                >
+                                  <option value="">Unassigned (available)</option>
+                                  {anthropicPrimaries.map((p) => (
+                                    <option key={p.id} value={p.id}>
+                                      {p.agentName?.trim() ||
+                                        p.definition?.trim() ||
+                                        p.id}
+                                    </option>
+                                  ))}
+                                </select>
+                                {anthropicPrimaries.length === 0 && (
+                                  <p className="mt-1 text-[10px] text-amber-600">
+                                    No Anthropic-vendor primary agents in
+                                    this org — switch one&apos;s model to
+                                    Claude before assigning.
+                                  </p>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
             {/* Google Permissions — super_admin only (server also enforces).
                 Grants calendar/drive/gmail operations per-(agent, subject user, scope). */}
             {user?.role === "super_admin" && (
               <GooglePermissionsSection agents={agents} />
             )}
 
-            {/* Dedicated Web Search Agent (pick Gemini or Tavily — only one active) */}
+            {/* Dedicated Web Search Agent (pick Gemini, Tavily, or Anthropic — only one active) */}
             <div className="mb-4">
               <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
                 <Search className="h-3.5 w-3.5 text-sky-500" />
                 Dedicated Web Search Agent
                 <span className="rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] font-semibold text-sky-500">
-                  {webSearchStatus?.activeChoice === "tavily" ? "Tavily" : "Gemini"}
+                  {webSearchStatus?.activeChoice === "tavily"
+                    ? "Tavily"
+                    : webSearchStatus?.activeChoice === "anthropic"
+                      ? "Anthropic"
+                      : "Gemini"}
                 </span>
                 <span className="ml-1 text-[9px] font-normal normal-case text-gray-400">
                   only one can be active
                 </span>
               </h3>
               {webSearchStatus ? (
-                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                  {(["gemini", "tavily"] as WebSearchChoice[]).map((choice) => {
-                    const candidate =
-                      choice === "tavily"
-                        ? webSearchStatus.candidates.tavily
-                        : webSearchStatus.candidates.gemini;
-                    const isActive = webSearchStatus.activeChoice === choice;
-                    const accent =
-                      choice === "tavily"
-                        ? "from-emerald-500 to-teal-600"
-                        : "from-sky-500 to-indigo-600";
-                    const icon = choice === "tavily" ? Search : Globe;
-                    const Icon = icon;
-                    return (
-                      <button
-                        key={choice}
-                        type="button"
-                        disabled={!candidate || webSearchSwitching}
-                        onClick={() => handleSwitchWebSearchAgent(choice)}
-                        className={`group relative flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-200 ${
-                          isActive
-                            ? "border-sky-300 bg-sky-50/60 shadow-sm"
-                            : "border-gray-200/80 bg-white hover:border-indigo-300 hover:bg-white"
-                        } ${!candidate ? "cursor-not-allowed opacity-60" : ""}`}
-                      >
-                        <div
-                          className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${accent} text-white shadow-sm`}
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                  {(["gemini", "tavily", "anthropic"] as WebSearchChoice[]).map(
+                    (choice) => {
+                      const candidate =
+                        choice === "tavily"
+                          ? webSearchStatus.candidates.tavily
+                          : choice === "anthropic"
+                            ? webSearchStatus.candidates.anthropic
+                            : webSearchStatus.candidates.gemini;
+                      const isActive = webSearchStatus.activeChoice === choice;
+                      const accent =
+                        choice === "tavily"
+                          ? "from-emerald-500 to-teal-600"
+                          : choice === "anthropic"
+                            ? "from-amber-500 to-orange-600"
+                            : "from-sky-500 to-indigo-600";
+                      const Icon =
+                        choice === "tavily"
+                          ? Search
+                          : choice === "anthropic"
+                            ? Sparkles
+                            : Globe;
+                      const fallbackName =
+                        choice === "tavily"
+                          ? "Tavily Web Search"
+                          : choice === "anthropic"
+                            ? "Anthropic Web Search"
+                            : "Gemini Web Search";
+                      const fallbackBlurb =
+                        choice === "tavily"
+                          ? "Routes web searches through the Tavily search API."
+                          : choice === "anthropic"
+                            ? "Uses Anthropic's hosted WebSearch (billed against your Claude credential)."
+                            : "Uses Gemini's built-in web grounding for search.";
+                      return (
+                        <button
+                          key={choice}
+                          type="button"
+                          disabled={!candidate || webSearchSwitching}
+                          onClick={() => handleSwitchWebSearchAgent(choice)}
+                          className={`group relative flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-200 ${
+                            isActive
+                              ? "border-sky-300 bg-sky-50/60 shadow-sm"
+                              : "border-gray-200/80 bg-white hover:border-indigo-300 hover:bg-white"
+                          } ${!candidate ? "cursor-not-allowed opacity-60" : ""}`}
                         >
-                          <Icon className="h-4 w-4" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="truncate text-sm font-semibold text-gray-900">
-                              {candidate?.agentName ??
-                                (choice === "tavily"
-                                  ? "Tavily Web Search"
-                                  : "Gemini Web Search")}
-                            </span>
-                            {isActive && (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600">
-                                <CheckCircle2 className="h-3 w-3" />
-                                Active
+                          <div
+                            className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${accent} text-white shadow-sm`}
+                          >
+                            <Icon className="h-4 w-4" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate text-sm font-semibold text-gray-900">
+                                {candidate?.agentName ?? fallbackName}
                               </span>
+                              {isActive && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600">
+                                  <CheckCircle2 className="h-3 w-3" />
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-[11px] text-gray-500">
+                              {candidate?.description ?? fallbackBlurb}
+                            </p>
+                            {candidate?.modelSlug && (
+                              <p className="mt-1 text-[10px] font-medium text-gray-400">
+                                {candidate.modelSlug}
+                              </p>
                             )}
                           </div>
-                          <p className="mt-1 line-clamp-2 text-[11px] text-gray-500">
-                            {candidate?.description ??
-                              (choice === "tavily"
-                                ? "Routes web searches through the Tavily search API."
-                                : "Uses Gemini's built-in web grounding for search.")}
-                          </p>
-                          {candidate?.modelSlug && (
-                            <p className="mt-1 text-[10px] font-medium text-gray-400">
-                              {candidate.modelSlug}
-                            </p>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
+                        </button>
+                      );
+                    },
+                  )}
                 </div>
               ) : (
                 <p className="py-2 text-xs text-gray-400">
@@ -1811,7 +2116,10 @@ export default function AdminPage() {
               </div>
             </div>
           </div>
-
+          </>
+          )}
+          {activeAdminTab === "people" && (
+          <>
           {/* Users */}
           <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
@@ -1909,7 +2217,10 @@ export default function AdminPage() {
               ))}
             </div>
           </div>
-
+          </>
+          )}
+          {activeAdminTab === "organization" && (
+          <>
           {/* Organization summary — prepended to every agent's system prompt */}
           <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-2 flex items-center gap-2.5 text-sm font-bold text-gray-900">
@@ -2084,7 +2395,10 @@ export default function AdminPage() {
               </ul>
             )}
           </div>
-
+          </>
+          )}
+          {activeAdminTab === "people" && (
+          <>
           {/* Groups */}
           <div className="w-full min-w-0 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
             <h2 className="mb-5 flex items-center gap-2.5 text-sm font-bold text-gray-900">
@@ -2400,7 +2714,10 @@ export default function AdminPage() {
               </div>
             )}
           </div>
-
+          </>
+          )}
+          {activeAdminTab === "organization" && (
+          <>
           {/* Vendor API Keys — per-org. Super-admin only: these credentials
               belong to THIS organization and are used by all agents in it.
               The Claude Code OAuth token sits in the same card because it is
@@ -2409,14 +2726,28 @@ export default function AdminPage() {
           {user?.role === "super_admin" && (
             <VendorApiKeysCard
               vendorApiKeys={vendorApiKeys}
-              claudeOauthToken={claudeOauthToken}
-              codexApiKey={codexApiKey}
-              codexAuthJson={codexAuthJson}
               reload={reload}
               setError={setError}
             />
           )}
 
+          {/* Embedding model picker — slice 15. Super_admin only.
+              Embeddings are blocking: chat is gated until both a model
+              and a usable key are present. The card shows the current
+              choice + missing-piece chips and refuses dim-changing
+              switches server-side. */}
+          {user?.role === "super_admin" && (
+            <EmbeddingConfigCard
+              choice={embeddingChoice}
+              catalog={embeddingCatalog}
+              reload={reload}
+              setError={setError}
+            />
+          )}
+          </>
+          )}
+          {activeAdminTab === "integrations" && (
+          <>
           {/* Claude/Codex CLI MCP registry */}
           {user?.role === "super_admin" && (
             <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
@@ -2651,7 +2982,10 @@ export default function AdminPage() {
               </div>
             </div>
           )}
-
+          </>
+          )}
+          {activeAdminTab === "catalog" && (
+          <>
           {/* Skills library — platform-wide catalog, read-only in the UI. */}
           {user?.role === "super_admin" && (
           <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
@@ -2745,7 +3079,10 @@ export default function AdminPage() {
               )}
             </div>
           </div>
-
+          </>
+          )}
+          {activeAdminTab === "integrations" && (
+          <>
           {/* ── Epic Orchestrator — super_admin only ── */}
           {user?.role === "super_admin" && (
           <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
@@ -3123,7 +3460,9 @@ export default function AdminPage() {
             )}
           </div>
           )}
-
+          </>
+          )}
+          </div>
         </Box>
       </Stack>
       </Container>
@@ -3133,6 +3472,14 @@ export default function AdminPage() {
 
 // ── Vendor API Keys (super_admin only, per-org) ──────────────────────────────
 
+type VendorKeyType = "api_key" | "oauth_token" | "auth_object" | "embedding";
+
+interface VendorApiKeyCredential {
+  keyType: VendorKeyType;
+  masked: string;
+  updatedAt: string | null;
+}
+
 interface VendorApiKeyEntry {
   vendorId: string;
   vendorName: string;
@@ -3140,6 +3487,21 @@ interface VendorApiKeyEntry {
   hasApiKey: boolean;
   masked: string | null;
   updatedAt: string | null;
+  /**
+   * Per-credential-type breakdown. A vendor row may carry up to three
+   * credentials: `api_key`, `oauth_token`, and (OpenAI only) `auth_object`
+   * — the structured Codex CLI ChatGPT-account login. Empty when none are
+   * configured. The legacy top-level `masked`/`updatedAt` mirror the
+   * most recently updated entry for backwards-compat with older renderers.
+   */
+  keys: VendorApiKeyCredential[];
+}
+
+function vendorKeyTypeLabel(t: VendorKeyType): string {
+  if (t === "oauth_token") return "OAuth token";
+  if (t === "auth_object") return "Codex login";
+  if (t === "embedding") return "Embedding key";
+  return "API key";
 }
 
 /**
@@ -3150,32 +3512,10 @@ interface VendorApiKeyEntry {
  */
 function VendorApiKeysCard({
   vendorApiKeys,
-  claudeOauthToken,
-  codexApiKey,
-  codexAuthJson,
   reload,
   setError,
 }: {
   vendorApiKeys: VendorApiKeyEntry[];
-  claudeOauthToken: {
-    configured: boolean;
-    masked: string | null;
-    updatedAt: string | null;
-  } | null;
-  codexApiKey: {
-    configured: boolean;
-    masked: string | null;
-    updatedAt: string | null;
-  } | null;
-  codexAuthJson: {
-    configured: boolean;
-    accountIdSuffix: string | null;
-    accessTokenMasked: string | null;
-    hasRefreshToken: boolean;
-    hasOpenaiApiKey: boolean;
-    lastRefresh: string | null;
-    updatedAt: string | null;
-  } | null;
   reload: () => Promise<void>;
   setError: (msg: string) => void;
 }) {
@@ -3187,13 +3527,18 @@ function VendorApiKeysCard({
         </div>
         Credentials
         <span className="ml-1 text-[10px] font-normal text-gray-400">
-          (your organization&apos;s vendor and CLI credentials)
+          (your organization&apos;s vendor credentials)
         </span>
       </h2>
       <p className="mb-5 text-xs text-gray-500">
         These keys are used by every agent in your organization when it calls
-        the corresponding vendor. CLI credentials are stored server-side on the
-        agent service; raw values are never sent back to the browser.
+        the corresponding vendor. The Codex CLI <code>auth.json</code> blob
+        sits inside the OpenAI vendor card alongside the regular API key —
+        upload it there once your workstation has finished{" "}
+        <code>codex login</code>. A separate <strong>Embedding key</strong>{" "}
+        slot on each vendor lets you bill embeddings against a different
+        credential than chat completions; leave it empty to share the
+        regular API key.
       </p>
 
       <div className="grid w-full min-w-0 grid-cols-1 gap-3 sm:[grid-template-columns:repeat(2,minmax(0,1fr))] lg:[grid-template-columns:repeat(3,minmax(0,1fr))] [&>*]:min-w-0">
@@ -3205,21 +3550,6 @@ function VendorApiKeysCard({
             setError={setError}
           />
         ))}
-        <ClaudeOauthTokenRow
-          entry={claudeOauthToken}
-          reload={reload}
-          setError={setError}
-        />
-        <CodexAuthJsonRow
-          entry={codexAuthJson}
-          reload={reload}
-          setError={setError}
-        />
-        <CodexApiKeyRow
-          entry={codexApiKey}
-          reload={reload}
-          setError={setError}
-        />
       </div>
     </div>
   );
@@ -3234,44 +3564,123 @@ function VendorApiKeyRow({
   reload: () => Promise<void>;
   setError: (msg: string) => void;
 }) {
+  // OpenAI's vendor row is special: in addition to an API key, the org may
+  // upload the structured Codex CLI ChatGPT-account login (`auth.json`,
+  // stored as `auth_object`). The Codex SDK runner reads that blob from the
+  // DB at invocation time and materialises it to a per-turn temp $HOME so
+  // the spawned codex subprocess sees `~/.codex/auth.json`. OAuth tokens
+  // (sk-ant-oat…) don't exist for OpenAI, so we hide that radio.
+  const isOpenAi = entry.vendorSlug === "openai";
+
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const [draftKeyType, setDraftKeyType] = useState<VendorKeyType>("api_key");
   const [busy, setBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Per-keyType lookup for status pills + delete buttons. A vendor row may
+  // carry up to four credentials (api_key + oauth_token + auth_object +
+  // embedding); we render each independently. OpenAI shows
+  // api_key + auth_object + embedding; every other vendor shows
+  // api_key + oauth_token + embedding.
+  const keysByType = new Map<VendorKeyType, VendorApiKeyCredential>();
+  for (const k of entry.keys ?? []) keysByType.set(k.keyType, k);
+
+  const visibleKeyTypes: VendorKeyType[] = isOpenAi
+    ? ["api_key", "auth_object", "embedding"]
+    : ["api_key", "oauth_token", "embedding"];
 
   async function handleSave() {
     const trimmed = draft.trim();
     if (!trimmed) {
-      setError("API key cannot be empty. Use Remove to clear it.");
+      setError(`${vendorKeyTypeLabel(draftKeyType)} cannot be empty. Use Remove to clear it.`);
       return;
     }
     setBusy(true);
     try {
-      await admin.setVendorApiKey(entry.vendorId, trimmed);
+      if (draftKeyType === "auth_object") {
+        // Validate JSON shape client-side so admins get an immediate error
+        // instead of a server-roundtrip 400. The server re-validates the
+        // structure (must carry OPENAI_API_KEY or tokens.access_token).
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(trimmed);
+        } catch (err: any) {
+          setError(`auth.json is not valid JSON: ${err?.message ?? err}`);
+          setBusy(false);
+          return;
+        }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setError("auth.json must be a JSON object.");
+          setBusy(false);
+          return;
+        }
+        await admin.setVendorApiKey(entry.vendorId, {
+          keyType: "auth_object",
+          authObject: parsed as Record<string, unknown>,
+        });
+      } else {
+        await admin.setVendorApiKey(entry.vendorId, {
+          keyType: draftKeyType,
+          apiKey: trimmed,
+        });
+      }
       setDraft("");
       setEditing(false);
       await reload();
     } catch (err: any) {
-      setError(err?.message ?? "Failed to save key.");
+      setError(err?.message ?? "Failed to save credential.");
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleDelete() {
+  async function handleDelete(keyType: VendorKeyType) {
     // Single-step delete is fine here — the key can always be re-entered, and
     // the only consequence of an accidental click is that agents using this
-    // vendor will surface a clear "your org has not configured an API key for
-    // …" error on the next call, prompting a re-set.
+    // vendor will surface a clear "your org has not configured a key for …"
+    // error on the next call, prompting a re-set.
     setBusy(true);
     try {
-      await admin.deleteVendorApiKey(entry.vendorId);
+      await admin.deleteVendorApiKey(entry.vendorId, keyType);
       setDraft("");
       setEditing(false);
       await reload();
     } catch (err: any) {
-      setError(err?.message ?? "Failed to remove key.");
+      setError(err?.message ?? "Failed to remove credential.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleFileSelected(file: File | null) {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const text = await file.text();
+      const trimmed = text.trim();
+      if (!trimmed) {
+        setError("Selected auth.json file is empty.");
+        return;
+      }
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          setError("auth.json must be a JSON object.");
+          return;
+        }
+      } catch (err: any) {
+        setError(`Selected auth.json is not valid JSON: ${err?.message ?? err}`);
+        return;
+      }
+      setDraftKeyType("auth_object");
+      setDraft(trimmed);
+      setEditing(true);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to read auth.json file.");
+    } finally {
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
@@ -3295,637 +3704,166 @@ function VendorApiKeyRow({
         )}
       </div>
 
-      {entry.hasApiKey && entry.masked && (
-        <div className="mt-2 font-mono text-[11px] text-gray-500">{entry.masked}</div>
+      {/* Per-key_type breakdown — ONE ROW PER VISIBLE TYPE, regardless of
+          whether it's configured. Missing types render a dimmed pill with
+          an inline ✗ icon so the empty slot is visible at a glance
+          (without the wrap-prone explanatory text that previously blew up
+          the row height). Hover the pill for the fallback explanation. */}
+      {visibleKeyTypes.map((kt) => {
+        const k = keysByType.get(kt);
+        const configured = !!k;
+        const fallbackHint =
+          kt === "auth_object"
+            ? "Not configured — Codex CLI will fall back to the api_key row."
+            : kt === "embedding"
+              ? "Not configured — embeddings will use the api_key row."
+              : "Not configured.";
+        return (
+          <div
+            key={kt}
+            className="mt-2 flex h-7 items-center gap-2 rounded-md bg-gray-50 px-2"
+          >
+            <span
+              className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${
+                configured
+                  ? "bg-white text-gray-600 ring-gray-200"
+                  : "bg-amber-50 text-amber-700 ring-amber-200"
+              }`}
+              title={configured ? "" : fallbackHint}
+            >
+              {configured ? (
+                <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500" />
+              ) : (
+                <XCircle className="h-2.5 w-2.5 text-amber-500" />
+              )}
+              {vendorKeyTypeLabel(kt)}
+            </span>
+            {configured ? (
+              <>
+                <span className="font-mono text-[11px] text-gray-500 truncate">
+                  {k!.masked}
+                </span>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => handleDelete(kt)}
+                  className="ml-auto inline-flex items-center justify-center rounded-md border border-red-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
+                  title={`Remove ${vendorKeyTypeLabel(kt)}`}
+                >
+                  {busy ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3" />
+                  )}
+                </button>
+              </>
+            ) : (
+              <span className="text-[10px] italic text-gray-400">not set</span>
+            )}
+          </div>
+        );
+      })}
+
+      {/* OpenAI guidance — explain the two credential paths so admins know
+          which one Codex agents actually need. */}
+      {isOpenAi && (
+        <p className="mt-2 rounded-md bg-blue-50 px-2 py-1.5 text-[10px] leading-snug text-blue-800">
+          <strong>API key</strong> = direct OpenAI billing for chat-completion
+          models. <strong>Codex login</strong> = upload your
+          workstation&apos;s <code>~/.codex/auth.json</code> for ChatGPT-account
+          login (Codex CLI). Codex prefers auth.json when both are configured.
+        </p>
       )}
 
       {!editing ? (
-        <div className="mt-3 flex items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={() => setEditing(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-          >
-            <Pencil className="h-3 w-3" />
-            {entry.hasApiKey ? "Replace" : "Set key"}
-          </button>
-          {entry.hasApiKey && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleDelete}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-              Remove
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="mt-3 space-y-2">
-          <input
-            type="password"
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Paste new API key"
-            className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
-          />
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={busy || !draft.trim()}
-              onClick={handleSave}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-              Save
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setEditing(false);
-                setDraft("");
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-60"
-            >
-              <X className="h-3 w-3" />
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Claude Code OAuth token (super_admin only, system-wide) ──────────────────
-//
-// Sits next to the vendor API keys because it is also a model-vendor
-// credential, just stored on the agent_service container instead of in the
-// per-org table. The agent_service persists the token to a file under
-// /home/agent/.claude/.oauth-token and exports CLAUDE_CODE_OAUTH_TOKEN into
-// process.env at startup, so every spawned `claude` CLI authenticates without
-// a manual `su-exec agent claude /login` inside the container.
-
-function ClaudeOauthTokenRow({
-  entry,
-  reload,
-  setError,
-}: {
-  entry: { configured: boolean; masked: string | null; updatedAt: string | null } | null;
-  reload: () => Promise<void>;
-  setError: (msg: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  // While the super_admin-only fetch is in flight we render a placeholder
-  // entry so the layout matches the other rows.
-  const safeEntry = entry ?? { configured: false, masked: null, updatedAt: null };
-
-  async function handleSave() {
-    const trimmed = draft.trim();
-    if (!trimmed) {
-      setError("OAuth token cannot be empty. Use Remove to clear it.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await admin.setClaudeOauthToken(trimmed);
-      setDraft("");
-      setEditing(false);
-      await reload();
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to save token.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleDelete() {
-    setBusy(true);
-    try {
-      await admin.deleteClaudeOauthToken();
-      setDraft("");
-      setEditing(false);
-      await reload();
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to remove token.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const tooltip =
-    "Claude Code CLI OAuth token. Saved on the agent_service container and " +
-    "exported as CLAUDE_CODE_OAUTH_TOKEN so every spawned `claude` invocation " +
-    "authenticates without an interactive login inside the container. Generate " +
-    "with `claude setup-token` on a machine where you're logged in.";
-
-  return (
-    <div className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <div
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600"
-          title={tooltip}
-        >
-          <Terminal className="h-4 w-4" />
-        </div>
-        <span
-          className="min-w-0 truncate text-sm font-semibold text-gray-900"
-          title={tooltip}
-        >
-          Claude CLI OAuth
-        </span>
-        {safeEntry.configured ? (
-          <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
-            Configured
-          </span>
-        ) : (
-          <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
-            Missing
-          </span>
-        )}
-      </div>
-
-      <p className="mt-2 text-[11px] leading-relaxed text-gray-500" title={tooltip}>
-        Sets <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
-          CLAUDE_CODE_OAUTH_TOKEN
-        </code> on the agent_service container so the spawned <code>claude</code>{" "}
-        CLI skips manual login.
-      </p>
-
-      {safeEntry.configured && safeEntry.masked && (
-        <div className="mt-2 font-mono text-[11px] text-gray-500">{safeEntry.masked}</div>
-      )}
-
-      {!editing ? (
-        <div className="mt-3 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-          >
-            <Pencil className="h-3 w-3" />
-            {safeEntry.configured ? "Replace" : "Set token"}
-          </button>
-          {safeEntry.configured && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleDelete}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-              Remove
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="mt-3 space-y-2">
-          <input
-            type="password"
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Paste OAuth token"
-            className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
-          />
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={busy || !draft.trim()}
-              onClick={handleSave}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-              Save
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setEditing(false);
-                setDraft("");
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-60"
-            >
-              <X className="h-3 w-3" />
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Codex CLI API key (super_admin only, system-wide) ────────────────────────
-//
-// Sibling of `ClaudeOauthTokenRow`. The agent_service container persists the
-// key to /home/agent/.codex/.api-key and exports it as OPENAI_API_KEY at
-// startup so every spawned `codex` CLI authenticates without `codex login`
-// inside the container. Token lifecycle is identical to the Claude OAuth row;
-// the only differences are wording ("API key" vs "OAuth token") and the env
-// var name we surface.
-
-function CodexApiKeyRow({
-  entry,
-  reload,
-  setError,
-}: {
-  entry: { configured: boolean; masked: string | null; updatedAt: string | null } | null;
-  reload: () => Promise<void>;
-  setError: (msg: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const safeEntry = entry ?? { configured: false, masked: null, updatedAt: null };
-
-  async function handleSave() {
-    const trimmed = draft.trim();
-    if (!trimmed) {
-      setError("API key cannot be empty. Use Remove to clear it.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await admin.setCodexApiKey(trimmed);
-      setDraft("");
-      setEditing(false);
-      await reload();
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to save key.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleDelete() {
-    setBusy(true);
-    try {
-      await admin.deleteCodexApiKey();
-      setDraft("");
-      setEditing(false);
-      await reload();
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to remove key.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const tooltip =
-    "Fallback OpenAI API key for the Codex CLI. Saved on the agent_service " +
-    "container and exported as OPENAI_API_KEY. Use auth.json for ChatGPT-account " +
-    "Codex login; Codex prefers auth.json when both are configured.";
-
-  return (
-    <div className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <div
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600"
-          title={tooltip}
-        >
-          <Terminal className="h-4 w-4" />
-        </div>
-        <span
-          className="min-w-0 truncate text-sm font-semibold text-gray-900"
-          title={tooltip}
-        >
-          Codex CLI API Key Fallback
-        </span>
-        {safeEntry.configured ? (
-          <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
-            Configured
-          </span>
-        ) : (
-          <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
-            Missing
-          </span>
-        )}
-      </div>
-
-      <p className="mt-2 text-[11px] leading-relaxed text-gray-500" title={tooltip}>
-        Fallback: sets <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
-          OPENAI_API_KEY
-        </code> on the agent_service container so the spawned <code>codex</code>{" "}
-        CLI can authenticate when no auth.json is configured.
-      </p>
-
-      {safeEntry.configured && safeEntry.masked && (
-        <div className="mt-2 font-mono text-[11px] text-gray-500">{safeEntry.masked}</div>
-      )}
-
-      {!editing ? (
-        <div className="mt-3 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-          >
-            <Pencil className="h-3 w-3" />
-            {safeEntry.configured ? "Replace" : "Set key"}
-          </button>
-          {safeEntry.configured && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleDelete}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-              Remove
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="mt-3 space-y-2">
-          <input
-            type="password"
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Paste OpenAI API key"
-            className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
-          />
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={busy || !draft.trim()}
-              onClick={handleSave}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-              Save
-            </button>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                setEditing(false);
-                setDraft("");
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600 hover:bg-gray-50 disabled:opacity-60"
-            >
-              <X className="h-3 w-3" />
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Codex CLI auth.json (super_admin only, system-wide) ──────────────────────
-//
-// The ChatGPT-account login path. After a super_admin runs `codex login` on
-// their workstation, they paste the contents of `~/.codex/auth.json` here.
-// The agent_service writes it to /home/agent/.codex/auth.json (chowned to
-// `agent` so the spawned codex can read it directly — codex doesn't accept
-// an env-var equivalent for this credential bundle). Codex prefers
-// auth.json over OPENAI_API_KEY when both are present.
-
-function CodexAuthJsonRow({
-  entry,
-  reload,
-  setError,
-}: {
-  entry: {
-    configured: boolean;
-    accountIdSuffix: string | null;
-    accessTokenMasked: string | null;
-    hasRefreshToken: boolean;
-    hasOpenaiApiKey: boolean;
-    lastRefresh: string | null;
-    updatedAt: string | null;
-  } | null;
-  reload: () => Promise<void>;
-  setError: (msg: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const safeEntry =
-    entry ?? {
-      configured: false,
-      accountIdSuffix: null,
-      accessTokenMasked: null,
-      hasRefreshToken: false,
-      hasOpenaiApiKey: false,
-      lastRefresh: null,
-      updatedAt: null,
-    };
-
-  async function handleSave() {
-    const trimmed = draft.trim();
-    if (!trimmed) {
-      setError("auth.json cannot be empty. Paste the full file or use Remove to clear it.");
-      return;
-    }
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        setError("auth.json must be a JSON object.");
-        return;
-      }
-    } catch (err: any) {
-      setError(`auth.json is not valid JSON: ${err?.message ?? err}`);
-      return;
-    }
-    setBusy(true);
-    try {
-      await admin.setCodexAuthJson(trimmed);
-      setDraft("");
-      setEditing(false);
-      await reload();
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to save auth.json.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleFileSelected(file: File | null) {
-    if (!file) return;
-    setBusy(true);
-    try {
-      const text = await file.text();
-      const trimmed = text.trim();
-      if (!trimmed) {
-        setError("Selected auth.json file is empty.");
-        return;
-      }
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-          setError("auth.json must be a JSON object.");
-          return;
-        }
-      } catch (err: any) {
-        setError(`Selected auth.json is not valid JSON: ${err?.message ?? err}`);
-        return;
-      }
-      setDraft(trimmed);
-      setEditing(true);
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to read auth.json file.");
-    } finally {
-      setBusy(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
-  }
-
-  async function handleDelete() {
-    setBusy(true);
-    try {
-      await admin.deleteCodexAuthJson();
-      setDraft("");
-      setEditing(false);
-      await reload();
-    } catch (err: any) {
-      setError(err?.message ?? "Failed to remove auth.json.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const tooltip =
-    "Codex CLI ChatGPT-account login. Upload or paste the contents of ~/.codex/auth.json " +
-    "from a workstation where you've already run `codex login`. The agent_service " +
-    "writes it to /home/agent/.codex/auth.json with owner=agent so the spawned " +
-    "codex can read it. Codex prefers this over OPENAI_API_KEY when both exist.";
-
-  return (
-    <div className="min-w-0 rounded-xl border border-gray-200/60 bg-white p-4 shadow-glass transition-all duration-200">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <div
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl border border-gray-200/80 bg-gray-50 text-gray-600"
-          title={tooltip}
-        >
-          <Terminal className="h-4 w-4" />
-        </div>
-        <span
-          className="min-w-0 truncate text-sm font-semibold text-gray-900"
-          title={tooltip}
-        >
-          Codex CLI Login File
-        </span>
-        {safeEntry.configured ? (
-          <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
-            Configured
-          </span>
-        ) : (
-          <span className="ml-auto rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
-            Missing
-          </span>
-        )}
-      </div>
-
-      <p className="mt-2 text-[11px] leading-relaxed text-gray-500" title={tooltip}>
-        Writes <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
-          /home/agent/.codex/auth.json
-        </code>{" "}
-        from the contents of your workstation&apos;s file. Run{" "}
-        <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
-          codex login
-        </code>{" "}
-        locally first, then upload or paste{" "}
-        <code className="rounded bg-gray-100 px-1 py-0.5 font-mono text-[10px]">
-          ~/.codex/auth.json
-        </code>{" "}
-        below.
-      </p>
-
-      {safeEntry.configured && (
-        <div className="mt-2 space-y-0.5 font-mono text-[11px] text-gray-500">
-          {safeEntry.accountIdSuffix && (
-            <div>
-              <span className="text-gray-400">account:</span>{" "}
-              {safeEntry.accountIdSuffix}
-            </div>
-          )}
-          {safeEntry.accessTokenMasked && (
-            <div>
-              <span className="text-gray-400">access_token:</span>{" "}
-              {safeEntry.accessTokenMasked}
-            </div>
-          )}
-          <div>
-            <span className="text-gray-400">refresh_token:</span>{" "}
-            {safeEntry.hasRefreshToken ? "present" : "—"}
-            {"  "}
-            <span className="text-gray-400">api_key:</span>{" "}
-            {safeEntry.hasOpenaiApiKey ? "present" : "—"}
-          </div>
-          {safeEntry.lastRefresh && (
-            <div>
-              <span className="text-gray-400">last_refresh:</span>{" "}
-              {safeEntry.lastRefresh}
-            </div>
-          )}
-        </div>
-      )}
-
-      {!editing ? (
-        <div className="mt-3 flex items-center gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".json,application/json"
-            className="hidden"
-            onChange={(e) => {
-              void handleFileSelected(e.target.files?.[0] ?? null);
+            onClick={() => {
+              setDraftKeyType("api_key");
+              setEditing(true);
             }}
-          />
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-600 disabled:opacity-60"
-          >
-            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
-            Upload file
-          </button>
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
           >
-            <FileText className="h-3 w-3" />
-            Paste JSON
+            <Pencil className="h-3 w-3" />
+            {entry.hasApiKey ? "Add / replace" : "Set credential"}
           </button>
-          {safeEntry.configured && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={handleDelete}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-2.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
-            >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-              Remove
-            </button>
+          {/* OpenAI gets a one-click "Upload auth.json" button so admins
+              don't have to copy-paste a structured blob into the textarea. */}
+          {isOpenAi && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json,application/json"
+                className="hidden"
+                onChange={(e) => {
+                  void handleFileSelected(e.target.files?.[0] ?? null);
+                }}
+              />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => fileInputRef.current?.click()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                title="Upload your workstation's ~/.codex/auth.json file"
+              >
+                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
+                Upload auth.json
+              </button>
+            </>
           )}
         </div>
       ) : (
         <div className="mt-3 space-y-2">
-          <textarea
-            autoFocus
-            spellCheck={false}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder='{"OPENAI_API_KEY": null, "tokens": {"id_token": "…", "access_token": "…", "refresh_token": "…", "account_id": "…"}, "last_refresh": "…"}'
-            rows={8}
-            className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 font-mono text-[11px] focus:border-amber-400 focus:outline-none"
-          />
+          {/* Type toggle. OpenAI shows api_key + auth_object; every other
+              vendor shows api_key + oauth_token. */}
+          <div className="flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="font-semibold text-gray-600">Type:</span>
+            {visibleKeyTypes.map((kt) => (
+              <label key={kt} className="inline-flex items-center gap-1">
+                <input
+                  type="radio"
+                  name={`keyType-${entry.vendorId}`}
+                  value={kt}
+                  checked={draftKeyType === kt}
+                  onChange={() => {
+                    setDraftKeyType(kt);
+                    // Clear the textarea/input when switching types — the
+                    // accepted shape (string vs JSON object) differs.
+                    setDraft("");
+                  }}
+                />
+                {vendorKeyTypeLabel(kt)}
+              </label>
+            ))}
+          </div>
+          {draftKeyType === "auth_object" ? (
+            <textarea
+              autoFocus
+              spellCheck={false}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder='{"OPENAI_API_KEY": null, "tokens": {"id_token": "…", "access_token": "…", "refresh_token": "…", "account_id": "…"}, "last_refresh": "…"}'
+              rows={8}
+              className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 font-mono text-[11px] focus:border-amber-400 focus:outline-none"
+            />
+          ) : (
+            <input
+              type="password"
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              placeholder={
+                isOpenAi
+                  ? "Paste OpenAI API key (sk-…)"
+                  : draftKeyType === "oauth_token"
+                    ? "Paste OAuth token (sk-ant-oat…)"
+                    : "Paste API key (sk-ant-api…)"
+              }
+              className="w-full rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs focus:border-amber-400 focus:outline-none"
+            />
+          )}
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -3949,6 +3887,156 @@ function CodexAuthJsonRow({
               Cancel
             </button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// `ClaudeOauthTokenRow` removed. Anthropic credentials are now per-org
+// (uploaded as OAuth token or API key on the vendor row above). Both the
+// Agent SDK runtime and spawned `claude` CLI subprocesses authenticate
+// against that per-org credential — there is no deployment-level token.
+
+
+// `CodexAuthJsonRow` removed (slice 14). The Codex CLI ChatGPT-account
+// login (`auth.json`) is now stored per-org as a `keyType: "auth_object"`
+// row on `organization_vendor_api_keys` for the OpenAI vendor — the same
+// surface every other vendor credential lives on. The agent_service Codex
+// SDK runner reads the blob from the DB at invocation time and
+// materialises it to a per-turn temp $HOME so concurrent turns from
+// different orgs cannot race on a shared file.
+
+// ── Embedding model picker (slice 15) ────────────────────────────────────────
+// Per-org embedding configuration card. Surfaces the catalog of supported
+// embedding models, the org's current pick, and the setup-status chips
+// (missing model / missing key). Refuses dim-changing switches via a
+// server-side 409 — the user-visible behaviour is "the new option appears
+// disabled with a tooltip explaining why" so admins don't try to pick it
+// in the first place.
+function EmbeddingConfigCard({
+  choice,
+  catalog,
+  reload,
+  setError,
+}: {
+  choice: OrgEmbeddingChoice | null;
+  catalog: EmbeddingCatalogEntry[];
+  reload: () => Promise<void>;
+  setError: (msg: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  const frozenDim = choice?.frozenDimension ?? null;
+  const currentId = choice?.current?.id ?? null;
+  const setupComplete = choice?.setup.complete ?? false;
+  const missing = choice?.setup.missing ?? [];
+
+  async function handlePick(modelId: string) {
+    if (busy || modelId === currentId) return;
+    setBusy(true);
+    try {
+      await admin.setEmbeddingChoice(modelId);
+      await reload();
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to set embedding model.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="w-full min-w-0 lg:col-span-2 rounded-2xl border border-gray-200/60 bg-white/80 p-4 sm:p-6 shadow-glass backdrop-blur-sm">
+      <h2 className="mb-2 flex items-center gap-2.5 text-sm font-bold text-gray-900">
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-fuchsia-500 to-pink-600 text-white shadow-sm">
+          <Cpu className="h-4 w-4" />
+        </div>
+        Embedding Model
+        {setupComplete ? (
+          <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-600">
+            <CheckCircle2 className="h-3 w-3" />
+            Ready
+          </span>
+        ) : (
+          <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold text-red-500">
+            <XCircle className="h-3 w-3" />
+            Setup required
+          </span>
+        )}
+      </h2>
+      <p className="mb-4 text-xs text-gray-500">
+        Pick the model used for episodic-memory embeddings across this
+        organization. Once chosen, the dimension is frozen — switching to a
+        model with a different dimension is refused (the existing vector
+        store would become unreadable).{" "}
+        {missing.includes("embedding_key") && (
+          <span className="text-red-600 font-medium">
+            Add an{" "}
+            {choice?.setup.embeddingVendorSlug
+              ? `${choice.setup.embeddingVendorSlug} `
+              : ""}
+            API key in the Credentials card above (any keyType{" "}
+            <code>api_key</code> or <code>embedding</code> works).
+          </span>
+        )}
+      </p>
+
+      {catalog.length === 0 ? (
+        <p className="py-2 text-xs text-gray-400">
+          No embedding models in the catalog. Run the latest migrations.
+        </p>
+      ) : (
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+          {catalog.map((m) => {
+            const isCurrent = m.id === currentId;
+            const dimMismatch =
+              frozenDim !== null && m.dimension !== frozenDim;
+            const disabled = busy || dimMismatch;
+            const tooltip = dimMismatch
+              ? `Dimension ${m.dimension} ≠ frozen ${frozenDim}. Wipe episodic memory first.`
+              : isCurrent
+                ? "Current model"
+                : "";
+            return (
+              <button
+                key={m.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => handlePick(m.id)}
+                title={tooltip}
+                className={`group relative flex items-start gap-3 rounded-xl border p-3 text-left transition-all duration-200 ${
+                  isCurrent
+                    ? "border-fuchsia-300 bg-fuchsia-50/60 shadow-sm"
+                    : "border-gray-200/80 bg-white hover:border-fuchsia-300 hover:bg-white"
+                } ${disabled ? "cursor-not-allowed opacity-60" : ""}`}
+              >
+                <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-fuchsia-500 to-pink-600 text-white shadow-sm">
+                  <Cpu className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-gray-900">
+                      {m.name}
+                    </span>
+                    {isCurrent && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    {m.vendor.name} · {m.dimension}-dim · <code>{m.slug}</code>
+                  </p>
+                  {dimMismatch && (
+                    <p className="mt-1 text-[10px] font-medium text-red-500">
+                      Dim mismatch — locked
+                    </p>
+                  )}
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

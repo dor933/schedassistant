@@ -2,7 +2,7 @@ import { createDeepAgent } from "deepagents";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { ChatOpenAI } from "@langchain/openai";
 import { logger } from "../logger";
-import { resolveOrgVendorByOrg } from "../services/resolveOrgVendor.service";
+import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import { getLangfuseCallbackHandler, flushLangfuse } from "../langfuse";
 import type { AskGrahamyState, CachedResearchObject } from "./types";
 

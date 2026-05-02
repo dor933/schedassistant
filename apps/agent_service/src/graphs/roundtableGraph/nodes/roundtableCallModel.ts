@@ -13,15 +13,16 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { resolveModelSlug } from "../../../chat/modelResolution";
-import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
+import { anthropicBaseConfig } from "../../../chat/anthropic/anthropicContextManagement";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
-import { resolveOrgVendor } from "../../../services/resolveOrgVendor.service";
+import { resolveOrgVendor } from "../../../utils/resolveOrgVendor.service";
 
 import { EditUserIdentityTool } from "../../../tools/editUserIdentityTool";
 import { EditAgentNameTool } from "../../../tools/agentNameTool";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
+import { ListClaudeSubAgentsTool } from "../../../tools/listClaudeSubAgentsTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
 import { SyncDelegateToDeepAgentTool } from "../../../tools/syncDelegateToDeepAgentTool";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
@@ -34,12 +35,12 @@ import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
-import { RunClaudeCliTool, RunCodexCliTool } from "../../../tools/runCliTools";
-import { KillCliExecutionTool } from "../../../tools/killCliExecutionTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
 import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
+import { runAnthropicAgentSdk, shouldUseAgentSdk } from "../../../chat/anthropic/agentSdkRunner";
+import { runOpenAiCodexSdk, shouldUseCodexSdk } from "../../../chat/codex/codexSdkRunner";
 
 const MAX_TOOL_ROUNDS = 15;
 
@@ -251,12 +252,60 @@ export async function roundtableCallModelNode(
     tools.push(ListRepositoriesTool());
   if (has("query_database"))
     tools.push(QueryDatabaseTool());
-  if (has("run_claude_cli"))
-    tools.push(RunClaudeCliTool(agentId, state.userId, threadId));
-  if (has("run_codex_cli"))
-    tools.push(RunCodexCliTool(agentId, state.userId, threadId));
-  if (has("kill_cli_execution"))
-    tools.push(KillCliExecutionTool(agentId, state.userId));
+
+  // Vendor-conditional auto-bind for Claude Agent SDK's `Task` discovery
+  // (slice 19). The roundtable runner doesn't pass sub-agent bundles to
+  // the SDK today, so the bound tool will always return "no sub-agents
+  // attached" — but auto-binding it on Anthropic still keeps behaviour
+  // uniform across graphs and prevents future drift if the roundtable
+  // runner later acquires sub-agent fan-out.
+  if (vendor.vendorSlug === "anthropic") {
+    tools.push(ListClaudeSubAgentsTool(agentId));
+  }
+
+  // ─── Anthropic Agent SDK runtime branch ────────────────────────────────────
+  //
+  // Roundtables share threadId across multiple agents (one shared Claude
+  // session would mix histories), so for roundtable turns we always run with
+  // a fresh session — the per-agent contextBuilder builds an attribution-safe
+  // prompt and the legacy code already collapses other-agent blocks into
+  // named HumanMessages. Resume of a prior session would re-mix those.
+  //
+  // We accomplish this by writing a null `claudeSessionId` into the runner's
+  // input state — `runAnthropicAgentSdk` reads `state.claudeSessionId` first
+  // before falling back to the DB column. Forcing it to null per turn means
+  // every roundtable invocation starts fresh, while the basicGraph keeps full
+  // session continuity.
+  if (shouldUseAgentSdk(vendor.vendorSlug)) {
+    return runAnthropicAgentSdk({
+      state: { ...state, claudeSessionId: null },
+      config,
+      tools,
+      vendor,
+      modelSlug,
+      maxTurns: MAX_TOOL_ROUNDS,
+      source: "roundtable_agent",
+    });
+  }
+
+  // ─── OpenAI Codex SDK runtime branch ───────────────────────────────────
+  //
+  // Same fresh-thread policy as the Anthropic branch: roundtables share
+  // one threadId across multiple agents, and reusing a vendor-side session
+  // would mix per-agent histories. Force `codexThreadId: null` per turn
+  // so each roundtable invocation starts a fresh Codex thread; the
+  // per-agent contextBuilder still builds an attribution-safe prompt.
+  if (shouldUseCodexSdk(vendor.vendorSlug)) {
+    return runOpenAiCodexSdk({
+      state: { ...state, codexThreadId: null },
+      config,
+      tools,
+      vendor,
+      modelSlug,
+      maxTurns: MAX_TOOL_ROUNDS,
+      source: "roundtable_agent",
+    });
+  }
 
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

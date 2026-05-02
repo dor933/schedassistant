@@ -26,13 +26,32 @@ export class VendorApiKeysController {
     if (typeof vendorId !== "string" || !vendorId) {
       return res.status(400).json({ error: "vendorId is required." });
     }
-    const { apiKey } = req.body ?? {};
-    if (typeof apiKey !== "string") {
-      return res.status(400).json({ error: "apiKey must be a string." });
+    const { apiKey, authObject, keyType } = req.body ?? {};
+    if (apiKey !== undefined && typeof apiKey !== "string") {
+      return res.status(400).json({ error: "apiKey, when provided, must be a string." });
+    }
+    if (
+      authObject !== undefined &&
+      typeof authObject !== "string" &&
+      (typeof authObject !== "object" || authObject === null)
+    ) {
+      return res
+        .status(400)
+        .json({ error: "authObject, when provided, must be a JSON object or string." });
+    }
+    if (keyType !== undefined && typeof keyType !== "string") {
+      return res.status(400).json({ error: "keyType, when provided, must be a string." });
     }
     try {
       const orgId = req.user!.organizationId;
-      const result = await this.service.set(orgId, vendorId, apiKey, req.user!.userId);
+      const result = await this.service.set(
+        orgId,
+        vendorId,
+        { apiKey, authObject },
+        req.user!.userId,
+        // Service validates the enum and throws 400 on bad values.
+        (keyType ?? "api_key") as "api_key" | "oauth_token" | "auth_object" | "embedding",
+      );
       return res.json(result);
     } catch (err: any) {
       if (err?.status) return res.status(err.status).json({ error: err.message });
@@ -46,9 +65,20 @@ export class VendorApiKeysController {
     if (typeof vendorId !== "string" || !vendorId) {
       return res.status(400).json({ error: "vendorId is required." });
     }
+    // Optional `keyType` query param scopes the delete to one credential
+    // kind; absent → removes all credentials for the vendor (legacy UX).
+    const keyTypeParam = req.query.keyType;
+    if (keyTypeParam !== undefined && typeof keyTypeParam !== "string") {
+      return res.status(400).json({ error: "keyType query param must be a string." });
+    }
     try {
       const orgId = req.user!.organizationId;
-      const result = await this.service.remove(orgId, vendorId, req.user!.userId);
+      const result = await this.service.remove(
+        orgId,
+        vendorId,
+        req.user!.userId,
+        keyTypeParam as "api_key" | "oauth_token" | "auth_object" | "embedding" | undefined,
+      );
       return res.json(result);
     } catch (err: any) {
       if (err?.status) return res.status(err.status).json({ error: err.message });

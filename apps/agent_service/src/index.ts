@@ -32,11 +32,8 @@ import {
 import { cronAgentQueue, cronAgentQueueEvents } from "./queues/cronAgent.bull";
 import { roundtableQueueEvents } from "./queues/roundtable.bull";
 import { attachAgentSocketIO } from "./socket";
-import { loadIntoEnv as loadClaudeOauthTokenIntoEnv } from "./services/claudeOauthToken.service";
-import { loadIntoEnv as loadCodexAuthTokenIntoEnv } from "./services/codexAuthToken.service";
 import { renderCodexConfigToml } from "./services/codexConfigToml.service";
 import { renderClaudeMcpConfig } from "./services/claudeMcpConfig.service";
-import { markStaleRunningExecutions } from "./utils/cliExecution";
 import { logger } from "./logger";
 
 const PORT = parseInt(process.env.PORT ?? "3001", 10);
@@ -44,15 +41,10 @@ const PORT = parseInt(process.env.PORT ?? "3001", 10);
 async function main(): Promise<void> {
   logger.info("Starting agent_service…");
 
-  // Load the persisted Claude Code OAuth token (set from the admin UI) into
-  // process.env so every spawned `claude` CLI inherits CLAUDE_CODE_OAUTH_TOKEN
-  // via `agentSpawnEnv()` and skips the interactive login.
-  loadClaudeOauthTokenIntoEnv();
-
-  // Same pattern for the Codex CLI's OPENAI_API_KEY (separate admin endpoint,
-  // separate file under /home/agent/.codex). No-op if not configured — codex
-  // can still fall back to ~/.codex/auth.json from `codex login`.
-  loadCodexAuthTokenIntoEnv();
+  // Deployment-level CLI credential loading removed — per-org credentials
+  // resolved from `organization_vendor_api_keys` are pinned per-call by SDK
+  // helpers (env scrubbed + injected fresh on each invocation), so nothing
+  // here needs to read or set OPENAI_API_KEY / ANTHROPIC_API_KEY at startup.
 
   if (isLangfuseConfigured()) {
     try {
@@ -68,17 +60,6 @@ async function main(): Promise<void> {
   // 1. Verify database connectivity.
   await sequelize.authenticate();
   logger.info("Database connection OK");
-
-  // Sweep cli_executions rows orphaned by a previous container life. The OS
-  // process is gone, but the row would still say running and incorrectly
-  // gate new spawns through the busy check (DB-side accounting). Idempotent.
-  try {
-    await markStaleRunningExecutions();
-  } catch (err) {
-    logger.warn("cli_executions startup sweep failed (non-fatal)", {
-      error: String(err),
-    });
-  }
 
   // Codex reads MCP server definitions from ~/.codex/config.toml, not from
   // env or CLI flags. Re-render from the DB on boot so restarts pick up the

@@ -10,15 +10,27 @@ import {
 } from "@scheduling-agent/database";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { resolveModelSlug } from "../../chat/modelResolution";
-import { anthropicBaseConfig } from "../../chat/anthropicContextManagement";
-import { resolveOrgVendor } from "../../services/resolveOrgVendor.service";
+import { anthropicBaseConfig } from "../../chat/anthropic/anthropicContextManagement";
+import { resolveOrgVendor } from "../../utils/resolveOrgVendor.service";
 import {
   observeWithContext,
   getLangfuseCallbackHandler,
   flushLangfuse,
 } from "../../langfuse";
 import { logger } from "../../logger";
+import { runCodexOneShot } from "../../chat/codex/codexOneShot";
+import { loadCodexAuthObjectForAgent } from "../../utils/codexAuthJson.service";
+import { shouldUseCodexSdk } from "../../chat/codex/codexSdkRunner";
+import { runAnthropicOneShot } from "../../chat/anthropic/anthropicOneShot";
+import { shouldUseAgentSdk } from "../../chat/anthropic/agentSdkRunner";
 
+/**
+ * Builds a LangChain `BaseChatModel` for the non-Codex paths
+ * (Anthropic, Google, and the kill-switch fallback to ChatOpenAI).
+ * The OpenAI happy path no longer reaches this — it goes through
+ * `runCodexOneShot` below — but we keep ChatOpenAI here so
+ * `CODEX_SDK_DISABLED=1` cleanly falls back without code changes.
+ */
 function getModel(
   modelSlug: string,
   vendorSlug: string,
@@ -125,12 +137,20 @@ export async function summarizeRoundtable(
       `Cannot summarize roundtable: unknown model "${modelSlug}" or no organization on the primary agent`,
     );
   }
-  if (!vendor.apiKey) {
+  // Per slice 14: OpenAI may store its credential as a structured Codex
+  // auth.json blob (key_type='auth_object') instead of a plain API key.
+  // Look up the auth_object alongside the api_key so we can satisfy the
+  // "must have at least one credential" check whichever path the org
+  // configured.
+  const codexAuthObject =
+    vendor.vendorSlug === "openai"
+      ? await loadCodexAuthObjectForAgent(primaryAgentId)
+      : null;
+  if (!vendor.apiKey && !codexAuthObject) {
     throw new Error(
       `Cannot summarize roundtable: this organization has not configured an API key for ${vendor.vendorSlug}`,
     );
   }
-  const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
 
   // ── Build the transcript ──────────────────────────────────────────────
   const participantLines = agents.map((ra) => {
@@ -162,28 +182,105 @@ export async function summarizeRoundtable(
     graph: "roundtable_summary",
   });
 
-  const response = await observeWithContext(
-    "roundtable_summary",
-    () =>
-      model.invoke(
-        [new SystemMessage(SYSTEM_PROMPT), new HumanMessage(userPrompt)],
-        langfuseHandler
-          ? ({
-            callbacks: [langfuseHandler],
-          } as RunnableConfig)
-          : undefined,
-      ),
-    {
-      roundtableId,
-      threadId: roundtable.threadId,
-      participantCount: agents.length,
-      messageCount: messages.length,
-      topicPreview:
-        typeof roundtable.topic === "string"
-          ? roundtable.topic.substring(0, 200)
-          : "",
-    },
-  );
+  // ── Vendor branch ────────────────────────────────────────────────────
+  // Each vendor runs through its own native SDK in a tool-less one-shot:
+  //   - openai    → Codex SDK
+  //   - anthropic → Claude Agent SDK (covers both API-key and OAuth-token
+  //                 orgs; ChatAnthropic only handles API keys, so the
+  //                 SDK path is the only thing that works for Pro/Max
+  //                 subscription billing).
+  //   - google or kill-switch fallback → LangChain `model.invoke`.
+  // No structured output here — roundtable summaries are plain prose,
+  // so the SDK branches just return the text directly.
+  let text: string;
+  const useCodex =
+    vendor.vendorSlug === "openai" && shouldUseCodexSdk(vendor.vendorSlug);
+  const useAnthropicSdk =
+    vendor.vendorSlug === "anthropic" && shouldUseAgentSdk(vendor.vendorSlug);
+  const observeMeta = {
+    roundtableId,
+    threadId: roundtable.threadId,
+    participantCount: agents.length,
+    messageCount: messages.length,
+    topicPreview:
+      typeof roundtable.topic === "string"
+        ? roundtable.topic.substring(0, 200)
+        : "",
+  };
+
+  if (useCodex) {
+    text = await observeWithContext(
+      "roundtable_summary",
+      () =>
+        runCodexOneShot({
+          // Prefer auth_object when configured — same priority rule as
+          // the Codex SDK runner. Falls back to the api_key row when
+          // the org only configured a plain OpenAI key.
+          apiKey: codexAuthObject ? null : (vendor.apiKey ?? null),
+          authObject: codexAuthObject,
+          model: modelSlug,
+          systemPrompt: SYSTEM_PROMPT,
+          userPrompt,
+        }),
+      observeMeta,
+    );
+    if (!text || text.trim().length === 0) {
+      text = "_The model did not produce a summary._";
+    }
+  } else if (useAnthropicSdk) {
+    text = await observeWithContext(
+      "roundtable_summary",
+      () =>
+        runAnthropicOneShot({
+          credential: vendor.apiKey ?? "",
+          keyType: vendor.keyType,
+          model: modelSlug,
+          systemPrompt: SYSTEM_PROMPT,
+          userPrompt,
+        }),
+      observeMeta,
+    );
+    if (!text || text.trim().length === 0) {
+      text = "_The model did not produce a summary._";
+    }
+  } else {
+    // The LangChain fallback path can't speak the auth_object protocol —
+    // it expects a plain key string in env-var-style auth. If we landed
+    // here it's because the SDK was kill-switched off; require a real
+    // api_key row to be configured.
+    if (!vendor.apiKey) {
+      throw new Error(
+        `Cannot summarize roundtable: SDK fallback requires an api_key for ${vendor.vendorSlug}, but the org only has an auth_object.`,
+      );
+    }
+    const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
+    const response = await observeWithContext(
+      "roundtable_summary",
+      () =>
+        model.invoke(
+          [new SystemMessage(SYSTEM_PROMPT), new HumanMessage(userPrompt)],
+          langfuseHandler
+            ? ({
+                callbacks: [langfuseHandler],
+              } as RunnableConfig)
+            : undefined,
+        ),
+      observeMeta,
+    );
+    const raw = response.content;
+    if (typeof raw === "string") {
+      text = raw;
+    } else if (Array.isArray(raw)) {
+      text =
+        raw
+          .filter((b: any) => b?.type === "text" && typeof b.text === "string")
+          .map((b: any) => b.text)
+          .join("\n")
+          .trim() || "_The model did not produce a summary._";
+    } else {
+      text = "_The model did not produce a summary._";
+    }
+  }
 
   try {
     await flushLangfuse();
@@ -191,25 +288,15 @@ export async function summarizeRoundtable(
     /* flush errors are logged inside flushLangfuse */
   }
 
-  const raw = response.content;
-  let text: string;
-  if (typeof raw === "string") {
-    text = raw;
-  } else if (Array.isArray(raw)) {
-    text =
-      raw
-        .filter((b: any) => b?.type === "text" && typeof b.text === "string")
-        .map((b: any) => b.text)
-        .join("\n")
-        .trim() || "_The model did not produce a summary._";
-  } else {
-    text = "_The model did not produce a summary._";
-  }
-
   logger.info("Roundtable summary generated", {
     roundtableId,
     modelSlug,
     vendor: vendor.vendorSlug,
+    runtime: useCodex
+      ? "codex_one_shot"
+      : useAnthropicSdk
+        ? "anthropic_one_shot"
+        : "langchain",
     summaryLen: text.length,
   });
 

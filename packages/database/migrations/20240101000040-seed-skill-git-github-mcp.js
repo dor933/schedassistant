@@ -4,7 +4,9 @@
  * Seeds one Skill row per slug — assign skills to agents independently via the UI (`agents_skills`).
  * Idempotent: INSERT … WHERE NOT EXISTS on `slug`.
  *
- * MCP servers referenced: bash, fetch, github, docker, massive_market_data (see `mcp_servers` seed).
+ * MCP servers referenced: fetch, github, docker, massive_market_data (see `mcp_servers` seed).
+ * Shell access is provided by the SDK's native `Bash` tool, not an MCP — gated per-agent by
+ * `agents.allow_sdk_bash`.
  *
  * @type {import('sequelize-cli').Migration}
  */
@@ -37,12 +39,14 @@ const SKILLS = [
   {
     slug: "gh-cli",
     name: "Git & GitHub CLI (git + gh)",
-    description: "All git operations (clone, commit, push, branch, merge) and GitHub operations (PRs, issues, checks) via git and gh CLI through bash MCP.",
+    description: "All git operations (clone, commit, push, branch, merge) and GitHub operations (PRs, issues, checks) via git and gh CLI through the SDK Bash tool.",
     skillText: `# Git & GitHub CLI (\`git\` + \`gh\`)
 
 ## What this is
 Both **\`git\`** and **\`gh\`** CLIs are installed in the container.
-Use them through the **bash MCP** (\`mcp-shell\`) — run commands like any other shell command.
+Use them through the **Bash** tool (built into the Claude Agent SDK; requires
+\`agents.allow_sdk_bash=true\` for this agent) — run commands like any other
+shell command.
 
 ## Authentication
 
@@ -143,7 +147,7 @@ gh run list
 > edit existing files, create directories, or move/rename files — use this skill.
 >
 > **This is NOT a shell.** You cannot run commands (\`npm\`, \`git\`, \`pytest\`, \`curl\`, etc.) through this skill.
-> For running commands, use the **bash** MCP skills (\`gh-cli\`, \`mcp-bash-build-test\`).
+> For running commands, use the SDK \`Bash\` tool (skills: \`gh-cli\`, \`mcp-bash-build-test\`).
 
 ## Server
 - **filesystem** (DB name) — \`npx -y @modelcontextprotocol/server-filesystem /app/data\`
@@ -160,9 +164,9 @@ gh run list
 ## When NOT to use this skill
 | Need | Use instead |
 |------|-------------|
-| Run \`git clone\`, \`git commit\`, \`git push\` | \`gh-cli\` (bash MCP) |
-| Run \`npm install\`, \`pytest\`, \`make build\` | \`mcp-bash-build-test\` (bash MCP) |
-| Run any shell command | bash MCP skills |
+| Run \`git clone\`, \`git commit\`, \`git push\` | \`gh-cli\` (SDK Bash) |
+| Run \`npm install\`, \`pytest\`, \`make build\` | \`mcp-bash-build-test\` (SDK Bash) |
+| Run any shell command | SDK \`Bash\` tool (any bash skill) |
 
 ## Available tools
 
@@ -193,12 +197,16 @@ gh run list
   },
   {
     slug: "mcp-bash-build-test",
-    name: "Build, test, lint (bash MCP)",
-    description: "Run package managers, test runners, linters, typecheck via bash MCP.",
-    skillText: `# Build & test — bash MCP
+    name: "Build, test, lint (SDK Bash)",
+    description: "Run package managers, test runners, linters, typecheck via the SDK Bash tool.",
+    skillText: `# Build & test — SDK \`Bash\` tool
 
-## Server
-- **bash** (\`mcp-shell\`)
+## Tool
+- **\`Bash\`** — built into the Claude Agent SDK. Requires
+  \`agents.allow_sdk_bash=true\` for this agent. Persistent shell session
+  across calls (cwd / env survive between invocations); supports
+  \`run_in_background\` for long-running commands and a companion
+  \`KillShell\` for runaway processes.
 
 ## Scope
 **Tooling**: \`npm\`/\`pnpm\`/\`yarn\`, \`pytest\`, \`jest\`, \`cargo test\`, \`go test\`, formatters, linters, typecheckers — run the **narrowest** command first when iterating.
@@ -276,15 +284,17 @@ Not a substitute for repo files — see \`mcp-filesystem-repo\` / \`dev-in-house
   },
 
   // ─── In-house: workspace vs skill library (split) — chat agents only ───
+  // Note: this row is overwritten by migration 100 with a longer dual-mode
+  // body. Keeping the placeholder text minimal here so a fresh-install
+  // ordering issue (if 100 fails) leaves an obviously-incomplete skill
+  // rather than a misleading single-surface description.
   {
     slug: "dev-in-house-workspace",
-    name: "Agent workspace (filesystem MCP)",
-    description: "Persistent .md / .txt workspace served by the filesystem MCP (rooted at /app/data).",
-    skillText: `# Agent workspace
+    name: "Agent workspace",
+    description: "Persistent .md / .txt workspace. Tool surface depends on the runtime — see body for both SDK built-ins and filesystem MCP variants.",
+    skillText: `# Agent workspace (placeholder — see migration 100 for the full body)
 
-Private persistent scratchpad served by the **filesystem MCP** (server \`filesystem\`, rooted at \`/app/data\`). Use the absolute workspace path announced in your system prompt.
-
-- \`list_directory\`, \`read_text_file\`, \`write_file\`, \`edit_file\`, \`search_files\`
+Persistent scratchpad served either by the SDK built-in file tools (\`Read\` / \`Write\` / \`Edit\`, on the Anthropic SDK path) or by the filesystem MCP (\`read_text_file\` / \`write_file\` / \`edit_file\`, when filesystem MCP is attached). Migration 100 installs the full dual-mode skill text describing both surfaces — running migrations to head will replace this row.
 
 ## Related
 - Shared library reads → \`dev-in-house-library-mcp\`.

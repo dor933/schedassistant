@@ -31,11 +31,8 @@ import { logger } from "../logger";
 import {
   buildArchitectureOverviewPrompt,
   MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
-} from "../services/architectureOverviewPrompt.service";
-import {
-  runCliExecution,
-  CliBusyError,
-} from "./cliExecution";
+} from "./architectureOverviewPrompt.service";
+import { runArchitectureScan } from "./architectureScan.service";
 
 // The agent_service container runs as root, but Claude CLI (and gh) must run
 // as the non-root `agent` user via `su-exec`. `su-exec` inherits env unchanged,
@@ -70,7 +67,7 @@ const agentSpawnEnv = (): NodeJS.ProcessEnv => ({
  * `HOME` is pinned to `/home/agent` so git uses the agent user's config and
  * credential helpers instead of root's (empty) ones.
  */
-function gitAsAgent(
+export function gitAsAgent(
   cwd: string,
   args: string[],
   options: { timeoutMs?: number; maxBufferBytes?: number } = {},
@@ -172,7 +169,6 @@ export async function getEpic(
 export async function startExecution(
   taskId: AgentTaskId,
   data: {
-    cliSessionId?: string;
     prompt?: string;
     metadata?: Record<string, unknown>;
   } = {},
@@ -186,7 +182,6 @@ export async function startExecution(
   return TaskExecution.create({
     agentTaskId: taskId,
     attemptNumber,
-    cliSessionId: data.cliSessionId ?? null,
     prompt: data.prompt ?? null,
     metadata: data.metadata ?? null,
   });
@@ -232,137 +227,6 @@ export async function failExecution(
   return execution;
 }
 
-export async function prepareRetry(
-  taskId: AgentTaskId,
-  feedback: string,
-): Promise<{
-  previousSessionId: string | null;
-  /** Continuation-style prompt — safe to use only with `--resume <previousSessionId>`. */
-  resumePrompt: string;
-  /** Standalone prompt — safe to use when starting a fresh CLI session with no prior memory. */
-  freshPrompt: string;
-}> {
-  const task = await AgentTask.findByPk(taskId);
-  const originalPrompt = task?.description ?? task?.title ?? "";
-
-  const lastExec = await TaskExecution.findOne({
-    where: { agentTaskId: taskId },
-    order: [["attempt_number", "DESC"]],
-  });
-  const previousSessionId = lastExec?.cliSessionId ?? null;
-
-  if (lastExec) {
-    await lastExec.update({ feedback });
-  }
-
-  // Pull diff context from the previous execution (if any).
-  let diffStat: string | undefined;
-  let fullDiff: string | undefined;
-  if (lastExec?.metadata) {
-    const meta = lastExec.metadata as Record<string, unknown>;
-    diffStat = meta.git_diff_stat as string | undefined;
-    fullDiff = meta.git_diff as string | undefined;
-  }
-
-  // Truncate diff once for both prompt variants.
-  const truncatedDiff =
-    fullDiff && fullDiff.length > 20000
-      ? fullDiff.slice(0, 20000) + "\n\n... (diff truncated)"
-      : fullDiff;
-
-  // ── Resume prompt ──
-  // Used ONLY when we successfully resume the previous Claude CLI session.
-  // The session already contains the original task description, the model's
-  // prior turns, and the tool outputs, so the wording is second-person
-  // ("you previously changed...") and does not restate the task.
-  //
-  // Important — the prior turns may have ended with the model believing the
-  // task was complete. A gentle "fix the issues" wrapper is read as a
-  // follow-up question and the model summarizes prior work instead of
-  // re-executing it (root cause of the "CLI ignores the path" symptom on
-  // retries — see attempt #4 trace, 2026-04-25). The wrapper below makes the
-  // re-execution requirement explicit and forbids "summarize what I did" as
-  // a valid reply.
-  const directiveTail =
-    "\n## This is a re-execution, not a follow-up question\n" +
-    "The orchestrator rejected your previous outcome. **The task is NOT complete.** You must re-run " +
-    "the actual work via tool calls (write_file / edit / bash / etc.), not just describe, summarize, " +
-    "or apologize for what you did before.\n\n" +
-    "Concretely:\n" +
-    "- Treat anything the previous attempt claimed to deliver as **not delivered** until you have a " +
-    "fresh tool result confirming it in this turn.\n" +
-    "- If the feedback names a specific output path, file, or behavior, **call the corresponding tool " +
-    "again now** to produce it — even if you remember writing it before. Permissions or paths that " +
-    "previously failed may have been fixed since.\n" +
-    "- If a prior write fell back to an alternate location because the original target wasn't " +
-    "writable, redo the write at the **originally-requested path**. Don't assume the previous failure " +
-    "still applies — verify with a tool call.\n" +
-    "- Your session memory (file reads, prior tool outputs, reasoning) is preserved so you can be " +
-    "efficient — use it as context, then finish the work.\n" +
-    "- A reply that only restates what you did in earlier turns will be rejected as another empty " +
-    "completion. Re-execute, then report what the new tool calls actually returned.";
-
-  let resumePrompt = feedback + directiveTail;
-  if (diffStat || truncatedDiff) {
-    resumePrompt = `## Feedback from Orchestrator\n\n${feedback}\n`;
-    if (diffStat) {
-      resumePrompt += `\n## Files You Changed (from previous attempt)\n\`\`\`\n${diffStat}\n\`\`\`\n`;
-    }
-    if (truncatedDiff) {
-      resumePrompt += `\n## Your Previous Diff\n\`\`\`diff\n${truncatedDiff}\n\`\`\`\n`;
-    }
-    resumePrompt += directiveTail;
-  }
-
-  // ── Fresh prompt ──
-  // Used when the previous CLI session is gone (not found, expired, or never
-  // persisted). The new session has NO memory of the prior attempt, so we
-  // must restate the original task and frame the previous attempt in
-  // third-person ("a previous attempt...") with an explicit note that the
-  // model is not resuming its own prior work.
-  const freshPromptParts: string[] = [];
-  if (originalPrompt) {
-    freshPromptParts.push(originalPrompt);
-  }
-  freshPromptParts.push(
-    "---",
-    "## Note — Fresh Session",
-    "A previous attempt at this task was made in a different Claude CLI session, but that session is not available to resume. You are starting fresh and do NOT have memory of the previous attempt. Treat the original task above as your primary instructions, and use the context below (reviewer feedback and the prior diff) as reference for what was already tried and what still needs to change.",
-    "",
-    "## Reviewer Feedback on the Previous Attempt",
-    feedback,
-  );
-  if (diffStat) {
-    freshPromptParts.push(
-      "",
-      "## Files Changed in the Previous Attempt",
-      "```",
-      diffStat,
-      "```",
-    );
-  }
-  if (truncatedDiff) {
-    freshPromptParts.push(
-      "",
-      "## Previous Attempt Diff (for reference)",
-      "```diff",
-      truncatedDiff,
-      "```",
-    );
-  }
-  freshPromptParts.push(
-    "",
-    "Implement the task per the original instructions above. Apply the reviewer feedback. The previous diff is provided only as context — you may build on it, correct it, or rewrite it, whichever produces a correct implementation.",
-  );
-  const freshPrompt = freshPromptParts.join("\n");
-
-  await AgentTask.update(
-    { status: "in_progress" as AgentTaskStatus, completedAt: null },
-    { where: { id: taskId } },
-  );
-
-  return { previousSessionId, resumePrompt, freshPrompt };
-}
 
 // ─── Dependency Resolution ───────────────────────────────────────────────────
 
@@ -830,7 +694,7 @@ export async function captureStageDiff(
  * to match how the Claude CLI itself is invoked — otherwise git's
  * `safe.directory` / ownership checks trip on files just written by `agent`.
  */
-function ensureWorkingTreeCommitted(
+export function ensureWorkingTreeCommitted(
   cwd: string,
   taskTitle: string,
 ): { committed: boolean; message?: string } {
@@ -1128,28 +992,35 @@ async function generateArchitectureOverview(
   const prompt = buildArchitectureOverviewPrompt(currentOverview);
 
   try {
-    const result = await runCliExecution(
-      {
+    // Slice 21: scan via the SDK (Anthropic preferred, Codex fallback)
+    // instead of spawning the Claude CLI as a subprocess. The org is
+    // resolved from the orchestrator agent that created the epic; if
+    // there's no agentId on this path we cannot bill the scan and must
+    // skip — the architecture refresh is a nice-to-have, not blocking.
+    if (!agentId) {
+      logger.warn(
+        "generateArchitectureOverview: skipped (no agentId for credential resolution)",
+        { repoId: repo.id },
+      );
+      return;
+    }
+    const agent = await Agent.findByPk(agentId, {
+      attributes: ["organizationId"],
+    });
+    if (!agent?.organizationId) {
+      logger.warn(
+        "generateArchitectureOverview: skipped (orchestrator agent has no organization)",
+        { repoId: repo.id, agentId },
+      );
+      return;
+    }
+    const text = (
+      await runArchitectureScan({
         cwd,
         prompt,
-        timeoutMs: 600_000,
-        providerOpts: { maxTurns: 35 },
-      },
-      {
-        provider: "claude",
-        agentId,
-        invokedVia: "architecture_overview",
-      },
-    );
-
-    if (result.status !== "completed") {
-      throw new Error(
-        result.stderr?.trim() ||
-          `claude exited with code ${result.exitCode ?? "?"} (status ${result.status})`,
-      );
-    }
-
-    const text = (result.resultText ?? "").trim();
+        organizationId: agent.organizationId,
+      })
+    ).trim();
     if (text && text.length > 20) {
       const stored =
         text.length > MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS
@@ -1162,11 +1033,10 @@ async function generateArchitectureOverview(
         repoName: repo.name,
         previousLength: previous?.length ?? 0,
         newLength: stored.length,
-        cliExecutionId: result.executionId,
       });
     }
   } catch (err) {
-    logger.warn("generateArchitectureOverview: Claude CLI architecture analysis failed", {
+    logger.warn("generateArchitectureOverview: SDK architecture scan failed", {
       repoId: repo.id,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -1339,283 +1209,6 @@ export async function buildArchitectureContext(epicId: EpicTaskId): Promise<stri
   return sections.join("\n");
 }
 
-// ─── Task Execution via Claude CLI ───────────────────────────────────────────
-
-export async function executeTask(
-  taskId: AgentTaskId,
-  options: {
-    cwd: string;
-    allowedTools?: string;
-    maxTurns?: number;
-    systemPrompt?: string;
-    promptOverride?: string;
-    resumeSessionId?: string;
-    /** CLI agent name to pass via --agent-name (e.g. "Dag"). */
-    agentName?: string;
-    /**
-     * Replacement prompt to use if --resume fails and we fall back to a
-     * fresh Claude CLI session. The `promptOverride` is typically written
-     * as a continuation ("you previously changed..."), which is incoherent
-     * for a new session that has no memory of the prior attempt. Callers
-     * that use `resumeSessionId` should provide a standalone version of
-     * the prompt here so the fallback session gets coherent instructions.
-     *
-     * Ignored if `resumeSessionId` is not set.
-     */
-    freshPromptFallback?: string;
-    /**
-     * Absolute path the CLI was instructed to write its per-task summary
-     * `.md` file to (via the system prompt's "Required output: per-task
-     * summary file" block). Set by the caller using `buildTaskSummaryFilePath`
-     * with the *current* threadId — same value the system prompt names — so
-     * the post-success persist on `agent_tasks.summary_file_path` matches
-     * what the CLI actually wrote. Null/omitted disables the persist
-     * (e.g. non-chat invocations without a thread context).
-     */
-    expectedSummaryFilePath?: string | null;
-  },
-): Promise<TaskExecution> {
-  const task = await AgentTask.findByPk(taskId, {
-    include: [{ model: TaskStage, as: "stage" }],
-  });
-  if (!task) throw new Error(`Agent task ${taskId} not found`);
-
-  // Resolve the agent that owns this task's epic, for cli_executions
-  // attribution. Best-effort — a missing epic just means the row gets
-  // recorded with agentId=null, which is allowed.
-  let agentId: AgentId | null = null;
-  try {
-    const stage = (task as { stage?: TaskStage } | null)?.stage;
-    if (stage?.epicTaskId) {
-      const epic = await EpicTask.findByPk(stage.epicTaskId, {
-        attributes: ["id", "agent_id"],
-      });
-      agentId = (epic?.agentId as AgentId | undefined) ?? null;
-    }
-  } catch (err: any) {
-    logger.warn("executeTask: failed to resolve epic agentId", {
-      taskId,
-      error: err?.message,
-    });
-  }
-
-  // Update task status to in_progress
-  await task.update({
-    status: "in_progress" as AgentTaskStatus,
-    startedAt: task.startedAt ?? new Date(),
-    completedAt: null,
-  });
-
-  // Build the prompt first so it's persisted even if the CLI spawn fails
-  const prompt = options.promptOverride ?? task.description ?? task.title;
-
-  // Create execution record (stores the exact prompt sent to the CLI)
-  const execution = await startExecution(taskId, { prompt });
-
-  logger.info("Executing agent task via Claude CLI", {
-    taskId,
-    executionId: execution.id,
-    cwd: options.cwd,
-    agentName: options.agentName ?? null,
-  });
-
-  // Snapshot HEAD before running the CLI so captureGitDiff can diff against
-  // it afterwards. This is what makes git_diff / git_diff_stat actually
-  // reflect the task's work even when the CLI (or our safety-net
-  // ensureWorkingTreeCommitted) commits everything before we get to inspect
-  // the working tree. Running as `agent` via gitAsAgent matches the user
-  // that owns the repo files.
-  let preRunSha: string | null = null;
-  try {
-    preRunSha = gitAsAgent(options.cwd, ["rev-parse", "HEAD"]) || null;
-  } catch (snapshotErr: any) {
-    logger.warn("executeTask: failed to snapshot HEAD before CLI run", {
-      taskId,
-      cwd: options.cwd,
-      error: snapshotErr?.message,
-    });
-  }
-
-  // Run the CLI subprocess via the engine. The engine owns spawn, the
-  // cross-provider busy check, the cli_executions row, output parsing, and
-  // kill-on-timeout. We layer epic-flow concerns (auto-commit, git diff,
-  // task_executions row, summary path, --resume retry) on top of its result.
-  let engineResult: Awaited<ReturnType<typeof runCliExecution>>;
-  try {
-    engineResult = await runCliExecution(
-      {
-        cwd: options.cwd,
-        prompt,
-        systemPrompt: options.systemPrompt,
-        resumeSessionId: options.resumeSessionId,
-        providerOpts: {
-          maxTurns: options.maxTurns ?? 200,
-          agentName: options.agentName,
-          allowedTools: options.allowedTools,
-        },
-      },
-      {
-        provider: "claude",
-        agentId,
-        agentTaskId: taskId,
-        cliAgentName: options.agentName ?? null,
-        invokedVia: "epic_orchestrator",
-      },
-    );
-  } catch (err: any) {
-    if (err instanceof CliBusyError) {
-      // Surface the structured busy-info to the logs so operators can
-      // correlate the conflicting run by execution id, agent, and elapsed
-      // time without grepping stdout.
-      logger.warn("executeTask: CLI busy — failing task", {
-        taskId,
-        executionId: execution.id,
-        busyKind: err.kind,
-        busyProvider: err.busyProvider,
-        busyPid: err.busyPid,
-        busyExecutionId: err.busyExecution?.id ?? null,
-        busyAgentId: err.busyExecution?.agentId ?? null,
-        busyStartedAt: err.busyExecution?.startedAt ?? null,
-      });
-    } else {
-      logger.error("executeTask: engine spawn error", {
-        taskId,
-        executionId: execution.id,
-        error: err?.message,
-      });
-    }
-    await failExecution(execution.id, { error: err?.message ?? String(err) });
-    await updateTaskStatus(taskId, "failed");
-    const updated = await TaskExecution.findByPk(execution.id);
-    return updated!;
-  }
-
-  // Pin the task_executions row to the underlying cli_executions row + carry
-  // over the captured session id (used for `--resume` on retry).
-  try {
-    await execution.update({
-      cliExecutionId: engineResult.executionId,
-      cliSessionId: engineResult.sessionId,
-    });
-  } catch (linkErr: any) {
-    logger.warn("executeTask: failed to link cli_execution_id (non-fatal)", {
-      executionId: execution.id,
-      cliExecutionId: engineResult.executionId,
-      error: linkErr?.message,
-    });
-  }
-
-  // Treat as success when the CLI exited cleanly OR when it exited non-zero
-  // but still produced output (the "max turns reached" case — the executor
-  // got somewhere useful before being cut off, and the diff/result are
-  // worth keeping).
-  const wasSuccess = engineResult.status === "completed";
-  const hasUsableOutput = !!engineResult.resultText.trim();
-
-  if (wasSuccess || (engineResult.status === "failed" && hasUsableOutput)) {
-    const metadata: Record<string, unknown> = {
-      session_id: engineResult.sessionId,
-      cost_usd: engineResult.costUsd,
-      duration_ms: engineResult.durationMs,
-      num_turns: engineResult.numTurns,
-      is_error: engineResult.isError,
-    };
-    if (!wasSuccess) {
-      metadata.exitCode = engineResult.exitCode;
-      metadata.warning =
-        engineResult.stderr || `exit code ${engineResult.exitCode}`;
-    }
-
-    // Safety-net auto-commit only on the clean success path. The max-turns
-    // case would have left the executor mid-thought; auto-committing those
-    // changes wholesale risks shipping half-finished work without intent.
-    if (wasSuccess) {
-      try {
-        const autoCommitResult = ensureWorkingTreeCommitted(
-          options.cwd,
-          task.title,
-        );
-        if (autoCommitResult.committed) {
-          metadata.auto_committed = true;
-          metadata.auto_commit_message = autoCommitResult.message;
-          logger.info("executeTask: auto-committed leftover changes", {
-            taskId,
-            cwd: options.cwd,
-            message: autoCommitResult.message,
-          });
-        }
-      } catch (commitErr: any) {
-        logger.warn("executeTask: safety-net auto-commit failed", {
-          taskId,
-          cwd: options.cwd,
-          error: commitErr?.message,
-        });
-      }
-    }
-
-    try {
-      const gitDiff = captureGitDiff(options.cwd, preRunSha);
-      metadata.git_diff_stat = gitDiff.diffStat;
-      metadata.git_diff = gitDiff.fullDiff;
-      metadata.git_recent_commits = gitDiff.recentCommits;
-      if (preRunSha) metadata.git_diff_base_sha = preRunSha;
-    } catch (diffErr: any) {
-      logger.warn("Failed to capture git diff after task execution", {
-        taskId,
-        error: diffErr.message,
-      });
-    }
-
-    await completeExecution(execution.id, {
-      result: engineResult.resultText,
-      metadata,
-    });
-
-    if (options.expectedSummaryFilePath) {
-      await recordTaskSummaryFilePath(taskId, options.expectedSummaryFilePath);
-    }
-
-    await updateTaskStatus(taskId, "completed");
-    const updated = await TaskExecution.findByPk(execution.id);
-    return updated!;
-  }
-
-  // Hard failure (no usable output) or killed-by-timeout. If we were
-  // resuming a session that the CLI couldn't find, retry fresh — swap in
-  // the caller-provided standalone prompt so the new (memoryless) session
-  // doesn't receive a continuation-style prompt that references
-  // "what you previously changed".
-  const isMissingSession =
-    !!options.resumeSessionId &&
-    ((engineResult.stderr ?? "").includes("No conversation found") ||
-      (engineResult.resultText ?? "").includes("No conversation found"));
-
-  if (isMissingSession) {
-    logger.warn("Session not found — retrying without --resume", {
-      taskId,
-      sessionId: options.resumeSessionId,
-      usingFreshPrompt: !!options.freshPromptFallback,
-    });
-    await failExecution(execution.id, {
-      error: "Session expired — retrying fresh",
-    });
-    return executeTask(taskId, {
-      ...options,
-      resumeSessionId: undefined,
-      promptOverride: options.freshPromptFallback ?? options.promptOverride,
-      freshPromptFallback: undefined,
-    });
-  }
-
-  const errorMsg =
-    engineResult.stderr?.trim() ||
-    `Claude CLI exited with code ${engineResult.exitCode ?? "?"} (status ${engineResult.status})`;
-
-  await failExecution(execution.id, { error: errorMsg });
-  await updateTaskStatus(taskId, "failed");
-  const updated = await TaskExecution.findByPk(execution.id);
-  return updated!;
-}
 
 // ─── Bulk Epic Creation ──────────────────────────────────────────────────────
 
@@ -1730,77 +1323,6 @@ export async function createEpicWithPlan(data: {
     await transaction.rollback();
     throw err;
   }
-}
-
-// ─── Continue Remaining Stage Tasks ─────────────────────────────────────────
-
-/**
- * After a single task or retry completes, run any remaining pending/ready
- * tasks in the same stage sequentially by sort_order.
- */
-export async function continueRemainingTasks(
-  completedTaskId: string,
-  options: {
-    cwd: string;
-    allowedTools?: string;
-    maxTurns?: number;
-    systemPrompt?: string;
-    agentName?: string;
-    /**
-     * When set, every sub-task execution gets its per-task summary path
-     * computed and persisted on success — same flow as the first task in
-     * `ExecuteEpicTaskTool`. Optional so non-chat callers (none today) keep
-     * working without a thread context.
-     */
-    summaryContext?: { agentId: AgentId; threadId: string };
-  },
-): Promise<string | null> {
-  const task = await AgentTask.findByPk(completedTaskId, {
-    include: [{ model: TaskStage, as: "stage" }],
-  });
-  if (!task) return null;
-
-  const stageId = task.taskStageId;
-  const remaining = await AgentTask.findAll({
-    where: { taskStageId: stageId, status: ["pending", "ready"] },
-    order: [["sort_order", "ASC"]],
-  });
-
-  if (remaining.length === 0) return null;
-
-  const results: string[] = [];
-  for (const next of remaining) {
-    logger.info("continueRemainingTasks: executing", {
-      taskId: next.id,
-      taskTitle: next.title,
-    });
-
-    const expectedSummaryFilePath = options.summaryContext
-      ? await buildTaskSummaryFilePath({
-          agentId: options.summaryContext.agentId,
-          threadId: options.summaryContext.threadId,
-          taskId: next.id,
-        })
-      : null;
-
-    const execution = await executeTask(next.id, {
-      cwd: options.cwd,
-      allowedTools: options.allowedTools,
-      maxTurns: options.maxTurns,
-      systemPrompt: options.systemPrompt,
-      agentName: options.agentName,
-      expectedSummaryFilePath,
-    });
-
-    results.push(await formatExecutionResult(execution, next.id));
-
-    if (execution.status === "failed") {
-      results.push(`\n⚠ Task "${next.title}" failed. Stopping sequential execution.`);
-      break;
-    }
-  }
-
-  return results.join("\n\n---\n\n");
 }
 
 // ─── Automatic PR Creation ──────────────────────────────────────────────────
@@ -2221,65 +1743,6 @@ export function parseContinuationMarker(text: string): EpicContinuationPayload |
   }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const RETRY_EPIC_TASK_HINT =
-  `If fixes are needed, call \`execute_epic_task\` with \`mode='retry'\` and provide **specific feedback** referencing the diff lines that need to change.`;
-
-/**
- * Footer for completed task reports: only tell the orchestrator to "proceed to the next task"
- * when {@link getReadyTasks} is non-empty. When a stage just finished, the stage moves to
- * `pr_pending` and there are no ready tasks — the next stage must not run until PR approval.
- */
-async function formatReviewActionForCompletedTask(taskId: string): Promise<string> {
-  const task = await AgentTask.findByPk(taskId, {
-    include: [{ model: TaskStage, as: "stage" }],
-  });
-  const stage = (task as { stage?: TaskStage } | null)?.stage;
-  const epicId = stage?.epicTaskId;
-  if (!epicId) {
-    return `\n**Action:** If the changes are correct, proceed when appropriate. ${RETRY_EPIC_TASK_HINT}`;
-  }
-
-  const readyTasks = await getReadyTasks(epicId);
-  if (readyTasks.length > 0) {
-    return (
-      `\n**Action:** If the changes are correct, proceed to the next task. ${RETRY_EPIC_TASK_HINT}`
-    );
-  }
-
-  const stageRow = await TaskStage.findByPk(stage.id);
-  if (stageRow?.status === ("pr_pending" as TaskStageStatus)) {
-    const pos = await resolveStagePosition(stageRow);
-    const positionLabel = pos ? ` (stage ${pos.index} of ${pos.total})` : "";
-    const finalityLine = pos?.isLast
-      ? ` **This is the FINAL stage of the epic — approving it completes the whole epic; do NOT tell the user a next-stage number.**`
-      : pos
-        ? ` Approval will start stage ${pos.index + 1} of ${pos.total}.`
-        : "";
-    if (stageRow.kind === ("plan" as TaskStageKind)) {
-      return (
-        `\n**Action:** **This plan stage is complete${positionLabel}** and is **waiting for the user to review and approve** — ` +
-        `do **not** call \`execute_epic_task\` to start the next stage until they confirm.${finalityLine} ` +
-        `Summarize the plan, ask for approval, then call \`approve_stage\` with their verbatim quote. ${RETRY_EPIC_TASK_HINT}`
-      );
-    }
-    return (
-      `\n**Action:** **This stage is complete${positionLabel}** and is **waiting for PR approval** — do **not** call ` +
-      `\`execute_epic_task\` to start the next stage until this PR is approved (or handled via \`approve_stage\` / your workflow).${finalityLine} ` +
-      `Tell the user the stage is blocked on review. ${RETRY_EPIC_TASK_HINT}`
-    );
-  }
-
-  const epic = await EpicTask.findByPk(epicId);
-  if (epic?.status === ("completed" as EpicTaskStatus)) {
-    return `\n**Action:** This epic is finished — there are no more tasks.`;
-  }
-
-  return (
-    `\n**Action:** No task is currently in the ready queue. Use \`get_epic_status\` to see the epic state (e.g. waiting on PR approval). ${RETRY_EPIC_TASK_HINT}`
-  );
-}
 
 /**
  * Deterministic absolute path the CLI is told to write its per-task summary
@@ -2360,75 +1823,3 @@ export async function recordTaskSummaryFilePath(
   }
 }
 
-export async function formatExecutionResult(execution: any, taskId: string): Promise<string> {
-  const status = execution.status;
-  const meta = execution.metadata ?? {};
-
-  // Fetch task context for the review
-  const task = await AgentTask.findByPk(taskId);
-  const taskTitle = task?.title ?? "(unknown)";
-  const taskDescription = task?.description ?? "(no description)";
-
-  let result = `# Task Execution Report\n\n`;
-  result += `**Task:** ${taskTitle}\n`;
-  result += `**Task ID:** ${taskId}\n`;
-  result += `**Status:** ${status}\n`;
-  result += `**Execution ID:** ${execution.id}\n`;
-  result += `**Attempt:** #${execution.attemptNumber}\n`;
-
-  if (execution.cliSessionId) {
-    result += `**CLI Session:** ${execution.cliSessionId}\n`;
-  }
-  if (meta.cost_usd) result += `**Cost:** $${meta.cost_usd}\n`;
-  if (meta.num_turns) result += `**Turns:** ${meta.num_turns}\n`;
-
-  if (status === "completed") {
-    // Section 1: Instructions that were given
-    result += `\n## Instructions Given\n`;
-    result += `${taskDescription}\n`;
-
-    // Section 2: Files changed (git diff --stat)
-    if (meta.git_diff_stat) {
-      result += `\n## Files Changed\n`;
-      result += `\`\`\`\n${meta.git_diff_stat}\n\`\`\`\n`;
-    }
-
-    // Section 3: Full diff
-    if (meta.git_diff) {
-      result += `\n## Full Diff\n`;
-      result += `\`\`\`diff\n${meta.git_diff}\n\`\`\`\n`;
-    } else {
-      result += `\n## Full Diff\n`;
-      result += `_No git diff captured. The CLI may have committed changes or no files were modified._\n`;
-    }
-
-    // Section 4: CLI output summary
-    if (execution.result) {
-      result += `\n## CLI Output Summary\n`;
-      result += `${execution.result}\n`;
-    }
-
-    // Section 5: Recent commits
-    if (meta.git_recent_commits) {
-      result += `\n## Recent Commits\n`;
-      result += `\`\`\`\n${meta.git_recent_commits}\n\`\`\`\n`;
-    }
-
-    // Section 6: Review checklist
-    result += `\n## Review Checklist\n`;
-    result += `Before proceeding, verify:\n`;
-    result += `- [ ] The changed files match what was requested in the instructions\n`;
-    result += `- [ ] There are no unexpected file changes outside the task scope\n`;
-    result += `- [ ] The diff implements the logic described in the task description\n`;
-    result += `- [ ] No obvious issues: hardcoded values, removed important code, missing imports\n`;
-    result += `- [ ] Naming conventions and code style are consistent with the codebase\n`;
-
-    result += await formatReviewActionForCompletedTask(taskId);
-  } else if (status === "failed") {
-    result += `\n## Error\n`;
-    result += `\`\`\`\n${execution.error ?? "Unknown error"}\n\`\`\`\n`;
-    result += `\nThe task failed. You can retry with \`mode='retry'\` and feedback, or investigate the error.`;
-  }
-
-  return result;
-}

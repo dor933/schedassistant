@@ -128,6 +128,32 @@ export const AgentAnnotation = Annotation.Root({
     default: () => [],
   }),
 
+  /**
+   * Claude Agent SDK session id for this thread (when on the Anthropic SDK
+   * runtime path). Hydrated by the SDK runner from the `threads` row at the
+   * start of each turn, written back after each successful Agent SDK call,
+   * and cleared by `sessionSummarizationNode` after compaction.
+   *
+   * Last-write-wins reducer; null = no SDK session yet (fresh thread, or just
+   * summarized).
+   */
+  claudeSessionId: Annotation<string | null>({
+    reducer: (state, update) => (update !== undefined ? update : state),
+    default: () => null,
+  }),
+
+  /**
+   * OpenAI Codex SDK thread id for this thread (when on the Codex SDK
+   * runtime path). Same lifecycle as `claudeSessionId`: hydrated from
+   * `threads.codex_thread_id` at the start of each turn, written back
+   * after a successful Codex run, and cleared by `sessionSummarizationNode`
+   * after compaction. Last-write-wins reducer.
+   */
+  codexThreadId: Annotation<string | null>({
+    reducer: (state, update) => (update !== undefined ? update : state),
+    default: () => null,
+  }),
+
   /** Roundtable ID when this turn is part of a multi-agent roundtable. */
   roundtableId: Annotation<string | null>({
     reducer: (_state, update) => (update !== undefined ? update : _state),

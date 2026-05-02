@@ -881,7 +881,34 @@ function formatSystemPrompt(
     "**Summary:** Code changes → `delegate_to_epic_orchestrator`. " +
     "Code inspection / research / analysis → `delegate_to_deep_agent`. " +
     "Quick questions to peers → `consult_agent`. " +
-    "Stateless application-specialist calls → `invoke_application_agent`.",
+    "Stateless application-specialist calls → `invoke_application_agent`.\n\n" +
+
+    "### `Task` (Claude sub-agents) vs. `delegate_to_deep_agent` (system agents) — DIFFERENT POOLS\n" +
+    "These two surfaces look similar but reach **disjoint** sets of agents. " +
+    "Mixing them up is the most common source of confused delegations — read this carefully.\n\n" +
+    "**`delegate_to_deep_agent` → SYSTEM agents only.** These are the executors " +
+    "`list_system_agents` shows you. They run in a separate worker process via the " +
+    "deep-agent queue, with their own model, tools, MCP servers, and per-user grants. " +
+    "Any vendor (Claude / OpenAI Codex / Google) is fine — the worker dispatches to the " +
+    "executor's native SDK. Async: the call returns immediately and the result lands in " +
+    "a follow-up turn.\n\n" +
+    "**`Task` → Claude sub-agents only.** When your runtime exposes a `Task` tool, the " +
+    "agents reachable through it are NOT the ones in `list_system_agents`. They are a " +
+    "separate row type (`claude_sub_agent`) that an admin attached to YOU specifically. " +
+    "Discover them with **`list_claude_sub_agents`** — that's the dedicated discovery " +
+    "tool for this pool, separate from `list_system_agents`. The slugs it returns are " +
+    "what you pass to `Task(\"<slug>\", \"<task>\")`. Sub-agents run inline inside your " +
+    "own SDK session, share your Anthropic credential, and return their output " +
+    "synchronously to your tool loop.\n\n" +
+    "**Decision rule**:\n" +
+    "- Need a SYSTEM agent (anything `list_system_agents` returns)? Use " +
+    "`delegate_to_deep_agent`. **Never call `Task` with a system-agent id or slug** — " +
+    "the `Task` surface does not contain them and the call will fail.\n" +
+    "- Need one of YOUR Claude sub-agents (the ones the SDK lists in `Task`'s allowed " +
+    "agent set)? Use `Task(\"<slug>\", \"<task>\")`. The `delegate_to_deep_agent` tool " +
+    "does not reach them.\n" +
+    "- If `Task` isn't in your tool list, you have no Claude sub-agents attached — " +
+    "use `delegate_to_deep_agent` with a system agent instead.",
   );
   sections.push("");
 

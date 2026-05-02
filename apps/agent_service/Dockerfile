@@ -28,7 +28,13 @@
     # @openai/codex installs the `codex` binary used by the run_codex_cli tool
     # and the codex-backed paths in cliExecution.ts. Same global-npm style as
     # claude-code so both CLIs end up on PATH for the `agent` user.
-    RUN npm install -g --unsafe-perm @modelcontextprotocol/server-filesystem mcp-shell @modelcontextprotocol/server-github @alisaitteke/docker-mcp @anthropic-ai/claude-code @openai/codex
+    #
+    # Note: `mcp-shell` was previously installed here as the bash MCP server.
+    # It was removed once agents migrated to the Claude Agent SDK's native
+    # `Bash` tool (gated per-agent by `agents.allow_sdk_bash`). DB rows in
+    # `mcp_servers` and `agent_available_mcp_servers` referencing the legacy
+    # `bash` MCP can be cleaned up via the admin UI as agents are migrated.
+    RUN npm install -g --unsafe-perm @modelcontextprotocol/server-filesystem @modelcontextprotocol/server-github @alisaitteke/docker-mcp @anthropic-ai/claude-code @openai/codex
     COPY package.json ./
     COPY --from=builder /app/node_modules/ ./node_modules/
     COPY --from=builder /app/packages/ ./packages/

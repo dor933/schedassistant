@@ -29,6 +29,7 @@ import {
   DOMAIN_VERIFICATION_TXT_PREFIX,
   type VerifiedGoogleIdentity,
 } from "./google.service";
+import { organizationSetupService } from "./organizationSetup.service";
 
 /**
  * Role assigned to the user who creates a new tenant via the onboarding
@@ -191,9 +192,12 @@ export class AuthService {
       attributes: ["id", "name", "slug", "logo", "webSearchAgentId"],
     });
 
+    const setup = await organizationSetupService.getStatus(user.organizationId);
+
     return {
       token,
       isFirstLogin,
+      setupComplete: setup.complete,
       user: {
         id: user.id,
         displayName: user.displayName,
@@ -252,9 +256,11 @@ export class AuthService {
     await user.update({ lastLoginAt: new Date() });
 
     const org = identity.organization;
+    const setup = await organizationSetupService.getStatus(org.id);
     return {
       token,
       isFirstLogin,
+      setupComplete: setup.complete,
       user: {
         id: user.id,
         displayName: user.displayName,
@@ -595,12 +601,14 @@ export class AuthService {
 
     await this.ensureAgentSingleChats(user.id, user.organizationId);
     const conversations = await this.loadUserConversations(user.id, user.organizationId);
+    const setup = await organizationSetupService.getStatus(user.organizationId);
 
     return {
       id: user.id,
       displayName: user.displayName,
       userIdentity: user.userIdentity,
       role: roleName,
+      setupComplete: setup.complete,
       organization: org
         ? {
             id: org.id,

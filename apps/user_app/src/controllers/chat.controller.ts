@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { Request, Response } from "express";
 import { ChatService } from "../services/chat.service";
+import { organizationSetupService } from "../services/organizationSetup.service";
 import { logger } from "../logger";
 
 function parseRequestId(raw: unknown): string | null {
@@ -27,10 +28,11 @@ function coerceBool(v: unknown): boolean | undefined {
 export class ChatController {
   private chatService = new ChatService();
 
-  send = (req: Request, res: Response) => {
+  send = async (req: Request, res: Response) => {
     const { message, groupId, singleChatId, agentId } = req.body;
     const mentionsAgent = coerceBool(req.body.mentionsAgent);
     const userId = req.user!.userId;
+    const organizationId = req.user!.organizationId;
 
     const uploaded = (req as any).file as
       | { originalname: string; buffer: Buffer; size: number; mimetype?: string }
@@ -42,6 +44,43 @@ export class ChatController {
     }
     if (!groupId && !singleChatId) {
       res.status(400).json({ error: "groupId or singleChatId is required." });
+      return;
+    }
+
+    // ── Setup gate (slice 15) ─────────────────────────────────────────
+    // Refuse chat when the org hasn't finished setup. Embeddings are an
+    // invisible dependency (used by episodic RAG on every turn), so a
+    // missing config here would otherwise surface as a confusing
+    // mid-stream agent_service error. 412 + a structured `missing[]`
+    // lets the client render an actionable banner directing the
+    // super-admin to the embedding model card.
+    try {
+      const status = await organizationSetupService.getStatus(organizationId);
+      if (!status.complete) {
+        res.status(412).json({
+          error: "setup_incomplete",
+          message:
+            "Your organization has not finished setup. " +
+            (status.missing.includes("embedding_model")
+              ? "Pick an embedding model in Admin → Embedding Model. "
+              : "") +
+            (status.missing.includes("embedding_key")
+              ? `Add an API key for the chosen embedding vendor` +
+                (status.embeddingVendorSlug
+                  ? ` (${status.embeddingVendorSlug})`
+                  : "") +
+                ` in Admin → Vendor API Keys.`
+              : ""),
+          missing: status.missing,
+        });
+        return;
+      }
+    } catch (err) {
+      logger.error("Setup-status check failed; refusing chat to fail closed", {
+        organizationId,
+        error: String(err),
+      });
+      res.status(500).json({ error: "Setup status check failed." });
       return;
     }
 

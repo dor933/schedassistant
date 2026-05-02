@@ -18,14 +18,15 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { resolveModelSlug } from "../../../chat/modelResolution";
-import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
-import { resolveOrgVendor } from "../../../services/resolveOrgVendor.service";
+import { anthropicBaseConfig } from "../../../chat/anthropic/anthropicContextManagement";
+import { resolveOrgVendor } from "../../../utils/resolveOrgVendor.service";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
 import { EditUserIdentityTool } from "../../../tools/editUserIdentityTool";
 import { EditAgentNameTool } from "../../../tools/agentNameTool";
 import { ConsultAgentTool } from "../../../tools/consultAgentTool";
 import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
+import { ListClaudeSubAgentsTool } from "../../../tools/listClaudeSubAgentsTool";
 import { ListAgentsTool } from "../../../tools/listAgentsTool";
 import { DelegateToDeepAgentTool } from "../../../tools/delegateToDeepAgentTool";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
@@ -41,12 +42,13 @@ import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskT
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { InvokeApplicationAgentTool } from "../../../tools/invokeApplicationAgentTool";
-import { RunClaudeCliTool, RunCodexCliTool } from "../../../tools/runCliTools";
-import { KillCliExecutionTool } from "../../../tools/killCliExecutionTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
 import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
+import { runAnthropicAgentSdk, shouldUseAgentSdk } from "../../../chat/anthropic/agentSdkRunner";
+import { runOpenAiCodexSdk, shouldUseCodexSdk } from "../../../chat/codex/codexSdkRunner";
+import { buildSubAgentDefinitions } from "../../../utils/buildSubAgentDefinitions.service";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 10;
@@ -339,15 +341,74 @@ export async function callModelNode(
     tools.push(SendFileToUserTool(agentId));
   if (has("invoke_application_agent"))
     tools.push(InvokeApplicationAgentTool(agentId, state.userId));
-  if (has("run_claude_cli"))
-    tools.push(RunClaudeCliTool(agentId, state.userId, threadId));
-  if (has("run_codex_cli"))
-    tools.push(RunCodexCliTool(agentId, state.userId, threadId));
-  // Independent slug — admins typically grant alongside `run_*_cli` so an
-  // agent can abort its own orphans, but they can opt out for read-only
-  // agents.
-  if (has("kill_cli_execution"))
-    tools.push(KillCliExecutionTool(agentId, state.userId));
+
+  // ── Vendor-conditional auto-bind: list_claude_sub_agents ──────────────────
+  // The Claude Agent SDK is the only runtime that exposes `Task("<slug>", …)`,
+  // and `Task` only reaches `claude_sub_agent` rows — not system agents.
+  // Auto-bind the discovery tool on every Anthropic-vendor agent regardless
+  // of `agent_available_tools` rows so admins don't have to remember to grant
+  // it (mirrors how filesystem MCP tools and skill tools are surface-bound).
+  // Non-Anthropic vendors don't get it because the SDK path is never taken
+  // for them — surfacing the tool would mislead the model.
+  if (vendor.vendorSlug === "anthropic") {
+    tools.push(ListClaudeSubAgentsTool(agentId));
+  }
+  // ─── Anthropic Agent SDK runtime branch ────────────────────────────────────
+  //
+  // When the resolved vendor is Anthropic AND the SDK runtime is not disabled
+  // by env kill-switch, route this turn through Claude Agent SDK instead of
+  // the legacy `bindTools` loop below. The same `tools` array is reused — the
+  // adapter re-presents them as an in-process MCP server, so behavior parity
+  // is preserved (truncation, error tagging, FS-write instrumentation).
+  //
+  // Non-Anthropic vendors (`openai`, `google`) and any explicit kill-switch
+  // continue to run the legacy code unchanged.
+  if (shouldUseAgentSdk(vendor.vendorSlug)) {
+    // Build the per-call sub-agent map: one AgentDefinition per system agent
+    // visible to this primary (own dedicated reports + org-shared specialists,
+    // matching `list_system_agents` filter). Each carries its own scoped tool
+    // factories + MCP servers so per-(agentId, userId) grants stay enforced
+    // when the model calls Task("<sub-agent-slug>", ...).
+    const subAgents = await buildSubAgentDefinitions({
+      primaryAgentId: agentId,
+      userId,
+      threadId,
+      groupId: state.groupId,
+      singleChatId: state.singleChatId,
+    });
+
+    return runAnthropicAgentSdk({
+      state,
+      config,
+      tools,
+      vendor,
+      modelSlug,
+      maxTurns: MAX_TOOL_ROUNDS,
+      source: "primary_agent",
+      subAgents,
+    });
+  }
+
+  // ─── OpenAI Codex SDK runtime branch ────────────────────────────────────
+  //
+  // Mirrors the Anthropic branch for the openai vendor: the Codex CLI runs
+  // the model's tool loop autonomously while exposing our `tools[]` through
+  // the `mcp_server` bridge container. Sub-agents are not passed — Codex
+  // SDK has no inline `Task` shortcut, so system-agent delegation continues
+  // through the existing async `delegate_to_deep_agent` tool (already
+  // present in `tools` when granted).
+  if (shouldUseCodexSdk(vendor.vendorSlug)) {
+    return runOpenAiCodexSdk({
+      state,
+      config,
+      tools,
+      vendor,
+      modelSlug,
+      maxTurns: MAX_TOOL_ROUNDS,
+      source: "primary_agent",
+    });
+  }
+
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),
   );

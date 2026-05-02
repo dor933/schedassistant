@@ -64,7 +64,7 @@ export interface OrganizationInfo {
   webSearchAgentId?: string | null;
 }
 
-export type WebSearchChoice = "gemini" | "tavily";
+export type WebSearchChoice = "gemini" | "tavily" | "anthropic";
 
 export interface LoginResponse {
   token: string;
@@ -83,6 +83,12 @@ export interface LoginResponse {
    * launch animation exactly once per user based on this flag.
    */
   isFirstLogin?: boolean;
+  /**
+   * False when the org hasn't picked an embedding model OR has no usable
+   * embedding key. Chat is blocked until this flips to true (slice 15).
+   * Admin pages stay reachable so the super-admin can finish setup.
+   */
+  setupComplete?: boolean;
 }
 
 export function login(userName: string, password: string) {
@@ -216,6 +222,8 @@ export interface MeResponse {
   role: string;
   conversations: Conversations;
   organization: OrganizationInfo | null;
+  /** Per slice 15 — false when embedding model + key aren't both set. */
+  setupComplete?: boolean;
 }
 
 export function getMe() {
@@ -433,7 +441,12 @@ export interface AgentToolLink {
   active: boolean;
 }
 
-export type AgentType = "primary" | "system" | "external" | "application";
+export type AgentType =
+  | "primary"
+  | "system"
+  | "external"
+  | "application"
+  | "claude_sub_agent";
 
 export interface AdminAgent {
   id: string;
@@ -609,12 +622,36 @@ export interface LibraryFile {
   updatedAt: string;
 }
 
+export interface EmbeddingCatalogEntry {
+  id: string;
+  slug: string;
+  name: string;
+  dimension: number;
+  vendor: { id: string; slug: string; name: string };
+}
+
+export type EmbeddingMissingPiece = "embedding_model" | "embedding_key";
+
+export interface OrgEmbeddingChoice {
+  current: EmbeddingCatalogEntry | null;
+  /** Frozen dim; non-null entries lock out future picks at other dims. */
+  frozenDimension: number | null;
+  setup: {
+    organizationId: string;
+    complete: boolean;
+    missing: EmbeddingMissingPiece[];
+    embeddingModelSlug: string | null;
+    embeddingVendorSlug: string | null;
+  };
+}
+
 export interface AdminWebSearchStatus {
   activeChoice: WebSearchChoice;
   activeAgentId: string;
   candidates: {
     gemini: AdminWebSearchCandidate | null;
     tavily: AdminWebSearchCandidate | null;
+    anthropic: AdminWebSearchCandidate | null;
   };
 }
 
@@ -745,6 +782,12 @@ export const admin = {
   // Keys are scoped to the caller's organization — the backend pulls the
   // organizationId from the JWT, so these endpoints can never touch another
   // org's credentials regardless of what the client sends.
+  //
+  // `keyType` discriminates the credential shape:
+  //   - "api_key"     → simple string (sk-…)
+  //   - "oauth_token" → simple string (sk-ant-oat…)
+  //   - "auth_object" → structured Codex `auth.json` blob, set via the
+  //                     `authObject` payload (object or stringified JSON)
   getVendorApiKeys: () =>
     request<
       {
@@ -754,102 +797,81 @@ export const admin = {
         hasApiKey: boolean;
         masked: string | null;
         updatedAt: string | null;
+        // Per-key_type breakdown. Backwards-compatible — the legacy
+        // top-level `masked`/`updatedAt` mirror the most-recent row, so
+        // pre-keyType client renderers keep working.
+        keys: {
+          keyType: "api_key" | "oauth_token" | "auth_object" | "embedding";
+          masked: string;
+          updatedAt: string | null;
+        }[];
       }[]
     >("/admin/vendor-api-keys"),
-  setVendorApiKey: (vendorId: string, apiKey: string) =>
+  setVendorApiKey: (
+    vendorId: string,
+    payload:
+      | { keyType?: "api_key" | "oauth_token" | "embedding"; apiKey: string }
+      | { keyType: "auth_object"; authObject: Record<string, unknown> | string },
+  ) =>
     request<{
       vendorId: string;
       vendorName: string;
       vendorSlug: string;
+      keyType: "api_key" | "oauth_token" | "auth_object" | "embedding";
       hasApiKey: boolean;
       masked: string;
     }>(`/admin/vendor-api-keys/${vendorId}`, {
       method: "PUT",
-      body: JSON.stringify({ apiKey }),
+      body: JSON.stringify(payload),
     }),
-  deleteVendorApiKey: (vendorId: string) =>
-    request<{ vendorId: string; vendorName: string; vendorSlug: string; hasApiKey: false }>(
-      `/admin/vendor-api-keys/${vendorId}`,
-      { method: "DELETE" },
-    ),
-
-  // ── Claude Code OAuth token (super_admin only, system-wide) ───────────────
-  // The token is persisted on the agent_service container and inherited by
-  // every spawned `claude` CLI via CLAUDE_CODE_OAUTH_TOKEN, so admins can
-  // configure auth from the UI without `su-exec agent claude /login`.
-  getClaudeOauthToken: () =>
-    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
-      "/admin/claude-oauth-token",
-    ),
-  setClaudeOauthToken: (token: string) =>
-    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
-      "/admin/claude-oauth-token",
-      { method: "PUT", body: JSON.stringify({ token }) },
-    ),
-  deleteClaudeOauthToken: () =>
-    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
-      "/admin/claude-oauth-token",
-      { method: "DELETE" },
-    ),
-
-  // ── Codex CLI API key (super_admin only, system-wide) ─────────────────────
-  // Same model as the Claude OAuth token: persisted on the agent_service
-  // container under /home/agent/.codex/.api-key and exported as OPENAI_API_KEY
-  // so every spawned `codex` CLI authenticates without `codex login` inside
-  // the container.
-  getCodexApiKey: () =>
-    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
-      "/admin/codex-api-key",
-    ),
-  setCodexApiKey: (token: string) =>
-    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
-      "/admin/codex-api-key",
-      { method: "PUT", body: JSON.stringify({ token }) },
-    ),
-  deleteCodexApiKey: () =>
-    request<{ configured: boolean; masked: string | null; updatedAt: string | null }>(
-      "/admin/codex-api-key",
-      { method: "DELETE" },
-    ),
-
-  // ── Codex CLI auth.json (super_admin only, system-wide) ──────────────────
-  // Full ChatGPT-account login blob (id_token, access_token, refresh_token,
-  // account_id, last_refresh, optional OPENAI_API_KEY). Persisted on the
-  // agent_service container at /home/agent/.codex/auth.json so the spawned
-  // `codex` CLI reads it directly. The status response masks every secret.
-  getCodexAuthJson: () =>
+  deleteVendorApiKey: (
+    vendorId: string,
+    keyType?: "api_key" | "oauth_token" | "auth_object" | "embedding",
+  ) =>
     request<{
-      configured: boolean;
-      accountIdSuffix: string | null;
-      accessTokenMasked: string | null;
-      hasRefreshToken: boolean;
-      hasOpenaiApiKey: boolean;
-      lastRefresh: string | null;
-      updatedAt: string | null;
-    }>("/admin/codex-auth-json"),
-  setCodexAuthJson: (blob: string) =>
-    request<{
-      configured: boolean;
-      accountIdSuffix: string | null;
-      accessTokenMasked: string | null;
-      hasRefreshToken: boolean;
-      hasOpenaiApiKey: boolean;
-      lastRefresh: string | null;
-      updatedAt: string | null;
-    }>("/admin/codex-auth-json", {
+      vendorId: string;
+      vendorName: string;
+      vendorSlug: string;
+      keyType: "api_key" | "oauth_token" | "auth_object" | "embedding" | null;
+      hasApiKey: false;
+    }>(
+      `/admin/vendor-api-keys/${vendorId}${keyType ? `?keyType=${keyType}` : ""}`,
+      { method: "DELETE" },
+    ),
+
+  // ── Claude credential ──────────────────────────────────────────────────
+  // Removed. Anthropic credentials are now per-org in the vendor-api-keys
+  // section above (uploaded as OAuth token or API key). Both the Agent SDK
+  // runtime and spawned `claude` CLI subprocesses authenticate against that
+  // per-org credential — there is no deployment-level shared token.
+
+  // ── Codex CLI API key ─────────────────────────────────────────────────────
+  // Removed. The deployment-level OPENAI_API_KEY fallback was used by the
+  // legacy `runCliExecution` engine (deleted in slice 22). Per-org Codex
+  // credentials now live as `keyType: "api_key"` (or `"embedding"`) rows
+  // on `organization_vendor_api_keys` for the OpenAI vendor; the SDK
+  // helpers pin them per-call via env scrubbing + injection, so no
+  // host-level fallback is consumed anywhere in the runtime.
+
+  // ── Codex CLI auth.json ──────────────────────────────────────────────────
+  // Removed. The auth.json blob is now stored per-org as a row on
+  // `organization_vendor_api_keys` with `keyType: "auth_object"` for the
+  // OpenAI vendor. Set/clear it via `setVendorApiKey` /
+  // `deleteVendorApiKey` with that keyType.
+
+  // ── Embedding model & key (super_admin only) ─────────────────────────────
+  // Per-org embedding configuration (slice 15). Catalog is read-only; the
+  // org's choice is mutable but a switch that would change the dim is
+  // refused server-side until a "wipe & re-embed" admin flow is built.
+  getEmbeddingModelCatalog: () =>
+    request<EmbeddingCatalogEntry[]>("/admin/embedding-config/catalog"),
+  getEmbeddingChoice: () =>
+    request<OrgEmbeddingChoice>("/admin/embedding-config"),
+  setEmbeddingChoice: (modelId: string) =>
+    request<OrgEmbeddingChoice>("/admin/embedding-config", {
       method: "PUT",
-      body: JSON.stringify({ blob }),
+      body: JSON.stringify({ modelId }),
     }),
-  deleteCodexAuthJson: () =>
-    request<{
-      configured: boolean;
-      accountIdSuffix: string | null;
-      accessTokenMasked: string | null;
-      hasRefreshToken: boolean;
-      hasOpenaiApiKey: boolean;
-      lastRefresh: string | null;
-      updatedAt: string | null;
-    }>("/admin/codex-auth-json", { method: "DELETE" }),
 
   // ── Projects & Repositories ───────────────────────────────────────────────
   getProjects: () => request<AdminProject[]>("/admin/projects"),

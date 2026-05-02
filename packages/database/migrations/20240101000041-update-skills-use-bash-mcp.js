@@ -1,13 +1,19 @@
 "use strict";
 
 /**
- * Adds new skill rows that instruct agents to use the **bash** MCP for
- * Docker and HTTP instead of the limited single-purpose MCP servers.
- * Also adds an improved massive_market_data skill that tells the agent
- * to explore the 40+ tools before calling them.
+ * Adds new skill rows that instruct agents to use the SDK's native `Bash`
+ * tool for Docker and HTTP instead of the limited single-purpose MCP
+ * servers. Also adds an improved massive_market_data skill that tells the
+ * agent to explore the 40+ tools before calling them.
  *
  * The old skills (dev-docker-mcp, dev-fetch-mcp, dev-massive-market-mcp)
  * are left in place — remove them manually once agents are migrated.
+ *
+ * Note: this migration originally referenced the legacy `bash` MCP server
+ * (`mcp-shell`). Skill text has been updated to point at the Claude Agent
+ * SDK's built-in `Bash` tool, gated per-agent by `agents.allow_sdk_bash`
+ * (added in migration 121). Migration 122 backfills the same wording
+ * onto rows already present in pre-existing environments.
  *
  * Idempotent: INSERT … WHERE NOT EXISTS on `slug`.
  *
@@ -18,12 +24,14 @@
 const SKILLS = [
   {
     slug: "bash-docker-cli",
-    name: "Docker CLI (bash MCP)",
-    description: "Manage Docker containers, images, volumes, and networks via the bash MCP shell.",
-    skillText: `# Docker — bash MCP (\`mcp-shell\`)
+    name: "Docker CLI (SDK Bash)",
+    description: "Manage Docker containers, images, volumes, and networks via the SDK Bash tool.",
+    skillText: `# Docker — SDK \`Bash\` tool
 
-## Server
-- **bash** (DB name) — \`npx -y mcp-shell\`
+## Tool
+- **\`Bash\`** — built into the Claude Agent SDK. Requires
+  \`agents.allow_sdk_bash=true\` for this agent. Persistent shell session,
+  \`run_in_background\` for long-running commands.
 
 ## Scope
 Full **docker CLI** access: containers, images, volumes, networks, compose, and diagnostics.
@@ -69,12 +77,13 @@ Full **docker CLI** access: containers, images, volumes, networks, compose, and 
   },
   {
     slug: "bash-http-requests",
-    name: "HTTP requests (bash MCP)",
-    description: "Perform HTTP requests (GET, POST, PUT, DELETE) via curl in the bash MCP shell.",
-    skillText: `# HTTP requests — bash MCP (\`mcp-shell\`)
+    name: "HTTP requests (SDK Bash)",
+    description: "Perform HTTP requests (GET, POST, PUT, DELETE) via curl in the SDK Bash tool.",
+    skillText: `# HTTP requests — SDK \`Bash\` tool
 
-## Server
-- **bash** (DB name) — \`npx -y mcp-shell\`
+## Tool
+- **\`Bash\`** — built into the Claude Agent SDK. Requires
+  \`agents.allow_sdk_bash=true\` for this agent.
 
 ## Scope
 Full **curl** / **wget** access for any HTTP method: GET, POST, PUT, PATCH, DELETE.
