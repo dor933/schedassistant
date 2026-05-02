@@ -641,18 +641,18 @@ export function StartEpicTaskTool(callerAgentId: string) {
         // slug, and dispatching the same sub-agent twice with different
         // scopes inside one task would race on the same row's session
         // state. If you need that pattern, run two separate tasks.
-        const seenSlugs = new Set<string>();
+        const seenIds = new Set<string>();
         for (const a of assignments) {
-          if (seenSlugs.has(a.subagentSlug)) {
+          if (seenIds.has(a.id)) {
             return (
-              `Error: sub-agent "${a.subagentSlug}" appears in \`assignments\` ` +
+              `Error: sub-agent "${a.id}" appears in \`assignments\` ` +
               `more than once. Each slug may be used at most once per task.`
             );
           }
-          seenSlugs.add(a.subagentSlug);
+          seenIds.add(a.id);
           if (!a.scope || !a.scope.trim()) {
             return (
-              `Error: assignment for "${a.subagentSlug}" has an empty scope. ` +
+              `Error: assignment for "${a.id}" has an empty scope. ` +
               `Each assignment needs a self-contained instruction telling that ` +
               `sub-agent which files to look at + change.`
             );
@@ -669,26 +669,26 @@ export function StartEpicTaskTool(callerAgentId: string) {
         if (!callerAgent) {
           return `Error: caller agent "${callerAgentId}" not found.`;
         }
-        const slugs = assignments.map((a) => a.subagentSlug);
+          const ids = assignments.map((a) => a.id);
         const subAgentRows = await Agent.findAll({
           where: {
-            slug: { [Op.in]: slugs },
+            id: { [Op.in]: ids },
             type: "claude_sub_agent",
             owningPrimaryAgentId: callerAgentId,
             organizationId: callerAgent.organizationId,
           },
           attributes: ["id", "slug", "agentName"],
         });
-        const validSlugSet = new Set(
+        const validIdsSet = new Set(
           subAgentRows
-            .map((r) => r.slug)
-            .filter((s): s is string => typeof s === "string"),
+            .map((r) => r.id)
+            .filter((id): id is string => typeof id === "string"),
         );
-        const invalid = slugs.filter((s) => !validSlugSet.has(s));
+        const invalid = ids.filter((id) => !validIdsSet.has(id));
         if (invalid.length > 0) {
           return (
-            `Error: the following sub-agent slug(s) are not attached to you ` +
-            `or are not of type \`claude_sub_agent\`: ${invalid.map((s) => `"${s}"`).join(", ")}. ` +
+            `Error: the following sub-agent id(s) are not attached to you ` +
+            `or are not of type \`claude_sub_agent\`: ${invalid.map((id) => `"${id}"`).join(", ")}. ` +
             `Run \`list_claude_sub_agents\` to see your actual roster. ` +
             `Reminder: \`Task()\` only reaches \`claude_sub_agent\` rows — system ` +
             `agents go through \`delegate_to_deep_agent\` instead.`
@@ -757,7 +757,7 @@ export function StartEpicTaskTool(callerAgentId: string) {
           metadata: {
             ...(preRunSha ? { pre_run_sha: preRunSha } : {}),
             assignments: assignments.map((a) => ({
-              subagentSlug: a.subagentSlug,
+              id: a.id,
               scope: a.scope,
             })),
           },
@@ -776,7 +776,7 @@ export function StartEpicTaskTool(callerAgentId: string) {
         const dispatchLines = assignments
           .map(
             (a, i) =>
-              `${i + 1}. \`Task("${a.subagentSlug}", ${JSON.stringify(a.scope)})\``,
+              `${i + 1}. \`Task("${a.id}", ${JSON.stringify(a.scope)})\``,
           )
           .join("\n");
 
@@ -823,11 +823,11 @@ export function StartEpicTaskTool(callerAgentId: string) {
         assignments: z
           .array(
             z.object({
-              subagentSlug: z
+              id: z
                 .string()
                 .min(1)
                 .describe(
-                  "The sub-agent's slug as returned by `list_claude_sub_agents`. Must be a " +
+                  "The sub-agent's id as returned by `list_claude_sub_agents`. Must be a " +
                   "`claude_sub_agent` row attached to you — system / external / application / " +
                   "primary rows are rejected.",
                 ),
