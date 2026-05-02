@@ -7,6 +7,7 @@ import type {
   CachedResearchObject,
 } from "./types";
 import {
+  publicObjectViewFromCachedObject,
   sectorContextFromResearchObjects,
   stockContextFromResearchObjects,
 } from "./researchObjectBuilder";
@@ -40,6 +41,7 @@ export function compilePublicResearchView(input: {
     fallbackSectorContext,
   );
   const researchObjectKeys = researchObjects.map((item) => item.cacheKey);
+  const researchObjectViews = researchObjects.map(publicObjectViewFromCachedObject);
 
   return {
     objectType,
@@ -53,8 +55,17 @@ export function compilePublicResearchView(input: {
     marketContext,
     stockContext,
     sectorContext,
-    researchObjects,
+    researchObjectViews,
     researchObjectKeys,
+    probabilisticEvidence: Object.fromEntries(
+      researchObjectViews.map((item) => [item.cacheKey, item.probabilisticEvidence]),
+    ),
+    pathRisk: Object.fromEntries(
+      researchObjectViews.map((item) => [item.cacheKey, item.pathRisk]),
+    ),
+    edgeEvidence: Object.fromEntries(
+      researchObjectViews.map((item) => [item.cacheKey, item.edgeEvidence]),
+    ),
     evidence: {
       snapshotNames: ["daily_brief", "metadata", "clusters", "track_record", "transparency"].filter(
         (name) => !!snapshots[name as keyof SnapshotBundle],
@@ -62,6 +73,13 @@ export function compilePublicResearchView(input: {
       stockEvidenceCount: stockContext.symbols.reduce((sum, item) => sum + (item.evidenceCount ?? 0), 0),
       sectorCount: sectorContext.sectors.length,
       researchObjectCount: researchObjects.length,
+      completeResearchObjectCount: researchObjectViews.length,
+      edgeEvidenceStates: Object.fromEntries(
+        researchObjectViews.map((item) => [item.cacheKey, item.edgeEvidence.state]),
+      ),
+      pathRiskStates: Object.fromEntries(
+        researchObjectViews.map((item) => [item.cacheKey, item.pathRisk.state]),
+      ),
       researchObjectSources: Array.from(new Set(researchObjects.map((item) => item.source))),
     },
     freshness: snapshots.freshness ?? {},

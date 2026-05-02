@@ -197,6 +197,109 @@ export type ToolOutputs = Partial<{
 
 export type ResearchObjectSource = "redis" | "database" | "snapshot";
 
+export type EvidenceState = "complete" | "partial" | "unavailable";
+
+export const PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION = 2;
+
+export type ProbabilisticReferenceSet =
+  | "self_analogs"
+  | "sector_conditioned_analogs"
+  | "aggregate_base_rate";
+
+export type EvidenceClaim = {
+  text: string;
+  classification?: string;
+  family?: string;
+  source?: string;
+};
+
+export type EdgeEvidenceView = {
+  state: EvidenceState;
+  source: "validated_pipeline" | "snapshot_proxy" | "unavailable";
+  claims: EvidenceClaim[];
+  convergence?: {
+    label?: string;
+    familyCountBucket?: string;
+  };
+  rollingForwardValidation?: EvidenceClaim[];
+  decayState?: string;
+  sectorSignalDensity?: string;
+  warnings: string[];
+};
+
+export type ProbabilisticEvidenceView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  horizon: "60-day" | "252-day";
+  referenceSet?: ProbabilisticReferenceSet;
+  sampleSize?: number;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  p25ReturnPct?: number;
+  p75ReturnPct?: number;
+  sampleAdequacy?: string;
+  hitRateBucket?: string;
+  medianOutcomeBucket?: string;
+  downsideQuartileBucket?: string;
+  upsideQuartileBucket?: string;
+  conditionedHitRateBucket?: string;
+  conditionedOutcomeBucket?: string;
+  notes: string[];
+};
+
+export type PathRiskView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  horizon: "60-day";
+  source?: "pg_daily_price_path" | "analog_return_distribution" | "unavailable";
+  sampleSize?: number;
+  observedPathCount?: number;
+  sampleAdequacy?: string;
+  p10MaxDrawdownPct?: number;
+  worstMaxDrawdownPct?: number;
+  probDrawdownGt5Pct?: number;
+  probDrawdownGt10Pct?: number;
+  probDrawdownGt15Pct?: number;
+  probDrawdownGt20Pct?: number;
+  recoveredByHorizonRatePct?: number;
+  lossProbabilityBucket?: string;
+  severeLossProbabilityBucket?: string;
+  downsideTailBucket?: string;
+  adverseExcursionBucket?: string;
+  maxDrawdownBucket?: string;
+  recoveryProfile?: string;
+  validatedEvidence?: {
+    edgeSpecificPathRisk: EvidenceState;
+    sentinelRealizedDrawdown: EvidenceState;
+    coronerDecay: EvidenceState;
+  };
+  warnings?: string[];
+  notes: string[];
+};
+
+export type FiveQuestionCoverage = {
+  whatMattersNow: string[];
+  whyNow?: string;
+  historicalAnalogs: string[];
+  underWhichConditions: string[];
+  invalidation: string[];
+};
+
+export type PublicResearchObjectView = {
+  viewSchemaVersion: number;
+  cacheKey: string;
+  objectType: "stock" | "sector" | "regime";
+  anchor: string;
+  asOfDate: string;
+  title?: string;
+  fiveQuestion: FiveQuestionCoverage;
+  edgeEvidence: EdgeEvidenceView;
+  probabilisticEvidence: ProbabilisticEvidenceView;
+  pathRisk: PathRiskView;
+  freshness: FreshnessMetadata;
+  warnings: string[];
+};
+
 export type CachedResearchObject = {
   cacheKey: string;
   objectType: "stock" | "sector" | "regime";
@@ -206,6 +309,7 @@ export type CachedResearchObject = {
   source: ResearchObjectSource;
   publicSummary: Record<string, unknown>;
   parts: Record<string, unknown>;
+  view?: PublicResearchObjectView;
   freshness: FreshnessMetadata;
   warnings: string[];
 };
@@ -216,8 +320,11 @@ export type PublicResearchView = {
   marketContext: MarketContext;
   stockContext: StockResearchContext;
   sectorContext: SectorLandscape;
-  researchObjects: CachedResearchObject[];
+  researchObjectViews: PublicResearchObjectView[];
   researchObjectKeys: string[];
+  probabilisticEvidence: Record<string, ProbabilisticEvidenceView>;
+  pathRisk: Record<string, PathRiskView>;
+  edgeEvidence: Record<string, EdgeEvidenceView>;
   evidence: Record<string, unknown>;
   freshness: FreshnessMetadata;
   warnings: string[];
@@ -329,8 +436,11 @@ export const EMPTY_PUBLIC_RESEARCH_VIEW: PublicResearchView = {
   marketContext: {},
   stockContext: { symbols: [], missingSymbols: [] },
   sectorContext: { sectors: [], missingSectors: [] },
-  researchObjects: [],
+  researchObjectViews: [],
   researchObjectKeys: [],
+  probabilisticEvidence: {},
+  pathRisk: {},
+  edgeEvidence: {},
   evidence: {},
   freshness: {},
   warnings: [],

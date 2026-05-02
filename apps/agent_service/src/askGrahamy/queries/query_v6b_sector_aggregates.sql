@@ -118,6 +118,134 @@ adjacent_buckets AS (
     AND market_regime = :CURRENT_REGIME
     AND ABS(pe_bin  - :PE_BIN)  <= 1
     AND ABS(rsi_bin - :RSI_BIN) <= 1
+),
+
+sector_analog_sample AS (
+  SELECT
+    h.symbol,
+    h.as_of_date AS analog_date,
+    h.price::numeric AS entry_price,
+    fr.h60_return
+  FROM md_historical_features_daily h
+  LEFT JOIN md_forward_returns fr
+    ON fr.symbol = h.symbol
+   AND fr.as_of_date = h.as_of_date
+  WHERE h.sector = :SECTOR
+    AND h.market_regime = :CURRENT_REGIME
+    AND h.as_of_date >= '2010-01-01'
+    AND h.as_of_date < CURRENT_DATE - INTERVAL '180 days'
+    AND h.is_delisted = false
+    AND h.price > 0
+    AND CASE
+      WHEN h.pe_percentile_in_sector <= 0.20 THEN 1
+      WHEN h.pe_percentile_in_sector <= 0.40 THEN 2
+      WHEN h.pe_percentile_in_sector <= 0.60 THEN 3
+      WHEN h.pe_percentile_in_sector <= 0.80 THEN 4
+      WHEN h.pe_percentile_in_sector IS NULL  THEN NULL
+      ELSE 5
+    END = :PE_BIN
+    AND CASE
+      WHEN h.rsi_14 < 30 THEN 1
+      WHEN h.rsi_14 < 45 THEN 2
+      WHEN h.rsi_14 < 55 THEN 3
+      WHEN h.rsi_14 < 70 THEN 4
+      WHEN h.rsi_14 IS NULL THEN NULL
+      ELSE 5
+    END = :RSI_BIN
+  ORDER BY h.as_of_date DESC
+  LIMIT 300
+),
+
+sector_analog_path_rows_raw AS (
+  SELECT
+    a.symbol,
+    a.analog_date,
+    p.as_of_date AS path_date,
+    p.path_day,
+    a.entry_price,
+    p.price::numeric AS path_price
+  FROM sector_analog_sample a
+  JOIN LATERAL (
+    SELECT
+      h.as_of_date,
+      h.price,
+      ROW_NUMBER() OVER (ORDER BY h.as_of_date) - 1 AS path_day
+    FROM md_historical_features_daily h
+    WHERE h.symbol = a.symbol
+      AND h.as_of_date >= a.analog_date
+      AND h.as_of_date <= a.analog_date + INTERVAL '120 days'
+      AND h.price > 0
+    ORDER BY h.as_of_date
+    LIMIT 61
+  ) p ON true
+),
+
+sector_analog_path_rows AS (
+  SELECT
+    r.*,
+    (r.path_price / NULLIF(r.entry_price, 0) - 1) AS return_from_entry,
+    (r.path_price / NULLIF(
+      MAX(r.path_price) OVER (
+        PARTITION BY r.symbol, r.analog_date
+        ORDER BY r.path_day
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ),
+      0
+    ) - 1) AS drawdown_from_peak
+  FROM sector_analog_path_rows_raw r
+),
+
+sector_analog_path_by_event AS (
+  SELECT
+    symbol,
+    analog_date,
+    COUNT(*) FILTER (WHERE path_day <= 60) AS observed_days,
+    MIN(return_from_entry) FILTER (WHERE path_day BETWEEN 0 AND 60) AS max_adverse_excursion,
+    MIN(drawdown_from_peak) FILTER (WHERE path_day BETWEEN 0 AND 60) AS max_drawdown,
+    MIN(path_day) FILTER (WHERE path_day > 0 AND return_from_entry >= 0) AS first_recovery_day
+  FROM sector_analog_path_rows
+  GROUP BY symbol, analog_date
+),
+
+sector_path_risk_summary AS (
+  SELECT
+    COUNT(*) FILTER (WHERE p.observed_days >= 40) AS path_n,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY p.max_adverse_excursion)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_adverse_excursion IS NOT NULL) AS median_adverse_excursion,
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY p.max_adverse_excursion)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_adverse_excursion IS NOT NULL) AS p25_adverse_excursion,
+    PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY p.max_adverse_excursion)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_adverse_excursion IS NOT NULL) AS p10_adverse_excursion,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY p.max_drawdown)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_drawdown IS NOT NULL) AS median_max_drawdown,
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY p.max_drawdown)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_drawdown IS NOT NULL) AS p25_max_drawdown,
+    PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY p.max_drawdown)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_drawdown IS NOT NULL) AS p10_max_drawdown,
+    MIN(p.max_drawdown)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_drawdown IS NOT NULL) AS worst_max_drawdown,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_drawdown IS NOT NULL
+      THEN CASE WHEN p.max_drawdown <= -0.05 THEN 1.0 ELSE 0.0 END END) AS prob_drawdown_gt_5,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_drawdown IS NOT NULL
+      THEN CASE WHEN p.max_drawdown <= -0.10 THEN 1.0 ELSE 0.0 END END) AS prob_drawdown_gt_10,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_drawdown IS NOT NULL
+      THEN CASE WHEN p.max_drawdown <= -0.15 THEN 1.0 ELSE 0.0 END END) AS prob_drawdown_gt_15,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_drawdown IS NOT NULL
+      THEN CASE WHEN p.max_drawdown <= -0.20 THEN 1.0 ELSE 0.0 END END) AS prob_drawdown_gt_20,
+    AVG(CASE WHEN s.h60_return IS NULL THEN NULL WHEN s.h60_return < 0 THEN 1.0 ELSE 0.0 END) AS loss_rate_h60,
+    AVG(CASE WHEN s.h60_return IS NULL THEN NULL WHEN s.h60_return <= -0.10 THEN 1.0 ELSE 0.0 END) AS severe_loss_rate_h60,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY p.first_recovery_day)
+      FILTER (WHERE p.observed_days >= 40 AND p.first_recovery_day IS NOT NULL) AS median_recovery_days,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_adverse_excursion IS NOT NULL
+      THEN CASE
+        WHEN p.max_adverse_excursion >= 0 THEN 1.0
+        WHEN p.first_recovery_day IS NOT NULL AND p.first_recovery_day <= 60 THEN 1.0
+        ELSE 0.0
+      END END) AS recovered_by_horizon_rate
+  FROM sector_analog_path_by_event p
+  LEFT JOIN sector_analog_sample s
+    ON s.symbol = p.symbol
+   AND s.analog_date = p.analog_date
 )
 
 -- ═════════════════════════════════════════════════════════════════════════════
@@ -179,6 +307,32 @@ SELECT JSONB_BUILD_OBJECT(
       'h60_hit_rate',  ROUND(((SELECT hit_rate_h60  FROM adjacent_buckets))::numeric, 1),
       'h252_hit_rate', ROUND(((SELECT hit_rate_h252 FROM adjacent_buckets))::numeric, 1),
       'avg_median_h60',ROUND(((SELECT avg_median_h60 FROM adjacent_buckets) * 100)::numeric, 2)
+    ),
+    'path_risk_base', JSONB_BUILD_OBJECT(
+      'source', 'pg_daily_price_path_sector_analogs',
+      'horizon', '60-day',
+      'n', (SELECT path_n FROM sector_path_risk_summary),
+      'loss_rate_h60_pct', ROUND(((SELECT loss_rate_h60 FROM sector_path_risk_summary) * 100)::numeric, 1),
+      'severe_loss_rate_h60_pct', ROUND(((SELECT severe_loss_rate_h60 FROM sector_path_risk_summary) * 100)::numeric, 1),
+      'median_adverse_excursion_pct', ROUND(((SELECT median_adverse_excursion FROM sector_path_risk_summary) * 100)::numeric, 2),
+      'p25_adverse_excursion_pct', ROUND(((SELECT p25_adverse_excursion FROM sector_path_risk_summary) * 100)::numeric, 2),
+      'p10_adverse_excursion_pct', ROUND(((SELECT p10_adverse_excursion FROM sector_path_risk_summary) * 100)::numeric, 2),
+      'median_max_drawdown_pct', ROUND(((SELECT median_max_drawdown FROM sector_path_risk_summary) * 100)::numeric, 2),
+      'p25_max_drawdown_pct', ROUND(((SELECT p25_max_drawdown FROM sector_path_risk_summary) * 100)::numeric, 2),
+      'p10_max_drawdown_pct', ROUND(((SELECT p10_max_drawdown FROM sector_path_risk_summary) * 100)::numeric, 2),
+      'worst_max_drawdown_pct', ROUND(((SELECT worst_max_drawdown FROM sector_path_risk_summary) * 100)::numeric, 2),
+      'prob_drawdown_gt_5_pct', ROUND(((SELECT prob_drawdown_gt_5 FROM sector_path_risk_summary) * 100)::numeric, 1),
+      'prob_drawdown_gt_10_pct', ROUND(((SELECT prob_drawdown_gt_10 FROM sector_path_risk_summary) * 100)::numeric, 1),
+      'prob_drawdown_gt_15_pct', ROUND(((SELECT prob_drawdown_gt_15 FROM sector_path_risk_summary) * 100)::numeric, 1),
+      'prob_drawdown_gt_20_pct', ROUND(((SELECT prob_drawdown_gt_20 FROM sector_path_risk_summary) * 100)::numeric, 1),
+      'median_recovery_days', ROUND((SELECT median_recovery_days FROM sector_path_risk_summary)::numeric, 0),
+      'recovered_by_horizon_rate_pct', ROUND(((SELECT recovered_by_horizon_rate FROM sector_path_risk_summary) * 100)::numeric, 1),
+      'sample_adequacy', CASE
+        WHEN COALESCE((SELECT path_n FROM sector_path_risk_summary), 0) < 30 THEN 'INSUFFICIENT'
+        WHEN (SELECT path_n FROM sector_path_risk_summary) < 100 THEN 'WEAK'
+        WHEN (SELECT path_n FROM sector_path_risk_summary) < 300 THEN 'ADEQUATE'
+        ELSE 'ROBUST'
+      END
     )
   ),
 
