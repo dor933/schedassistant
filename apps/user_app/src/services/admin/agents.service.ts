@@ -133,7 +133,12 @@ export class AgentsService {
     modelId?: string | null,
     skillIds?: number[],
     agentName?: string | null,
-    agentType?: "primary" | "system" | "external" | "application",
+    agentType?:
+      | "primary"
+      | "system"
+      | "external"
+      | "application"
+      | "claude_sub_agent",
     toolIds?: number[],
     description?: string | null,
     organizationId?: string,
@@ -164,7 +169,10 @@ export class AgentsService {
 
     // System agents do not get their own workspace — when they execute a
     // delegation they write into the caller's workspace folder instead.
-    if (resolvedType !== "system") {
+    // claude_sub_agent rows likewise share the parent primary's workspace
+    // through the SDK runner's `cwd` plumbing (slice 17), so they don't
+    // need a per-row directory either.
+    if (resolvedType !== "system" && resolvedType !== "claude_sub_agent") {
       const workspaceFolderName = (agent.definition || agent.id).replace(/\s+/g, "_");
       const workspacePath = path.join(WORKSPACES_ROOT, workspaceFolderName);
       try {
@@ -339,14 +347,15 @@ export class AgentsService {
       patch.modelId = data.modelId;
     }
 
-    // Ownership change. Mirrors the DB CHECK constraint and adds an
-    // explicit cross-org guard so the admin UI can't accidentally lock a
-    // system agent to a primary that lives in a different tenant.
+    // Ownership change. Mirrors the DB CHECK constraint (system OR
+    // claude_sub_agent only) and adds explicit cross-org + vendor guards.
     if (data.owningPrimaryAgentId !== undefined) {
       if (data.owningPrimaryAgentId !== null) {
-        if (agent.type !== "system") {
+        if (agent.type !== "system" && agent.type !== "claude_sub_agent") {
           throw Object.assign(
-            new Error("Only system agents can have an owning primary agent."),
+            new Error(
+              "Only system or claude_sub_agent agents can have an owning primary agent.",
+            ),
             { status: 400 },
           );
         }
@@ -355,7 +364,11 @@ export class AgentsService {
         // them, so they can't be locked to a single owner. The admin UI
         // disables the select for these too; this is the server-side
         // backstop in case the request comes in via API or an out-of-date UI.
-        if (agent.slug && SHARED_SYSTEM_AGENT_SLUG_SET.has(agent.slug)) {
+        if (
+          agent.type === "system" &&
+          agent.slug &&
+          SHARED_SYSTEM_AGENT_SLUG_SET.has(agent.slug)
+        ) {
           throw Object.assign(
             new Error(
               `System agent "${agent.slug}" is shared org-wide by design and cannot be assigned to a single primary agent.`,
@@ -369,7 +382,6 @@ export class AgentsService {
             type: "primary",
             organizationId: callerOrgId,
           },
-          attributes: ["id"],
         });
         if (!owner) {
           throw Object.assign(
@@ -379,11 +391,64 @@ export class AgentsService {
             { status: 400 },
           );
         }
+        // claude_sub_agent ownership is only meaningful when the primary
+        // runs on an Anthropic-vendor model — the Claude Agent SDK is the
+        // only runtime that can actually invoke it via `agents:`. Reject
+        // attachment to a non-Anthropic primary at the server boundary;
+        // the admin UI also filters its dropdown but this is the backstop.
+        if (agent.type === "claude_sub_agent") {
+          const ownerOnAnthropic = await this.isAgentOnAnthropic(owner);
+          if (!ownerOnAnthropic) {
+            throw Object.assign(
+              new Error(
+                "claude_sub_agent can only be assigned to a primary agent running on an Anthropic-vendor model.",
+              ),
+              { status: 400 },
+            );
+          }
+        }
       }
       patch.owningPrimaryAgentId = data.owningPrimaryAgentId;
     }
 
+    // Snapshot whether the primary was on Anthropic BEFORE applying the
+    // patch — we need to know whether this update is the moment of the
+    // off-ramp. Only relevant for primary agents whose modelId is being
+    // changed; cheap no-op otherwise.
+    const wasPrimaryOnAnthropicBefore =
+      agent.type === "primary" && data.modelId !== undefined
+        ? await this.isAgentOnAnthropic(agent)
+        : false;
+
     await agent.update(patch);
+
+    // Cascade-null `claude_sub_agent` assignments off this primary if it
+    // just transitioned from Anthropic to a different vendor (slice 17).
+    // We don't unconditionally re-run on every update — the lookup is
+    // gated on `wasPrimaryOnAnthropicBefore` so non-Anthropic primaries
+    // and non-model-touching updates skip the work entirely.
+    if (
+      wasPrimaryOnAnthropicBefore &&
+      agent.type === "primary" &&
+      data.modelId !== undefined
+    ) {
+      const isOnAnthropicNow = await this.isAgentOnAnthropic(agent);
+      if (!isOnAnthropicNow) {
+        const detached = await this.detachClaudeSubAgentsFromPrimary(agent.id);
+        if (detached.length > 0) {
+          logger.info(
+            "Detached claude_sub_agents from primary that left Anthropic",
+            { primaryId: agent.id, detachedAgentIds: detached },
+          );
+          this.broadcast(
+            "claude_sub_agent_detached",
+            `Detached ${detached.length} sub-agent(s) — primary "${agent.definition || agent.id}" left the Anthropic vendor.`,
+            { primaryId: agent.id, detachedAgentIds: detached },
+            callerId,
+          );
+        }
+      }
+    }
 
     // Sync MCP server assignments if provided (new format takes precedence)
     if (data.mcpServerLinks !== undefined) {
@@ -571,6 +636,52 @@ export class AgentsService {
     if (vendor?.slug === "google") {
       throw Object.assign(new Error("Google (Gemini) models are not supported."), { status: 400 });
     }
+  }
+
+  /**
+   * Returns true when the agent's currently assigned model belongs to the
+   * Anthropic vendor. Used to gate `claude_sub_agent` ownership — the
+   * Claude Agent SDK only fires for Anthropic-vendor primaries, so it
+   * makes no sense to attach a sub-agent to a primary that runs on
+   * OpenAI/Google. Falls back to `false` when modelId is null (no model
+   * configured yet).
+   */
+  private async isAgentOnAnthropic(agent: Agent): Promise<boolean> {
+    if (!agent.modelId) return false;
+    const model = await LLMModel.findByPk(agent.modelId, {
+      attributes: ["vendorId"],
+    });
+    if (!model) return false;
+    const vendor = await Vendor.findByPk(model.vendorId, {
+      attributes: ["slug"],
+    });
+    return vendor?.slug === "anthropic";
+  }
+
+  /**
+   * Detaches every `claude_sub_agent` currently owned by this primary —
+   * sets `owning_primary_agent_id = NULL`, returning the agents to the
+   * "available for assignment" pool. Called from `update()` whenever a
+   * primary's modelId moves off the Anthropic vendor (slice 17).
+   *
+   * Returns the list of detached agent ids so the caller can broadcast a
+   * single change event for the UI.
+   */
+  private async detachClaudeSubAgentsFromPrimary(
+    primaryId: string,
+  ): Promise<string[]> {
+    const owned = await Agent.findAll({
+      where: { type: "claude_sub_agent", owningPrimaryAgentId: primaryId },
+      attributes: ["id"],
+    });
+    if (owned.length === 0) return [];
+    await Agent.update(
+      { owningPrimaryAgentId: null },
+      {
+        where: { type: "claude_sub_agent", owningPrimaryAgentId: primaryId },
+      },
+    );
+    return owned.map((a) => a.id);
   }
 
   /**

@@ -45,17 +45,15 @@ module.exports = {
       },
     });
 
-    // Seed MCP servers (without docker — removed in old migration 0069)
+    // Seed MCP servers (without docker — removed in old migration 0069).
+    //
+    // The legacy `bash` MCP server (`mcp-shell`) is no longer seeded here:
+    // shell access is provided by the Claude Agent SDK's native `Bash` tool,
+    // gated per-agent by `agents.allow_sdk_bash` (added in migration 121).
+    // Existing environments that already have a `bash` row from an earlier
+    // run of this migration keep it — admins manage cleanup via the admin
+    // UI as agents are migrated off the legacy MCP.
     await queryInterface.bulkInsert("mcp_servers", [
-      {
-        name: "bash",
-        transport: "stdio",
-        command: "npx",
-        args: JSON.stringify(["-y", "mcp-shell"]),
-        env: null,
-        created_at: new Date(),
-        updated_at: new Date(),
-      },
       {
         name: "fetch",
         transport: "stdio",

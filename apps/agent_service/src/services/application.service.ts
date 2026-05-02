@@ -1,12 +1,12 @@
 import type { CompiledStateGraph } from "@langchain/langgraph";
 import { Agent } from "@scheduling-agent/database";
 import type { ApplicationAgentState } from "../graphs/applicationGraph/state";
-import { resolveOrCreateApplicationAgentThread } from "./applicationAgentThread.service";
+import { resolveOrCreateApplicationAgentThread } from "../utils/applicationAgentThread.service";
 import {
   resolveDefaultClientApplication,
   resolveOrCreateClientUser,
   type JitUserMetadata,
-} from "./clientApplicationUser.service";
+} from "../utils/clientApplicationUser.service";
 import { observeWithContext } from "../langfuse";
 import { logger } from "../logger";
 

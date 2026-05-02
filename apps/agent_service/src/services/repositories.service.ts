@@ -1,13 +1,13 @@
 import { execSync, spawnSync } from "child_process";
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs";
 import path from "path";
-import { Project, Repository } from "@scheduling-agent/database";
+import { Project, Repository, User } from "@scheduling-agent/database";
 import { logger } from "../logger";
 import {
   buildArchitectureOverviewPrompt,
   MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
-} from "./architectureOverviewPrompt.service";
-import { runCliExecution } from "../utils/cliExecution";
+} from "../utils/architectureOverviewPrompt.service";
+import { runArchitectureScan } from "../utils/architectureScan.service";
 
 // ─── Env configuration ──────────────────────────────────────────────────────
 
@@ -94,47 +94,32 @@ export interface RepoResult {
 // ─── Private helpers ────────────────────────────────────────────────────────
 
 /**
- * Admin-triggered "generate architecture overview" — runs Claude CLI through
- * the shared engine (`utils/cliExecution.ts`), which handles spawning under
- * `su-exec agent`, env injection (HOME=/home/agent + CLAUDE_CODE_OAUTH_TOKEN),
- * the cross-provider busy lock, and persisting a `cli_executions` row.
- *
- * `agentId=null` because this path is invoked by an admin from the repo UI
- * and isn't tied to a specific agent's work.
+ * Resolves the organization that owns a repository, via
+ * `Repository → Project → User → organizationId`. Used by
+ * `generateArchitecture` to find the per-org credential the architecture
+ * scan should authenticate against. Throws on any missing link — a
+ * dangling repo without traceable ownership cannot run a billable scan.
  */
-async function runClaudeArchitecture(cwd: string, prompt: string): Promise<string> {
-  logger.info("runClaudeArchitecture: spawning", { cwd, promptLen: prompt.length });
-
-  const result = await runCliExecution(
-    {
-      cwd,
-      prompt,
-      timeoutMs: 600_000,
-      providerOpts: { maxTurns: 35 },
-    },
-    {
-      provider: "claude",
-      agentId: null,
-      invokedVia: "architecture_overview",
-    },
-  );
-
-  if (result.status !== "completed") {
-    // Surface stdout-as-resultText too — the Claude CLI prints auth/config
-    // errors there, not on stderr, so logging only stderr hides the real cause.
-    logger.error("runClaudeArchitecture: non-zero exit", {
-      cliExecutionId: result.executionId,
-      exitCode: result.exitCode,
-      status: result.status,
-      stdout: (result.resultText ?? "").slice(0, 2000),
-      stderr: (result.stderr ?? "").slice(0, 2000),
-    });
-    const detail = result.stderr?.trim() || result.resultText?.trim() || "(no output)";
+async function resolveRepoOrganizationId(repoId: string): Promise<string> {
+  const repo = await Repository.findByPk(repoId, { attributes: ["projectId"] });
+  if (!repo) {
+    throw new Error(`Repository "${repoId}" not found.`);
+  }
+  const project = await Project.findByPk(repo.projectId, {
+    attributes: ["userId"],
+  });
+  if (!project) {
+    throw new Error(`Project "${repo.projectId}" not found for repo "${repoId}".`);
+  }
+  const user = await User.findByPk(project.userId, {
+    attributes: ["organizationId"],
+  });
+  if (!user?.organizationId) {
     throw new Error(
-      `claude exited with code ${result.exitCode ?? "?"} (${result.status}): ${detail}`,
+      `Owning user "${project.userId}" has no organization — cannot resolve credentials.`,
     );
   }
-  return (result.resultText ?? "").trim();
+  return user.organizationId;
 }
 
 /**
@@ -685,7 +670,13 @@ export class RepositoriesService {
   }
 
   /**
-   * Generate an architecture overview for a cloned repository via Claude CLI.
+   * Generate an architecture overview for a cloned repository.
+   *
+   * Slice 21 — runs in-process via the Anthropic Agent SDK with read-only
+   * built-ins (`Read`/`Glob`/`Grep`), falling back to the Codex SDK with
+   * `sandboxMode: "read-only"` when the org has no Anthropic credential.
+   * Both vendors are credentialed against the per-org row on
+   * `organization_vendor_api_keys`.
    */
   async generateArchitecture(repoId: string): Promise<unknown> {
     const repo = await Repository.findByPk(repoId);
@@ -700,10 +691,15 @@ export class RepositoriesService {
     const prompt = buildArchitectureOverviewPrompt(currentOverview);
 
     try {
-      const result = await runClaudeArchitecture(repo.localPath, prompt);
+      const organizationId = await resolveRepoOrganizationId(repoId);
+      const result = await runArchitectureScan({
+        cwd: repo.localPath,
+        prompt,
+        organizationId,
+      });
 
       if (!result || result.length < 20) {
-        throw new RepoServiceError(500, "Claude returned an empty or too-short architecture overview.");
+        throw new RepoServiceError(500, "Scan returned an empty or too-short architecture overview.");
       }
 
       const overview =

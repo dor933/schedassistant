@@ -49,7 +49,7 @@ export const registerSchema = z.object({
 
 // ─── Onboarding (organization + admin + agents) ─────────────────────────────
 
-export const webSearchChoiceSchema = z.enum(["gemini", "tavily"]);
+export const webSearchChoiceSchema = z.enum(["gemini", "tavily", "anthropic"]);
 
 export const registerOrganizationSchema = z
   .object({
@@ -91,9 +91,10 @@ export const registerOrganizationSchema = z
       .max(5, "At most 5 agents at sign-up."),
     /**
      * The web-search system agent the new org wants active out of the box.
-     * Defaults to the Gemini-powered `web_search` agent; the alternative
-     * is `tavily` (backed by the Tavily search API via @langchain/tavily).
-     * Exactly one of the two is active per org.
+     * One of: `gemini` (Gemini's built-in Google Search grounding),
+     * `tavily` (Tavily search API via @langchain/tavily), or `anthropic`
+     * (Claude Agent SDK's hosted `WebSearch` built-in — billed by
+     * Anthropic per search). Exactly one is active per org.
      */
     webSearchChoice: webSearchChoiceSchema.optional(),
   })

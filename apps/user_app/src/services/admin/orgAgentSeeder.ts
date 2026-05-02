@@ -20,6 +20,8 @@ import { logger } from "../../logger";
  *   - Epic Orchestrator (type=primary) — with its skills + MCP servers
  *   - Web Search Gemini (type=system)  — googleSearch tool_config
  *   - Web Search Tavily (type=system)  — tavily_search (native LangChain tool)
+ *   - Web Search Anthropic (type=system) — Claude Agent SDK's hosted
+ *     `WebSearch` built-in (billed against the org's Anthropic credential)
  *
  * All rows are inserted inside the caller's transaction. Workspace folder
  * creation (filesystem side-effect) is the caller's responsibility — it
@@ -69,6 +71,25 @@ const WEB_SEARCH_TAVILY_INSTRUCTIONS =
   "and return the most relevant results.";
 const WEB_SEARCH_TAVILY_MODEL_SLUG = "claude-sonnet-4-6";
 
+// ── Anthropic-hosted web search ─────────────────────────────────────────
+// Uses the Claude Agent SDK's built-in `WebSearch` tool, which Anthropic
+// runs server-side. Billed against the org's Anthropic credential (the
+// same one the agent already authenticates with), so orgs on Pro/Max
+// subscriptions get search "for free" against their existing seat.
+// `useAnthropicWebSearch` in tool_config tells the deep-agent worker to
+// add `WebSearch` to the SDK runner's `allowedTools` list at runtime.
+const WEB_SEARCH_ANTHROPIC_SLUG = "web_search_anthropic";
+const WEB_SEARCH_ANTHROPIC_AGENT_NAME = "Web Search Agent (Anthropic)";
+const WEB_SEARCH_ANTHROPIC_DESCRIPTION =
+  "Searches the web using the Claude Agent SDK's hosted WebSearch tool. Billed against the org's Anthropic credential — no extra API key needed.";
+const WEB_SEARCH_ANTHROPIC_INSTRUCTIONS =
+  "You are THE dedicated web-search system agent for this organization. " +
+  "All web searches from other agents are routed directly to you. " +
+  "Use the built-in `WebSearch` tool (Anthropic-hosted) to find accurate, " +
+  "up-to-date information from the internet. Summarize findings clearly, " +
+  "cite sources when possible, and return the most relevant results.";
+const WEB_SEARCH_ANTHROPIC_MODEL_SLUG = "claude-sonnet-4-6";
+
 // ── Google Workspace Agent ──────────────────────────────────────────────
 // The organization's single dedicated specialist for Google's SaaS suite —
 // Gmail, Google Calendar, Google Drive. Every primary agent delegates those
@@ -116,6 +137,7 @@ export interface SeedOrganizationAgentsResult {
   epicOrchestratorId: string;
   webSearchGeminiId: string;
   webSearchTavilyId: string;
+  webSearchAnthropicId: string;
   /** The web-search agent id the org chose (already one of the above). */
   activeWebSearchAgentId: string;
   googleWorkspaceAgentId: string;
@@ -131,23 +153,29 @@ export async function seedOrganizationAgents(
 ): Promise<SeedOrganizationAgentsResult> {
   const { organizationId, actorId, webSearchChoice, transaction } = input;
 
-  const [geminiModel, tavilyModel, googleWorkspaceModel] = await Promise.all([
-    LLMModel.findOne({
-      where: { slug: WEB_SEARCH_GEMINI_MODEL_SLUG },
-      attributes: ["id"],
-      transaction,
-    }),
-    LLMModel.findOne({
-      where: { slug: WEB_SEARCH_TAVILY_MODEL_SLUG },
-      attributes: ["id"],
-      transaction,
-    }),
-    LLMModel.findOne({
-      where: { slug: GOOGLE_WORKSPACE_AGENT_MODEL_SLUG },
-      attributes: ["id"],
-      transaction,
-    }),
-  ]);
+  const [geminiModel, tavilyModel, anthropicWebSearchModel, googleWorkspaceModel] =
+    await Promise.all([
+      LLMModel.findOne({
+        where: { slug: WEB_SEARCH_GEMINI_MODEL_SLUG },
+        attributes: ["id"],
+        transaction,
+      }),
+      LLMModel.findOne({
+        where: { slug: WEB_SEARCH_TAVILY_MODEL_SLUG },
+        attributes: ["id"],
+        transaction,
+      }),
+      LLMModel.findOne({
+        where: { slug: WEB_SEARCH_ANTHROPIC_MODEL_SLUG },
+        attributes: ["id"],
+        transaction,
+      }),
+      LLMModel.findOne({
+        where: { slug: GOOGLE_WORKSPACE_AGENT_MODEL_SLUG },
+        attributes: ["id"],
+        transaction,
+      }),
+    ]);
 
   // ── Epic Orchestrator (primary) ─────────────────────────────────────────
   const epic = await Agent.create(
@@ -202,8 +230,36 @@ export async function seedOrganizationAgents(
     { transaction },
   );
 
+  // ── Web Search Anthropic (system) ───────────────────────────────────────
+  // Uses Anthropic's hosted `WebSearch` server tool via the Claude Agent
+  // SDK. No separate API key — the org's Anthropic credential
+  // (api_key or oauth_token row on `organization_vendor_api_keys`) is
+  // what bills the searches. The deep-agent worker reads
+  // `toolConfig.useAnthropicWebSearch` and threads it through to
+  // `runAnthropicAgentSdk`, which adds `WebSearch` to the SDK's
+  // `allowedTools` at invocation time.
+  const anthropicWs = await Agent.create(
+    {
+      type: "system",
+      slug: WEB_SEARCH_ANTHROPIC_SLUG,
+      agentName: WEB_SEARCH_ANTHROPIC_AGENT_NAME,
+      description: WEB_SEARCH_ANTHROPIC_DESCRIPTION,
+      instructions: WEB_SEARCH_ANTHROPIC_INSTRUCTIONS,
+      modelSlug: WEB_SEARCH_ANTHROPIC_MODEL_SLUG,
+      modelId: anthropicWebSearchModel?.id ?? null,
+      toolConfig: { useAnthropicWebSearch: true },
+      isLocked: false,
+      organizationId,
+    },
+    { transaction },
+  );
+
   const activeWebSearchAgentId =
-    webSearchChoice === "tavily" ? tavily.id : gemini.id;
+    webSearchChoice === "tavily"
+      ? tavily.id
+      : webSearchChoice === "anthropic"
+        ? anthropicWs.id
+        : gemini.id;
 
   // ── Google Workspace Agent (system) ─────────────────────────────────────
   // The google_* tools are bound ONLY to this agent at runtime (see
@@ -232,6 +288,7 @@ export async function seedOrganizationAgents(
     epicOrchestratorId: epic.id,
     webSearchGeminiId: gemini.id,
     webSearchTavilyId: tavily.id,
+    webSearchAnthropicId: anthropicWs.id,
     activeWebSearchAgentId,
     googleWorkspaceAgentId: googleWorkspace.id,
   });
@@ -240,6 +297,7 @@ export async function seedOrganizationAgents(
     epicOrchestratorId: epic.id,
     webSearchGeminiId: gemini.id,
     webSearchTavilyId: tavily.id,
+    webSearchAnthropicId: anthropicWs.id,
     activeWebSearchAgentId,
     googleWorkspaceAgentId: googleWorkspace.id,
   };

@@ -257,6 +257,9 @@ export default function LoginPage() {
             </Box>
             <button
               type="button"
+              onClick={() => navigate("/onboarding")}
+
+
               disabled
               aria-disabled="true"
               className="mt-2 inline-flex cursor-not-allowed items-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-50 to-violet-50 px-5 py-2.5 text-sm font-semibold text-indigo-600 opacity-50 ring-1 ring-indigo-100"

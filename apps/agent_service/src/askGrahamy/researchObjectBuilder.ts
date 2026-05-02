@@ -1,11 +1,18 @@
 import { logger } from "../logger";
 import { isRecord, stringValue } from "./snapshotClient";
 import { runResearchQuery } from "./researchQueryClient";
+import { PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION } from "./types";
 import type {
   CachedResearchObject,
+  EdgeEvidenceView,
+  EvidenceClaim,
   Classification,
   FreshnessMetadata,
   MarketContext,
+  PathRiskView,
+  ProbabilisticEvidenceView,
+  ProbabilisticReferenceSet,
+  PublicResearchObjectView,
   SectorLandscape,
   SnapshotBundle,
   StockResearchContext,
@@ -71,9 +78,17 @@ export async function buildResearchObjects(input: {
     const cacheKey = buildResearchObjectCacheKey("STOCK", symbol, asOfDate);
     const prior = priorIndex.get(cacheKey);
     if (prior) {
-      stats.hits += 1;
-      objects.push(prior);
-      continue;
+      const hydrated = hydrateCachedResearchObjectView(prior);
+      if (hydrated) {
+        stats.hits += 1;
+        objects.push(hydrated.object);
+        if (hydrated.updated) {
+          objectsUpdated.push(hydrated.object);
+          stats.writes += 1;
+        }
+        continue;
+      }
+      warnings.push(`Cached Research Object for ${symbol} is stale and cannot be safely hydrated; rebuilding.`);
     }
 
     stats.misses += 1;
@@ -101,9 +116,17 @@ export async function buildResearchObjects(input: {
     const cacheKey = buildResearchObjectCacheKey("SECTOR", sector, asOfDate);
     const prior = priorIndex.get(cacheKey);
     if (prior) {
-      stats.hits += 1;
-      objects.push(prior);
-      continue;
+      const hydrated = hydrateCachedResearchObjectView(prior);
+      if (hydrated) {
+        stats.hits += 1;
+        objects.push(hydrated.object);
+        if (hydrated.updated) {
+          objectsUpdated.push(hydrated.object);
+          stats.writes += 1;
+        }
+        continue;
+      }
+      warnings.push(`Cached Research Object for sector ${sector} is stale and cannot be safely hydrated; rebuilding.`);
     }
 
     stats.misses += 1;
@@ -133,8 +156,34 @@ export async function buildResearchObjects(input: {
       const cacheKey = buildResearchObjectCacheKey("REGIME", "MARKET", asOfDate);
       const prior = priorIndex.get(cacheKey);
       if (prior) {
-        stats.hits += 1;
-        objects.push(prior);
+        const hydrated = hydrateCachedResearchObjectView(prior);
+        if (hydrated) {
+          stats.hits += 1;
+          objects.push(hydrated.object);
+          if (hydrated.updated) {
+            objectsUpdated.push(hydrated.object);
+            stats.writes += 1;
+          }
+        } else {
+          warnings.push("Cached regime Research Object is stale and cannot be safely hydrated; rebuilding.");
+          stats.misses += 1;
+          try {
+            const regimeObject = await buildRegimeResearchObject({
+              regime,
+              asOfDate,
+              freshness: snapshots.freshness ?? {},
+            });
+            objects.push(regimeObject);
+            objectsUpdated.push(regimeObject);
+            stats.writes += 1;
+          } catch (err) {
+            warnings.push(`Regime Research Object query failed for ${regime}.`);
+            logger.warn("Ask Grahamy regime Research Object build failed", {
+              regime,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
       } else {
         stats.misses += 1;
         try {
@@ -236,6 +285,25 @@ async function buildStockResearchObject(input: {
   );
 
   const cacheKey = buildResearchObjectCacheKey("STOCK", symbol, input.asOfDate);
+  const publicSummary = buildStockSummary(
+    core,
+    sectorAggregates,
+    quality,
+    snapshotStock,
+  );
+  const view = buildStockPublicResearchObjectView({
+    cacheKey,
+    symbol,
+    asOfDate: stringValue(asRecord(core.meta).as_of_date) ?? input.asOfDate,
+    freshness: input.freshness,
+    publicSummary,
+    core,
+    sectorAggregates,
+    quality,
+    snapshotStock,
+    fullResearchObject: undefined,
+    warnings: [],
+  });
   return {
     cacheKey,
     objectType: "stock",
@@ -243,13 +311,19 @@ async function buildStockResearchObject(input: {
     asOfDate: stringValue(asRecord(core.meta).as_of_date) ?? input.asOfDate,
     generatedAt: new Date().toISOString(),
     source: "database",
-    publicSummary: buildStockSummary(core, sectorAggregates, quality, snapshotStock),
+    publicSummary: {
+      ...publicSummary,
+      edgeEvidence: view.edgeEvidence,
+      probabilisticEvidence: view.probabilisticEvidence,
+      pathRisk: view.pathRisk,
+    },
     parts: {
       core: sanitizeResearchPart(core),
       sectorAggregates: sanitizeResearchPart(sectorAggregates),
       financialQuality: sanitizeResearchPart(quality),
       snapshot: snapshotStock,
     },
+    view,
     freshness: input.freshness,
     warnings: [],
   };
@@ -300,16 +374,33 @@ async function buildSectorResearchObject(input: {
   const snapshotSector = input.snapshotContext?.sectors.find(
     (item) => normalize(item.sector) === normalize(input.sector),
   );
+  const cacheKey = buildResearchObjectCacheKey("SECTOR", input.sector, input.asOfDate);
+  const asOfDate = stringValue(asRecord(researchObject.meta).as_of_date) ?? input.asOfDate;
+  const publicSummary = buildSectorSummary(researchObject, snapshotSector);
+  const view = buildSectorPublicResearchObjectView({
+    cacheKey,
+    sector: input.sector,
+    asOfDate,
+    freshness: input.freshness,
+    publicSummary,
+    researchObject,
+  });
 
   return {
-    cacheKey: buildResearchObjectCacheKey("SECTOR", input.sector, input.asOfDate),
+    cacheKey,
     objectType: "sector",
     anchor: input.sector,
-    asOfDate: stringValue(asRecord(researchObject.meta).as_of_date) ?? input.asOfDate,
+    asOfDate,
     generatedAt: new Date().toISOString(),
     source: "database",
-    publicSummary: buildSectorSummary(researchObject, snapshotSector),
+    publicSummary: {
+      ...publicSummary,
+      edgeEvidence: view.edgeEvidence,
+      probabilisticEvidence: view.probabilisticEvidence,
+      pathRisk: view.pathRisk,
+    },
     parts: { sector: sanitizeResearchPart(researchObject), snapshot: snapshotSector },
+    view,
     freshness: input.freshness,
     warnings: [],
   };
@@ -328,16 +419,32 @@ async function buildRegimeResearchObject(input: {
   if (!Object.keys(researchObject).length) {
     throw new Error(`No regime Research Object row returned for ${input.regime}.`);
   }
+  const cacheKey = buildResearchObjectCacheKey("REGIME", "MARKET", input.asOfDate);
+  const asOfDate = stringValue(asRecord(researchObject.meta).as_of_date) ?? input.asOfDate;
+  const publicSummary = buildRegimeSummary(researchObject, input.regime);
+  const view = buildRegimePublicResearchObjectView({
+    cacheKey,
+    asOfDate,
+    freshness: input.freshness,
+    publicSummary,
+    researchObject,
+  });
 
   return {
-    cacheKey: buildResearchObjectCacheKey("REGIME", "MARKET", input.asOfDate),
+    cacheKey,
     objectType: "regime",
     anchor: "MARKET",
-    asOfDate: stringValue(asRecord(researchObject.meta).as_of_date) ?? input.asOfDate,
+    asOfDate,
     generatedAt: new Date().toISOString(),
     source: "database",
-    publicSummary: buildRegimeSummary(researchObject, input.regime),
+    publicSummary: {
+      ...publicSummary,
+      edgeEvidence: view.edgeEvidence,
+      probabilisticEvidence: view.probabilisticEvidence,
+      pathRisk: view.pathRisk,
+    },
     parts: { regime: sanitizeResearchPart(researchObject) },
+    view,
     freshness: input.freshness,
     warnings: [],
   };
@@ -348,6 +455,7 @@ function buildStockSummary(
   sectorAggregates: Record<string, unknown>,
   quality: Record<string, unknown>,
   snapshotStock: StockResearchContext["symbols"][number] | undefined,
+  fullResearchObject?: Record<string, unknown>,
 ): Record<string, unknown> {
   const meta = asRecord(core.meta);
   const regimeContext = asRecord(core.regime_context);
@@ -372,6 +480,16 @@ function buildStockSummary(
 
   const regimeFit = deriveRegimeFit(regimeContext);
   const forward = deriveForwardPerformance(analogSelf);
+  const probabilisticEvidence = deriveProbabilisticEvidence(
+    analogSelf,
+    asRecord(sectorAggregates.analog_evidence_sector),
+  );
+  const pathRisk = derivePathRisk(
+    analogSelf,
+    asRecord(sectorAggregates.analog_evidence_sector),
+    fullResearchObject,
+  );
+  const edgeEvidence = deriveEdgeEvidence(fullResearchObject, snapshotStock);
   const signals = deriveActiveSignals({
     trajectory,
     growthCompound,
@@ -425,9 +543,12 @@ function buildStockSummary(
     // Capital Allocation, Catalyst). Note: these are NOT pipeline-validated
     // edges — that's a Phase 2 build per the Ask Grahamy plan.
     activeSignals: signals,
+    edgeEvidence,
 
     // Forward performance — bucketed only.
     forwardPerformance: forward,
+    probabilisticEvidence,
+    pathRisk,
 
     // Fundamentals snapshot — buckets, not raw PE / revenue / market cap.
     fundamentalsSnapshot: fundamentals,
@@ -446,6 +567,673 @@ function buildStockSummary(
   };
 }
 
+export function publicObjectViewFromCachedObject(
+  item: CachedResearchObject,
+): PublicResearchObjectView {
+  if (isCurrentPublicObjectView(item.view)) return item.view;
+
+  if (item.objectType === "stock") {
+    return buildStockPublicResearchObjectView({
+      cacheKey: item.cacheKey,
+      symbol: item.anchor,
+      asOfDate: item.asOfDate,
+      freshness: item.freshness,
+      publicSummary: item.publicSummary,
+      core: asRecord(item.parts.core),
+      sectorAggregates: asRecord(item.parts.sectorAggregates),
+      quality: asRecord(item.parts.financialQuality),
+      snapshotStock: undefined,
+      fullResearchObject: undefined,
+      warnings: item.warnings,
+    });
+  }
+
+  if (item.objectType === "sector") {
+    return buildSectorPublicResearchObjectView({
+      cacheKey: item.cacheKey,
+      sector: item.anchor,
+      asOfDate: item.asOfDate,
+      freshness: item.freshness,
+      publicSummary: item.publicSummary,
+      researchObject: asRecord(item.parts.sector),
+    });
+  }
+
+  return buildRegimePublicResearchObjectView({
+    cacheKey: item.cacheKey,
+    asOfDate: item.asOfDate,
+    freshness: item.freshness,
+    publicSummary: item.publicSummary,
+    researchObject: asRecord(item.parts.regime),
+  });
+}
+
+function hydrateCachedResearchObjectView(
+  item: CachedResearchObject,
+): { object: CachedResearchObject; updated: boolean } | undefined {
+  if (isCurrentPublicObjectView(item.view)) {
+    return { object: item, updated: false };
+  }
+  if (!hasHydratableParts(item)) return undefined;
+  const view = publicObjectViewFromCachedObject(item);
+  return {
+    object: {
+      ...item,
+      view,
+      publicSummary: {
+        ...item.publicSummary,
+        edgeEvidence: view.edgeEvidence,
+        probabilisticEvidence: view.probabilisticEvidence,
+        pathRisk: view.pathRisk,
+      },
+      warnings: item.warnings ?? [],
+    },
+    updated: true,
+  };
+}
+
+function isCurrentPublicObjectView(
+  view: CachedResearchObject["view"] | unknown,
+): view is PublicResearchObjectView {
+  return (
+    isRecord(view) &&
+    numberFrom(view.viewSchemaVersion) === PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION
+  );
+}
+
+function hasHydratableParts(item: CachedResearchObject): boolean {
+  const parts = asRecord(item.parts);
+  if (item.objectType === "stock") return Object.keys(asRecord(parts.core)).length > 0;
+  if (item.objectType === "sector") return Object.keys(asRecord(parts.sector)).length > 0;
+  if (item.objectType === "regime") return Object.keys(asRecord(parts.regime)).length > 0;
+  return false;
+}
+
+function buildStockPublicResearchObjectView(input: {
+  cacheKey: string;
+  symbol: string;
+  asOfDate: string;
+  freshness: FreshnessMetadata;
+  publicSummary: Record<string, unknown>;
+  core: Record<string, unknown>;
+  sectorAggregates: Record<string, unknown>;
+  quality: Record<string, unknown>;
+  snapshotStock?: StockResearchContext["symbols"][number];
+  fullResearchObject?: Record<string, unknown>;
+  warnings: string[];
+}): PublicResearchObjectView {
+  const analogSelf = asRecord(asRecord(input.core.analog_evidence_self).self_history);
+  const analogSector = asRecord(input.sectorAggregates.analog_evidence_sector);
+  const edgeEvidence = deriveEdgeEvidence(
+    input.fullResearchObject,
+    input.snapshotStock,
+  );
+  const probabilisticEvidence = deriveProbabilisticEvidence(
+    analogSelf,
+    analogSector,
+  );
+  const pathRisk = derivePathRisk(
+    analogSelf,
+    analogSector,
+    input.fullResearchObject,
+  );
+
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    cacheKey: input.cacheKey,
+    objectType: "stock",
+    anchor: input.symbol,
+    asOfDate: input.asOfDate,
+    title: stringValue(input.publicSummary.company) ?? input.symbol,
+    fiveQuestion: {
+      whatMattersNow: buildStockWhatMattersNow(input.publicSummary),
+      whyNow: stringValue(input.publicSummary.whyNow),
+      historicalAnalogs: buildHistoricalAnalogBullets(
+        probabilisticEvidence,
+        "stock-local and sector-conditioned analogs",
+      ),
+      underWhichConditions: buildStockConditionBullets(input.sectorAggregates),
+      invalidation: arrayOfStrings(input.publicSummary.invalidationSignals),
+    },
+    edgeEvidence,
+    probabilisticEvidence,
+    pathRisk,
+    freshness: input.freshness,
+    warnings: Array.from(new Set([...input.warnings, ...edgeEvidence.warnings])),
+  };
+}
+
+function buildSectorPublicResearchObjectView(input: {
+  cacheKey: string;
+  sector: string;
+  asOfDate: string;
+  freshness: FreshnessMetadata;
+  publicSummary: Record<string, unknown>;
+  researchObject: Record<string, unknown>;
+}): PublicResearchObjectView {
+  const historicalBaseRate = asRecord(input.researchObject.historical_base_rate);
+  const probabilisticEvidence = deriveAggregateProbabilisticEvidence(
+    historicalBaseRate,
+    "60-day",
+  );
+  const pathRisk = deriveAggregatePathRisk(historicalBaseRate);
+  const edgeEvidence = unavailableEdgeEvidence(
+    "Validated edge evidence is not yet bridged for sector Research Objects in Ask Grahamy.",
+  );
+
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    cacheKey: input.cacheKey,
+    objectType: "sector",
+    anchor: input.sector,
+    asOfDate: input.asOfDate,
+    title: input.sector,
+    fiveQuestion: {
+      whatMattersNow: buildSectorWhatMattersNow(input.publicSummary),
+      whyNow: stringValue(input.publicSummary.whyNow),
+      historicalAnalogs: buildHistoricalAnalogBullets(
+        probabilisticEvidence,
+        "sector base rate",
+      ),
+      underWhichConditions: [
+        ...prefixList(
+          "Favorable",
+          arrayOfStrings(input.publicSummary.favorableConditions),
+        ),
+        ...prefixList(
+          "Unfavorable",
+          arrayOfStrings(input.publicSummary.unfavorableConditions),
+        ),
+      ],
+      invalidation: [
+        input.publicSummary.currentRegimeBelowBest === true
+          ? "Current regime is below the sector's best historical regime bucket."
+          : undefined,
+      ].filter((item): item is string => !!item),
+    },
+    edgeEvidence,
+    probabilisticEvidence,
+    pathRisk,
+    freshness: input.freshness,
+    warnings: edgeEvidence.warnings,
+  };
+}
+
+function buildRegimePublicResearchObjectView(input: {
+  cacheKey: string;
+  asOfDate: string;
+  freshness: FreshnessMetadata;
+  publicSummary: Record<string, unknown>;
+  researchObject: Record<string, unknown>;
+}): PublicResearchObjectView {
+  const historicalBaseRate = asRecord(input.researchObject.historical_base_rate);
+  const regime = stringValue(input.publicSummary.regime) ?? "MARKET";
+  const probabilisticEvidence = deriveAggregateProbabilisticEvidence(
+    historicalBaseRate,
+    "60-day",
+  );
+  const pathRisk = deriveAggregatePathRisk(historicalBaseRate);
+  const edgeEvidence = unavailableEdgeEvidence(
+    "Validated edge evidence is not yet bridged for regime Research Objects in Ask Grahamy.",
+  );
+
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    cacheKey: input.cacheKey,
+    objectType: "regime",
+    anchor: "MARKET",
+    asOfDate: input.asOfDate,
+    title: regime,
+    fiveQuestion: {
+      whatMattersNow: buildRegimeWhatMattersNow(input.publicSummary),
+      whyNow: stringValue(input.publicSummary.whyNow),
+      historicalAnalogs: buildHistoricalAnalogBullets(
+        probabilisticEvidence,
+        "regime base rate",
+      ),
+      underWhichConditions: [
+        ...prefixSectorBuckets(
+          "Historically stronger sectors",
+          input.publicSummary.topSectorsHistorical,
+        ),
+        ...prefixSectorBuckets(
+          "Historically weaker sectors",
+          input.publicSummary.bottomSectorsHistorical,
+        ),
+      ],
+      invalidation: [],
+    },
+    edgeEvidence,
+    probabilisticEvidence,
+    pathRisk,
+    freshness: input.freshness,
+    warnings: edgeEvidence.warnings,
+  };
+}
+
+function deriveEdgeEvidence(
+  fullResearchObject: Record<string, unknown> | undefined,
+  snapshotStock: StockResearchContext["symbols"][number] | undefined,
+): EdgeEvidenceView {
+  const fullEdge = asRecord(fullResearchObject?.edge_evidence);
+  const fullClaims = Array.isArray(fullEdge.claims)
+    ? fullEdge.claims.filter(isRecord)
+    : [];
+  const claims: EvidenceClaim[] = [];
+  for (const claim of fullClaims) {
+    const text = stringValue(claim.text);
+    if (!text) continue;
+    const next: EvidenceClaim = { text, source: "validated_pipeline" };
+    const classification = stringValue(claim.classification);
+    const family = stringValue(claim.derivation);
+    if (classification) next.classification = classification;
+    if (family) next.family = family;
+    claims.push(next);
+    if (claims.length >= 8) break;
+  }
+
+  if (claims.length) {
+    const rollingForwardValidation = claims.filter((claim) =>
+      /sentinel|rolling|horizon|validated/i.test(
+        `${claim.family ?? ""} ${claim.text}`,
+      ),
+    );
+    const decay = claims.find((claim) =>
+      /coroner|decay/i.test(`${claim.family ?? ""} ${claim.text}`),
+    );
+    const density = claims.find((claim) =>
+      /density/i.test(`${claim.family ?? ""} ${claim.text}`),
+    );
+    const convergence = claims.find((claim) =>
+      /convergence|famil/i.test(`${claim.family ?? ""} ${claim.text}`),
+    );
+
+    return {
+      state: "complete",
+      source: "validated_pipeline",
+      claims,
+      convergence: convergence
+        ? {
+            label: convergence.classification,
+            familyCountBucket: convergence.text,
+          }
+        : undefined,
+      rollingForwardValidation,
+      decayState: decay?.classification ?? decay?.text,
+      sectorSignalDensity: density?.classification ?? density?.text,
+      warnings: [],
+    };
+  }
+
+  if (snapshotStock?.confluenceLevel || snapshotStock?.convergenceScore != null) {
+    return {
+      state: "partial",
+      source: "snapshot_proxy",
+      claims: [
+        {
+          text: "Published snapshot context shows a convergence read for this name, but the validated edge bridge did not return full edge evidence.",
+          classification: snapshotStock.confluenceLevel,
+          source: "snapshot_proxy",
+        },
+      ],
+      convergence: {
+        label: snapshotStock.confluenceLevel,
+        familyCountBucket:
+          snapshotStock.convergenceScore == null
+            ? undefined
+            : bucketConvergenceCount(snapshotStock.convergenceScore),
+      },
+      rollingForwardValidation: [],
+      warnings: [
+        "Validated edge evidence bridge unavailable; using snapshot convergence proxy.",
+      ],
+    };
+  }
+
+  return unavailableEdgeEvidence("No validated edge evidence returned for this anchor.");
+}
+
+function deriveProbabilisticEvidence(
+  selfAnalog: Record<string, unknown>,
+  sectorAnalog: Record<string, unknown>,
+): ProbabilisticEvidenceView {
+  const selfHitRate = numberFrom(selfAnalog.h60_hit_rate);
+  const sectorHitRate = numberFrom(sectorAnalog.h60_hit_rate);
+  const referenceSet: ProbabilisticReferenceSet | undefined =
+    selfHitRate != null
+      ? "self_analogs"
+      : sectorHitRate != null
+      ? "sector_conditioned_analogs"
+      : undefined;
+  const selected = referenceSet === "sector_conditioned_analogs" ? sectorAnalog : selfAnalog;
+  const sampleAdequacy = stringValue(selected.sample_adequacy);
+  const sampleSize =
+    numberFrom(selected.n_with_h60) ??
+    numberFrom(selected.n);
+  const hitRate = numberFrom(selected.h60_hit_rate);
+  const median = numberFrom(selected.h60_median_pct);
+  const p25 = numberFrom(selected.h60_p25_pct);
+  const p75 = numberFrom(selected.h60_p75_pct);
+  const sectorMedian = numberFrom(sectorAnalog.h60_median_pct);
+
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    state: hitRate == null && sectorHitRate == null ? "unavailable" : "complete",
+    horizon: "60-day",
+    referenceSet,
+    sampleSize,
+    hitRatePct: hitRate,
+    medianReturnPct: median,
+    p25ReturnPct: p25,
+    p75ReturnPct: p75,
+    sampleAdequacy,
+    hitRateBucket: bucketHitRatePct(hitRate),
+    medianOutcomeBucket: bucketMedianOutcomePct(median),
+    downsideQuartileBucket: bucketTailOutcomePct(p25),
+    upsideQuartileBucket: bucketTailOutcomePct(p75),
+    conditionedHitRateBucket: bucketHitRatePct(sectorHitRate),
+    conditionedOutcomeBucket: bucketMedianOutcomePct(sectorMedian),
+    notes: [
+      "Base-rate evidence is bucketed from historical analog outcomes.",
+      sectorHitRate != null
+        ? "Sector-conditioned analog evidence is present for the current regime and valuation/RSI bucket."
+        : "Sector-conditioned analog evidence is unavailable for this setup.",
+    ],
+  };
+}
+
+function deriveAggregateProbabilisticEvidence(
+  baseRate: Record<string, unknown>,
+  horizon: "60-day" | "252-day",
+): ProbabilisticEvidenceView {
+  const hitRate =
+    horizon === "60-day"
+      ? numberFrom(baseRate.h60_hit_rate)
+      : numberFrom(baseRate.h252_hit_rate);
+  const outcome =
+    numberFrom(baseRate.h60_avg_pct) ??
+    numberFrom(baseRate.h60_median_pct);
+  const p25 = numberFrom(baseRate.h60_p25_pct);
+  const p75 = numberFrom(baseRate.h60_p75_pct);
+  const sample =
+    numberFrom(baseRate.n_observations) ??
+    numberFrom(baseRate.n_with_h60) ??
+    numberFrom(baseRate.n);
+
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    state: hitRate == null ? "unavailable" : "partial",
+    horizon,
+    referenceSet: "aggregate_base_rate",
+    sampleSize: sample,
+    hitRatePct: hitRate,
+    medianReturnPct: outcome,
+    p25ReturnPct: p25,
+    p75ReturnPct: p75,
+    sampleAdequacy: bucketSampleAdequacy(sample),
+    hitRateBucket: bucketHitRatePct(hitRate),
+    medianOutcomeBucket: bucketMedianOutcomePct(outcome),
+    notes: [
+      "Aggregate base-rate evidence is available; lower-tail path details are not yet present in this Ask path.",
+    ],
+  };
+}
+
+function derivePathRisk(
+  selfAnalog: Record<string, unknown>,
+  sectorAnalog: Record<string, unknown>,
+  fullResearchObject: Record<string, unknown> | undefined,
+): PathRiskView {
+  const selfPath = asRecord(selfAnalog.path_risk_base);
+  const sectorPath = asRecord(sectorAnalog.path_risk_base);
+  const pathBase = numberFrom(selfPath.n) != null ? selfPath : sectorPath;
+  const pathSource = stringValue(pathBase.source);
+  const hasPathBase =
+    numberFrom(pathBase.n) != null &&
+    typeof pathSource === "string" &&
+    pathSource.startsWith("pg_daily_price_path");
+  const validatedEvidence = deriveValidatedPathEvidence(fullResearchObject);
+
+  if (hasPathBase) {
+    const sampleSize = numberFrom(pathBase.n);
+    const sampleAdequacy = stringValue(pathBase.sample_adequacy);
+    const lossRate = numberFrom(pathBase.loss_rate_h60_pct);
+    const severeLossRate = numberFrom(pathBase.severe_loss_rate_h60_pct);
+    const adverseExcursion = numberFrom(pathBase.p25_adverse_excursion_pct);
+    const maxDrawdown = numberFrom(pathBase.p25_max_drawdown_pct);
+    const p10MaxDrawdownPct = numberFrom(pathBase.p10_max_drawdown_pct);
+    const worstMaxDrawdownPct = numberFrom(pathBase.worst_max_drawdown_pct);
+    const hasNumericDrawdown =
+      p10MaxDrawdownPct != null ||
+      worstMaxDrawdownPct != null ||
+      numberFrom(pathBase.prob_drawdown_gt_5_pct) != null ||
+      numberFrom(pathBase.prob_drawdown_gt_10_pct) != null ||
+      numberFrom(pathBase.prob_drawdown_gt_15_pct) != null ||
+      numberFrom(pathBase.prob_drawdown_gt_20_pct) != null;
+    const recoveryDays = numberFrom(pathBase.median_recovery_days);
+    const warnings = [
+      sampleAdequacy === "INSUFFICIENT"
+        ? "Daily path-risk sample is insufficient; numeric drawdown fields are directional only."
+        : undefined,
+      !hasNumericDrawdown
+        ? "Daily path rows were present, but numeric drawdown distribution fields were unavailable."
+        : undefined,
+    ].filter((item): item is string => !!item);
+    return {
+      viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+      state: sampleAdequacy === "INSUFFICIENT" || !hasNumericDrawdown ? "partial" : "complete",
+      horizon: "60-day",
+      source: "pg_daily_price_path",
+      sampleSize,
+      observedPathCount: sampleSize,
+      sampleAdequacy,
+      p10MaxDrawdownPct,
+      worstMaxDrawdownPct,
+      probDrawdownGt5Pct: numberFrom(pathBase.prob_drawdown_gt_5_pct),
+      probDrawdownGt10Pct: numberFrom(pathBase.prob_drawdown_gt_10_pct),
+      probDrawdownGt15Pct: numberFrom(pathBase.prob_drawdown_gt_15_pct),
+      probDrawdownGt20Pct: numberFrom(pathBase.prob_drawdown_gt_20_pct),
+      recoveredByHorizonRatePct: numberFrom(pathBase.recovered_by_horizon_rate_pct),
+      lossProbabilityBucket: bucketLossRatePct(lossRate),
+      severeLossProbabilityBucket: bucketLossRatePct(severeLossRate),
+      downsideTailBucket: bucketTailOutcomePct(adverseExcursion),
+      adverseExcursionBucket: bucketTailOutcomePct(adverseExcursion),
+      maxDrawdownBucket: bucketTailOutcomePct(maxDrawdown),
+      recoveryProfile: bucketRecoveryDays(recoveryDays),
+      validatedEvidence,
+      warnings,
+      notes: [
+        "Base-rate path risk is computed from PG daily price paths over the analog reference set.",
+        "Validated overlay is separate: edge-specific path risk, Sentinel realized drawdown, and Coroner decay state.",
+      ],
+    };
+  }
+
+  const hitRate =
+    numberFrom(selfAnalog.h60_hit_rate) ??
+    numberFrom(sectorAnalog.h60_hit_rate);
+  const p25 =
+    numberFrom(selfAnalog.h60_p25_pct) ??
+    numberFrom(sectorAnalog.h60_p25_pct);
+
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    state: hitRate == null && p25 == null ? "unavailable" : "partial",
+    horizon: "60-day",
+    source: hitRate == null && p25 == null ? "unavailable" : "analog_return_distribution",
+    lossProbabilityBucket: bucketLossProbabilityPct(hitRate),
+    downsideTailBucket: bucketTailOutcomePct(p25),
+    validatedEvidence,
+    warnings: [
+      hitRate == null && p25 == null
+        ? "Daily price-path base-rate metrics and analog return fallback are unavailable."
+        : "Numeric drawdown distribution is unavailable because daily price-path metrics are missing.",
+    ],
+    notes: [
+      "Daily price-path base-rate metrics are unavailable; using lower-quartile analog returns as a fallback.",
+      "Validated overlay is separate: edge-specific path risk, Sentinel realized drawdown, and Coroner decay state.",
+    ],
+  };
+}
+
+function deriveAggregatePathRisk(
+  baseRate: Record<string, unknown>,
+): PathRiskView {
+  const hitRate = numberFrom(baseRate.h60_hit_rate);
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    state: hitRate == null ? "unavailable" : "partial",
+    horizon: "60-day",
+    source: hitRate == null ? "unavailable" : "analog_return_distribution",
+    lossProbabilityBucket: bucketLossProbabilityPct(hitRate),
+    validatedEvidence: {
+      edgeSpecificPathRisk: "unavailable",
+      sentinelRealizedDrawdown: "unavailable",
+      coronerDecay: "unavailable",
+    },
+    warnings: [
+      "Numeric drawdown distribution is unavailable for aggregate anchors in this Ask path.",
+    ],
+    notes: [
+      "Aggregate path risk has base-rate loss probability only; daily path metrics are not available for this aggregate anchor yet.",
+    ],
+  };
+}
+
+function deriveValidatedPathEvidence(
+  fullResearchObject: Record<string, unknown> | undefined,
+): PathRiskView["validatedEvidence"] {
+  const explicitPathRisk = asRecord(fullResearchObject?.path_risk);
+  const edge = asRecord(fullResearchObject?.edge_evidence);
+  const claims = Array.isArray(edge.claims) ? edge.claims.filter(isRecord) : [];
+  const claimText = claims
+    .map((claim) => `${stringValue(claim.derivation) ?? ""} ${stringValue(claim.text) ?? ""}`)
+    .join(" ");
+  return {
+    edgeSpecificPathRisk: Object.keys(explicitPathRisk).length ? "complete" : "unavailable",
+    sentinelRealizedDrawdown: /sentinel|realized|drawdown/i.test(claimText)
+      ? "complete"
+      : "unavailable",
+    coronerDecay: /coroner|decay/i.test(claimText) ? "complete" : "unavailable",
+  };
+}
+
+function buildStockWhatMattersNow(summary: Record<string, unknown>): string[] {
+  const signals = Array.isArray(summary.activeSignals)
+    ? summary.activeSignals.filter(isRecord)
+    : [];
+  const lines = signals
+    .map((signal) => stringValue(signal.evidenceLanguage))
+    .filter((line): line is string => !!line)
+    .slice(0, 4);
+  const fundamentals = asRecord(summary.fundamentalsSnapshot);
+  const growth = stringValue(fundamentals.growthProfile);
+  const quality = stringValue(fundamentals.financialQualityBand);
+  const balance = stringValue(fundamentals.balanceSheetBand);
+  if (growth || quality || balance) {
+    lines.push(
+      `Fundamental profile: growth ${growth ?? "unknown"}, quality ${quality ?? "unknown"}, balance sheet ${balance ?? "unknown"}.`,
+    );
+  }
+  const regimeFit = stringValue(summary.regimeFit);
+  if (regimeFit) lines.push(`Current regime fit is ${regimeFit}.`);
+  return lines;
+}
+
+function buildSectorWhatMattersNow(summary: Record<string, unknown>): string[] {
+  return [
+    numberFrom(summary.symbolsCovered) != null
+      ? `${numberFrom(summary.symbolsCovered)} symbols are represented in the sector evidence set.`
+      : undefined,
+    stringValue(summary.currentRegimeBucket)
+      ? `Current-regime historical hit-rate is bucketed ${stringValue(summary.currentRegimeBucket)}.`
+      : undefined,
+    stringValue(summary.sampleAdequacy)
+      ? `Sample adequacy is ${stringValue(summary.sampleAdequacy)}.`
+      : undefined,
+  ].filter((item): item is string => !!item);
+}
+
+function buildRegimeWhatMattersNow(summary: Record<string, unknown>): string[] {
+  return [
+    stringValue(summary.regime)
+      ? `Regime anchor is ${stringValue(summary.regime)}.`
+      : undefined,
+    stringValue(summary.unconditionalHitRateBucket)
+      ? `Unconditional hit-rate bucket is ${stringValue(summary.unconditionalHitRateBucket)}.`
+      : undefined,
+    Array.isArray(summary.topSectorsTodayRank) &&
+    summary.topSectorsTodayRank.length
+      ? `Today's leading sectors: ${summary.topSectorsTodayRank.slice(0, 3).join(", ")}.`
+      : undefined,
+  ].filter((item): item is string => !!item);
+}
+
+function buildHistoricalAnalogBullets(
+  probabilisticEvidence: ProbabilisticEvidenceView,
+  label: string,
+): string[] {
+  const lines: string[] = [];
+  if (probabilisticEvidence.hitRateBucket) {
+    lines.push(
+      `${label}: hit-rate bucket ${probabilisticEvidence.hitRateBucket}.`,
+    );
+  }
+  if (probabilisticEvidence.medianOutcomeBucket) {
+    lines.push(
+      `${label}: median outcome bucket ${probabilisticEvidence.medianOutcomeBucket}.`,
+    );
+  }
+  if (probabilisticEvidence.downsideQuartileBucket) {
+    lines.push(
+      `${label}: downside quartile bucket ${probabilisticEvidence.downsideQuartileBucket}.`,
+    );
+  }
+  if (!lines.length) lines.push(`${label}: unavailable.`);
+  return lines;
+}
+
+function buildStockConditionBullets(
+  sectorAggregates: Record<string, unknown>,
+): string[] {
+  const analog = asRecord(sectorAggregates.analog_evidence_sector);
+  const bucket = asRecord(analog.bucket_key);
+  const conditions = [
+    stringValue(bucket.regime),
+    numberFrom(bucket.pe_bin) == null ? undefined : `P/E bin ${numberFrom(bucket.pe_bin)}`,
+    numberFrom(bucket.rsi_bin) == null ? undefined : `RSI bin ${numberFrom(bucket.rsi_bin)}`,
+    stringValue(bucket.valuation_bucket),
+  ].filter((item): item is string => !!item);
+  return conditions.length ? [`Conditioned analog bucket: ${conditions.join(" + ")}.`] : [];
+}
+
+function prefixList(prefix: string, values: string[]): string[] {
+  return values.map((value) => `${prefix}: ${value}.`);
+}
+
+function prefixSectorBuckets(prefix: string, value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((item) => {
+      const sector = stringValue(item.sector);
+      const bucket = stringValue(item.bucket);
+      if (!sector) return undefined;
+      return `${prefix}: ${sector}${bucket ? ` (${bucket})` : ""}.`;
+    })
+    .filter((item): item is string => !!item);
+}
+
+function unavailableEdgeEvidence(warning: string): EdgeEvidenceView {
+  return {
+    state: "unavailable",
+    source: "unavailable",
+    claims: [],
+    rollingForwardValidation: [],
+    warnings: [warning],
+  };
+}
+
 // Bucket helpers — keep raw stats internal; never leak numbers into public projection.
 function bucketHitRatePct(value: number | undefined): string | undefined {
   if (value == null) return undefined;
@@ -460,6 +1248,44 @@ function bucketMedianOutcomePct(value: number | undefined): string | undefined {
   if (value >= 5) return "CONSTRUCTIVE";
   if (value >= 0) return "MIXED";
   return "WEAK";
+}
+
+function bucketTailOutcomePct(value: number | undefined): string | undefined {
+  if (value == null) return undefined;
+  if (value >= 5) return "CONSTRUCTIVE";
+  if (value >= 0) return "MIXED_POSITIVE";
+  if (value >= -5) return "MODERATE_DOWNSIDE";
+  if (value >= -12) return "ELEVATED_DOWNSIDE";
+  return "SEVERE_DOWNSIDE";
+}
+
+function bucketLossProbabilityPct(hitRatePct: number | undefined): string | undefined {
+  if (hitRatePct == null) return undefined;
+  const lossRate = 100 - hitRatePct;
+  return bucketLossRatePct(lossRate);
+}
+
+function bucketLossRatePct(lossRatePct: number | undefined): string | undefined {
+  if (lossRatePct == null) return undefined;
+  if (lossRatePct <= 35) return "LOW";
+  if (lossRatePct <= 48) return "MODERATE";
+  if (lossRatePct <= 55) return "ELEVATED";
+  return "HIGH";
+}
+
+function bucketRecoveryDays(days: number | undefined): string | undefined {
+  if (days == null) return undefined;
+  if (days <= 10) return "FAST";
+  if (days <= 30) return "MODERATE";
+  if (days <= 60) return "SLOW";
+  return "UNRECOVERED_WITHIN_WINDOW";
+}
+
+function bucketConvergenceCount(value: number): string {
+  if (value >= 5) return "MANY_FAMILIES";
+  if (value >= 3) return "SEVERAL_FAMILIES";
+  if (value >= 1) return "LIMITED_FAMILIES";
+  return "NO_CONVERGENCE";
 }
 
 function bucketPercentileRank(value: number | undefined): string | undefined {

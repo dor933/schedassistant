@@ -23,10 +23,16 @@ export default function UserCard({
     const isSuperAdmin = currentUserRole === "super_admin";
     const targetIsSuperAdmin = u.role === "super_admin";
     const targetIsAdminOrAbove = u.role === "admin" || u.role === "super_admin";
-    // Admins cannot edit super_admin users; super_admins can edit anyone
-    const canEdit = isSuperAdmin || !targetIsSuperAdmin;
+    // Client-app JIT users are mirrored from an upstream application and
+    // are read-only here — the source app owns their displayName / identity
+    // / role. The server enforces the same rule (admin users.service.update
+    // throws 403 for authProvider='client_app').
+    const isClientAppUser = u.authProvider === "client_app";
+    // Admins cannot edit super_admin users; super_admins can edit anyone —
+    // except client-app users, which nobody can edit from this UI.
+    const canEdit = !isClientAppUser && (isSuperAdmin || !targetIsSuperAdmin);
     // Admins can only see/change identity for regular users (not admin/super_admin)
-    const canEditIdentity = isSuperAdmin || !targetIsAdminOrAbove;
+    const canEditIdentity = !isClientAppUser && (isSuperAdmin || !targetIsAdminOrAbove);
     const [editing, setEditing] = useState(false);
     const [displayName, setDisplayName] = useState(u.displayName ?? "");
     const [selectedRoleId, setSelectedRoleId] = useState(u.roleId ?? "");
@@ -186,6 +192,14 @@ export default function UserCard({
                 {u.role === "admin" && (
                   <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-600">
                     admin
+                  </span>
+                )}
+                {isClientAppUser && (
+                  <span
+                    className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-600"
+                    title="Provisioned by an external application — read-only here."
+                  >
+                    app user
                   </span>
                 )}
               </div>

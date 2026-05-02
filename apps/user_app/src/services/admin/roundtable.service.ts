@@ -14,6 +14,16 @@ import { InAppNotificationsService } from "../inAppNotifications.service";
 const AGENT_SERVICE_URL =
   process.env.AGENT_SERVICE_URL ?? "http://localhost:3001";
 
+/**
+ * Mirror of `USER_TURN_TIMEOUT_SECONDS` in the agent_service worker —
+ * the worker is the actual enforcer (it emits `roundtable:user_turn`
+ * with this `deadlineSeconds`). The value here only feeds the
+ * `userTurnDeadlineAt` field on the GET /roundtables/:id response so a
+ * page refresh can recompute the same deadline without waiting for a
+ * fresh socket event. Keep both numbers in lockstep.
+ */
+const USER_TURN_TIMEOUT_SECONDS = 5 * 60;
+
 export class RoundtableService {
   private notifications = new InAppNotificationsService();
 
@@ -72,8 +82,31 @@ export class RoundtableService {
       ],
     });
 
+    // When status === "waiting_for_user", the active turn belongs to the
+    // first participant whose `turnsCompleted <= currentRound` in
+    // `turn_order`. Surfacing both the userId and an absolute deadline
+    // here lets the client render the right "Your turn" / "Waiting for X"
+    // banner on a fresh page load without re-deriving the answer from a
+    // brittle find() heuristic, and without resetting the 5-minute timer.
+    const activeUserTurnRow =
+      roundtable.status === "waiting_for_user"
+        ? users.find((u) => u.turnsCompleted <= roundtable.currentRound) ?? null
+        : null;
+    const userTurnStartedAtIso = roundtable.userTurnStartedAt
+      ? roundtable.userTurnStartedAt.toISOString()
+      : null;
+    const userTurnDeadlineAtIso = roundtable.userTurnStartedAt
+      ? new Date(
+          roundtable.userTurnStartedAt.getTime() +
+            USER_TURN_TIMEOUT_SECONDS * 1000,
+        ).toISOString()
+      : null;
+
     return {
       ...roundtable.toJSON(),
+      userTurnStartedAt: userTurnStartedAtIso,
+      userTurnDeadlineAt: userTurnDeadlineAtIso,
+      currentTurnUserId: activeUserTurnRow?.userId ?? null,
       agents: agents.map((ra) => ({
         id: ra.id,
         agentId: ra.agentId,
@@ -161,13 +194,29 @@ export class RoundtableService {
     if (uniqueUserIds.length > 0) {
       participantRows = await User.findAll({
         where: { id: uniqueUserIds },
-        attributes: ["id", "displayName"],
+        attributes: ["id", "displayName", "authProvider"],
       });
       if (participantRows.length !== uniqueUserIds.length) {
         const found = new Set(participantRows.map((u) => u.id));
         const missing = uniqueUserIds.filter((id) => !found.has(id));
         throw Object.assign(
           new Error(`User(s) not found: ${missing.join(", ")}`),
+          { status: 400 },
+        );
+      }
+      // Client-app JIT users are never valid roundtable participants —
+      // their only entry point is the applicationGraph. Reject early so an
+      // admin can't accidentally add them via the picker.
+      const clientAppParticipants = participantRows.filter(
+        (u) => u.authProvider === "client_app",
+      );
+      if (clientAppParticipants.length > 0) {
+        throw Object.assign(
+          new Error(
+            `User(s) provisioned by an external application cannot join roundtables: ${clientAppParticipants
+              .map((u) => u.id)
+              .join(", ")}`,
+          ),
           { status: 400 },
         );
       }
@@ -347,7 +396,7 @@ export class RoundtableService {
     }
 
     await Roundtable.update(
-      { status: "completed" },
+      { status: "completed", userTurnStartedAt: null },
       { where: { id: roundtableId } },
     );
 

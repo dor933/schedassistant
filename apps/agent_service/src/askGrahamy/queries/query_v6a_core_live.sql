@@ -435,6 +435,7 @@ current_profile_vector AS (
 self_analogs_raw AS (
   SELECT
     h.as_of_date AS analog_date,
+    h.price AS analog_entry_price,
     h.market_regime AS analog_regime,
     h.pe_percentile_in_sector AS analog_pe_pct,
     h.rsi_14 AS analog_rsi,
@@ -468,6 +469,95 @@ self_analogs_with_fwd AS (
   LEFT JOIN md_forward_returns fr
     ON fr.symbol = (SELECT target_symbol FROM config)
    AND fr.as_of_date = a.analog_date
+),
+
+self_analog_path_rows_raw AS (
+  SELECT
+    a.analog_date,
+    p.as_of_date AS path_date,
+    p.path_day,
+    a.analog_entry_price::numeric AS entry_price,
+    p.price::numeric AS path_price
+  FROM self_analogs_top a
+  JOIN LATERAL (
+    SELECT
+      h.as_of_date,
+      h.price,
+      ROW_NUMBER() OVER (ORDER BY h.as_of_date) - 1 AS path_day
+    FROM md_historical_features_daily h
+    WHERE h.symbol = (SELECT target_symbol FROM config)
+      AND h.as_of_date >= a.analog_date
+      AND h.as_of_date <= a.analog_date + INTERVAL '120 days'
+      AND h.price > 0
+    ORDER BY h.as_of_date
+    LIMIT 61
+  ) p ON true
+  WHERE a.analog_entry_price > 0
+),
+
+self_analog_path_rows AS (
+  SELECT
+    r.*,
+    (r.path_price / NULLIF(r.entry_price, 0) - 1) AS return_from_entry,
+    (r.path_price / NULLIF(
+      MAX(r.path_price) OVER (
+        PARTITION BY r.analog_date
+        ORDER BY r.path_day
+        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+      ),
+      0
+    ) - 1) AS drawdown_from_peak
+  FROM self_analog_path_rows_raw r
+),
+
+self_analog_path_by_event AS (
+  SELECT
+    analog_date,
+    COUNT(*) FILTER (WHERE path_day <= 60) AS observed_days,
+    MIN(return_from_entry) FILTER (WHERE path_day BETWEEN 0 AND 60) AS max_adverse_excursion,
+    MIN(drawdown_from_peak) FILTER (WHERE path_day BETWEEN 0 AND 60) AS max_drawdown,
+    MIN(path_day) FILTER (WHERE path_day > 0 AND return_from_entry >= 0) AS first_recovery_day
+  FROM self_analog_path_rows
+  GROUP BY analog_date
+),
+
+self_path_risk_summary AS (
+  SELECT
+    COUNT(*) FILTER (WHERE p.observed_days >= 40) AS path_n,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY p.max_adverse_excursion)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_adverse_excursion IS NOT NULL) AS median_adverse_excursion,
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY p.max_adverse_excursion)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_adverse_excursion IS NOT NULL) AS p25_adverse_excursion,
+    PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY p.max_adverse_excursion)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_adverse_excursion IS NOT NULL) AS p10_adverse_excursion,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY p.max_drawdown)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_drawdown IS NOT NULL) AS median_max_drawdown,
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY p.max_drawdown)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_drawdown IS NOT NULL) AS p25_max_drawdown,
+    PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY p.max_drawdown)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_drawdown IS NOT NULL) AS p10_max_drawdown,
+    MIN(p.max_drawdown)
+      FILTER (WHERE p.observed_days >= 40 AND p.max_drawdown IS NOT NULL) AS worst_max_drawdown,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_drawdown IS NOT NULL
+      THEN CASE WHEN p.max_drawdown <= -0.05 THEN 1.0 ELSE 0.0 END END) AS prob_drawdown_gt_5,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_drawdown IS NOT NULL
+      THEN CASE WHEN p.max_drawdown <= -0.10 THEN 1.0 ELSE 0.0 END END) AS prob_drawdown_gt_10,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_drawdown IS NOT NULL
+      THEN CASE WHEN p.max_drawdown <= -0.15 THEN 1.0 ELSE 0.0 END END) AS prob_drawdown_gt_15,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_drawdown IS NOT NULL
+      THEN CASE WHEN p.max_drawdown <= -0.20 THEN 1.0 ELSE 0.0 END END) AS prob_drawdown_gt_20,
+    AVG(CASE WHEN f.h60_return IS NULL THEN NULL WHEN f.h60_return < 0 THEN 1.0 ELSE 0.0 END) AS loss_rate_h60,
+    AVG(CASE WHEN f.h60_return IS NULL THEN NULL WHEN f.h60_return <= -0.10 THEN 1.0 ELSE 0.0 END) AS severe_loss_rate_h60,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY p.first_recovery_day)
+      FILTER (WHERE p.observed_days >= 40 AND p.first_recovery_day IS NOT NULL) AS median_recovery_days,
+    AVG(CASE WHEN p.observed_days >= 40 AND p.max_adverse_excursion IS NOT NULL
+      THEN CASE
+        WHEN p.max_adverse_excursion >= 0 THEN 1.0
+        WHEN p.first_recovery_day IS NOT NULL AND p.first_recovery_day <= 60 THEN 1.0
+        ELSE 0.0
+      END END) AS recovered_by_horizon_rate
+  FROM self_analog_path_by_event p
+  LEFT JOIN self_analogs_with_fwd f ON f.analog_date = p.analog_date
 ),
 
 self_analog_summary AS (
@@ -592,6 +682,22 @@ assembled AS (
     sas.wins_h60 AS self_wins_h60, sas.total_h60 AS self_total_h60,
     sas.median_h252 AS self_median_h252,
     sas.wins_h252 AS self_wins_h252, sas.total_h252 AS self_total_h252,
+    sprs.path_n AS self_path_n,
+    sprs.median_adverse_excursion AS self_median_adverse_excursion,
+    sprs.p25_adverse_excursion AS self_p25_adverse_excursion,
+    sprs.p10_adverse_excursion AS self_p10_adverse_excursion,
+    sprs.median_max_drawdown AS self_median_max_drawdown,
+    sprs.p25_max_drawdown AS self_p25_max_drawdown,
+    sprs.p10_max_drawdown AS self_p10_max_drawdown,
+    sprs.worst_max_drawdown AS self_worst_max_drawdown,
+    sprs.prob_drawdown_gt_5 AS self_prob_drawdown_gt_5,
+    sprs.prob_drawdown_gt_10 AS self_prob_drawdown_gt_10,
+    sprs.prob_drawdown_gt_15 AS self_prob_drawdown_gt_15,
+    sprs.prob_drawdown_gt_20 AS self_prob_drawdown_gt_20,
+    sprs.loss_rate_h60 AS self_loss_rate_h60,
+    sprs.severe_loss_rate_h60 AS self_severe_loss_rate_h60,
+    sprs.median_recovery_days AS self_median_recovery_days,
+    sprs.recovered_by_horizon_rate AS self_recovered_by_horizon_rate,
     -- Q4 OWN-STOCK CONDITIONAL
     (SELECT JSONB_AGG(JSONB_BUILD_OBJECT(
       'regime', market_regime, 'n', n,
@@ -630,6 +736,7 @@ assembled AS (
   LEFT JOIN benchmark_sp500 bs            ON true
   LEFT JOIN benchmark_vix bv              ON true
   LEFT JOIN self_analog_summary sas       ON true
+  LEFT JOIN self_path_risk_summary sprs   ON true
 )
 
 SELECT
@@ -780,6 +887,32 @@ SELECT
         'h60_hit_rate', ROUND((a.self_wins_h60::numeric / NULLIF(a.self_total_h60, 0) * 100), 1),
         'h252_median_pct', ROUND((a.self_median_h252 * 100)::numeric, 2),
         'h252_hit_rate', ROUND((a.self_wins_h252::numeric / NULLIF(a.self_total_h252, 0) * 100), 1),
+        'path_risk_base', JSONB_BUILD_OBJECT(
+          'source', 'pg_daily_price_path_self_analogs',
+          'horizon', '60-day',
+          'n', a.self_path_n,
+          'loss_rate_h60_pct', ROUND((a.self_loss_rate_h60 * 100)::numeric, 1),
+          'severe_loss_rate_h60_pct', ROUND((a.self_severe_loss_rate_h60 * 100)::numeric, 1),
+          'median_adverse_excursion_pct', ROUND((a.self_median_adverse_excursion * 100)::numeric, 2),
+          'p25_adverse_excursion_pct', ROUND((a.self_p25_adverse_excursion * 100)::numeric, 2),
+          'p10_adverse_excursion_pct', ROUND((a.self_p10_adverse_excursion * 100)::numeric, 2),
+          'median_max_drawdown_pct', ROUND((a.self_median_max_drawdown * 100)::numeric, 2),
+          'p25_max_drawdown_pct', ROUND((a.self_p25_max_drawdown * 100)::numeric, 2),
+          'p10_max_drawdown_pct', ROUND((a.self_p10_max_drawdown * 100)::numeric, 2),
+          'worst_max_drawdown_pct', ROUND((a.self_worst_max_drawdown * 100)::numeric, 2),
+          'prob_drawdown_gt_5_pct', ROUND((a.self_prob_drawdown_gt_5 * 100)::numeric, 1),
+          'prob_drawdown_gt_10_pct', ROUND((a.self_prob_drawdown_gt_10 * 100)::numeric, 1),
+          'prob_drawdown_gt_15_pct', ROUND((a.self_prob_drawdown_gt_15 * 100)::numeric, 1),
+          'prob_drawdown_gt_20_pct', ROUND((a.self_prob_drawdown_gt_20 * 100)::numeric, 1),
+          'median_recovery_days', ROUND(a.self_median_recovery_days::numeric, 0),
+          'recovered_by_horizon_rate_pct', ROUND((a.self_recovered_by_horizon_rate * 100)::numeric, 1),
+          'sample_adequacy', CASE
+            WHEN COALESCE(a.self_path_n, 0) < 10 THEN 'INSUFFICIENT'
+            WHEN a.self_path_n < 20 THEN 'WEAK'
+            WHEN a.self_path_n < 50 THEN 'ADEQUATE'
+            ELSE 'ROBUST'
+          END
+        ),
         'sample_adequacy', CASE WHEN COALESCE(a.n_self_h60, 0) < 10 THEN 'INSUFFICIENT'
           WHEN a.n_self_h60 < 20 THEN 'WEAK'
           WHEN a.n_self_h60 < 50 THEN 'ADEQUATE' ELSE 'ROBUST' END

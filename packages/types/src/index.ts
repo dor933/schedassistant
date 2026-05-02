@@ -17,10 +17,11 @@ export interface OrganizationAttributes {
   summary: string | null;
   /**
    * FK to `agents.id` — the single, currently active system web-search agent
-   * for this org. Exactly one of the two web-search system agents
-   * (Gemini-powered `web_search` / Tavily-powered `web_search_tavily`) is
-   * pointed to at any time. Resolved at runtime when an agent delegates a
-   * web search so queries always land on the org's chosen agent.
+   * for this org. Exactly one of the three web-search system agents
+   * (Gemini-powered `web_search` / Tavily-powered `web_search_tavily` /
+   * Anthropic-hosted `web_search_anthropic`) is pointed to at any time.
+   * Resolved at runtime when an agent delegates a web search so queries
+   * always land on the org's chosen agent.
    */
   webSearchAgentId: AgentId | null;
   /**
@@ -36,14 +37,31 @@ export interface OrganizationAttributes {
    * default client id list is accepted instead.
    */
   googleClientId: string | null;
+  /**
+   * FK to `embedding_models.id` — the org's chosen embedding model. Null
+   * before the org has finished setup; the application layer refuses
+   * agent/chat invocations until both this and a usable embedding key
+   * are present.
+   */
+  embeddingModelId: string | null;
+  /**
+   * Frozen snapshot of the chosen model's `dimension` at the moment it
+   * was first set. Once non-null, switching to a model with a different
+   * dimension is refused at the service layer (the live
+   * `episodic_memory.embedding` column is hard-typed `vector(1536)` and
+   * dimension-mismatched rows would fail to insert). Reset to NULL only
+   * by an explicit "wipe & re-embed" admin flow.
+   */
+  embeddingDimension: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
 
-/** Fixed UUIDs for the two seeded web-search system agents (see migrations 20240101000083 / 20240101000095). */
+/** Fixed UUIDs for the seeded web-search system agents (see migrations 20240101000083 / 20240101000095 / 20240101000128). */
 export const WEB_SEARCH_AGENT_ID_GEMINI = "00000000-0000-4000-a000-000000000200";
 export const WEB_SEARCH_AGENT_ID_TAVILY = "00000000-0000-4000-a000-000000000201";
-export type WebSearchChoice = "gemini" | "tavily";
+export const WEB_SEARCH_AGENT_ID_ANTHROPIC = "00000000-0000-4000-a000-000000000202";
+export type WebSearchChoice = "gemini" | "tavily" | "anthropic";
 
 /**
  * Skills that every agent always has available and that never appear in the
@@ -51,23 +69,89 @@ export type WebSearchChoice = "gemini" | "tavily";
  *
  * The union (`AUTO_ASSIGNED_SKILL_SLUGS`) is what the admin skills list is
  * filtered against, so all auto-assigned slugs regardless of tier must be in
- * it. Runtime surfacing is finer-grained: `CORE_AUTO_ASSIGNED_SKILL_SLUGS`
- * is injected for every agent, while `FILESYSTEM_MCP_SKILL_SLUGS` is only
- * injected for agents that actually have the filesystem MCP server attached
- * (checked via `hasFilesystemMcp`). Agents without it get no workspace/library
- * guidance at all — they have no filesystem tools to act on it anyway.
+ * it. Runtime surfacing is finer-grained:
+ *   - `CORE_AUTO_ASSIGNED_SKILL_SLUGS` — injected for every agent.
+ *   - `FILESYSTEM_SKILL_SLUGS_SDK`     — Surface A (capitalised SDK built-ins:
+ *                                       Read/Write/Edit/MultiEdit/Glob/Grep).
+ *                                       Injected for every Anthropic-vendor
+ *                                       agent — Anthropic always runs through
+ *                                       the Claude Agent SDK with built-ins
+ *                                       enabled, so the SDK file tools are
+ *                                       always present.
+ *   - `FILESYSTEM_SKILL_SLUGS_MCP`     — Surface B (lowercase filesystem MCP
+ *                                       tools: read_text_file/write_file/
+ *                                       edit_file/list_directory/...).
+ *                                       Injected only when the agent has the
+ *                                       filesystem MCP server attached
+ *                                       (checked via `hasFilesystemMcp`).
+ *
+ * Use `filesystemSkillSlugsForVendor(vendorSlug)` to pick the right list at
+ * runtime; the union is for admin UI filtering only.
  */
 export const CORE_AUTO_ASSIGNED_SKILL_SLUGS: readonly string[] = [
   "dev-in-house-agent-notes",
   "dev-in-house-skill-library",
 ];
-export const FILESYSTEM_MCP_SKILL_SLUGS: readonly string[] = [
-  "dev-in-house-workspace",
+
+/** Surface A — SDK built-in file tools (Anthropic SDK path). */
+export const FILESYSTEM_SKILL_SLUGS_SDK: readonly string[] = [
+  "dev-in-house-workspace-sdk",
+  "dev-in-house-library-sdk",
+];
+/** Surface B — filesystem MCP tools (Codex bridge / legacy paths). */
+export const FILESYSTEM_SKILL_SLUGS_MCP: readonly string[] = [
+  "dev-in-house-workspace-mcp",
   "dev-in-house-library-mcp",
 ];
+
+/**
+ * Core "shell access" skill auto-assigned when the agent has
+ * `allow_sdk_bash = true` (the default after migration 126). Vendor-
+ * split for the same reason as the workspace skills: the tool name and
+ * semantics differ (Anthropic's `Bash` is a persistent shell with
+ * `run_in_background`; Codex's native shell is one-shot exec gated by
+ * `sandboxMode`). Other shell-related skills (`gh-cli`,
+ * `mcp-bash-build-test`, etc.) are admin-attached, not auto-assigned —
+ * each has its own `-sdk` and `-codex` variants the admin picks per
+ * agent.
+ */
+export const BASH_SKILL_SLUG_SDK = "dev-in-house-bash-sdk";
+export const BASH_SKILL_SLUG_CODEX = "dev-in-house-bash-codex";
+
+/**
+ * Picks the right bash-core skill slug for the agent's vendor.
+ * Anthropic agents get the `Bash` (capitalised) variant; everyone else
+ * gets the Codex `shell` variant. Used by `autoSlugsForAgent` together
+ * with the `allow_sdk_bash` flag — the slug is only injected when the
+ * flag is on.
+ */
+export function bashSkillSlugForVendor(
+  vendorSlug: string | null | undefined,
+): string {
+  return vendorSlug === "anthropic" ? BASH_SKILL_SLUG_SDK : BASH_SKILL_SLUG_CODEX;
+}
+
+/**
+ * @deprecated Use `FILESYSTEM_SKILL_SLUGS_SDK` /
+ *             `FILESYSTEM_SKILL_SLUGS_MCP` and pick by vendor.
+ *
+ * Kept as a union of both surfaces so admin UI filtering (which loads
+ * `AUTO_ASSIGNED_SKILL_SLUGS` to hide auto-assigned skills from the
+ * attach-list) continues to hide all four variants. Don't use this for
+ * runtime injection — it would emit both surfaces' guidance which is
+ * exactly what slice 11 was meant to stop.
+ */
+export const FILESYSTEM_MCP_SKILL_SLUGS: readonly string[] = [
+  ...FILESYSTEM_SKILL_SLUGS_SDK,
+  ...FILESYSTEM_SKILL_SLUGS_MCP,
+];
+
 export const AUTO_ASSIGNED_SKILL_SLUGS: readonly string[] = [
   ...CORE_AUTO_ASSIGNED_SKILL_SLUGS,
-  ...FILESYSTEM_MCP_SKILL_SLUGS,
+  ...FILESYSTEM_SKILL_SLUGS_SDK,
+  ...FILESYSTEM_SKILL_SLUGS_MCP,
+  BASH_SKILL_SLUG_SDK,
+  BASH_SKILL_SLUG_CODEX,
 ];
 export const CORE_AUTO_ASSIGNED_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
   CORE_AUTO_ASSIGNED_SKILL_SLUGS,
@@ -78,6 +162,25 @@ export const FILESYSTEM_MCP_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
 export const AUTO_ASSIGNED_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
   AUTO_ASSIGNED_SKILL_SLUGS,
 );
+
+/**
+ * Picks the right filesystem-skill surface for an agent's vendor.
+ *
+ * Anthropic primaries and deep-agent executors always run through the
+ * Claude Agent SDK with built-ins enabled (`allow_sdk_builtins=true` is
+ * the default for Anthropic agents per migration 125 and the runner's
+ * vendor-based fallback). They see Surface A.
+ *
+ * Other vendors (openai/codex via the bridge, google via legacy
+ * createDeepAgent) operate on the lowercase MCP-style filesystem tool
+ * surface. They see Surface B.
+ */
+export function filesystemSkillSlugsForVendor(
+  vendorSlug: string | null | undefined,
+): readonly string[] {
+  if (vendorSlug === "anthropic") return FILESYSTEM_SKILL_SLUGS_SDK;
+  return FILESYSTEM_SKILL_SLUGS_MCP;
+}
 
 /**
  * System agents that are SHARED by design — every primary in the org needs
@@ -130,7 +233,28 @@ export interface UserIdentity {
 export type AgentId = string;
 
 /** Discriminator for the unified agents table. */
-export type AgentType = "primary" | "system" | "external" | "application";
+/**
+ * Agent role taxonomy:
+ *  - `primary`           — chat-facing orchestrator owned by one user.
+ *  - `system`            — internal specialist invoked via the deepagents
+ *                          worker; can be NULL-shared org-wide or owned
+ *                          by one primary.
+ *  - `external`          — roundtable participant; doesn't run our graphs.
+ *  - `application`       — REST-triggered deep agent (POST /api/application/...).
+ *  - `claude_sub_agent`  — Claude Agent SDK first-class sub-agent (slice 17).
+ *                          Owned by exactly ONE Anthropic-vendor primary at a
+ *                          time (NULL = unassigned/available). Exposed only
+ *                          via the SDK's native `agents:` map; never via
+ *                          `list_system_agents` / deep-agent worker. When
+ *                          its owning primary switches to a non-Anthropic
+ *                          model, the assignment is auto-cleared.
+ */
+export type AgentType =
+  | "primary"
+  | "system"
+  | "external"
+  | "application"
+  | "claude_sub_agent";
 
 export interface AgentAttributes {
   id: AgentId;
@@ -184,6 +308,31 @@ export interface AgentAttributes {
   isLocked: boolean;
   /** FK to `organizations.id` — the tenant this agent belongs to. */
   organizationId: OrganizationId;
+  /**
+   * Per-agent opt-in for the Claude Agent SDK's built-in I/O tools
+   * (Read/Write/Edit/MultiEdit/Glob/Grep/WebFetch). Defaults to FALSE so
+   * unmigrated agents keep their MCP-only tool surface; flipping to TRUE
+   * adds the built-ins to the SDK call's `allowedTools` (and to the agent's
+   * `AgentDefinition.tools` list when running as an SDK sub-agent).
+   *
+   * Built-in writes are still gated by the `.md`/`.txt` extension policy
+   * and captured into the session-file ledger via PreToolUse / PostToolUse
+   * hooks — same instrumentation as the filesystem MCP path.
+   */
+  allowSdkBuiltins: boolean;
+  /**
+   * Per-agent opt-in for the Claude Agent SDK's built-in `Bash` tool.
+   * Separate flag from `allowSdkBuiltins` because Bash has a meaningfully
+   * larger blast radius (arbitrary shell, network, kill processes) than the
+   * read/write/grep surface. Defaults to FALSE; flipping to TRUE adds
+   * `"Bash"` to the SDK call's `allowedTools` (and to the agent's
+   * `AgentDefinition.tools` list when running as an SDK sub-agent).
+   *
+   * When TRUE, the agent typically no longer needs the `mcp-shell` MCP
+   * server attached — the SDK's native Bash is more capable (persistent
+   * session, run_in_background, KillShell companion).
+   */
+  allowSdkBash: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -351,6 +500,24 @@ export interface ThreadAttributes {
   summarizedAt?: Date | null;
   summary?: SessionSummary | null;
   checkpointSizeBytes?: number | null;
+  /**
+   * Claude Agent SDK session id, when this thread has been served by the SDK
+   * runtime path at least once. Cleared on summarization (compaction breaks
+   * Claude-side continuity). Treated as best-effort — the LangGraph checkpoint
+   * is the durable source of truth for the conversation, this is only used to
+   * keep Claude's internal context warm across turns.
+   */
+  claudeSessionId?: string | null;
+  /**
+   * OpenAI Codex SDK thread id (`@openai/codex-sdk`), populated after the
+   * first turn that ran through the Codex runtime. Same semantics as
+   * `claudeSessionId` — best-effort continuity hint for the vendor's own
+   * session store (`~/.codex/sessions`), the LangGraph checkpoint stays
+   * authoritative. Cleared on summarization for the same reason: compaction
+   * rewrites the rendered context, so the vendor session is no longer in
+   * sync and a fresh thread re-bootstraps cleanly.
+   */
+  codexThreadId?: string | null;
 }
 
 // ─── Episodic Memory ─────────────────────────────────────────────────────────
@@ -718,12 +885,6 @@ export interface TaskExecutionAttributes {
   agentTaskId: AgentTaskId;
   attemptNumber: number;
   status: TaskExecutionStatus;
-  cliSessionId: string | null;
-  /**
-   * FK to `cli_executions.id` for the underlying CLI subprocess this attempt
-   * spawned. Nullable for rows predating the cli_executions ledger.
-   */
-  cliExecutionId: CliExecutionId | null;
   prompt: string | null;
   result: string | null;
   error: string | null;
@@ -740,71 +901,13 @@ export interface TaskDependencyAttributes {
   createdAt: Date;
 }
 
-// ─── CLI Executions (provider-agnostic) ─────────────────────────────────────
-
-export type CliExecutionId = string;
-
-/** Which CLI binary this row describes. New providers add a value here. */
-export type CliProvider = "claude" | "codex";
-
-/**
- * Lifecycle of a single CLI invocation.
- * - "running":   spawn succeeded, process still alive (or row not yet finalized).
- * - "completed": process exited 0 and we parsed a result.
- * - "failed":    process exited non-zero, or we couldn't parse the output.
- * - "killed":    swept on startup as a stale `running` row, or explicitly aborted.
- */
-export type CliExecutionStatus = "running" | "completed" | "failed" | "killed";
-
-/** What part of the system spawned this CLI run. Used for filtering / billing. */
-export type CliInvokedVia =
-  | "epic_orchestrator"     // executeTask() / continueRemainingTasks()
-  | "architecture_overview" // generateArchitectureOverview()
-  | "run_cli_tool";         // RunClaudeCliTool / RunCodexCliTool grant
-
-export interface CliExecutionAttributes {
-  id: CliExecutionId;
-  provider: CliProvider;
-  /**
-   * Agent that triggered the run. Nullable so admin-triggered runs (e.g.
-   * the repo "generate architecture overview" endpoint) can be recorded
-   * without faking an attribution.
-   */
-  agentId: AgentId | null;
-  userId: UserId | null;
-  threadId: string | null;
-  /** Optional link back to the epic task that triggered this run. */
-  agentTaskId: AgentTaskId | null;
-  cwd: string;
-  prompt: string;
-  systemPrompt: string | null;
-  /** Resolved CLI agent name (`--agent-name` for claude). Provider may not use it. */
-  cliAgentName: string | null;
-  /** Concrete model id reported by the CLI's structured output, when available. */
-  model: string | null;
-  /** Session id captured from the CLI's structured output (provider-opaque). */
-  sessionId: string | null;
-  /** Set when this run resumed a prior `cli_executions.session_id`. */
-  parentSessionId: string | null;
-  status: CliExecutionStatus;
-  result: string | null;
-  stderr: string | null;
-  exitCode: number | null;
-  /** OS pid of the CLI process. Used by the cross-provider busy check / kill. */
-  pid: number | null;
-  costUsd: number | null;
-  durationMs: number | null;
-  /** Provider-specific. Claude reports it; codex generally doesn't. */
-  numTurns: number | null;
-  isError: boolean | null;
-  invokedVia: CliInvokedVia;
-  /** Provider-specific extras (flags, profile, reasoning_effort, allowedTools, …). */
-  providerMetadata: Record<string, unknown>;
-  startedAt: Date;
-  completedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
+// ─── CLI Executions ─────────────────────────────────────────────────────────
+// Removed in slice 22 follow-up. The `cli_executions` table and the
+// surrounding `runCliExecution` engine were deleted along with the
+// `run_*_cli` / `kill_cli_execution` tools and the legacy
+// `executeTask`-driven epic CLI flow. Session continuity for the
+// SDK-driven runtime lives on `threads.claude_session_id` /
+// `threads.codex_thread_id` instead — see `agentSdkRunner.ts`.
 
 // ─── Agent Cron Jobs ─────────────────────────────────────────────────────────
 

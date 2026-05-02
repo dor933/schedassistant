@@ -17,9 +17,12 @@ import { agentUserScopesRouter } from "./agentUserScopes.routes";
 import { vendorApiKeysRouter } from "./vendorApiKeys.routes";
 import { organizationRouter } from "./organization.routes";
 import { libraryRouter } from "./library.routes";
-import { claudeOauthRouter } from "./claudeOauth.routes";
-import { codexApiKeyRouter } from "./codexApiKey.routes";
-import { codexAuthJsonRouter } from "./codexAuthJson.routes";
+import { embeddingConfigRouter } from "./embeddingConfig.routes";
+// codex-auth-json: removed in slice 14. The Codex CLI auth.json is now
+// stored as `key_type='auth_object'` on the regular per-org
+// `organization_vendor_api_keys` row for the OpenAI vendor — no separate
+// system-wide endpoint or storage path. Admins set/clear it via the
+// vendor-api-keys admin endpoint with the new `authObject` body field.
 
 const router = Router();
 
@@ -40,9 +43,7 @@ router.use("/web-search-agent", webSearchAgentRouter);
 router.use("/vendor-api-keys", vendorApiKeysRouter);
 router.use("/organization", organizationRouter);
 router.use("/library", libraryRouter);
-router.use("/claude-oauth-token", claudeOauthRouter);
-router.use("/codex-api-key", codexApiKeyRouter);
-router.use("/codex-auth-json", codexAuthJsonRouter);
+router.use("/embedding-config", embeddingConfigRouter);
 // Agent ↔ user Google scope grants (super_admin gated inside the router).
 // Mounts at the admin root so the same router covers both
 // /admin/google-users and /admin/agents/:agentId/user-scopes.

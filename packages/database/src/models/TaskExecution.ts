@@ -4,7 +4,6 @@ import type {
   TaskExecutionAttributes,
   TaskExecutionStatus,
   AgentTaskId,
-  CliExecutionId,
 } from "@scheduling-agent/types";
 
 type TaskExecutionCreationAttributes = Optional<
@@ -12,8 +11,6 @@ type TaskExecutionCreationAttributes = Optional<
   | "id"
   | "createdAt"
   | "status"
-  | "cliSessionId"
-  | "cliExecutionId"
   | "prompt"
   | "result"
   | "error"
@@ -30,8 +27,6 @@ class TaskExecution
   declare agentTaskId: AgentTaskId;
   declare attemptNumber: number;
   declare status: TaskExecutionStatus;
-  declare cliSessionId: string | null;
-  declare cliExecutionId: CliExecutionId | null;
   declare prompt: string | null;
   declare result: string | null;
   declare error: string | null;
@@ -63,17 +58,6 @@ TaskExecution.init(
       type: DataTypes.STRING(32),
       allowNull: false,
       defaultValue: "running",
-    },
-    cliSessionId: {
-      type: DataTypes.STRING(255),
-      allowNull: true,
-      field: "cli_session_id",
-    },
-    cliExecutionId: {
-      type: DataTypes.UUID,
-      allowNull: true,
-      field: "cli_execution_id",
-      references: { model: "cli_executions", key: "id" },
     },
     prompt: {
       type: DataTypes.TEXT,

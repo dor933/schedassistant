@@ -1,27 +1,92 @@
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
-import { sequelize, Skill, AgentAvailableSkill } from "@scheduling-agent/database";
+import { sequelize, Skill, AgentAvailableSkill, Agent, LLMModel, Vendor } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 import { z } from "zod";
 import {
   CORE_AUTO_ASSIGNED_SKILL_SLUGS,
-  FILESYSTEM_MCP_SKILL_SLUGS,
+  FILESYSTEM_SKILL_SLUGS_SDK,
+  FILESYSTEM_SKILL_SLUGS_MCP,
+  filesystemSkillSlugsForVendor,
+  bashSkillSlugForVendor,
 } from "@scheduling-agent/types";
 import { hasFilesystemMcp } from "./hasFilesystemMcp";
+import { logger } from "../logger";
 
 /**
- * Returns the auto-assigned skill slugs actually visible to this agent:
- * always the core set, plus the filesystem-MCP subset when the agent has the
- * filesystem MCP server attached. Agents without filesystem MCP never see
- * workspace/library skill rows — they have no filesystem tools to act on
- * those instructions.
+ * Best-effort vendor + bash-flag lookup for an agent. Reads the
+ * agent's modelId → llm_models row → vendorId → vendors row → slug,
+ * and `allow_sdk_bash` from the agent row. Returns null fields when
+ * the lookup fails so the caller can fall back to safe defaults.
+ *
+ * Not cached at module scope: the agent's model and flags can change
+ * at runtime (admin UI), and a stale cache would point at the wrong
+ * skill surface.
+ */
+async function resolveAgentVendorAndFlags(
+  agentId: string,
+): Promise<{ vendorSlug: string | null; allowSdkBash: boolean }> {
+  try {
+    const agent = await Agent.findByPk(agentId, {
+      attributes: ["modelId", "allowSdkBash"],
+    });
+    if (!agent) return { vendorSlug: null, allowSdkBash: false };
+    const allowSdkBash = agent.allowSdkBash !== false;
+    if (!agent.modelId) return { vendorSlug: null, allowSdkBash };
+    const model = await LLMModel.findByPk(agent.modelId, {
+      attributes: ["vendorId"],
+    });
+    if (!model?.vendorId) return { vendorSlug: null, allowSdkBash };
+    const vendor = await Vendor.findByPk(model.vendorId, {
+      attributes: ["slug"],
+    });
+    return { vendorSlug: vendor?.slug ?? null, allowSdkBash };
+  } catch (err) {
+    logger.warn("Failed to resolve agent vendor/flags for skill auto-assignment", {
+      agentId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { vendorSlug: null, allowSdkBash: false };
+  }
+}
+
+/**
+ * Returns the auto-assigned skill slugs actually visible to this agent.
+ * Always the core set; plus vendor- and flag-conditional surfaces:
+ *   - Filesystem skill (workspace + library):
+ *       - Anthropic agents → Surface A (SDK built-in file tools).
+ *         Always injected — Anthropic agents always run through the
+ *         Claude Agent SDK with built-ins enabled, so the SDK file
+ *         tools are always present and the workspace skill is always
+ *         relevant.
+ *       - Non-Anthropic agents → Surface B (filesystem MCP) ONLY when
+ *         the filesystem MCP server is attached.
+ *   - Bash skill (vendor-split, gated by `allow_sdk_bash`):
+ *       - When the agent's `allow_sdk_bash` is on, inject the
+ *         vendor-matched bash skill (`-sdk` for Anthropic's `Bash`
+ *         tool; `-codex` for Codex's native `shell`). Other shell-
+ *         related skills (`gh-cli`, `mcp-bash-build-test`, etc.) are
+ *         admin-attached, not auto-assigned — admins pick the right
+ *         vendor variant per agent in the admin UI.
  */
 async function autoSlugsForAgent(agentId: string): Promise<string[]> {
   const slugs: string[] = [...CORE_AUTO_ASSIGNED_SKILL_SLUGS];
-  if (await hasFilesystemMcp(agentId)) {
-    slugs.push(...FILESYSTEM_MCP_SKILL_SLUGS);
+  const { vendorSlug, allowSdkBash } = await resolveAgentVendorAndFlags(agentId);
+
+  if (vendorSlug === "anthropic") {
+    slugs.push(...FILESYSTEM_SKILL_SLUGS_SDK);
+  } else if (await hasFilesystemMcp(agentId)) {
+    slugs.push(...FILESYSTEM_SKILL_SLUGS_MCP);
   }
+
+  if (allowSdkBash) {
+    slugs.push(bashSkillSlugForVendor(vendorSlug));
+  }
+
   return slugs;
 }
+
+// Re-export for callers that still want vendor-pinned slug lists.
+export { filesystemSkillSlugsForVendor, bashSkillSlugForVendor };
 
 const addSkillSchema = z.object({
   name: z.string().min(1).describe("Short display name for the skill"),

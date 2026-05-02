@@ -1,6 +1,7 @@
 export { Role } from "./Role";
 export { Vendor } from "./Vendor";
 export { LLMModel } from "./LLMModel";
+export { EmbeddingModel } from "./EmbeddingModel";
 export { Agent } from "./Agent";
 export { User } from "./User";
 export { Group } from "./Group";

@@ -29,6 +29,7 @@ import {
   DOMAIN_VERIFICATION_TXT_PREFIX,
   type VerifiedGoogleIdentity,
 } from "./google.service";
+import { organizationSetupService } from "./organizationSetup.service";
 
 /**
  * Role assigned to the user who creates a new tenant via the onboarding
@@ -154,6 +155,13 @@ export class AuthService {
     const user = await User.findOne({ where: { userName } });
     if (!user || !user.password)
       throw Object.assign(new Error("Invalid credentials."), { status: 401 });
+    // Client-app JIT users have no native login surface — their only valid
+    // entry point is the upstream client app talking to the agent service's
+    // `/api/application` route. Reject with the generic credential error so
+    // existence isn't confirmed.
+    if (user.authProvider === "client_app") {
+      throw Object.assign(new Error("Invalid credentials."), { status: 401 });
+    }
     if (user.authProvider !== "local") {
       throw Object.assign(
         new Error(
@@ -191,9 +199,12 @@ export class AuthService {
       attributes: ["id", "name", "slug", "logo", "webSearchAgentId"],
     });
 
+    const setup = await organizationSetupService.getStatus(user.organizationId);
+
     return {
       token,
       isFirstLogin,
+      setupComplete: setup.complete,
       user: {
         id: user.id,
         displayName: user.displayName,
@@ -252,9 +263,11 @@ export class AuthService {
     await user.update({ lastLoginAt: new Date() });
 
     const org = identity.organization;
+    const setup = await organizationSetupService.getStatus(org.id);
     return {
       token,
       isFirstLogin,
+      setupComplete: setup.complete,
       user: {
         id: user.id,
         displayName: user.displayName,
@@ -315,6 +328,14 @@ export class AuthService {
             "A local account with this email already exists. Ask an admin to migrate it to SSO.",
           ),
           { status: 409 },
+        );
+      }
+      // Client-app JIT users must never be hijacked into a native session,
+      // even if their userName happens to collide with a Workspace email.
+      if (byNameInOrg.authProvider === "client_app") {
+        throw Object.assign(
+          new Error("This account is provisioned by an external application and cannot sign in here."),
+          { status: 403 },
         );
       }
       // google-provisioned but missing external_sub — backfill and reuse.
@@ -595,12 +616,14 @@ export class AuthService {
 
     await this.ensureAgentSingleChats(user.id, user.organizationId);
     const conversations = await this.loadUserConversations(user.id, user.organizationId);
+    const setup = await organizationSetupService.getStatus(user.organizationId);
 
     return {
       id: user.id,
       displayName: user.displayName,
       userIdentity: user.userIdentity,
       role: roleName,
+      setupComplete: setup.complete,
       organization: org
         ? {
             id: org.id,

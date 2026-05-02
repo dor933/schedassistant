@@ -554,8 +554,9 @@ function formatEpicSystemPrompt(opts: {
       "- `search_files` (filesystem MCP) — filename glob across the filesystem. Not a " +
       "content grep.\n" +
       "- `read_session_file` — reads files **inside a per-thread session folder**. Adds " +
-      "`offset` + `limit` for arbitrary line ranges, cross-thread access (any past thread " +
-      "with your episodic memory), and a manifest-summary fallback when a file is missing.\n" +
+      "`offset` + `limit` for arbitrary line ranges, cross-thread access (any past thread you " +
+      "participated in — single-chat / group thread you own, or roundtable thread you joined), " +
+      "and a manifest-summary fallback when a file is missing.\n" +
       "- `grep_session_file` — content search with line numbers **inside a session-folder " +
       "file**. The filesystem MCP has no equivalent.\n\n" +
       "Rule of thumb: library and long-form references are usually read in full with " +
@@ -732,31 +733,44 @@ function formatEpicSystemPrompt(opts: {
   }
 
   // ── Long-term memory (tool-driven, NOT auto-injected) ──
-  sections.push("## Long-term memory — call `recall_episodic_memory` when you need it");
+  sections.push("## Long-term memory — recall is tool-driven");
   sections.push(
     "Past context (architectural decisions, repo patterns, prior epic outcomes, prior task " +
     "implementations) is **not auto-injected** into your prompt — you have to retrieve it " +
     "yourself. Use these tools when any of the trigger conditions below applies; do NOT fabricate " +
     "past context from memory or from the conversation log alone.\n\n" +
 
-    "**Trigger — call `recall_episodic_memory` whenever:**\n" +
+    "**Three entry points — pick by what you have:**\n" +
+    "- `recall_episodic_memory` — vector search over your prior chunks. Use when you can frame a " +
+    "clear semantic query.\n" +
+    "- `search_epic_tasks_by_date` — when you have a rough time window for a prior epic.\n" +
+    "- `list_my_threads` — non-vector listing of single-chat / group threads you own (title + " +
+    "summary preview). Use when the user references a past conversation but you don't have a " +
+    "precise enough vector query.\n" +
+    "- `list_my_roundtables` — same idea for roundtables you participated in.\n\n" +
+
+    "**Trigger — start a recall whenever:**\n" +
     "- The user references something from the past (\"the auth refactor we did\", \"that pattern from " +
     "last week's audit\") — search for it instead of guessing.\n" +
-    "- You're about to plan a new epic (`create_epic_plan`) and a similar one might exist — `recall_episodic_memory` " +
-    "first, or use `search_epic_tasks_by_date` if you have a rough time window.\n" +
+    "- You're about to plan a new epic (`create_epic_plan`) and a similar one might exist.\n" +
     "- You're about to make a non-trivial architectural decision and there might be a prior decision " +
     "worth aligning with.\n" +
     "- A repo-specific question comes up that prior epics have likely touched.\n\n" +
 
-    "**Crafting the query:** describe the topic in your own words, not the user's latest reply. " +
-    "Good: \"prior decisions about repository session-folder file persistence\". Bad: passing \"yes\" " +
-    "or \"do it\" verbatim — embeddings of bare affirmatives are noise.\n\n" +
+    "**Crafting a vector query (for `recall_episodic_memory`):** describe the topic in your own " +
+    "words, not the user's latest reply. Good: \"prior decisions about repository session-folder " +
+    "file persistence\". Bad: passing \"yes\" or \"do it\" verbatim — embeddings of bare affirmatives " +
+    "are noise.\n\n" +
 
-    "**Cascade after a hit:** episodic snippets are short. If a snippet references a past thread " +
-    "but you need more detail, `get_thread_summary` with the thread_id from the snippet returns " +
-    "the full saved summary plus a manifest of every session file written. If a manifest entry " +
-    "looks promising, `read_session_file` (same thread_id + file path) fetches the contents. Stop " +
-    "as soon as you have enough.\n\n" +
+    "**Cascade after you have a thread_id (from any of the entry points above):**\n" +
+    "  1. `get_thread_summary(threadId)` — full saved summary + a manifest of every session file " +
+    "written.\n" +
+    "  2. If a manifest entry looks promising, `grep_session_file(threadId, path, pattern)` then " +
+    "`read_session_file(threadId, path, offset, limit)` for the slice that matters.\n" +
+    "  3. For a roundtable, prefer `get_roundtable_overview(roundtableId)` — its `shortSummary` " +
+    "(one paragraph) is usually enough; drop into the long structured `summary` only when you need " +
+    "the full breakdown.\n\n" +
+    "Stop as soon as you have enough.\n\n" +
 
     "**When to skip:** simple reply-to-the-current-message turns, structural questions answerable " +
     "from the prompt itself, or workflow questions covered by the Epic Task Workflow skill. " +

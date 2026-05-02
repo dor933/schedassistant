@@ -3,7 +3,7 @@ import { logger } from "../logger";
 import {
   resolveDefaultClientApplication,
   resolveOrCreateClientUser,
-} from "./clientApplicationUser.service";
+} from "../utils/clientApplicationUser.service";
 import { runAskGrahamyGraph } from "../askGrahamy/graph";
 import { classifyMessage } from "../askGrahamy/classification";
 import type {

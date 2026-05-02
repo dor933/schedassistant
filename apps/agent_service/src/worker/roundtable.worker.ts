@@ -1,4 +1,5 @@
 import { Worker } from "bullmq";
+import { Op } from "sequelize";
 import type { CompiledStateGraph } from "@langchain/langgraph";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import {
@@ -106,7 +107,7 @@ export function startRoundtableWorker(
       // Mark as running on first turn
       if (roundtable.status === "pending") {
         await Roundtable.update(
-          { status: "running" },
+          { status: "running", userTurnStartedAt: null },
           { where: { id: roundtableId } },
         );
       }
@@ -123,8 +124,16 @@ export function startRoundtableWorker(
         userIdentity: any;
       }[] = [];
       if (roundtableUsers.length > 0) {
+        // Exclude client-app JIT users — they should never be surfaced as
+        // participants to a roundtable agent (their only valid surface is
+        // the applicationGraph). Filtering at the User.findAll keeps the
+        // downstream `participantUsers` list and the prompt-injected
+        // identities clean without changing the row in roundtable_users.
         const userRows = await User.findAll({
-          where: { id: roundtableUsers.map((u) => u.userId) },
+          where: {
+            id: roundtableUsers.map((u) => u.userId),
+            authProvider: { [Op.ne]: "client_app" },
+          },
           attributes: ["id", "displayName", "userIdentity"],
         });
         const byId = new Map(userRows.map((u) => [u.id, u]));
@@ -343,8 +352,13 @@ export function startRoundtableWorker(
               (u) => u.turnsCompleted <= roundNumber,
             );
             if (nextUser) {
+              // Stamp the turn-window opener so a refresh / reconnect can
+              // recompute the same deadline that the socket event carries.
               await Roundtable.update(
-                { status: "waiting_for_user" },
+                {
+                  status: "waiting_for_user",
+                  userTurnStartedAt: new Date(),
+                },
                 { where: { id: roundtableId } },
               );
 
@@ -389,7 +403,7 @@ export function startRoundtableWorker(
         });
 
         await Roundtable.update(
-          { status: "failed" },
+          { status: "failed", userTurnStartedAt: null },
           { where: { id: roundtableId } },
         );
 
@@ -475,6 +489,7 @@ async function advanceRoundOrComplete(params: {
         status: "completed",
         currentRound: nextRound,
         currentAgentOrderIndex: 0,
+        userTurnStartedAt: null,
       },
       { where: { id: roundtableId } },
     );
@@ -502,6 +517,7 @@ async function advanceRoundOrComplete(params: {
       status: "running",
       currentRound: nextRound,
       currentAgentOrderIndex: 0,
+      userTurnStartedAt: null,
     },
     { where: { id: roundtableId } },
   );
@@ -663,6 +679,15 @@ export async function submitRoundtableUserTurn(
     const nextDisplayName =
       nextRow?.displayName?.trim() || `User #${nextParticipant.userId}`;
 
+    // Re-stamp the turn-window opener for the next user — same reason as
+    // the worker's first emit: the GET /roundtables/:id response derives
+    // the deadline from this column, and a refresh between handoffs
+    // would otherwise carry the previous user's start time forward.
+    await Roundtable.update(
+      { userTurnStartedAt: new Date() },
+      { where: { id: roundtableId } },
+    );
+
     // status already == "waiting_for_user"; just emit the next prompt.
     if (io) {
       io.emit("roundtable:user_turn", {
@@ -733,8 +758,11 @@ async function generateAndPersistSummary(params: {
   const { roundtableId, threadId, userId, participantAgentIds, topic } = params;
 
   let summary: string;
+  let shortSummary: string | null = null;
   try {
-    summary = await summarizeRoundtable(roundtableId, { userId });
+    const result = await summarizeRoundtable(roundtableId, { userId });
+    summary = result.summary;
+    shortSummary = result.shortSummary;
   } catch (err: any) {
     logger.error("Roundtable: summary generation failed", {
       roundtableId,
@@ -745,7 +773,11 @@ async function generateAndPersistSummary(params: {
 
   try {
     await Roundtable.update(
-      { summary, summaryGeneratedAt: new Date() },
+      {
+        summary,
+        shortSummary,
+        summaryGeneratedAt: new Date(),
+      },
       { where: { id: roundtableId } },
     );
   } catch (err: any) {
@@ -942,7 +974,7 @@ export async function resumeRoundtable(
   //    creator as the userId — that field is required by the job payload
   //    and matches the original `start` route's behavior.
   await Roundtable.update(
-    { status: "running" },
+    { status: "running", userTurnStartedAt: null },
     { where: { id: roundtableId } },
   );
 

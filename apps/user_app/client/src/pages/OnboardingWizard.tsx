@@ -65,7 +65,7 @@ interface AgentDraft {
   modelId: string;
 }
 
-type WebSearchChoice = "gemini" | "tavily";
+type WebSearchChoice = "gemini" | "tavily" | "anthropic";
 
 function slugify(name: string): string {
   return (
@@ -1234,6 +1234,15 @@ export default function OnboardingWizard() {
                       blurb:
                         "Uses the @langchain/tavily tool (native LangChain, no MCP subprocess). Requires TAVILY_API_KEY in the environment.",
                       recommended: true,
+                    },
+                    {
+                      key: "anthropic" as const,
+                      title: "Anthropic WebSearch",
+                      icon: <Sparkles className="h-5 w-5 text-amber-200" />,
+                      subtitle: "Hosted by Anthropic · billed against your Claude credential",
+                      blurb:
+                        "Uses the Claude Agent SDK's hosted WebSearch built-in. No separate API key — searches are billed against the Anthropic key/OAuth token your org already configured.",
+                      recommended: false,
                     },
                     {
                       key: "gemini" as const,

@@ -15,6 +15,8 @@ type ThreadCreationAttributes = Optional<
   | "summarizedAt"
   | "summary"
   | "checkpointSizeBytes"
+  | "claudeSessionId"
+  | "codexThreadId"
 >;
 
 class Thread extends Model<ThreadAttributes, ThreadCreationAttributes> implements ThreadAttributes {
@@ -30,6 +32,8 @@ class Thread extends Model<ThreadAttributes, ThreadCreationAttributes> implement
   declare summarizedAt: Date | null;
   declare summary: SessionSummary | null;
   declare checkpointSizeBytes: number | null;
+  declare claudeSessionId: string | null;
+  declare codexThreadId: string | null;
 }
 
 Thread.init(
@@ -93,6 +97,16 @@ Thread.init(
       type: DataTypes.BIGINT,
       allowNull: true,
       field: "checkpoint_size_bytes",
+    },
+    claudeSessionId: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "claude_session_id",
+    },
+    codexThreadId: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "codex_thread_id",
     },
   },
   {

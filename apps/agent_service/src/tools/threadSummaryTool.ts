@@ -1,13 +1,13 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import {
-  EpisodicMemory,
   Roundtable,
   Thread,
 } from "@scheduling-agent/database";
 import type { AgentId, SessionFileEntry } from "@scheduling-agent/types";
 
 import { logger } from "../logger";
+import { agentMayAccessThread } from "../utils/agentThreadAccess";
 
 /**
  * Renders the per-thread session file manifest as a Markdown section so the
@@ -51,10 +51,12 @@ function formatFilesSection(
  *   3. Agent calls `get_thread_summary` with that thread_id to pull the full,
  *      human-readable summary written when the session or roundtable ended.
  *
- * **Access control:** the tool only returns a summary when the given thread_id
- * actually appears in THIS agent's `episodic_memory` rows. That guarantees the
- * agent can only read summaries for conversations it was part of, even though
- * the `threads` and `roundtables` tables have no direct agent FK.
+ * **Access control:** delegated to `agentMayAccessThread()` — passes when the
+ * agent owns the thread directly (`threads.agent_id == agentId`, single-chat
+ * or group case) or when the thread is a roundtable the agent participated in
+ * (`roundtable_agents` membership). This works the moment a thread is created,
+ * unlike the old "must have an episodic_memory row" proxy which only became
+ * true after summarization had embedded chunks.
  */
 export function GetThreadSummaryTool(agentId: AgentId | null) {
   return tool(
@@ -66,13 +68,10 @@ export function GetThreadSummaryTool(agentId: AgentId | null) {
       }
 
       try {
-        // 1. Gate: only return summaries for threads this agent has memories in.
-        const memoryRow = await EpisodicMemory.findOne({
-          where: { threadId, agentId },
-          attributes: ["id"],
-        });
-        if (!memoryRow) {
-          return `No summary available — thread ${threadId} is not in your episodic memory.`;
+        // 1. Gate via direct schema relationship (Thread.agentId or
+        //    roundtable_agents membership for multi-agent threads).
+        if (!(await agentMayAccessThread(agentId, threadId))) {
+          return `No summary available — thread ${threadId} is not one of your conversations.`;
         }
 
         // 2. Pull both summaries in parallel; either may be null.

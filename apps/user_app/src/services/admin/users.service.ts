@@ -1,4 +1,5 @@
 import bcrypt from "bcrypt";
+import { Op } from "sequelize";
 import { User, Role } from "@scheduling-agent/database";
 import type { UserId } from "@scheduling-agent/types";
 import {
@@ -10,10 +11,28 @@ import { getIO } from "../../sockets/server/socketServer";
 import { logger } from "../../logger";
 
 export class UsersService {
-  async getAll(organizationId: string) {
+  async getAll(
+    organizationId: string,
+    opts: { excludeClientApp?: boolean } = {},
+  ) {
+    // The roundtable / group picker passes excludeClientApp=true so users
+    // mirrored from upstream client apps never show up as candidates. The
+    // admin users page leaves it unset to keep its full read-only listing.
+    const where: Record<string, unknown> = { organizationId };
+    if (opts.excludeClientApp) {
+      where.authProvider = { [Op.ne]: "client_app" };
+    }
     const users = await User.findAll({
-      where: { organizationId },
-      attributes: ["id", "displayName", "userIdentity", "roleId", "createdAt"],
+      where,
+      attributes: [
+        "id",
+        "displayName",
+        "userIdentity",
+        "roleId",
+        "createdAt",
+        "authProvider",
+        "externalSub",
+      ],
       order: [["created_at", "DESC"]],
     });
     const roles = await Role.findAll({ attributes: ["id", "name"] });
@@ -25,6 +44,8 @@ export class UsersService {
       role: u.roleId ? roleMap[u.roleId] ?? "user" : "user",
       roleId: u.roleId,
       createdAt: u.createdAt,
+      authProvider: u.authProvider,
+      externalSub: u.externalSub,
     }));
   }
 
@@ -118,6 +139,18 @@ export class UsersService {
     // Scope by org — super_admin is still tenant-bound.
     const user = await User.findOne({ where: { id: targetId, organizationId: callerOrgId } });
     if (!user) throw Object.assign(new Error("User not found."), { status: 404 });
+
+    // Client-app users are owned by the upstream application — their
+    // displayName / identity / role mirror data we don't control here.
+    // Block all admin edits to keep the mirror authoritative.
+    if (user.authProvider === "client_app") {
+      throw Object.assign(
+        new Error(
+          "This user is provisioned by an external application and cannot be edited from the admin UI.",
+        ),
+        { status: 403 },
+      );
+    }
 
     let targetRoleName = "user";
     if (user.roleId) {

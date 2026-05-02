@@ -2,7 +2,7 @@ import { createDeepAgent } from "deepagents";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { ChatOpenAI } from "@langchain/openai";
 import { logger } from "../logger";
-import { resolveOrgVendorByOrg } from "../services/resolveOrgVendor.service";
+import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import { getLangfuseCallbackHandler, flushLangfuse } from "../langfuse";
 import type { AskGrahamyState, CachedResearchObject } from "./types";
 
@@ -195,12 +195,16 @@ function humanizeJsonValue(value: unknown): unknown {
 
 function formatResearchObjectForPrompt(ro: CachedResearchObject): string {
   const header = `## ${ro.objectType.toUpperCase()} — ${ro.anchor} (as of ${ro.asOfDate})`;
+  const publicResearchObjectView = ro.view
+    ? { ...ro.view, publicSummary: undefined }
+    : undefined;
   // Humanize all enum-shaped string values before serializing so the agent
   // receives "rich" / "high quintile" / "strongly underperforming" instead of
   // "RICH" / "HIGH_QUINTILE" / "STRONG_UNDERPERFORM".
   const humanized = humanizeJsonValue({
-    publicSummary: ro.publicSummary,
-    parts: ro.parts,
+    publicResearchObjectView,
+    freshness: ro.freshness,
+    warnings: ro.warnings,
   });
   const body = JSON.stringify(humanized, null, 2);
   return `${header}\n\`\`\`json\n${body}\n\`\`\``;
@@ -233,6 +237,7 @@ Your job is to answer the user's specific question, conversationally, using the 
 - Reference earlier turns when natural ("as I mentioned about NVDA's ROIC trend...").
 - Render bucket / band labels as natural language. The evidence already comes pre-humanized (lower-case prose). Do NOT type identifiers like \`STRONG_UNDERPERFORM\`, \`HIGH_QUINTILE\`, \`BELOW_OWN_HISTORY\` — write "strongly underperforming", "in the high quintile", "below its 10-year history".
 - Do NOT append disclaimers like "This is not financial advice." anywhere in your answer.
+- When the user asks for a full Research Object, cover the five-question view, validated edge evidence when present, base-rate probability evidence, and path-risk evidence. If a section is marked partial/unavailable, say that clearly instead of inventing the missing field.
 
 # Suggested follow-ups (REQUIRED — every response)
 After your prose answer and the disclaimer, append a section in this exact shape:
@@ -247,8 +252,9 @@ After your prose answer and the disclaimer, append a section in this exact shape
 The follow-ups MUST be specific to what you just discussed (not generic). 3-4 questions, each one phrased the way the user might naturally ask. Use the user's language.
 
 # MOAT discipline (strict)
-- Use ONLY the bucket labels, percentile bands, and direction descriptors from the EVIDENCE below. Acceptable: "in the high quintile of its sector", "FCF/NI poor conversion", "ROE above its 5-year history", "regime-challenged".
-- DO NOT invent or report raw numbers — no specific PE multiples, revenue figures, prices, or hit-rate percentages.
+- Use ONLY the bucket labels, percentile bands, direction descriptors, and explicit numeric public evidence fields from the EVIDENCE below. Acceptable: "in the high quintile of its sector", "FCF/NI poor conversion", "ROE above its 5-year history", "regime-challenged", or "the public view shows a 61% 60-day hit rate" when that exact field exists.
+- DO NOT invent or infer numbers. Raw PE multiples, revenue figures, prices, hit-rate percentages, drawdown percentages, and probability thresholds are allowed only when the exact number appears in \`publicResearchObjectView.probabilisticEvidence\` or \`publicResearchObjectView.pathRisk\`.
+- For temporary drawdown/path-risk claims, use only \`pathRisk.source = pg_daily_price_path\` with explicit numeric drawdown fields. If \`pathRisk.state\` is partial/unavailable or the numeric drawdown fields are absent, say path risk is partial/bucketed and do not write a sentence like "10% of cases fell more than 14%".
 - DO NOT mention internal terms: \`signal_sql\`, \`raw_alpha\`, edge IDs, methodology details, internal model names, or pipeline mechanics.
 - If forward-return analog evidence has fewer than 30 observations, label it explicitly as low-confidence / small sample.
 

@@ -38,6 +38,18 @@ html, body {
 /* Markdown prose inside chat messages */
 .chat-prose {
   line-height: 1.65;
+  text-align: start;
+}
+.chat-prose p,
+.chat-prose li,
+.chat-prose blockquote,
+.chat-prose h1,
+.chat-prose h2,
+.chat-prose h3,
+.chat-prose th,
+.chat-prose td {
+  text-align: start;
+  unicode-bidi: isolate;
 }
 .chat-prose p {
   margin: 0;
@@ -48,7 +60,7 @@ html, body {
 .chat-prose ul,
 .chat-prose ol {
   margin: 0.4em 0;
-  padding-left: 1.4em;
+  padding-inline-start: 1.4em;
 }
 .chat-prose li {
   margin: 0.15em 0;
@@ -80,8 +92,8 @@ html, body {
   text-underline-offset: 2px;
 }
 .chat-prose blockquote {
-  border-left: 3px solid rgba(0, 0, 0, 0.15);
-  padding-left: 0.75em;
+  border-inline-start: 3px solid rgba(0, 0, 0, 0.15);
+  padding-inline-start: 0.75em;
   margin: 0.5em 0;
   opacity: 0.85;
 }
@@ -114,7 +126,7 @@ html, body {
   background: rgba(255, 255, 255, 0.1);
 }
 .chat-prose-user blockquote {
-  border-left-color: rgba(255, 255, 255, 0.3);
+  border-inline-start-color: rgba(255, 255, 255, 0.3);
 }
 .chat-prose-user th,
 .chat-prose-user td {
@@ -551,7 +563,7 @@ html, body {
   color: rgb(224, 231, 255);
 }
 .chat-prose-dark blockquote {
-  border-left-color: rgba(168, 85, 247, 0.55);
+  border-inline-start-color: rgba(168, 85, 247, 0.55);
   color: rgb(199, 210, 254);
   opacity: 0.95;
 }

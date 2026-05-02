@@ -23,3 +23,21 @@ test("removes forbidden fields recursively and redacts forbidden text", () => {
   assert.match((result.value as any).answer.summary, /restricted internal detail/);
 });
 
+test("removes raw analog and gate fields without stripping public drawdown probabilities", () => {
+  const result = runMoatGuard({
+    pathRisk: {
+      probDrawdownGt10Pct: 18,
+      gate_name: "internal gate",
+      internal_threshold: 0.42,
+      raw_analog_rows: [{ id: 1 }],
+      path_rows: [{ path_day: 1 }],
+    },
+  });
+
+  assert.equal(result.result, "cleaned");
+  assert.equal((result.value as any).pathRisk.probDrawdownGt10Pct, 18);
+  assert.equal((result.value as any).pathRisk.gate_name, undefined);
+  assert.equal((result.value as any).pathRisk.internal_threshold, undefined);
+  assert.equal((result.value as any).pathRisk.raw_analog_rows, undefined);
+  assert.equal((result.value as any).pathRisk.path_rows, undefined);
+});

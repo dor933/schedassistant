@@ -389,8 +389,15 @@ export async function buildContext(
       });
       const memberIds = rows.map((r) => r.userId);
       if (memberIds.length > 0) {
+        // Exclude client-app JIT users from the group-member identities we
+        // inject into the system prompt — those rows are an upstream-app
+        // mirror, not real org members the agent should reason about.
+        // The applicationGraph has its own context builder and is unaffected.
         const users = await User.findAll({
-          where: { id: { [Op.in]: memberIds } },
+          where: {
+            id: { [Op.in]: memberIds },
+            authProvider: { [Op.ne]: "client_app" },
+          },
           attributes: ["id", "displayName", "userIdentity"],
         });
         const byId = new Map(users.map((u) => [u.id, u]));
@@ -881,7 +888,34 @@ function formatSystemPrompt(
     "**Summary:** Code changes → `delegate_to_epic_orchestrator`. " +
     "Code inspection / research / analysis → `delegate_to_deep_agent`. " +
     "Quick questions to peers → `consult_agent`. " +
-    "Stateless application-specialist calls → `invoke_application_agent`.",
+    "Stateless application-specialist calls → `invoke_application_agent`.\n\n" +
+
+    "### `Task` (Claude sub-agents) vs. `delegate_to_deep_agent` (system agents) — DIFFERENT POOLS\n" +
+    "These two surfaces look similar but reach **disjoint** sets of agents. " +
+    "Mixing them up is the most common source of confused delegations — read this carefully.\n\n" +
+    "**`delegate_to_deep_agent` → SYSTEM agents only.** These are the executors " +
+    "`list_system_agents` shows you. They run in a separate worker process via the " +
+    "deep-agent queue, with their own model, tools, MCP servers, and per-user grants. " +
+    "Any vendor (Claude / OpenAI Codex / Google) is fine — the worker dispatches to the " +
+    "executor's native SDK. Async: the call returns immediately and the result lands in " +
+    "a follow-up turn.\n\n" +
+    "**`Task` → Claude sub-agents only.** When your runtime exposes a `Task` tool, the " +
+    "agents reachable through it are NOT the ones in `list_system_agents`. They are a " +
+    "separate row type (`claude_sub_agent`) that an admin attached to YOU specifically. " +
+    "Discover them with **`list_claude_sub_agents`** — that's the dedicated discovery " +
+    "tool for this pool, separate from `list_system_agents`. The slugs it returns are " +
+    "what you pass to `Task(\"<slug>\", \"<task>\")`. Sub-agents run inline inside your " +
+    "own SDK session, share your Anthropic credential, and return their output " +
+    "synchronously to your tool loop.\n\n" +
+    "**Decision rule**:\n" +
+    "- Need a SYSTEM agent (anything `list_system_agents` returns)? Use " +
+    "`delegate_to_deep_agent`. **Never call `Task` with a system-agent id or slug** — " +
+    "the `Task` surface does not contain them and the call will fail.\n" +
+    "- Need one of YOUR Claude sub-agents (the ones the SDK lists in `Task`'s allowed " +
+    "agent set)? Use `Task(\"<slug>\", \"<task>\")`. The `delegate_to_deep_agent` tool " +
+    "does not reach them.\n" +
+    "- If `Task` isn't in your tool list, you have no Claude sub-agents attached — " +
+    "use `delegate_to_deep_agent` with a system agent instead.",
   );
   sections.push("");
 
@@ -962,8 +996,9 @@ function formatSystemPrompt(
       "filesystem. Not a content grep.\n" +
       "- `read_session_file` — reads files **inside a per-thread session folder**. Adds " +
       "`offset` + `limit` for arbitrary line ranges (middle slices), cross-thread access to " +
-      "any past thread you have episodic memory from, and a graceful fallback to the manifest " +
-      "summary when a file has been moved or deleted.\n" +
+      "any past thread you participated in (single-chat / group thread you own, or roundtable " +
+      "thread you joined), and a graceful fallback to the manifest summary when a file has " +
+      "been moved or deleted.\n" +
       "- `grep_session_file` — content search with line numbers **inside a session-folder " +
       "file**. Returns matching lines (with context windows) so you can jump straight to the " +
       "right section. The filesystem MCP has no equivalent.\n\n" +
@@ -1096,14 +1131,23 @@ function formatSystemPrompt(
   // the latest user message ("yes, do it" / "ok" / short replies) embeds
   // poorly and produces noise hits. You decide when memory matters and
   // call the tool with a real query.
-  sections.push("## Long-term memory — call `recall_episodic_memory` when you need it");
+  sections.push("## Long-term memory — recall is tool-driven");
   sections.push(
     "Past context (decisions, repo patterns, prior task outcomes, user preferences) is **not " +
     "auto-injected** into your prompt — you have to retrieve it yourself. Use these tools when " +
     "any of the trigger conditions below applies; do NOT fabricate past context from memory or " +
     "from the conversation log alone.\n\n" +
 
-    "**Trigger — call `recall_episodic_memory` whenever:**\n" +
+    "**Two entry points — pick by what you have:**\n" +
+    "- `recall_episodic_memory` — vector search. Use when you can frame a clear semantic query " +
+    "(\"prior decisions about session-folder persistence\", \"how the user prefers PR descriptions\").\n" +
+    "- `list_my_threads` — non-vector listing of single-chat / group threads you own, with title + " +
+    "summary preview. Use when the user references a past conversation but you don't have a " +
+    "precise enough query, or when no episodic chunk has matched.\n" +
+    "- `list_my_roundtables` — same idea for roundtables you participated in (returns topic + " +
+    "`hasShortSummary` flag).\n\n" +
+
+    "**Trigger — start a recall whenever:**\n" +
     "- The user references something from the past (\"the auth refactor we did\", \"last week's audit\", " +
     "\"that pattern we discussed\") — search for it instead of guessing.\n" +
     "- You're about to make a non-trivial decision (architecture, naming, tooling) and there might " +
@@ -1112,15 +1156,21 @@ function formatSystemPrompt(
     "- A user-preferences-y question comes up (\"how do I usually want X formatted?\") — past " +
     "interactions probably hold the answer.\n\n" +
 
-    "**Crafting the query:** describe the topic in your own words, not the user's latest reply. " +
-    "Good: \"prior decisions about session-folder file persistence\". Bad: passing \"yes\" or \"do it\" " +
-    "verbatim — embeddings of bare affirmatives are noise.\n\n" +
+    "**Crafting a vector query (for `recall_episodic_memory`):** describe the topic in your own " +
+    "words, not the user's latest reply. Good: \"prior decisions about session-folder file " +
+    "persistence\". Bad: passing \"yes\" or \"do it\" verbatim — embeddings of bare affirmatives are " +
+    "noise.\n\n" +
 
-    "**Cascade after a hit:** episodic snippets are short. If a snippet references a past thread " +
-    "but you need more detail, call `get_thread_summary` with the thread_id from the snippet — " +
-    "that returns the full saved summary plus a manifest of every session file written. If a " +
-    "manifest entry looks promising, `read_session_file` (same thread_id + file path) fetches the " +
-    "contents. Stop as soon as you have enough; you don't need to walk every step.\n\n" +
+    "**Cascade after you have a thread_id (from any of the entry points above):**\n" +
+    "  1. `get_thread_summary(threadId)` — full saved summary + a manifest of every session file " +
+    "written.\n" +
+    "  2. If a manifest entry looks promising, `grep_session_file(threadId, path, pattern)` to " +
+    "locate the right line range, then `read_session_file(threadId, path, offset, limit)` to read " +
+    "that slice — or just `read_session_file` directly when the file is small.\n" +
+    "  3. For a roundtable, prefer `get_roundtable_overview(roundtableId)` instead — its " +
+    "`shortSummary` (one paragraph) is usually enough; drop into the longer `summary` field only if " +
+    "you need the full structured breakdown.\n\n" +
+    "Stop as soon as you have enough; you don't need to walk every step.\n\n" +
 
     "**When to skip:** simple reply-to-the-current-message turns, structural questions answerable " +
     "from the prompt itself, or workflow questions covered by your skills. Don't gratuitously fetch " +

@@ -45,11 +45,11 @@ const NEW_REST_OF_RULES = `3. **Never skip the planning phase** — even for "si
 // ─── 2. Tool reference — add force_approve_stage_pr row ─────────────────────
 
 const OLD_TOOL_TABLE_TAIL = `| \`update_stage_pr\` | Link a PR URL to a stage after creating it |
-| \`run_command\` | Run shell commands (git, gh) via the **bash MCP** — use for pushing branches and creating PRs |`;
+| \`run_command\` | Run shell commands (git, gh) via the SDK \`Bash\` tool — use for pushing branches and creating PRs |`;
 
 const NEW_TOOL_TABLE_TAIL = `| \`update_stage_pr\` | Fallback: manually link a PR URL to a stage (auto-creation normally handles this) |
 | \`force_approve_stage_pr\` | **DESTRUCTIVE** — bypass PR webhook and mark a stage's PR as approved. Requires explicit user authorization quote. See usage rule below. |
-| \`run_command\` | Run shell commands (git, gh) via the **bash MCP** — for general shell operations |
+| \`run_command\` | Run shell commands (git, gh) via the SDK \`Bash\` tool — for general shell operations |
 
 ---
 

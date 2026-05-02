@@ -11,7 +11,7 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogle } from "@langchain/google";
 import { ChatAnthropic } from "@langchain/anthropic";
-import { anthropicBaseConfig } from "../../../chat/anthropicContextManagement";
+import { anthropicBaseConfig } from "../../../chat/anthropic/anthropicContextManagement";
 import {
   SystemMessage,
   HumanMessage,
@@ -25,7 +25,7 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { AgentState } from "../../../state";
 import { logger } from "../../../logger";
-import { resolveOrgVendor } from "../../../services/resolveOrgVendor.service";
+import { resolveOrgVendor } from "../../../utils/resolveOrgVendor.service";
 import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../../../tools/agentNotesTool";
 import { ListCronJobsTool } from "../../../tools/listCronJobsTool";
 import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspaceGrantsTool";
@@ -36,15 +36,24 @@ import {
   DelegateToDeepAgentTool,
 } from "../../../tools/delegateToDeepAgentTool";
 import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
+import { ListClaudeSubAgentsTool } from "../../../tools/listClaudeSubAgentsTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
+import { ListMyThreadsTool } from "../../../tools/threadRecallTools";
+import {
+  ListMyRoundtablesTool,
+  GetRoundtableOverviewTool,
+} from "../../../tools/roundtableRecallTools";
 import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import {
   ListProjectsTool,
   ListRepositoriesTool,
   CreateEpicPlanTool,
-  ExecuteEpicTaskTool,
+  StartEpicTaskTool,
+  PlanEpicTaskCodexTool,
+  StartEpicTaskCodexTool,
+  CompleteEpicTaskTool,
   GetEpicStatusTool,
   ReviewTaskDiffTool,
   UpdateStagePrTool,
@@ -58,12 +67,13 @@ import {
   parseContinuationMarker,
 } from "../../../tools/epicTaskTools";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
-import { RunClaudeCliTool, RunCodexCliTool } from "../../../tools/runCliTools";
-import { KillCliExecutionTool } from "../../../tools/killCliExecutionTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
 import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
+import { runAnthropicAgentSdk, shouldUseAgentSdk } from "../../../chat/anthropic/agentSdkRunner";
+import { runOpenAiCodexSdk, shouldUseCodexSdk } from "../../../chat/codex/codexSdkRunner";
+import { buildSubAgentDefinitions } from "../../../utils/buildSubAgentDefinitions.service";
 
 // Cap the orchestrator's tool-call chain per chat turn. This is the EPIC
 // orchestrator, which legitimately chains many tool calls: setup checks
@@ -191,6 +201,17 @@ export async function epicCallModelNode(
     SaveEpisodicMemoryTool(agentId, userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
+    // Thread recall — same reason as basicGraph: gives the epic
+    // orchestrator a non-vector entry point to past single-chat / group
+    // conversations it owned, before the existing get_thread_summary →
+    // grep_session_file → read_session_file cascade.
+    ListMyThreadsTool(agentId),
+    // Roundtable recall — the epic orchestrator can pull short summaries
+    // of past roundtables it participated in to inform planning. Same
+    // access gating as elsewhere (caller agentId must appear in
+    // roundtable_agents for the row in question).
+    ListMyRoundtablesTool(agentId),
+    GetRoundtableOverviewTool(agentId),
     ReadSessionFileTool(agentId, threadId),
     GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
@@ -204,7 +225,23 @@ export async function epicCallModelNode(
     // `dev-in-house-workspace` / `dev-in-house-library-mcp` skills).
     // Epic workflow tools (always on for epic agents)
     CreateEpicPlanTool(state.userId, agentId),
-    ExecuteEpicTaskTool({
+    // Vendor-conditional task-execution surface (slices 20 + 23):
+    //   - Anthropic vendor: `start_epic_task` declares a sub-agent slice
+    //     plan, the orchestrator then fans out via `Task("<slug>", ...)`
+    //     calls in parallel.
+    //   - OpenAI / Codex vendor: optional `plan_epic_task` (read-only
+    //     scout) + `start_epic_task_codex` (workspace-write execute).
+    //     One Codex session does the whole task end-to-end inside its
+    //     own loop — no sub-agent fan-out (Codex SDK doesn't have a
+    //     parallel-Task equivalent and concurrent codex sessions on
+    //     one repo race on the git index).
+    // `complete_epic_task` is shared — same lifecycle finalize for both.
+    ...(vendor.vendorSlug === "anthropic"
+      ? [StartEpicTaskTool(agentId)]
+      : vendor.vendorSlug === "openai"
+        ? [PlanEpicTaskCodexTool(agentId), StartEpicTaskCodexTool(agentId)]
+        : []),
+    CompleteEpicTaskTool({
       threadId,
       userId,
       groupId: state.groupId,
@@ -240,12 +277,105 @@ export async function epicCallModelNode(
     tools.push(SearchEpicTasksByDateTool());
   if (has("get_epic_task_stages_and_tasks"))
     tools.push(GetEpicTaskStagesAndTasksTool());
-  if (has("run_claude_cli"))
-    tools.push(RunClaudeCliTool(agentId, state.userId, threadId));
-  if (has("run_codex_cli"))
-    tools.push(RunCodexCliTool(agentId, state.userId, threadId));
-  if (has("kill_cli_execution"))
-    tools.push(KillCliExecutionTool(agentId, state.userId));
+
+  // Vendor-conditional auto-bind for Claude Agent SDK's `Task` discovery
+  // (slice 19). Same rationale as the basicGraph variant — this tool is
+  // useful only when the runner is the Anthropic SDK, so we surface it
+  // exclusively to Anthropic-vendor agents.
+  if (vendor.vendorSlug === "anthropic") {
+    tools.push(ListClaudeSubAgentsTool(agentId));
+  }
+
+  // ─── Anthropic Agent SDK runtime branch ────────────────────────────────────
+  //
+  // Same as basicGraph, plus an `onToolResult` observer that watches for the
+  // `[EPIC_CONTINUATION]` marker emitted by `ExecuteEpicTaskTool`. When seen,
+  // we capture the parsed continuation so the worker can auto-enqueue the next
+  // task — exactly the same signal the legacy loop returned via
+  // `state.epicContinuation`.
+  //
+  // The legacy loop also emitted a wrap-up assistant message after the marker
+  // (a hint asking the model to update the user without further tool calls).
+  // The SDK manages its own loop autonomously, so the model will already have
+  // produced its own closing message in `result.finalText` by the time we see
+  // the marker. We just need to flag the continuation; no second invoke needed.
+  if (shouldUseAgentSdk(vendor.vendorSlug)) {
+    // Same sub-agent fan-out as basicGraph — epic orchestrator can also call
+    // Task("<system-agent-slug>", ...) to delegate research / inspection work
+    // to specialists. Code-change execution still flows through the epic task
+    // tools (`ExecuteEpicTaskTool` etc.), unchanged.
+    const subAgents = await buildSubAgentDefinitions({
+      primaryAgentId: agentId,
+      userId,
+      threadId,
+      groupId: state.groupId,
+      singleChatId: state.singleChatId,
+    });
+
+    let detectedContinuation: { epicId: string; completedTaskTitle: string; remainingTasks: number } | null = null;
+    const sdkPatch = await runAnthropicAgentSdk({
+      state,
+      config,
+      tools,
+      vendor,
+      modelSlug,
+      maxTurns: MAX_TOOL_ROUNDS,
+      source: "epic_orchestrator",
+      subAgents,
+      onToolResult: ({ text }) => {
+        if (detectedContinuation) return;
+        const cont = parseContinuationMarker(text);
+        if (cont) {
+          detectedContinuation = cont;
+          logger.info("Epic continuation detected (SDK path)", {
+            epicId: cont.epicId,
+            completedTask: cont.completedTaskTitle,
+            remaining: cont.remainingTasks,
+          });
+        }
+      },
+    });
+    if (detectedContinuation && !sdkPatch.error) {
+      return { ...sdkPatch, epicContinuation: detectedContinuation };
+    }
+    return sdkPatch;
+  }
+
+  // ─── OpenAI Codex SDK runtime branch ───────────────────────────────────
+  //
+  // Same observer-driven EPIC_CONTINUATION detection as the Anthropic
+  // branch above. Codex's `mcp_tool_call` events flow through the bridge,
+  // and the runner forwards each tool result text to `onToolResult` —
+  // identical contract to the Anthropic runner so this code path stays
+  // structurally symmetric.
+  if (shouldUseCodexSdk(vendor.vendorSlug)) {
+    let detectedContinuation: { epicId: string; completedTaskTitle: string; remainingTasks: number } | null = null;
+    const sdkPatch = await runOpenAiCodexSdk({
+      state,
+      config,
+      tools,
+      vendor,
+      modelSlug,
+      maxTurns: MAX_TOOL_ROUNDS,
+      source: "epic_orchestrator",
+      onToolResult: ({ text }: { text: string }) => {
+        if (detectedContinuation) return;
+        const cont = parseContinuationMarker(text);
+        if (cont) {
+          detectedContinuation = cont;
+          logger.info("Epic continuation detected (Codex SDK path)", {
+            epicId: cont.epicId,
+            completedTask: cont.completedTaskTitle,
+            remaining: cont.remainingTasks,
+          });
+        }
+      },
+    });
+    if (detectedContinuation && !sdkPatch.error) {
+      return { ...sdkPatch, epicContinuation: detectedContinuation };
+    }
+    return sdkPatch;
+  }
 
   const toolByName = new Map<string, StructuredToolInterface>(
     tools.map((t) => [t.name, t]),

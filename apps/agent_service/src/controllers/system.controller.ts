@@ -1,23 +1,5 @@
 import type { Request, Response } from "express";
 import {
-  ClaudeOauthTokenError,
-  clear as clearClaudeOauthToken,
-  describe as describeClaudeOauthToken,
-  set as setClaudeOauthToken,
-} from "../services/claudeOauthToken.service";
-import {
-  CodexAuthTokenError,
-  clear as clearCodexAuthToken,
-  describe as describeCodexAuthToken,
-  set as setCodexAuthToken,
-} from "../services/codexAuthToken.service";
-import {
-  CodexAuthJsonError,
-  clear as clearCodexAuthJson,
-  describe as describeCodexAuthJson,
-  set as setCodexAuthJson,
-} from "../services/codexAuthJson.service";
-import {
   deleteMcpScript,
   persistMcpScript,
   renderCodexConfigToml as renderCodexConfigTomlFile,
@@ -26,113 +8,25 @@ import { renderClaudeMcpConfig as renderClaudeMcpConfigFile } from "../services/
 import { logger } from "../logger";
 
 function handleError(res: Response, err: unknown, scope: string): Response {
-  if (
-    err instanceof ClaudeOauthTokenError ||
-    err instanceof CodexAuthTokenError ||
-    err instanceof CodexAuthJsonError
-  ) {
-    return res.status(err.status).json({ error: err.message });
-  }
   const message = (err as any)?.message ?? "Internal error";
   logger.error(scope, { error: message });
   return res.status(500).json({ error: message });
 }
 
 export class SystemController {
-  /** Status of the persisted CLAUDE_CODE_OAUTH_TOKEN — never returns the raw value. */
-  getClaudeOauthToken = async (_req: Request, res: Response) => {
-    try {
-      return res.json(describeClaudeOauthToken());
-    } catch (err) {
-      return handleError(res, err, "GET /system/claude-oauth-token error");
-    }
-  };
-
-  /** Persist a new token to disk and load it into process.env. */
-  setClaudeOauthToken = async (req: Request, res: Response) => {
-    const { token } = req.body ?? {};
-    if (typeof token !== "string") {
-      return res.status(400).json({ error: "token must be a string." });
-    }
-    try {
-      return res.json(setClaudeOauthToken(token));
-    } catch (err) {
-      return handleError(res, err, "PUT /system/claude-oauth-token error");
-    }
-  };
-
-  /** Remove the token (CLI falls back to interactive login next time). */
-  deleteClaudeOauthToken = async (_req: Request, res: Response) => {
-    try {
-      return res.json(clearClaudeOauthToken());
-    } catch (err) {
-      return handleError(res, err, "DELETE /system/claude-oauth-token error");
-    }
-  };
-
-  /** Status of the persisted OPENAI_API_KEY for the codex CLI — never returns the raw value. */
-  getCodexApiKey = async (_req: Request, res: Response) => {
-    try {
-      return res.json(describeCodexAuthToken());
-    } catch (err) {
-      return handleError(res, err, "GET /system/codex-api-key error");
-    }
-  };
-
-  /** Persist a new key to disk and load it into process.env as OPENAI_API_KEY. */
-  setCodexApiKey = async (req: Request, res: Response) => {
-    const { token } = req.body ?? {};
-    if (typeof token !== "string") {
-      return res.status(400).json({ error: "token must be a string." });
-    }
-    try {
-      return res.json(setCodexAuthToken(token));
-    } catch (err) {
-      return handleError(res, err, "PUT /system/codex-api-key error");
-    }
-  };
-
-  /** Remove the key. CLI then falls back to ~/.codex/auth.json or fails. */
-  deleteCodexApiKey = async (_req: Request, res: Response) => {
-    try {
-      return res.json(clearCodexAuthToken());
-    } catch (err) {
-      return handleError(res, err, "DELETE /system/codex-api-key error");
-    }
-  };
-
-  /** Status of the persisted /home/agent/.codex/auth.json — never returns secrets. */
-  getCodexAuthJson = async (_req: Request, res: Response) => {
-    try {
-      return res.json(describeCodexAuthJson());
-    } catch (err) {
-      return handleError(res, err, "GET /system/codex-auth-json error");
-    }
-  };
-
-  /** Persist a fresh auth.json blob (paste of `~/.codex/auth.json` from a logged-in workstation). */
-  setCodexAuthJson = async (req: Request, res: Response) => {
-    const { blob } = req.body ?? {};
-    if (typeof blob !== "string" && (typeof blob !== "object" || blob === null)) {
-      return res
-        .status(400)
-        .json({ error: "blob must be a JSON string or object." });
-    }
-    try {
-      return res.json(setCodexAuthJson(blob));
-    } catch (err) {
-      return handleError(res, err, "PUT /system/codex-auth-json error");
-    }
-  };
-
-  /** Remove the auth.json file. The CLI then falls back to OPENAI_API_KEY or fails. */
-  deleteCodexAuthJson = async (_req: Request, res: Response) => {
-    try {
-      return res.json(clearCodexAuthJson());
-    } catch (err) {
-      return handleError(res, err, "DELETE /system/codex-auth-json error");
-    }
-  };
+  // System-wide `/codex-api-key` endpoints removed (slice 22 follow-up):
+  // the legacy `runCliExecution` engine that consumed the deployment-level
+  // OPENAI_API_KEY env var was deleted. SDK helpers pin per-org credentials
+  // per-call via env scrubbing + injection, so no host-level fallback is
+  // consumed anywhere in the runtime. Per-org Codex credentials live as
+  // `keyType: "api_key"` (or `"embedding"`) rows on
+  // `organization_vendor_api_keys` for the OpenAI vendor.
+  //
+  // System-wide `/codex-auth-json` endpoints removed in slice 14:
+  // the auth.json is now stored per-org on `organization_vendor_api_keys`
+  // (key_type='auth_object'). The runner materialises it to a per-turn
+  // temp $HOME at invocation time. No system-wide file, no admin
+  // endpoint here.
 
   /** Re-render /home/agent/.codex/config.toml from the mcp_servers table. */
   renderCodexConfigToml = async (_req: Request, res: Response) => {

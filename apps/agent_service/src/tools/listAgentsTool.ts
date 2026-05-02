@@ -23,18 +23,22 @@ export function ListAgentsTool(callerAgentId: string) {
         return `Error: caller agent "${callerAgentId}" not found.`;
       }
 
+      // Positive filter on type='primary' so the surface here is exactly
+      // "fellow orchestrators" — no system agents (those go through
+      // `list_system_agents` + `delegate_to_deep_agent`), no external
+      // (roundtable-only) agents, and no application agents (REST-triggered,
+      // reached via `invoke_application_agent`). The previous exclusion list
+      // missed `system`, which let executor/specialist agents leak into the
+      // peer-consult dropdown.
       const where: any = {
-        // Exclude the calling agent, external (roundtable-only) agents, and
-        // application agents (REST-triggered, not consultable peers — primaries
-        // reach them via `invoke_application_agent` instead).
         id: { [Op.ne]: callerAgentId },
-        type: { [Op.notIn]: ["external", "application"] },
+        type: "primary",
         organizationId: callerAgent.organizationId,
       };
       if (query) {
         where[Op.and] = [
           { id: { [Op.ne]: callerAgentId } },
-          { type: { [Op.notIn]: ["external", "application"] } },
+          { type: "primary" },
           { organizationId: callerAgent.organizationId },
           {
             [Op.or]: [
