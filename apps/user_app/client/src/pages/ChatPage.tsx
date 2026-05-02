@@ -261,16 +261,30 @@ export default function ChatPage() {
     };
   }, [activeConv?.id]);
 
-  const prevMsgCount = useRef(0);
+  // Track the last message's identity (absolute index + current content
+  // length) instead of the array length. A `length >= prev` check can't
+  // tell "new message appended at the bottom" from "older messages
+  // prepended at the top" — both grow the array — so loading older
+  // history would yank the scroll to the bottom right after
+  // `handleLoadMore` had carefully restored it.
+  //
+  //   - Append:     last message changes → signature differs → scroll.
+  //   - Streaming:  last message's content length grows → scroll.
+  //   - Prepend:    last message identity unchanged → no scroll.
+  //   - Empty list: clear the ref so the next first message scrolls.
+  const lastMsgSigRef = useRef<string | null>(null);
   useEffect(() => {
-    if (messages.length > 0 && messages.length >= prevMsgCount.current) {
-      if (!loadingMore) {
-        const c = scrollContainerRef.current;
-        if (c) c.scrollTo({ top: c.scrollHeight, behavior: "smooth" });
-      }
+    if (messages.length === 0) {
+      lastMsgSigRef.current = null;
+      return;
     }
-    prevMsgCount.current = messages.length;
-  }, [messages, loadingMore]);
+    const last = messages[messages.length - 1];
+    const sig = `${last._absIndex ?? "x"}::${last.content.length}`;
+    if (sig === lastMsgSigRef.current) return;
+    lastMsgSigRef.current = sig;
+    const c = scrollContainerRef.current;
+    if (c) c.scrollTo({ top: c.scrollHeight, behavior: "smooth" });
+  }, [messages]);
 
   const handleLoadMore = useCallback(async () => {
     if (!activeConv || loadingMore || loadedFrom <= 0) return;

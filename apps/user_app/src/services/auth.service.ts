@@ -155,6 +155,13 @@ export class AuthService {
     const user = await User.findOne({ where: { userName } });
     if (!user || !user.password)
       throw Object.assign(new Error("Invalid credentials."), { status: 401 });
+    // Client-app JIT users have no native login surface — their only valid
+    // entry point is the upstream client app talking to the agent service's
+    // `/api/application` route. Reject with the generic credential error so
+    // existence isn't confirmed.
+    if (user.authProvider === "client_app") {
+      throw Object.assign(new Error("Invalid credentials."), { status: 401 });
+    }
     if (user.authProvider !== "local") {
       throw Object.assign(
         new Error(
@@ -321,6 +328,14 @@ export class AuthService {
             "A local account with this email already exists. Ask an admin to migrate it to SSO.",
           ),
           { status: 409 },
+        );
+      }
+      // Client-app JIT users must never be hijacked into a native session,
+      // even if their userName happens to collide with a Workspace email.
+      if (byNameInOrg.authProvider === "client_app") {
+        throw Object.assign(
+          new Error("This account is provisioned by an external application and cannot sign in here."),
+          { status: 403 },
         );
       }
       // google-provisioned but missing external_sub — backfill and reuse.

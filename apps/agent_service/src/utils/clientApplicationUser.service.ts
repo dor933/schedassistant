@@ -44,6 +44,12 @@ export async function resolveOrCreateClientUser(input: {
   // so client-app users can never collide with native ones.
   const userName = `${clientApplication.slug}:${externalUserId}`;
 
+  // Fallback display label used everywhere a real human-friendly name is
+  // missing. Format: `grahamy_app_user_<externalSub>`. Keeps the admin UI
+  // and any operator-side listings unambiguous about which rows came from
+  // the client-app JIT path versus native sign-ins.
+  const fallbackDisplayName = `grahamy_app_user_${externalUserId}`;
+
   const externalMetadata = metadata?.extra ?? null;
 
   const [user, created] = await User.findOrCreate({
@@ -57,7 +63,7 @@ export async function resolveOrCreateClientUser(input: {
       authProvider: "client_app",
       externalSub: externalUserId,
       clientApplicationId: clientApplication.id,
-      displayName: metadata?.displayName ?? null,
+      displayName: metadata?.displayName ?? fallbackDisplayName,
       password: null,
       externalSyncedAt: new Date(),
       externalMetadata,
@@ -84,6 +90,10 @@ export async function resolveOrCreateClientUser(input: {
 
   if (metadata?.displayName !== undefined && metadata.displayName !== user.displayName) {
     updates.displayName = metadata.displayName;
+  } else if (!user.displayName) {
+    // Backfill rows created before this fallback existed so they stop
+    // showing up as a blank dash in the admin UI.
+    updates.displayName = fallbackDisplayName;
   }
   if (externalMetadata !== undefined) {
     // JSONB equality is finicky; just stamp every time metadata is supplied.

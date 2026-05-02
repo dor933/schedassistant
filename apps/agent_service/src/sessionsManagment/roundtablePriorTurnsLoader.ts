@@ -103,7 +103,15 @@ export async function loadPriorRoundtableTurns(
         : Promise.resolve([]),
       userIds.length > 0
         ? User.findAll({
-            where: { id: { [Op.in]: userIds } },
+            // Exclude client-app JIT users from the per-agent transcript —
+            // they should never be surfaced to non-application graphs.
+            // A missing label downstream falls back to `User #<id>`, so any
+            // client-app message accidentally in `roundtable_messages` is
+            // anonymised rather than named.
+            where: {
+              id: { [Op.in]: userIds },
+              authProvider: { [Op.ne]: "client_app" },
+            },
             attributes: ["id", "displayName"],
           })
         : Promise.resolve([]),

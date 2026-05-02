@@ -39,6 +39,11 @@ import { ListSystemAgentsTool } from "../../../tools/listSystemAgentsTool";
 import { ListClaudeSubAgentsTool } from "../../../tools/listClaudeSubAgentsTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
+import { ListMyThreadsTool } from "../../../tools/threadRecallTools";
+import {
+  ListMyRoundtablesTool,
+  GetRoundtableOverviewTool,
+} from "../../../tools/roundtableRecallTools";
 import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import {
@@ -196,6 +201,17 @@ export async function epicCallModelNode(
     SaveEpisodicMemoryTool(agentId, userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
+    // Thread recall — same reason as basicGraph: gives the epic
+    // orchestrator a non-vector entry point to past single-chat / group
+    // conversations it owned, before the existing get_thread_summary →
+    // grep_session_file → read_session_file cascade.
+    ListMyThreadsTool(agentId),
+    // Roundtable recall — the epic orchestrator can pull short summaries
+    // of past roundtables it participated in to inform planning. Same
+    // access gating as elsewhere (caller agentId must appear in
+    // roundtable_agents for the row in question).
+    ListMyRoundtablesTool(agentId),
+    GetRoundtableOverviewTool(agentId),
     ReadSessionFileTool(agentId, threadId),
     GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),

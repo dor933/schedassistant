@@ -264,6 +264,28 @@ export async function roundtableContextBuilderNode(
       sections.push("");
     }
 
+    // ── Recall — non-vector entry points into past conversations ────────
+    // Roundtable contributions often benefit from referencing prior
+    // discussions you took part in. These tools let you pull that
+    // context without leaning on a vector query when you don't have
+    // one. Same access gating as elsewhere: scoped to threads /
+    // roundtables you actually participated in.
+    sections.push("## Recall — pull prior context when it strengthens your turn");
+    sections.push(
+      "Past conversations you took part in are not auto-injected — fetch them yourself when a " +
+      "prior decision or position is directly relevant to this turn:\n" +
+      "- `recall_episodic_memory(query)` — vector search over your prior chunks. Use when you " +
+      "can frame a clear semantic query.\n" +
+      "- `list_my_threads({query?, hasSummaryOnly?})` — single-chat / group threads you own, " +
+      "with summary previews. Use when you don't have a precise vector query.\n" +
+      "- `list_my_roundtables({status?, query?})` → `get_roundtable_overview(roundtableId)` — " +
+      "discover and read the short summary of a past roundtable.\n" +
+      "- `get_thread_summary(threadId)` → `grep_session_file` / `read_session_file` for any " +
+      "files the manifest points at.\n\n" +
+      "Don't gratuitously recall on every turn — fetch when there's a real connection to make.",
+    );
+    sections.push("");
+
     // ── Skills ──────────────────────────────────────────────────────────
     if (agentHasLinkedSkills) {
       sections.push("## Linked skills");

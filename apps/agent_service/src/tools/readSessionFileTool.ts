@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { Agent, EpisodicMemory, Thread } from "@scheduling-agent/database";
+import { Agent, Thread } from "@scheduling-agent/database";
 import type {
   AgentId,
   SessionFileEntry,
@@ -10,6 +10,7 @@ import type {
 
 import { logger } from "../logger";
 import { resolveSessionFilePath } from "../workspace/sessionWorkspace";
+import { agentMayAccessThread } from "../utils/agentThreadAccess";
 
 /** Hard cap on bytes returned to the LLM — prevents a huge file from blowing context. */
 const MAX_READ_BYTES = Number(process.env.READ_SESSION_FILE_MAX_BYTES ?? 50_000);
@@ -30,10 +31,12 @@ const MAX_LIMIT_LINES = Number(process.env.READ_SESSION_FILE_MAX_LINES ?? 2_000)
  *   3. `read_session_file` opens a specific file when the summary isn't enough.
  *
  * Access control:
- *   - Current thread: always readable (the agent owns it).
- *   - Other threads: the agent must have at least one episodic memory chunk
- *     from that thread (same gate as `get_thread_summary`). This ensures an
- *     agent can only read files from conversations it participated in.
+ *   - Current thread: always readable (fast-path, no DB roundtrip).
+ *   - Other threads: gated by `agentMayAccessThread()` — passes when the
+ *     agent owns the thread directly (`threads.agent_id == agentId`) or
+ *     participated in it as a roundtable agent. Same helper used by
+ *     `get_thread_summary` and `grep_session_file`, so all three tools stay
+ *     in lockstep.
  *
  * Graceful drift: when the file is not found on disk but the thread's stored
  * summary has a matching `files[].summary`, we return that summary plus a
@@ -62,16 +65,13 @@ export function ReadSessionFileTool(
           return "This agent has no workspace configured, so it has no session files to read.";
         }
 
-        // 2. Access control. Current thread is always in scope; past threads
-        // require the agent to have at least one episodic memory chunk from
-        // that thread (same gate used by get_thread_summary).
+        // 2. Access control. Current thread is always in scope (fast-path);
+        // past threads go through agentMayAccessThread() which checks
+        // threads.agent_id (single-chat / group ownership) and falls back
+        // to roundtable_agents for multi-agent roundtable threads.
         if (targetThreadId !== currentThreadId) {
-          const memoryRow = await EpisodicMemory.findOne({
-            where: { threadId: targetThreadId, agentId },
-            attributes: ["id"],
-          });
-          if (!memoryRow) {
-            return `No access — thread ${targetThreadId} is not in your episodic memory.`;
+          if (!(await agentMayAccessThread(agentId, targetThreadId))) {
+            return `No access — thread ${targetThreadId} is not one of your conversations.`;
           }
         }
 
@@ -191,8 +191,9 @@ export function ReadSessionFileTool(
         "relevant to the user's question, call this tool with that path.\n" +
         "  2. Omit `threadId` to read from the current thread. Otherwise pass the exact thread_id " +
         "shown in episodic chunk metadata or the manifest.\n" +
-        "  3. You can only read files from threads where you have at least one stored memory — " +
-        "the tool enforces this.\n\n" +
+        "  3. You can only read files from threads you actually participated in — single-chat / " +
+        "group threads where you are the agent, or roundtable threads where you were a " +
+        "participant. The tool enforces this server-side.\n\n" +
         "**Pagination.** For large files, pass `offset` (0-based line number to start at) and " +
         "`limit` (max lines to return). Omit both to read the whole file (byte-capped — the " +
         "header tells you if content was cut off and what the total size is). When you need " +
@@ -206,7 +207,8 @@ export function ReadSessionFileTool(
           .optional()
           .describe(
             "The thread id the file belongs to. Omit to read from the current thread. " +
-              "When provided, must be a thread where you have stored episodic memory.",
+              "When provided, must be a thread you participated in (single-chat / group " +
+              "thread you own, or a roundtable thread you joined).",
           ),
         path: z
           .string()

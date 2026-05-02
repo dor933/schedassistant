@@ -31,6 +31,11 @@ import { ListGoogleWorkspaceGrantsTool } from "../../../tools/listGoogleWorkspac
 import { agentSkillTools } from "../../../tools/skillsTools";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
+import { ListMyThreadsTool } from "../../../tools/threadRecallTools";
+import {
+  ListMyRoundtablesTool,
+  GetRoundtableOverviewTool,
+} from "../../../tools/roundtableRecallTools";
 import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
@@ -223,6 +228,17 @@ export async function roundtableCallModelNode(
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
+    // Thread recall — same reason as basicGraph: a non-vector path into
+    // the existing summary → grep → read cascade for single-chat /
+    // group threads this agent owns.
+    ListMyThreadsTool(agentId),
+    // Roundtable recall — useful inside an active roundtable too: an
+    // agent can pull short summaries of past roundtables it took part in
+    // and bring relevant prior conclusions into its current turn. Same
+    // access gating as in basicGraph (caller agentId must appear in
+    // roundtable_agents for the row in question).
+    ListMyRoundtablesTool(agentId),
+    GetRoundtableOverviewTool(agentId),
     ReadSessionFileTool(agentId, threadId),
     GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),

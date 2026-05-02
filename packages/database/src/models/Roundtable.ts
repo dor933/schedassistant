@@ -22,7 +22,22 @@ export interface RoundtableAttributes {
   createdBy: UserId;
   /** Final roundtable summary — written once when status transitions to "completed". */
   summary: string | null;
+  /**
+   * One-paragraph distillation of `summary`, generated in the same pass
+   * when the roundtable completes. Agents reach for this first via
+   * `get_roundtable_overview` and only escalate to `summary` if they
+   * need the full structured version.
+   */
+  shortSummary: string | null;
   summaryGeneratedAt: Date | null;
+  /**
+   * Wall-clock timestamp the active user-turn window opened. Stamped
+   * whenever the worker emits `roundtable:user_turn`; cleared back to
+   * null on every other status transition. The 5-minute deadline shown
+   * in the UI is derived from this so a page refresh no longer resets
+   * the countdown.
+   */
+  userTurnStartedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -36,7 +51,9 @@ type CreationAttrs = Optional<
   | "currentAgentOrderIndex"
   | "includeUser"
   | "summary"
+  | "shortSummary"
   | "summaryGeneratedAt"
+  | "userTurnStartedAt"
   | "createdAt"
   | "updatedAt"
 >;
@@ -55,7 +72,9 @@ class Roundtable
   declare threadId: string;
   declare createdBy: UserId;
   declare summary: string | null;
+  declare shortSummary: string | null;
   declare summaryGeneratedAt: Date | null;
+  declare userTurnStartedAt: Date | null;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -115,10 +134,20 @@ Roundtable.init(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    shortSummary: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "short_summary",
+    },
     summaryGeneratedAt: {
       type: DataTypes.DATE,
       allowNull: true,
       field: "summary_generated_at",
+    },
+    userTurnStartedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "user_turn_started_at",
     },
     createdAt: {
       type: DataTypes.DATE,

@@ -7,7 +7,11 @@ export class UsersController {
 
   getAll = async (req: Request, res: Response) => {
     try {
-      const users = await this.usersService.getAll(req.user!.organizationId);
+      const excludeClientApp = req.query.excludeClientApp === "1"
+        || req.query.excludeClientApp === "true";
+      const users = await this.usersService.getAll(req.user!.organizationId, {
+        excludeClientApp,
+      });
       return res.json(users);
     } catch (err: any) {
       logger.error("GET /users error:", err);

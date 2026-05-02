@@ -1,11 +1,12 @@
 import { readFile, stat } from "node:fs/promises";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
-import { Agent, EpisodicMemory } from "@scheduling-agent/database";
+import { Agent } from "@scheduling-agent/database";
 import type { AgentId } from "@scheduling-agent/types";
 
 import { logger } from "../logger";
 import { resolveSessionFilePath } from "../workspace/sessionWorkspace";
+import { agentMayAccessThread } from "../utils/agentThreadAccess";
 
 /** Absolute cap on matches per call — keeps the tool response bounded. */
 const MAX_MATCHES = Number(process.env.GREP_SESSION_FILE_MAX_MATCHES ?? 200);
@@ -23,8 +24,9 @@ const MAX_RESPONSE_BYTES = Number(process.env.GREP_SESSION_FILE_MAX_BYTES ?? 50_
  *   3. `read_session_file` with `offset` + `limit` — fetch just that slice.
  *
  * Access control mirrors `read_session_file`: the current thread is always in
- * scope, past threads require at least one episodic memory chunk proving this
- * agent participated.
+ * scope (fast-path), past threads go through `agentMayAccessThread()` —
+ * `threads.agent_id` ownership for single-chat / group threads, falling back
+ * to `roundtable_agents` membership for roundtable threads.
  */
 export function GrepSessionFileTool(
   agentId: AgentId | null,
@@ -49,12 +51,8 @@ export function GrepSessionFileTool(
         }
 
         if (targetThreadId !== currentThreadId) {
-          const memoryRow = await EpisodicMemory.findOne({
-            where: { threadId: targetThreadId, agentId },
-            attributes: ["id"],
-          });
-          if (!memoryRow) {
-            return `No access — thread ${targetThreadId} is not in your episodic memory.`;
+          if (!(await agentMayAccessThread(agentId, targetThreadId))) {
+            return `No access — thread ${targetThreadId} is not one of your conversations.`;
           }
         }
 
@@ -197,15 +195,17 @@ export function GrepSessionFileTool(
         "By default the pattern is a literal substring match (safest). Set `regex: true` for " +
         "regex. Set `caseInsensitive: true` either way. `contextBefore` / `contextAfter` expand " +
         "each match with surrounding lines (like grep's -B / -A). Same access control as " +
-        "`read_session_file` — current thread always, past threads only when you have stored " +
-        "episodic memory from them.",
+        "`read_session_file` — current thread always, past threads only when you actually " +
+        "participated in them (single-chat / group threads you own, or roundtable threads " +
+        "you joined).",
       schema: z.object({
         threadId: z
           .string()
           .optional()
           .describe(
             "The thread id the file belongs to. Omit to grep the current thread's file. " +
-              "When provided, must be a thread where you have stored episodic memory.",
+              "When provided, must be a thread you participated in (single-chat / group " +
+              "thread you own, or a roundtable thread you joined).",
           ),
         path: z
           .string()

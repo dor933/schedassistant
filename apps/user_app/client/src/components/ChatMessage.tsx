@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
 import { User, AlertTriangle, Paperclip, Download } from "lucide-react";
@@ -82,7 +83,81 @@ function childrenToString(children: unknown): string {
   return "";
 }
 
+type BidiDirection = "rtl" | "auto";
+
+const HEBREW_RE = /[\u0590-\u05FF]/;
+
+function getTextDirection(text: string): BidiDirection {
+  return HEBREW_RE.test(text) ? "rtl" : "auto";
+}
+
+function getChildrenDirection(children: unknown): BidiDirection {
+  return getTextDirection(childrenToString(children));
+}
+
+const bidiContentSx = {
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
+  minWidth: 0,
+  textAlign: "start",
+  unicodeBidi: "isolate",
+} as const;
+
+const bidiBlockStyle: CSSProperties = {
+  textAlign: "start",
+  unicodeBidi: "isolate",
+};
+
+function withBidiBlockStyle(style?: CSSProperties): CSSProperties {
+  return { ...bidiBlockStyle, ...style };
+}
+
 const markdownComponents: Components = {
+  p: ({ children, style, ...props }) => (
+    <p {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </p>
+  ),
+  li: ({ children, style, ...props }) => (
+    <li {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </li>
+  ),
+  blockquote: ({ children, style, ...props }) => (
+    <blockquote {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </blockquote>
+  ),
+  h1: ({ children, style, ...props }) => (
+    <h1 {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </h1>
+  ),
+  h2: ({ children, style, ...props }) => (
+    <h2 {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </h2>
+  ),
+  h3: ({ children, style, ...props }) => (
+    <h3 {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </h3>
+  ),
+  th: ({ children, style, ...props }) => (
+    <th {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </th>
+  ),
+  td: ({ children, style, ...props }) => (
+    <td {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </td>
+  ),
+  pre: ({ children, ...props }) => (
+    <pre {...props} dir="ltr">
+      {children}
+    </pre>
+  ),
   a: ({ href, children, ...props }) => {
     if (isAttachmentHref(href)) {
       return (
@@ -171,16 +246,21 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
   const isSelfInGroup = isUser && !isOtherUser && isGroup;
   const ts = formatTimestamp(createdAt);
 
-  // התיקון כאן: הוספנו dir="auto" ויישור אדפטיבי (start) רק לטקסט
   const renderContent = (className?: string) => {
+    const contentDirection = getTextDirection(content);
+
     if (highlightText) {
       return (
         <Box 
-          dir="auto" 
+          dir={contentDirection}
           className={className} 
-          sx={{ overflowWrap: "break-word", wordBreak: "break-word", minWidth: 0, textAlign: "start" }}
+          sx={bidiContentSx}
         >
-          <p className="whitespace-pre-wrap">
+          <p
+            dir={contentDirection}
+            className="whitespace-pre-wrap"
+            style={bidiBlockStyle}
+          >
             <HighlightedText text={content} term={highlightText} />
           </p>
         </Box>
@@ -188,9 +268,9 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
     }
     return (
       <Box
-        dir="auto"
+        dir={contentDirection}
         className={className}
-        sx={{ overflowWrap: "break-word", wordBreak: "break-word", minWidth: 0, textAlign: "start" }}
+        sx={bidiContentSx}
       >
         <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
           {content}
@@ -203,7 +283,6 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
     <Stack
       direction="row"
       className="animate-slide-up"
-      // הערה: הורדנו מפה את ה dir="auto" כדי לא להפוך את כיוון ה-UI כולו!
       sx={{
         justifyContent: isUser && !isOtherUser ? "flex-end" : "flex-start",
       }}
@@ -287,13 +366,10 @@ export default function ChatMessage({ role, content, senderName, vendorSlug, mod
             </Stack>
             <Box
               component="p"
-              dir="auto"
+              dir={getTextDirection(content.replace(/^Error:\s*/, ""))}
               sx={{
                 whiteSpace: "pre-wrap",
-                overflowWrap: "break-word",
-                wordBreak: "break-word",
-                minWidth: 0,
-                textAlign: "start"
+                ...bidiContentSx,
               }}
             >
               {content.replace(/^Error:\s*/, "")}

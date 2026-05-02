@@ -4,6 +4,7 @@ import {
   useRef,
   useCallback,
   useMemo,
+  type CSSProperties,
   type MouseEvent,
 } from "react";
 import { useParams, useNavigate } from "react-router-dom";
@@ -31,6 +32,7 @@ import {
   RotateCw,
 } from "lucide-react";
 import Markdown from "react-markdown";
+import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useToast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
@@ -58,6 +60,89 @@ const btnGhost =
 
 const cardClass =
   "glass-panel-elevated rounded-2xl p-5 sm:p-6";
+
+type BidiDirection = "rtl" | "auto";
+
+const HEBREW_RE = /[\u0590-\u05FF]/;
+
+function childrenToString(children: unknown): string {
+  if (typeof children === "string") return children;
+  if (typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(childrenToString).join("");
+  return "";
+}
+
+function getTextDirection(text: string): BidiDirection {
+  return HEBREW_RE.test(text) ? "rtl" : "auto";
+}
+
+function getChildrenDirection(children: unknown): BidiDirection {
+  return getTextDirection(childrenToString(children));
+}
+
+const bidiTextStyle: CSSProperties = {
+  overflowWrap: "break-word",
+  wordBreak: "break-word",
+  textAlign: "start",
+  unicodeBidi: "isolate",
+};
+
+const bidiBlockStyle: CSSProperties = {
+  textAlign: "start",
+  unicodeBidi: "isolate",
+};
+
+function withBidiBlockStyle(style?: CSSProperties): CSSProperties {
+  return { ...bidiBlockStyle, ...style };
+}
+
+const markdownComponents: Components = {
+  p: ({ children, style, ...props }) => (
+    <p {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </p>
+  ),
+  li: ({ children, style, ...props }) => (
+    <li {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </li>
+  ),
+  blockquote: ({ children, style, ...props }) => (
+    <blockquote {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </blockquote>
+  ),
+  h1: ({ children, style, ...props }) => (
+    <h1 {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </h1>
+  ),
+  h2: ({ children, style, ...props }) => (
+    <h2 {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </h2>
+  ),
+  h3: ({ children, style, ...props }) => (
+    <h3 {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </h3>
+  ),
+  th: ({ children, style, ...props }) => (
+    <th {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </th>
+  ),
+  td: ({ children, style, ...props }) => (
+    <td {...props} dir={getChildrenDirection(children)} style={withBidiBlockStyle(style)}>
+      {children}
+    </td>
+  ),
+  pre: ({ children, ...props }) => (
+    <pre {...props} dir="ltr">
+      {children}
+    </pre>
+  ),
+};
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<
@@ -173,7 +258,10 @@ function RoundtableListView() {
         ),
       )
       .catch(console.error);
-    api.getUsers().then(setOrgUsers).catch(console.error);
+    // Roundtables can never include client-app JIT users — those live only
+    // inside the applicationGraph. Ask the server to filter them out so the
+    // picker doesn't surface candidates the backend would reject anyway.
+    api.getUsers({ excludeClientApp: true }).then(setOrgUsers).catch(console.error);
   }, []);
 
   const toggleAgent = (id: string) => {
@@ -280,6 +368,8 @@ function RoundtableListView() {
                   placeholder="Describe the discussion topic for the agents..."
                   rows={3}
                   className={`${inputClass} resize-none`}
+                  dir={getTextDirection(topic)}
+                  style={bidiTextStyle}
                 />
               </div>
 
@@ -450,7 +540,11 @@ function RoundtableListView() {
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-white group-hover:text-fuchsia-100">
+                          <p
+                            className="truncate text-sm font-semibold text-white group-hover:text-fuchsia-100"
+                            dir={getTextDirection(rt.topic)}
+                            style={bidiTextStyle}
+                          >
                             {rt.topic}
                           </p>
                           <p className="mt-1 flex items-center gap-2 text-[11px] text-indigo-200/60">
@@ -593,13 +687,24 @@ function RoundtableDetailView({ id }: { id: string }) {
       // appears after the messages we're watching.
       setSummaryPlacement(result.summary ? "top" : "bottom");
       if (result.status === "waiting_for_user") {
-        const activeUser =
-          result.users.find((u) => u.turnsCompleted <= result.currentRound) ??
-          null;
+        // Trust the server for both the active user and the deadline.
+        // `currentTurnUserId` is the row whose `turnsCompleted <=
+        // currentRound`, resolved on the server so we don't repeat the
+        // heuristic here (and accidentally pick the logged-in user when
+        // it's actually somebody else's turn). `userTurnDeadlineAt` is
+        // derived from the persisted `userTurnStartedAt`, so refreshing
+        // the page no longer restarts the 5-minute countdown.
+        const activeUserId = result.currentTurnUserId;
+        const activeUser = activeUserId
+          ? result.users.find((u) => u.userId === activeUserId) ?? null
+          : null;
+        const deadlineMs = result.userTurnDeadlineAt
+          ? new Date(result.userTurnDeadlineAt).getTime()
+          : Date.now() + 5 * 60 * 1000;
         setUserTurn({
           roundNumber: result.currentRound,
-          deadline: Date.now() + 5 * 60 * 1000,
-          userId: activeUser?.userId ?? null,
+          deadline: deadlineMs,
+          userId: activeUserId,
           displayName: activeUser?.displayName ?? null,
         });
       }
@@ -863,7 +968,11 @@ function RoundtableDetailView({ id }: { id: string }) {
             </button>
             <div className="min-w-0 flex-1">
               {/* Row 1: topic title only */}
-              <h1 className="truncate text-base font-semibold text-white sm:text-lg">
+              <h1
+                className="truncate text-base font-semibold text-white sm:text-lg"
+                dir={getTextDirection(data.topic)}
+                style={bidiTextStyle}
+              >
                 {data.topic}
               </h1>
               {/* Row 2: status pill + round indicator (always together) */}
@@ -876,19 +985,33 @@ function RoundtableDetailView({ id }: { id: string }) {
               </div>
               {/* Row 3: participant chips on their own line so they get the
                   full content width and never get crammed next to the status
-                  on mobile. */}
+                  on mobile. Agents render with their accent palette; user
+                  participants get a neutral fuchsia chip with a person glyph
+                  so they're distinguishable at a glance. */}
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                 {data.agents.map((a) => {
                   const accent = agentAccentMap.get(a.agentId);
                   return (
                     <span
-                      key={a.agentId}
+                      key={`agent-${a.agentId}`}
                       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 backdrop-blur-sm ${accent?.chip ?? "bg-white/[0.04] ring-white/10"} ${accent?.text ?? "text-indigo-100"}`}
                     >
                       <span
                         className={`h-1.5 w-1.5 rounded-full ${accent?.dot ?? "bg-indigo-300"}`}
                       />
                       {a.agentName}
+                    </span>
+                  );
+                })}
+                {data.users.map((u) => {
+                  const isMe = u.userId === user?.id;
+                  return (
+                    <span
+                      key={`user-${u.userId}`}
+                      className="inline-flex items-center gap-1 rounded-full bg-fuchsia-500/15 px-2 py-0.5 text-[11px] font-medium text-fuchsia-100 ring-1 ring-fuchsia-400/30 backdrop-blur-sm"
+                    >
+                      <UserIcon className="h-3 w-3 text-fuchsia-200" />
+                      {isMe ? `${u.displayName} (you)` : u.displayName}
                     </span>
                   );
                 })}
@@ -970,8 +1093,17 @@ function RoundtableDetailView({ id }: { id: string }) {
                   AI
                 </span>
               </div>
-              <div className="chat-prose chat-prose-dark px-5 py-4 text-sm text-slate-100">
-                <Markdown remarkPlugins={[remarkGfm]}>{data.summary}</Markdown>
+              <div
+                className="chat-prose chat-prose-dark px-5 py-4 text-sm text-slate-100"
+                dir={getTextDirection(data.summary)}
+                style={bidiTextStyle}
+              >
+                <Markdown
+                  remarkPlugins={[remarkGfm]}
+                  components={markdownComponents}
+                >
+                  {data.summary}
+                </Markdown>
               </div>
             </div>
           )}
@@ -1075,7 +1207,11 @@ function RoundtableDetailView({ id }: { id: string }) {
                         })}
                       </span>
                     </div>
-                    <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
+                    <div
+                      className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100"
+                      dir={getTextDirection(msg.content)}
+                      style={bidiTextStyle}
+                    >
                       {msg.content}
                     </div>
                   </div>
@@ -1103,7 +1239,11 @@ function RoundtableDetailView({ id }: { id: string }) {
                         })}
                       </span>
                     </div>
-                    <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">
+                    <div
+                      className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100"
+                      dir={getTextDirection(msg.content)}
+                      style={bidiTextStyle}
+                    >
                       {msg.content}
                     </div>
                   </div>
@@ -1142,8 +1282,17 @@ function RoundtableDetailView({ id }: { id: string }) {
                   AI
                 </span>
               </div>
-              <div className="chat-prose chat-prose-dark px-5 py-4 text-sm text-slate-100">
-                <Markdown remarkPlugins={[remarkGfm]}>{data.summary}</Markdown>
+              <div
+                className="chat-prose chat-prose-dark px-5 py-4 text-sm text-slate-100"
+                dir={getTextDirection(data.summary)}
+                style={bidiTextStyle}
+              >
+                <Markdown
+                  remarkPlugins={[remarkGfm]}
+                  components={markdownComponents}
+                >
+                  {data.summary}
+                </Markdown>
               </div>
             </div>
           )}
@@ -1239,6 +1388,8 @@ function RoundtableDetailView({ id }: { id: string }) {
                 rows={3}
                 disabled={submittingTurn}
                 className={`${inputClass} resize-none`}
+                dir={getTextDirection(userDraft)}
+                style={bidiTextStyle}
                 autoFocus
               />
               <div className="mt-3 flex items-center justify-between gap-3">

@@ -119,6 +119,19 @@ export class GroupsService {
   }
 
   async addMember(groupId: string, userId: UserId, actorId: UserId) {
+    // Client-app JIT users live in the applicationGraph only — adding them
+    // to a group would inject their mirrored identity into another agent's
+    // system prompt, which the agent-side filters now strip back out anyway.
+    // Reject at the boundary so the admin gets a clear error instead of a
+    // silently-empty group member.
+    const candidate = await User.findByPk(userId, { attributes: ["authProvider"] });
+    if (candidate?.authProvider === "client_app") {
+      throw Object.assign(
+        new Error("Users provisioned by an external application cannot join groups."),
+        { status: 400 },
+      );
+    }
+
     const [member, created] = await GroupMember.findOrCreate({
       where: { groupId, userId },
       defaults: { groupId, userId },

@@ -419,6 +419,8 @@ export interface AdminUser {
   role: string;
   roleId: string | null;
   createdAt: string;
+  authProvider: "local" | "google" | "client_app";
+  externalSub: string | null;
 }
 
 export interface AdminRole {
@@ -657,7 +659,12 @@ export interface AdminWebSearchStatus {
 
 export const admin = {
   getRoles: () => request<AdminRole[]>("/admin/roles"),
-  getUsers: () => request<AdminUser[]>("/admin/users"),
+  getUsers: (opts: { excludeClientApp?: boolean } = {}) =>
+    request<AdminUser[]>(
+      opts.excludeClientApp
+        ? "/admin/users?excludeClientApp=1"
+        : "/admin/users",
+    ),
   getAgents: () => request<AdminAgent[]>("/admin/agents"),
   getMcpServers: () => request<AdminMcpServer[]>("/admin/mcp-servers"),
   createMcpServer: (data: CreateMcpServerInput) =>
@@ -1185,6 +1192,20 @@ export interface RoundtableDetail extends RoundtableSummary {
   /** Final summary — populated once the roundtable transitions to "completed". */
   summary: string | null;
   summaryGeneratedAt: string | null;
+  /**
+   * When status === "waiting_for_user": ISO timestamp the worker opened
+   * the current user-turn window. Null otherwise. The deadline is
+   * persisted server-side so a refresh doesn't reset the countdown.
+   */
+  userTurnStartedAt: string | null;
+  /** Convenience: `userTurnStartedAt + USER_TURN_TIMEOUT_SECONDS`. */
+  userTurnDeadlineAt: string | null;
+  /**
+   * The user whose turn it currently is (null unless status ===
+   * "waiting_for_user"). Authoritative — the client should NOT try to
+   * derive this from `users[]` + `currentRound`.
+   */
+  currentTurnUserId: number | null;
 }
 
 // ─── In-app notifications ────────────────────────────────────────────────

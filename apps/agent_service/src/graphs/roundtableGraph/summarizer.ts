@@ -57,7 +57,7 @@ function getModel(
   }
 }
 
-// ─── Prompt ──────────────────────────────────────────────────────────────────
+// ─── Prompts ─────────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are an expert discussion analyst. You will be given the transcript of a \
 multi-agent roundtable discussion on a specific topic. Produce a concise, well-structured \
@@ -85,13 +85,41 @@ who only restated others.
 Keep the entire summary under ~350 words. Be specific. Do not invent facts that aren't in \
 the transcript. Do not editorialize or add recommendations.`;
 
+/**
+ * Distillation prompt — second pass over the long structured summary to
+ * produce a one-paragraph "what was this roundtable about and what
+ * happened" snippet. Stored on `roundtables.short_summary` so agents can
+ * triage cheaply via `get_roundtable_overview` before deciding whether
+ * to pull the full structured summary.
+ */
+const SHORT_SUMMARY_SYSTEM_PROMPT = `You distill a structured roundtable summary into a single \
+paragraph (3-5 sentences, max ~100 words) that captures the topic, the most important \
+substantive outcome, and any unresolved tension. Plain prose only — no markdown, no headings, \
+no bullet points. Do not invent facts beyond what the input contains.`;
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
+export type RoundtableSummaryResult = {
+  /** Long structured markdown summary (Topic / Key Points / Agreements / etc). */
+  summary: string;
+  /**
+   * One-paragraph distillation derived from `summary` via a cheap second
+   * pass. Null when the second pass failed — the caller can still
+   * persist the long form and the agent-side recall tool will fall back
+   * to it gracefully.
+   */
+  shortSummary: string | null;
+};
+
 /**
- * Generates a final-summary string for a completed roundtable by making a
- * single LLM call over the full transcript. Does not persist anything — the
- * caller is responsible for writing it to the roundtable row and for pushing
- * it into each participant's episodic memory.
+ * Generates a final summary for a completed roundtable. Two LLM calls:
+ *   1. Long structured markdown over the full transcript.
+ *   2. One-paragraph distillation derived from (1) — much cheaper, runs
+ *      even if (1) takes ~350 words.
+ *
+ * Does not persist anything — the caller writes both fields to the
+ * roundtable row and pushes the long form into each participant's
+ * episodic memory.
  *
  * The summarizer uses the first participating agent's configured model so
  * it respects the user's vendor/model choice without introducing a new
@@ -100,7 +128,7 @@ the transcript. Do not editorialize or add recommendations.`;
 export async function summarizeRoundtable(
   roundtableId: string,
   options: { userId?: number } = {},
-): Promise<string> {
+): Promise<RoundtableSummaryResult> {
   const roundtable = await Roundtable.findByPk(roundtableId);
   if (!roundtable) {
     throw new Error(`Roundtable ${roundtableId} not found`);
@@ -122,7 +150,10 @@ export async function summarizeRoundtable(
   });
 
   if (messages.length === 0) {
-    return "_The roundtable ended without any messages to summarize._";
+    return {
+      summary: "_The roundtable ended without any messages to summarize._",
+      shortSummary: "_The roundtable ended without any messages to summarize._",
+    };
   }
 
   // Pick a model from the first agent; falls back to the system default.
@@ -192,12 +223,11 @@ export async function summarizeRoundtable(
   //   - google or kill-switch fallback → LangChain `model.invoke`.
   // No structured output here — roundtable summaries are plain prose,
   // so the SDK branches just return the text directly.
-  let text: string;
   const useCodex =
     vendor.vendorSlug === "openai" && shouldUseCodexSdk(vendor.vendorSlug);
   const useAnthropicSdk =
     vendor.vendorSlug === "anthropic" && shouldUseAgentSdk(vendor.vendorSlug);
-  const observeMeta = {
+  const baseObserveMeta = {
     roundtableId,
     threadId: roundtable.threadId,
     participantCount: agents.length,
@@ -208,78 +238,106 @@ export async function summarizeRoundtable(
         : "",
   };
 
-  if (useCodex) {
-    text = await observeWithContext(
-      "roundtable_summary",
-      () =>
-        runCodexOneShot({
-          // Prefer auth_object when configured — same priority rule as
-          // the Codex SDK runner. Falls back to the api_key row when
-          // the org only configured a plain OpenAI key.
-          apiKey: codexAuthObject ? null : (vendor.apiKey ?? null),
-          authObject: codexAuthObject,
-          model: modelSlug,
-          systemPrompt: SYSTEM_PROMPT,
-          userPrompt,
-        }),
-      observeMeta,
-    );
-    if (!text || text.trim().length === 0) {
-      text = "_The model did not produce a summary._";
+  // Single one-shot the function is called twice with: once for the long
+  // structured summary, then a second time to distill it into a
+  // one-paragraph short_summary. Captured locals (vendor, modelSlug,
+  // codexAuthObject, langfuseHandler) are the same for both calls.
+  async function runOneShot(
+    sysPrompt: string,
+    usrPrompt: string,
+    spanName: string,
+  ): Promise<string> {
+    if (useCodex) {
+      const out = await observeWithContext(
+        spanName,
+        () =>
+          runCodexOneShot({
+            // Prefer auth_object when configured — same priority rule as
+            // the Codex SDK runner. Falls back to the api_key row when
+            // the org only configured a plain OpenAI key.
+            apiKey: codexAuthObject ? null : (vendor!.apiKey ?? null),
+            authObject: codexAuthObject,
+            model: modelSlug,
+            systemPrompt: sysPrompt,
+            userPrompt: usrPrompt,
+          }),
+        baseObserveMeta,
+      );
+      return out && out.trim().length > 0 ? out : "_The model did not produce a summary._";
     }
-  } else if (useAnthropicSdk) {
-    text = await observeWithContext(
-      "roundtable_summary",
-      () =>
-        runAnthropicOneShot({
-          credential: vendor.apiKey ?? "",
-          keyType: vendor.keyType,
-          model: modelSlug,
-          systemPrompt: SYSTEM_PROMPT,
-          userPrompt,
-        }),
-      observeMeta,
-    );
-    if (!text || text.trim().length === 0) {
-      text = "_The model did not produce a summary._";
+    if (useAnthropicSdk) {
+      const out = await observeWithContext(
+        spanName,
+        () =>
+          runAnthropicOneShot({
+            credential: vendor!.apiKey ?? "",
+            keyType: vendor!.keyType,
+            model: modelSlug,
+            systemPrompt: sysPrompt,
+            userPrompt: usrPrompt,
+          }),
+        baseObserveMeta,
+      );
+      return out && out.trim().length > 0 ? out : "_The model did not produce a summary._";
     }
-  } else {
     // The LangChain fallback path can't speak the auth_object protocol —
     // it expects a plain key string in env-var-style auth. If we landed
     // here it's because the SDK was kill-switched off; require a real
     // api_key row to be configured.
-    if (!vendor.apiKey) {
+    if (!vendor!.apiKey) {
       throw new Error(
-        `Cannot summarize roundtable: SDK fallback requires an api_key for ${vendor.vendorSlug}, but the org only has an auth_object.`,
+        `Cannot summarize roundtable: SDK fallback requires an api_key for ${vendor!.vendorSlug}, but the org only has an auth_object.`,
       );
     }
-    const model = getModel(modelSlug, vendor.vendorSlug, vendor.apiKey);
+    const model = getModel(modelSlug, vendor!.vendorSlug, vendor!.apiKey);
     const response = await observeWithContext(
-      "roundtable_summary",
+      spanName,
       () =>
         model.invoke(
-          [new SystemMessage(SYSTEM_PROMPT), new HumanMessage(userPrompt)],
+          [new SystemMessage(sysPrompt), new HumanMessage(usrPrompt)],
           langfuseHandler
-            ? ({
-                callbacks: [langfuseHandler],
-              } as RunnableConfig)
+            ? ({ callbacks: [langfuseHandler] } as RunnableConfig)
             : undefined,
         ),
-      observeMeta,
+      baseObserveMeta,
     );
     const raw = response.content;
     if (typeof raw === "string") {
-      text = raw;
-    } else if (Array.isArray(raw)) {
-      text =
+      return raw.trim().length > 0 ? raw : "_The model did not produce a summary._";
+    }
+    if (Array.isArray(raw)) {
+      return (
         raw
           .filter((b: any) => b?.type === "text" && typeof b.text === "string")
           .map((b: any) => b.text)
           .join("\n")
-          .trim() || "_The model did not produce a summary._";
-    } else {
-      text = "_The model did not produce a summary._";
+          .trim() || "_The model did not produce a summary._"
+      );
     }
+    return "_The model did not produce a summary._";
+  }
+
+  // Pass 1 — long structured summary over the transcript. This is the
+  // existing behavior and remains the source of truth on the
+  // `summary` column / episodic memory chunks.
+  const summary = await runOneShot(SYSTEM_PROMPT, userPrompt, "roundtable_summary");
+
+  // Pass 2 — distill the long summary into a one-paragraph short form
+  // for the new `short_summary` column. Best-effort: if this throws we
+  // still return the long summary so a transient model error doesn't
+  // block the roundtable from completing.
+  let shortSummary: string | null = null;
+  try {
+    shortSummary = await runOneShot(
+      SHORT_SUMMARY_SYSTEM_PROMPT,
+      `**Topic:** ${roundtable.topic}\n\n**Long summary:**\n\n${summary}`,
+      "roundtable_short_summary",
+    );
+  } catch (err: any) {
+    logger.warn("Roundtable short_summary generation failed; persisting long summary only", {
+      roundtableId,
+      error: err?.message ?? String(err),
+    });
   }
 
   try {
@@ -297,8 +355,9 @@ export async function summarizeRoundtable(
       : useAnthropicSdk
         ? "anthropic_one_shot"
         : "langchain",
-    summaryLen: text.length,
+    summaryLen: summary.length,
+    shortSummaryLen: shortSummary?.length ?? 0,
   });
 
-  return text;
+  return { summary, shortSummary };
 }

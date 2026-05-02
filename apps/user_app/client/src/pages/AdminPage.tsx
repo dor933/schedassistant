@@ -601,12 +601,13 @@ export default function AdminPage() {
       try {
         const next = await admin.setWebSearchAgent(choice);
         setWebSearchStatus(next);
-        toast(
+        const label =
           choice === "tavily"
-            ? "Tavily is now the active web-search agent."
-            : "Gemini is now the active web-search agent.",
-          "success",
-        );
+            ? "Tavily"
+            : choice === "anthropic"
+              ? "Anthropic"
+              : "Gemini";
+        toast(`${label} is now the active web-search agent.`, "success");
       } catch (e: any) {
         toast(e?.message ?? "Failed to switch web-search agent.", "error");
       } finally {

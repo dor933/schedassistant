@@ -36,6 +36,11 @@ import { agentSkillTools } from "../../../tools/skillsTools";
 import { DelegateToEpicOrchestratorTool } from "../../../tools/delegateToEpicOrchestratorTool";
 import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../../../tools/episodicMemoryTool";
 import { GetThreadSummaryTool } from "../../../tools/threadSummaryTool";
+import { ListMyThreadsTool } from "../../../tools/threadRecallTools";
+import {
+  ListMyRoundtablesTool,
+  GetRoundtableOverviewTool,
+} from "../../../tools/roundtableRecallTools";
 import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
 import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
@@ -305,6 +310,19 @@ export async function callModelNode(
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
+    // Thread recall — non-vector entry point into the existing
+    // get_thread_summary → grep_session_file → read_session_file
+    // cascade. Lists single-chat / group threads where this agent is
+    // the owner (`threads.agent_id`). Roundtable threads are listed by
+    // ListMyRoundtablesTool below.
+    ListMyThreadsTool(agentId),
+    // Roundtable recall — primary agents always get the listing + overview
+    // tools so they can pull the topic + short_summary of past discussions
+    // they participated in without going through episodic memory or the
+    // threads table. The tools are access-gated to roundtables this
+    // agentId actually belongs to.
+    ListMyRoundtablesTool(agentId),
+    GetRoundtableOverviewTool(agentId),
     ReadSessionFileTool(agentId, threadId),
     GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
