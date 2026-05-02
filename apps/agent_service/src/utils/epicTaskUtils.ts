@@ -28,13 +28,6 @@ import type {
   PrStatus,
 } from "@scheduling-agent/types";
 import { logger } from "../logger";
-import {
-  buildArchitectureOverviewPrompt,
-  MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
-} from "./architectureOverviewPrompt.service";
-import { runArchitectureScan } from "./architectureScan.service";
-import { resolveOrgVendor } from "./resolveOrgVendor.service";
-import { resolveModelSlug } from "../chat/modelResolution";
 
 // The agent_service container runs as root, but Claude CLI (and gh) must run
 // as the non-root `agent` user via `su-exec`. `su-exec` inherits env unchanged,
@@ -834,11 +827,9 @@ function buildStageBranchName(epic: EpicTask, stage: TaskStage): string {
  *   • Other repos in the same epic (non-primary) always pull their default
  *     branch.
  *
- * Architecture overviews are NOT refreshed here — that happens once per epic,
- * at plan-creation time, against each repo's DEFAULT branch (see
- * `refreshArchitectureOverviewOnDefault`). Refreshing here would risk writing
- * back an overview derived from an unmerged stage branch that may be
- * abandoned or rewritten.
+ * Architecture overviews are NOT refreshed here. Refreshing during task
+ * sync would risk writing an overview derived from an unmerged stage branch
+ * that may be abandoned or rewritten.
  */
 export async function preExecutionSync(
   epicId: EpicTaskId,
@@ -1016,195 +1007,6 @@ export async function preExecutionSync(
   }
 }
 
-// ─── Architecture Overview Refresh ──────────────────────────────────────────
-
-/**
- * Spawns a quick Claude CLI call to analyze the repo at `cwd` and produce a
- * concise architecture overview, then persists it to the repository record.
- *
- * The caller is responsible for checking out the correct branch before
- * invoking — the CLI just reads the working tree as it finds it. In practice
- * this is always the repo's default branch, so the stored overview describes
- * the canonical/merged state of the repo.
- *
- * `agentId` attributes the run to the orchestrator agent that created the
- * epic; pass `null` for admin-triggered manual refreshes.
- */
-async function generateArchitectureOverview(
-  repo: Repository,
-  cwd: string,
-  agentId: AgentId | null,
-): Promise<void> {
-  const currentOverview = repo.architectureOverview?.trim() || "(none)";
-  const prompt = buildArchitectureOverviewPrompt(currentOverview);
-
-  try {
-    // Slice 21: scan via the SDK (Anthropic preferred, Codex fallback)
-    // instead of spawning the Claude CLI as a subprocess. The org is
-    // resolved from the orchestrator agent that created the epic; if
-    // there's no agentId on this path we cannot bill the scan and must
-    // skip — the architecture refresh is a nice-to-have, not blocking.
-    if (!agentId) {
-      logger.warn(
-        "generateArchitectureOverview: skipped (no agentId for credential resolution)",
-        { repoId: repo.id },
-      );
-      return;
-    }
-    const agent = await Agent.findByPk(agentId, {
-      attributes: ["organizationId"],
-    });
-    if (!agent?.organizationId) {
-      logger.warn(
-        "generateArchitectureOverview: skipped (orchestrator agent has no organization)",
-        { repoId: repo.id, agentId },
-      );
-      return;
-    }
-
-    // Pin the scan vendor to the orchestrator's vendor so a Codex-running
-    // orchestrator gets a Codex scan instead of the org's Anthropic key
-    // (which the orchestrator may not be authorised against).
-    let preferredVendor: "anthropic" | "openai" | undefined;
-    try {
-      const modelSlug = await resolveModelSlug(agentId);
-      const vendor = await resolveOrgVendor(modelSlug, agentId);
-      if (vendor?.vendorSlug === "anthropic" || vendor?.vendorSlug === "openai") {
-        preferredVendor = vendor.vendorSlug;
-      }
-    } catch (err) {
-      logger.warn(
-        "generateArchitectureOverview: vendor resolution failed — falling back to default scan ordering",
-        { agentId, error: err instanceof Error ? err.message : String(err) },
-      );
-    }
-
-    const text = (
-      await runArchitectureScan({
-        cwd,
-        prompt,
-        organizationId: agent.organizationId,
-        preferredVendor,
-      })
-    ).trim();
-    if (text && text.length > 20) {
-      const stored =
-        text.length > MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS
-          ? text.slice(0, MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS)
-          : text;
-      const previous = repo.architectureOverview;
-      await repo.update({ architectureOverview: stored });
-      logger.info("generateArchitectureOverview: updated architecture overview", {
-        repoId: repo.id,
-        repoName: repo.name,
-        previousLength: previous?.length ?? 0,
-        newLength: stored.length,
-      });
-    }
-  } catch (err) {
-    logger.warn("generateArchitectureOverview: SDK architecture scan failed", {
-      repoId: repo.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-/**
- * Checks out the repo's default branch, pulls the latest, and refreshes
- * `repo.architectureOverview` if the repo has drifted (or has no overview yet).
- *
- * Call this once per epic, at plan-creation time — NOT per task. The stored
- * overview must always describe the merged/canonical state of the repo, so we
- * must analyze it on the default branch, never on a speculative stage branch
- * that may be abandoned or rewritten during review.
- *
- * Concurrency: safe to call from `createEpicWithPlan` because the epic
- * orchestrator enforces a system-wide "one active epic at a time" invariant
- * (see `CreateEpicPlanTool`), so no executing task can be holding the repo's
- * working tree on another branch when this runs.
- *
- * Non-fatal: git or CLI hiccups are logged and swallowed so epic creation
- * is never blocked on architecture refresh.
- */
-export async function refreshArchitectureOverviewOnDefault(
-  repo: Repository,
-  agentId: AgentId | null,
-): Promise<void> {
-  if (!repo.localPath) return;
-
-  const cwd = repo.localPath;
-  const defaultBranch = repo.defaultBranch || "main";
-
-  // ── 1. Put the working tree on the default branch ──
-  try {
-    gitAsAgent(cwd, ["fetch", "origin"]);
-    try {
-      gitAsAgent(cwd, ["switch", defaultBranch]);
-    } catch {
-      gitAsAgent(cwd, ["checkout", "-B", defaultBranch, `origin/${defaultBranch}`]);
-    }
-    gitAsAgent(cwd, ["pull", "origin", defaultBranch]);
-  } catch (err) {
-    logger.warn("refreshArchitectureOverviewOnDefault: git sync failed", {
-      repoId: repo.id,
-      defaultBranch,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return;
-  }
-
-  // ── 2. Detect structural changes ──
-  try {
-    const hasArchitecture = !!repo.architectureOverview?.trim();
-
-    let diffNameOnly = "";
-    try {
-      diffNameOnly = gitAsAgent(cwd, [
-        "log",
-        "--name-status",
-        "--diff-filter=ADRT",
-        "--pretty=format:",
-        "-20",
-      ]);
-    } catch {
-      try {
-        diffNameOnly = gitAsAgent(cwd, ["diff", "--name-status", "HEAD~10", "HEAD"]);
-      } catch {
-        // Repo may have <10 commits — nothing to compare against.
-        if (!hasArchitecture) {
-          await generateArchitectureOverview(repo, cwd, agentId);
-        }
-        return;
-      }
-    }
-
-    if (!diffNameOnly) {
-      // No recent structural activity — only generate if we have nothing stored.
-      if (!hasArchitecture) {
-        await generateArchitectureOverview(repo, cwd, agentId);
-      }
-      return;
-    }
-
-    // Structural changes: new/deleted/renamed files.
-    const structuralPatterns = /^[ADR]\t/m;
-    const hasStructuralChanges = structuralPatterns.test(diffNameOnly);
-
-    if (!hasStructuralChanges && hasArchitecture) {
-      // Content-only changes — architecture hasn't drifted.
-      return;
-    }
-
-    // ── 3. Analyze and update architecture ──
-    await generateArchitectureOverview(repo, cwd, agentId);
-  } catch (err) {
-    logger.warn("refreshArchitectureOverviewOnDefault: architecture check failed", {
-      repoId: repo.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
 // ─── Architecture Context Builder ───────────────────────────────────────────
 
 /**
@@ -1359,53 +1161,6 @@ export async function createEpicWithPlan(data: {
     }
 
     await transaction.commit();
-
-    // Refresh architecture overviews from each repo's DEFAULT branch. This
-    // runs once per epic (here, at plan-creation time) rather than per task,
-    // so the stored overview always reflects the repo's merged/canonical
-    // state — never a speculative stage branch that may be abandoned. By the
-    // time the first task runs, `buildArchitectureContext` will pick up the
-    // fresh overview and inject it into the executor's system prompt.
-    //
-    // FIRE-AND-FORGET, in parallel:
-    //   - A single repo scan (Sonnet/Codex with Read+Glob+Grep) takes
-    //     ~5-10 minutes. Awaiting them here — even concurrently — exceeded
-    //     the MCP bridge's 120s `tools/call` timeout and made
-    //     `create_epic_plan` error out even though the epic was already
-    //     committed. Holding the tool call open for that long collides
-    //     with the bridge's lifecycle on every codex turn.
-    //   - The architecture column is consumed by `buildArchitectureContext`
-    //     at task-execute time, in a separate tool call. The first task
-    //     may run with the previous overview if it lands before the
-    //     refresh completes — accepted trade-off, no regression versus
-    //     the prior behaviour where the refresh ran but blocked the tool.
-    //   - `refreshArchitectureOverviewOnDefault` already swallows its own
-    //     errors and logs; the `.catch` here is a defensive top-level so
-    //     an unhandled rejection from the helper itself can't crash the
-    //     process after the function has returned.
-    //   - `Promise.all` lets all repos run concurrently; their git fetch
-    //     + SDK call don't share a critical section.
-    if (data.repositoryIds?.length) {
-      const planRepos = await Repository.findAll({
-        where: { id: data.repositoryIds as unknown as string[] },
-      });
-      void Promise.all(
-        planRepos.map((repo) =>
-          refreshArchitectureOverviewOnDefault(repo, data.agentId).catch(
-            (err) => {
-              logger.warn(
-                "createEpicWithPlan: background architecture refresh failed",
-                {
-                  repoId: repo.id,
-                  repoName: repo.name,
-                  error: err instanceof Error ? err.message : String(err),
-                },
-              );
-            },
-          ),
-        ),
-      );
-    }
 
     // First-stage tasks were created with `status='ready'` inside the
     // transaction above (atomic with epic/stage/task creation), so there's

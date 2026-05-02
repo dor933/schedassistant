@@ -1,6 +1,6 @@
 /**
  * Shared prompt for Claude CLI (`claude -p`) when generating `repository.architecture_overview`.
- * Used by admin "generate architecture" and by epic-time refresh on default branch.
+ * Used by admin "generate architecture" (`repositories.service.generateArchitecture`).
  */
 
 /** Safety cap when persisting to DB (PostgreSQL TEXT; avoids runaway outputs). */

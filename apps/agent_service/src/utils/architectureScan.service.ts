@@ -8,10 +8,8 @@
  * the organization has no Anthropic credential.
  *
  * Why a service-layer wrapper:
- *   - Both call sites (`repositories.service.generateArchitecture` for
- *     admin-triggered refreshes + `epicTaskUtils.generateArchitectureOverview`
- *     for epic-time auto-refresh) need identical vendor-resolution logic.
- *     Sharing the wrapper keeps the fallback rule in one place.
+ *   - `repositories.service.generateArchitecture` (admin-triggered refreshes)
+ *     needs vendor-resolution + fallback logic in one place.
  *   - The lower-level `runAnthropicScanCwd` / `runCodexScanCwd` helpers
  *     deliberately don't know about credentials — they accept the
  *     resolved values directly so they're testable and composable. The
