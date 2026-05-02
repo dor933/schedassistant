@@ -16,6 +16,10 @@ import {
   loadRecentRoundtableSummaries,
   formatRoundtableSummariesSection,
 } from "../../../sessionsManagment/roundtableSummaryLoader";
+import {
+  loadPriorRoundtableTurns,
+  formatPriorTurnsSection,
+} from "../../../sessionsManagment/roundtablePriorTurnsLoader";
 
 /**
  * LangGraph node: assembles the system prompt for a roundtable agent turn.
@@ -79,11 +83,19 @@ export async function roundtableContextBuilderNode(
       googleWorkspaceAgentSection,
       librarySection,
       recentRoundtableSummaries,
+      priorRoundtableTurns,
     ] = await Promise.all([
       loadOrganizationSummarySection(agentOrganizationId),
       loadGoogleWorkspaceAgentSection(agentOrganizationId),
       loadLibrarySection(agentId),
       loadRecentRoundtableSummaries(agentId, { limit: 2 }),
+      // Loads every prior contribution in THIS roundtable (current round +
+      // earlier rounds). Required because the SDK runner branches in
+      // `roundtableCallModel` discard `state.messages` aside from the latest
+      // moderator HumanMessage — without this section, an Anthropic / Codex
+      // SDK agent would see an empty transcript and could not "build on
+      // previous contributions" as the discussion guidelines instruct.
+      loadPriorRoundtableTurns(state.roundtableId, agentId),
     ]);
     if (orgSummarySection.trim().length > 0) {
       sections.push(orgSummarySection);
@@ -182,6 +194,16 @@ export async function roundtableContextBuilderNode(
           `and remember they speak last in each round.\n`,
         );
       }
+
+      // Verbatim transcript of every prior contribution in this roundtable.
+      // Sits inside the roundtable block so it reads as part of the briefing
+      // ("here are the rules → here is what was actually said → your turn").
+      // Renders nothing on round 1 turn 0 (no prior turns exist yet).
+      const priorTurnsSection = formatPriorTurnsSection(priorRoundtableTurns);
+      if (priorTurnsSection) {
+        sections.push(priorTurnsSection);
+        sections.push("");
+      }
     }
 
     const recentRoundtableSection = formatRoundtableSummariesSection(
@@ -275,6 +297,7 @@ export async function roundtableContextBuilderNode(
       roundtableId: state.roundtableId,
       round: roundtableConfig?.roundNumber,
       promptLen: systemPrompt.length,
+      priorTurnsLoaded: priorRoundtableTurns.length,
       sessionWorkspacePath,
     });
 
