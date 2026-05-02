@@ -10,6 +10,13 @@ export const FORBIDDEN_PATTERNS = [
   "backtest_details",
   "internal_score",
   "feature_rules",
+  "raw_sql",
+  "analog_rows",
+  "raw_analog_rows",
+  "path_rows",
+  "gate_name",
+  "internal_threshold",
+  "threshold_rule",
   "query text",
 ] as const;
 
@@ -24,6 +31,13 @@ const FORBIDDEN_KEY_PARTS = [
   "backtest_details",
   "internal_score",
   "feature_rules",
+  "raw_sql",
+  "analog_rows",
+  "raw_analog_rows",
+  "path_rows",
+  "gate_name",
+  "internal_threshold",
+  "threshold_rule",
 ];
 
 const FORBIDDEN_TEXT_REGEXES = [
@@ -37,6 +51,13 @@ const FORBIDDEN_TEXT_REGEXES = [
   /\bbacktest_details\b/gi,
   /\binternal_score\b/gi,
   /\bfeature_rules\b/gi,
+  /\braw_sql\b/gi,
+  /\banalog_rows\b/gi,
+  /\braw_analog_rows\b/gi,
+  /\bpath_rows\b/gi,
+  /\bgate(?:_name|s)?\b/gi,
+  /\binternal_threshold\b/gi,
+  /\bthreshold_rule\b/gi,
   /\bsql\b/gi,
   /\bquery text\b/gi,
   /\bpipeline implementation details\b/gi,
@@ -101,6 +122,7 @@ function scrub(value: unknown, markCleaned: () => void): unknown {
 function isForbiddenKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (lower === "run_id" || lower === "runid") return true;
+  if (lower === "gate" || lower === "gates" || lower === "gate_name") return true;
+  if (lower.endsWith("_gate") || lower.startsWith("gate_")) return true;
   return FORBIDDEN_KEY_PARTS.some((part) => lower.includes(part));
 }
-
