@@ -322,6 +322,15 @@ export function CreateEpicPlanTool(userId: number, agentId: string) {
               "Stage kind. Default 'code_change' — produces a PR. Use 'plan' for stages that are pure " +
               "planning/research/spec work with no code changes; those stages skip PR creation and auto-unblock the next stage.",
             ),
+          repositoryId: z.string().uuid().optional()
+            .describe(
+              "Which repository this stage targets. Must be one of the IDs you passed in the epic's " +
+              "`repositoryIds`. **Required when the epic spans more than one repository** — the stage's " +
+              "feature branch and PR live on this repo, and every task in the stage runs with this repo " +
+              "as its working directory. **Optional when the epic has exactly one repository** (auto-filled " +
+              "from `repositoryIds[0]` at creation time). One stage = one repo: if a unit of work crosses " +
+              "repos, plan one stage per repo.",
+            ),
           tasks: z.array(z.object({
             title: z.string().min(1).describe("Short task title"),
             description: z.string().optional()
@@ -627,6 +636,7 @@ async function resolveInProgressExecution(): Promise<InProgressExecutionContext 
         as: "stage",
         where: { epicTaskId: epic.id },
         required: true,
+        include: [{ model: Repository, as: "repository" }],
       },
     ],
     order: [["startedAt", "DESC"]],
@@ -639,17 +649,21 @@ async function resolveInProgressExecution(): Promise<InProgressExecutionContext 
   });
   if (!execution) return null;
 
-  // Resolve cwd from the epic's first repo with a localPath (same logic
-  // ExecuteEpicTaskTool used). Without a cwd we can't capture the diff
-  // or commit, so this is a hard requirement.
-  const withRepos = await EpicTask.findByPk(epic.id, {
-    include: [{ model: Repository, as: "repositories" }],
-  });
-  const repos = ((withRepos as any)?.repositories ?? []) as Repository[];
-  const repo = repos.find((r) => r.localPath);
-  if (!repo?.localPath) {
+  // Resolve cwd from the stage's targeted repository — set at plan time via
+  // `create_epic_plan(... stages[].repositoryId ...)` and (back-compat) auto-
+  // filled by `preExecutionSync` for single-repo epics that pre-date the
+  // per-stage field. Replaces the old "first epic-level repo with a
+  // localPath" fallback that picked the wrong repo on multi-repo epics
+  // (the StocksScanner / grahamy-agents collision was an instance of that
+  // bug). If we get here without a stage repo, the start side already
+  // refused to launch — surface a clear error rather than silently picking.
+  const stage = ((task as any).stage as TaskStage | undefined) ?? null;
+  const stageRepo = ((stage as any)?.repository as Repository | undefined) ?? null;
+  if (!stageRepo?.localPath) {
     throw new Error(
-      "complete_epic_task: no repository has a localPath configured — cannot capture diff.",
+      `complete_epic_task: stage "${stage?.title ?? "(unknown)"}" has no repository ` +
+      `with a localPath set — cannot capture diff. This usually means the epic was ` +
+      `planned before per-stage repositoryId was required; cancel and replan.`,
     );
   }
 
@@ -661,7 +675,7 @@ async function resolveInProgressExecution(): Promise<InProgressExecutionContext 
     task,
     execution,
     epicId: epic.id,
-    cwd: repo.localPath,
+    cwd: stageRepo.localPath,
     preRunSha,
   };
 }
@@ -773,22 +787,27 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
           );
         }
 
-        // Resolve cwd before mutating any state — if the repo isn't
-        // configured properly we fail loudly rather than leave a half-
-        // started task.
-        const withRepos = await EpicTask.findByPk(epic.id, {
-          include: [{ model: Repository, as: "repositories" }],
-        });
-        const repos = ((withRepos as any)?.repositories ?? []) as Repository[];
-        const repo = repos.find((r) => r.localPath);
-        if (!repo?.localPath) {
+        // Resolve cwd from the stage's targeted repository (set at plan time
+        // via per-stage `repositoryId`, or auto-filled by `preExecutionSync`
+        // for single-repo epics). `resolveNextRetryableTask` already eager-
+        // loaded `next.stage.repository`, so we don't need a second query.
+        // If the stage has no repo set we fail loudly here rather than fall
+        // back to "first epic-level repo with a localPath" — that fallback
+        // was the source of the wrong-repo bug (StocksScanner task running
+        // with cwd=grahamy-agents because grahamy-agents happened to be
+        // returned first by the join).
+        const stage = ((next as any).stage as TaskStage | undefined) ?? null;
+        const stageRepo = ((stage as any)?.repository as Repository | undefined) ?? null;
+        if (!stageRepo?.localPath) {
           return (
-            `Error: cannot start task — no repository has a localPath ` +
-            `configured for epic "${epic.title}". Set localPath on the ` +
-            `repository before starting epic work.`
+            `Error: cannot start task — stage "${stage?.title ?? "(unknown)"}" ` +
+            `has no repository with a localPath configured. The orchestrator ` +
+            `must specify each stage's \`repositoryId\` at \`create_epic_plan\` ` +
+            `time when the epic spans multiple repos. Cancel this epic and ` +
+            `replan with a per-stage \`repositoryId\` if needed.`
           );
         }
-        const cwd = repo.localPath;
+        const cwd = stageRepo.localPath;
 
         // Branch sync + base-SHA snapshot. preExecutionSync also pushes
         // the stage's feature branch when first created, so this also
@@ -847,7 +866,11 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
           );
         });
 
-        const stage = (next as any).stage as TaskStage | undefined;
+        // `stage` is already in scope from the cwd-resolution block above
+        // (eager-loaded by `resolveNextRetryableTask`). With the include in
+        // place, this label is now correct — it was "Stage (unknown)" before
+        // because the legacy `resolveNextRetryableTask` returned an
+        // AgentTask with no `stage` association loaded.
         const stageLabel = stage
           ? `Stage "${stage.title}" (${stage.kind})`
           : "Stage (unknown)";
@@ -1235,17 +1258,20 @@ async function resolveActiveEpicRepoCwd(): Promise<{
       `No tasks are ready to execute on epic "${epic.title}" (status: ${epic.status}).`,
     );
   }
-  const withRepos = await EpicTask.findByPk(epic.id, {
-    include: [{ model: Repository, as: "repositories" }],
-  });
-  const repos = ((withRepos as any)?.repositories ?? []) as Repository[];
-  const repo = repos.find((r) => r.localPath);
-  if (!repo?.localPath) {
+  // Use the stage's repository (eager-loaded by resolveNextRetryableTask)
+  // — the old "first epic-level repo with a localPath" fallback ignored
+  // per-stage targeting and silently picked the wrong repo on multi-repo
+  // epics.
+  const stage = ((next as any).stage as TaskStage | undefined) ?? null;
+  const stageRepo = ((stage as any)?.repository as Repository | undefined) ?? null;
+  if (!stageRepo?.localPath) {
     throw new Error(
-      `Cannot run codex tool — no repository has a localPath configured for epic "${epic.title}".`,
+      `Cannot run codex tool — stage "${stage?.title ?? "(unknown)"}" has no ` +
+      `repository with a localPath configured for epic "${epic.title}". ` +
+      `Specify the stage's repositoryId at create_epic_plan time.`,
     );
   }
-  return { epic, cwd: repo.localPath, next };
+  return { epic, cwd: stageRepo.localPath, next };
 }
 
 /**
@@ -1399,23 +1425,25 @@ export function StartEpicTaskCodexTool(
           );
         }
 
-        const withRepos = await EpicTask.findByPk(epic.id, {
-          include: [{ model: Repository, as: "repositories" }],
-        });
-        const repos = ((withRepos as any)?.repositories ?? []) as Repository[];
-        const repo = repos.find((r) => r.localPath);
-        if (!repo?.localPath) {
+        // Use the stage's targeted repository (eager-loaded by
+        // `resolveNextRetryableTask`). Replaces the old "first epic-level
+        // repo with a localPath" fallback that picked the wrong repo on
+        // multi-repo epics.
+        const stage = ((next as any).stage as TaskStage | undefined) ?? null;
+        const stageRepo = ((stage as any)?.repository as Repository | undefined) ?? null;
+        if (!stageRepo?.localPath) {
           throw new Error(
-            `Cannot run codex tool — no repository has a localPath configured for epic "${epic.title}".`,
+            `Cannot run codex tool — stage "${stage?.title ?? "(unknown)"}" has no ` +
+            `repository with a localPath configured for epic "${epic.title}". ` +
+            `Specify the stage's repositoryId at create_epic_plan time.`,
           );
         }
-        const repoCwd = repo.localPath;
+        const repoCwd = stageRepo.localPath;
 
         const epicFull = await EpicTask.findByPk(epic.id, {
           attributes: ["id", "agentId", "userId"],
         });
 
-        const stage = await TaskStage.findByPk(next.taskStageId);
         const stageKind = stage?.kind ?? "code_change";
 
         const sessionWorkspacePath = sessionCtx?.sessionWorkspacePath ?? null;

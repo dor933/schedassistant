@@ -477,9 +477,22 @@ export async function resolveNextRetryableTask(
   // QueryTypes.SELECT, which returns plain row objects — not Sequelize model
   // instances. Callers expect to call instance methods like .update() on the
   // result, so re-fetch via findByPk to materialize a real model instance.
+  //
+  // We include `stage` (with its `repository`) on every returned task so
+  // callers don't have to do a second query to:
+  //   (a) render the stage label in the task prompt (was "Stage (unknown)"
+  //       before this include landed), and
+  //   (b) resolve the working directory via `task.stage.repository.localPath`
+  //       — replaces the old "first epic-level repo with a localPath" fallback
+  //       that picked the wrong repo on multi-repo epics.
+  const includeStageRepo = [{
+    model: TaskStage,
+    as: "stage",
+    include: [{ model: Repository, as: "repository" }],
+  }];
   const ready = await getReadyTasks(epicId);
   if (ready.length > 0) {
-    return AgentTask.findByPk(ready[0].id);
+    return AgentTask.findByPk(ready[0].id, { include: includeStageRepo });
   }
 
   // Orphan auto-recovery (added with the start_epic_task transaction fix).
@@ -518,7 +531,7 @@ export async function resolveNextRetryableTask(
     { replacements: { epicId }, type: QueryTypes.SELECT },
   );
   if (orphans[0]) {
-    const orphan = await AgentTask.findByPk(orphans[0].id);
+    const orphan = await AgentTask.findByPk(orphans[0].id, { include: includeStageRepo });
     if (orphan) {
       logger.warn(
         "resolveNextRetryableTask: auto-recovering orphan in_progress task with no running execution",
@@ -541,7 +554,7 @@ export async function resolveNextRetryableTask(
     { replacements: { epicId }, type: QueryTypes.SELECT },
   );
   if (!failed[0]) return null;
-  return AgentTask.findByPk(failed[0].id);
+  return AgentTask.findByPk(failed[0].id, { include: includeStageRepo });
 }
 
 /**
@@ -996,8 +1009,34 @@ export async function preExecutionSync(
       `preExecutionSync: agent task ${taskId} has no parent stage — refusing to sync without a stage context`,
     );
   }
-  const primaryRepoId: string | null =
-    stage.repositoryId ?? repos.find((r) => r.localPath)?.id ?? null;
+  // Resolve the stage's targeted repository:
+  //   1. Honor an explicit `stage.repositoryId` (set at plan time via
+  //      `create_epic_plan`'s per-stage `repositoryId`, or by an earlier
+  //      `preExecutionSync` run that auto-filled it).
+  //   2. For SINGLE-REPO epics with no explicit value, auto-fill from the
+  //      only choice — back-compat for epics planned before per-stage
+  //      `repositoryId` was a thing, and the convenience path the schema
+  //      validation already auto-fills at create time too.
+  //   3. For MULTI-REPO epics with no explicit value, REFUSE — picking the
+  //      "first repo with a localPath" silently was the source of the wrong-
+  //      repo bug (StocksScanner task running against grahamy-agents). The
+  //      user should cancel + replan with per-stage `repositoryId`.
+  let primaryRepoId: string | null;
+  if (stage.repositoryId) {
+    primaryRepoId = stage.repositoryId;
+  } else if (repos.length === 1 && repos[0].localPath) {
+    primaryRepoId = repos[0].id;
+  } else if (repos.length > 1) {
+    throw new Error(
+      `preExecutionSync: stage "${stage.title}" (id ${stage.id}) has no ` +
+      `repositoryId set, but its epic spans ${repos.length} repositories. ` +
+      `Refusing to fall back to "first repo with a localPath" — that picks ` +
+      `the wrong repo half the time on multi-repo epics. Cancel this epic ` +
+      `and replan with a per-stage repositoryId on every stage.`,
+    );
+  } else {
+    primaryRepoId = null;
+  }
 
   // If the stage is on its first task (no branch yet), create one FROM the
   // primary repo's default branch BEFORE looping over repos — so the main
@@ -1225,12 +1264,46 @@ export async function createEpicWithPlan(data: {
     title: string;
     description?: string;
     kind?: TaskStageKind;
+    /** Optional in the input; required and validated by this function when the
+     *  epic spans more than one repository. Auto-filled from `repositoryIds[0]`
+     *  for single-repo epics. */
+    repositoryId?: RepositoryId;
     tasks: Array<{
       title: string;
       description?: string;
     }>;
   }>;
 }): Promise<EpicTask> {
+  // ── Per-stage repo validation (one stage = one repo) ────────────────────
+  // The PR fields (prNumber, prUrl, prStatus, branchName, baseCommitSha) live
+  // on the TaskStage row, so a stage can target at most one repository.
+  // Single-repo epics auto-fill from the only choice; multi-repo epics MUST
+  // disambiguate explicitly. Throw before opening the transaction so the
+  // failure surfaces cleanly with no partial DB state.
+  const epicRepoIds = data.repositoryIds ?? [];
+  const epicRepoIdSet = new Set<string>(epicRepoIds);
+  for (let si = 0; si < data.stages.length; si++) {
+    const stageData = data.stages[si];
+    const stageLabel = `stage[${si}] "${stageData.title}"`;
+    if (stageData.repositoryId) {
+      if (!epicRepoIdSet.has(stageData.repositoryId)) {
+        throw new Error(
+          `${stageLabel} has repositoryId="${stageData.repositoryId}" but that id ` +
+          `is not in the epic's repositoryIds. Each stage's repositoryId must be ` +
+          `one of the repos passed in the epic's repositoryIds.`,
+        );
+      }
+    } else if (epicRepoIds.length > 1) {
+      throw new Error(
+        `${stageLabel} has no repositoryId, but the epic spans ${epicRepoIds.length} ` +
+        `repositories. Specify which repository this stage targets — one stage = one ` +
+        `repo. If a single unit of work crosses repos, plan one stage per repo.`,
+      );
+    }
+    // epicRepoIds.length <= 1: auto-fill from repositoryIds[0] below, or leave
+    // null when the epic has no repos at all (rare — repo-less plan-only epics).
+  }
+
   const transaction = await sequelize.transaction();
   try {
     const epic = await EpicTask.create(
@@ -1258,6 +1331,11 @@ export async function createEpicWithPlan(data: {
 
     for (let si = 0; si < data.stages.length; si++) {
       const stageData = data.stages[si];
+      // Auto-fill for single-repo epics; otherwise honor the validated explicit
+      // value from the input.
+      const resolvedRepoId: RepositoryId | undefined =
+        stageData.repositoryId ??
+        (epicRepoIds.length === 1 ? epicRepoIds[0] : undefined);
       const stage = await TaskStage.create(
         {
           epicTaskId: epic.id,
@@ -1265,6 +1343,7 @@ export async function createEpicWithPlan(data: {
           description: stageData.description,
           kind: stageData.kind ?? ("code_change" as TaskStageKind),
           sortOrder: si,
+          ...(resolvedRepoId ? { repositoryId: resolvedRepoId } : {}),
         },
         { transaction },
       );
