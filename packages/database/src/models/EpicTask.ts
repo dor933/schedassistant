@@ -4,7 +4,7 @@ import type { EpicTaskAttributes, EpicTaskStatus, ProjectId, UserId, AgentId } f
 
 type EpicTaskCreationAttributes = Optional<
   EpicTaskAttributes,
-  "id" | "createdAt" | "updatedAt" | "status" | "metadata" | "completedAt"
+  "id" | "createdAt" | "updatedAt" | "status" | "metadata" | "completedAt" | "workspacePath"
 >;
 
 class EpicTask extends Model<EpicTaskAttributes, EpicTaskCreationAttributes> implements EpicTaskAttributes {
@@ -16,6 +16,7 @@ class EpicTask extends Model<EpicTaskAttributes, EpicTaskCreationAttributes> imp
   declare userId: UserId;
   declare agentId: AgentId;
   declare metadata: Record<string, unknown> | null;
+  declare workspacePath: string | null;
   declare createdAt: Date;
   declare updatedAt: Date;
   declare completedAt: Date | null;
@@ -62,6 +63,11 @@ EpicTask.init(
     metadata: {
       type: DataTypes.JSONB,
       allowNull: true,
+    },
+    workspacePath: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "workspace_path",
     },
     createdAt: {
       type: DataTypes.DATE,

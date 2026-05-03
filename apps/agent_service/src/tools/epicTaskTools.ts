@@ -979,6 +979,24 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
           ? `Stage "${stage.title}" (${stage.kind})`
           : "Stage (unknown)";
 
+        // Per-epic shared workspace folder (sibling to the per-thread
+        // session workspaces). Stable across thread rotations and across
+        // task dispatches, so sub-agents in task N+1 can find files that
+        // sub-agents in task N wrote. NULL for epics created before the
+        // `workspace_path` column was added — surfaced only when present.
+        const epicWorkspacePath = epic.workspacePath ?? null;
+        const workspaceBlock = epicWorkspacePath
+          ? `## Epic shared workspace\n` +
+            `Path: \`${epicWorkspacePath}\`\n` +
+            `Sub-agents in this epic share this folder for non-repo files ` +
+            `(research notes, scratch markdown, intermediate artifacts the ` +
+            `next task may read, plan deliverables, …). Code edits still go ` +
+            `to the repo cwd above — NOT here. **Include this absolute path ` +
+            `verbatim in every sub-agent's scope** so the sub-agent knows ` +
+            `where to write deliverables and where to find files left by ` +
+            `prior tasks in the same epic.\n\n`
+          : "";
+
         const repoBlock =
           `## Repository\n` +
           `Working directory: \`${cwd}\`\n` +
@@ -989,7 +1007,8 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
           `**Task:** ${next.title}\n` +
           `**${stageLabel}**\n\n` +
           `## Description\n${next.description ?? "(no description)"}\n\n` +
-          repoBlock;
+          repoBlock +
+          workspaceBlock;
 
         const trailer =
           `Execution ID: \`${execution.id}\` (carried implicitly — \`complete_epic_task\` resolves it ` +
@@ -999,10 +1018,35 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
         // Task() call directly from this section. We don't issue the Task()
         // calls server-side — that's the model's native SDK flow — but
         // listing them here turns the dispatch into a mechanical translation.
+        //
+        // When the epic has a workspace path, we PREPEND a workspace header
+        // to each sub-agent's scope server-side rather than asking the
+        // orchestrator to remember to mention it. Sub-agents see the
+        // augmented scope verbatim (their `Task(...)` invocation passes
+        // `scope` as the user-side prompt), so this guarantees they know
+        // about the folder regardless of how carefully the orchestrator
+        // crafts each scope.
+        const wrapScope = (scope: string): string => {
+          if (!epicWorkspacePath) return scope;
+          return (
+            `## Epic shared workspace (read + write)\n` +
+            `Absolute path: \`${epicWorkspacePath}\`\n` +
+            `THIS IS YOUR FOLDER FOR THIS EPIC. All non-repo files related to ` +
+            `this task — research notes, scratch markdown, intermediate ` +
+            `artifacts, plan-stage deliverables — go here. Files left here by ` +
+            `prior tasks in the same epic are also yours to read; check this ` +
+            `folder before assuming nothing exists. Use absolute paths when ` +
+            `reading or writing so the location is unambiguous. **Do NOT ` +
+            `write code edits here** — code edits go to the repository ` +
+            `working directory the orchestrator passes you separately.\n\n` +
+            `---\n\n` +
+            scope
+          );
+        };
         const dispatchLines = assignments
           .map(
             (a, i) =>
-              `${i + 1}. \`Task("${a.id}", ${JSON.stringify(a.scope)})\``,
+              `${i + 1}. \`Task("${a.id}", ${JSON.stringify(wrapScope(a.scope))})\``,
           )
           .join("\n");
 
@@ -1015,6 +1059,11 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
           `## Now do this\n` +
           `1. Emit the \`Task()\` calls listed above **in a single assistant message** so the ` +
           `SDK runs them concurrently. (Splitting them across messages serializes execution.)\n` +
+          (epicWorkspacePath
+            ? `   - Each sub-agent's scope MUST mention the epic shared workspace path ` +
+              `\`${epicWorkspacePath}\` so it knows where to write non-repo deliverables ` +
+              `and where to look for files left by prior tasks in this epic.\n`
+            : "") +
           `2. Wait for ALL \`Task()\` results to return in your tool-loop. Each result includes ` +
           `that sub-agent's \`## Files changed\` section.\n` +
           `3. Call \`complete_epic_task\` with an aggregated summary and the final status. The ` +
