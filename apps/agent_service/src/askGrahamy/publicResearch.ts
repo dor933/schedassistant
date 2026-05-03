@@ -71,6 +71,9 @@ export function compilePublicResearchView(input: {
     ...(input.pgCapabilityViews?.sectorLeaderboardView
       ? { sectorLeaderboardView: input.pgCapabilityViews.sectorLeaderboardView }
       : {}),
+    ...(input.pgCapabilityViews?.stockIdeaView
+      ? { stockIdeaView: input.pgCapabilityViews.stockIdeaView }
+      : {}),
     evidence: {
       snapshotNames: ["daily_brief", "metadata", "clusters", "track_record", "transparency"].filter(
         (name) => !!snapshots[name as keyof SnapshotBundle],
@@ -95,6 +98,18 @@ export function compilePublicResearchView(input: {
               input.pgCapabilityViews.sectorLeaderboardView.rows.length,
           }
         : {}),
+      ...(input.pgCapabilityViews?.stockIdeaView
+        ? {
+            pgCapabilityViews: [
+              ...(input.pgCapabilityViews?.sectorLeaderboardView
+                ? ["sectorLeaderboardView"]
+                : []),
+              "stockIdeaView",
+            ],
+            stockIdeaState: input.pgCapabilityViews.stockIdeaView.state,
+            stockIdeaRows: input.pgCapabilityViews.stockIdeaView.rows.length,
+          }
+        : {}),
     },
     freshness: snapshots.freshness ?? {},
     warnings: [
@@ -113,6 +128,7 @@ export function compilePublicResearchView(input: {
 
 function inferObjectType(classification: Classification): PublicResearchView["objectType"] {
   if (classification.intent === "sector_conviction_leaderboard") return "sector";
+  if (classification.intent === "stock_idea_discovery") return "stock";
   const hasStock = classification.symbols.length > 0;
   const hasSector = classification.sectors.length > 0;
   const hasRegime = classification.regimeRequested;

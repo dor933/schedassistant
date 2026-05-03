@@ -4,14 +4,21 @@ import type {
   FreshnessMetadata,
   SectorLeaderboardView,
   SnapshotBundle,
+  StockIdeaView,
   ToolOutputs,
 } from "../types";
 
-export type PgCapabilityIntent = "sector_conviction_leaderboard";
+export type PgCapabilityIntent =
+  | "sector_conviction_leaderboard"
+  | "stock_idea_discovery";
 
-export type PgCapabilityName = "sector_conviction_leaderboard";
+export type PgCapabilityName =
+  | "sector_conviction_leaderboard"
+  | "stock_idea_discovery";
 
-export type PgCapabilityQueryName = "query_sector_conviction_leaderboard";
+export type PgCapabilityQueryName =
+  | "query_sector_conviction_leaderboard"
+  | "query_stock_idea_discovery";
 
 export type PgCapabilityRunInput = {
   classification: Classification;
@@ -22,6 +29,7 @@ export type PgCapabilityRunInput = {
 
 export type PgCapabilityViews = {
   sectorLeaderboardView?: SectorLeaderboardView;
+  stockIdeaView?: StockIdeaView;
 };
 
 export type PgCapabilityRunResult = {
@@ -37,7 +45,8 @@ export type PgCapabilityRegistryEntry = {
   source:
     | "pg_sector_peer_daily"
     | "pg_sector_regime_forward_agg"
-    | "pg_sector_analog_bucket";
+    | "pg_sector_analog_bucket"
+    | "pg_features_daily";
   freshnessSources: string[];
   fallback: "unavailable_empty_rows";
   sanitizer: "public_safe_capability_view";
@@ -72,6 +81,30 @@ export type SectorConvictionLeaderboardRow = Record<string, unknown> & {
   forward_freshness_state?: unknown;
   forward_completed_at?: unknown;
   overlay_available?: unknown;
+};
+
+export type StockIdeaDiscoveryRow = Record<string, unknown> & {
+  symbol?: unknown;
+  company_name?: unknown;
+  sector?: unknown;
+  rank?: unknown;
+  conviction_score_pct?: unknown;
+  conviction_bucket?: unknown;
+  evidence_strength?: unknown;
+  hit_rate_pct?: unknown;
+  median_return_pct?: unknown;
+  p25_return_pct?: unknown;
+  p75_return_pct?: unknown;
+  momentum_bucket?: unknown;
+  quality_bucket?: unknown;
+  valuation_bucket?: unknown;
+  path_risk_bucket?: unknown;
+  as_of_date?: unknown;
+  features_freshness_state?: unknown;
+  features_completed_at?: unknown;
+  peer_freshness_state?: unknown;
+  peer_completed_at?: unknown;
+  forward_overlay_available?: unknown;
 };
 
 export type EmptyCapabilityView = {

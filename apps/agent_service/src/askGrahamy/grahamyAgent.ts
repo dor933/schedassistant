@@ -171,6 +171,13 @@ const HUMANIZE_OVERRIDES: Record<string, string> = {
 };
 
 const ENUM_PATTERN = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$|^[A-Z][A-Z0-9]{2,}$/;
+const SYMBOL_PRESERVE_KEYS = new Set([
+  "symbol",
+  "symbols",
+  "anchor",
+  "cacheKey",
+  "researchObjectKeys",
+]);
 
 function humanizeEnum(value: string): string {
   if (HUMANIZE_OVERRIDES[value]) return HUMANIZE_OVERRIDES[value];
@@ -180,13 +187,14 @@ function humanizeEnum(value: string): string {
   return value.toLowerCase().replace(/_/g, " ");
 }
 
-function humanizeJsonValue(value: unknown): unknown {
+function humanizeJsonValue(value: unknown, key?: string): unknown {
+  if (SYMBOL_PRESERVE_KEYS.has(key ?? "")) return value;
   if (typeof value === "string") return humanizeEnum(value);
-  if (Array.isArray(value)) return value.map(humanizeJsonValue);
+  if (Array.isArray(value)) return value.map((item) => humanizeJsonValue(item, key));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = humanizeJsonValue(v);
+      out[k] = humanizeJsonValue(v, k);
     }
     return out;
   }
@@ -211,15 +219,28 @@ function formatResearchObjectForPrompt(ro: CachedResearchObject): string {
 }
 
 function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): string[] {
-  if (!views?.sectorLeaderboardView) return [];
-  const humanized = humanizeJsonValue({
-    sectorLeaderboardView: views.sectorLeaderboardView,
-    freshness: views.sectorLeaderboardView.freshness,
-    warnings: views.sectorLeaderboardView.warnings,
-  });
-  return [
-    `## SECTOR LEADERBOARD — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
-  ];
+  const blocks: string[] = [];
+  if (views?.sectorLeaderboardView) {
+    const humanized = humanizeJsonValue({
+      sectorLeaderboardView: views.sectorLeaderboardView,
+      freshness: views.sectorLeaderboardView.freshness,
+      warnings: views.sectorLeaderboardView.warnings,
+    });
+    blocks.push(
+      `## SECTOR LEADERBOARD — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+    );
+  }
+  if (views?.stockIdeaView) {
+    const humanized = humanizeJsonValue({
+      stockIdeaView: views.stockIdeaView,
+      freshness: views.stockIdeaView.freshness,
+      warnings: views.stockIdeaView.warnings,
+    });
+    blocks.push(
+      `## STOCK IDEA DISCOVERY — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+    );
+  }
+  return blocks;
 }
 
 export function buildSystemPrompt(state: AskGrahamyState): string {
@@ -274,6 +295,11 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - For sector leaderboard questions, use only \`sectorLeaderboardView.rows\`. Rank sectors only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent sectors, scores, or ranks.
 - Treat \`sectorLeaderboardView\` as PG base-rate/current composite evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
 - If \`sectorLeaderboardView.rows\` is empty or the view state is unavailable, say the sector leaderboard is unavailable instead of naming sectors.
+- For stock idea / best setup / top conviction name questions, use only \`stockIdeaView.rows\`. Mention stocks only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent tickers, scores, hit rates, returns, or risk metrics.
+- Call \`stockIdeaView.rows\` "research candidates" or "setups to review", never buy/sell recommendations.
+- Explain each stock idea only with \`reasonBullets\` and explicit public fields in the row.
+- Treat \`stockIdeaView\` as PG current/base-rate evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
+- If \`stockIdeaView.rows\` is empty or the view state is unavailable, say stock discovery data is unavailable instead of naming tickers.
 - DO NOT mention internal terms: \`signal_sql\`, \`raw_alpha\`, edge IDs, methodology details, internal model names, or pipeline mechanics.
 - If forward-return analog evidence has fewer than 30 observations, label it explicitly as low-confidence / small sample.
 

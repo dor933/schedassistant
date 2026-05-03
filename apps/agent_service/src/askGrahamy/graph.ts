@@ -300,9 +300,13 @@ function buildMeta(
     type: "research" as const,
     name: item.cacheKey,
   }));
-  const capabilitySources = pgCapabilityViews?.sectorLeaderboardView
-    ? [{ type: "research" as const, name: "sector_conviction_leaderboard" }]
-    : [];
+  const capabilitySources: Array<{ type: "research"; name: string }> = [];
+  if (pgCapabilityViews?.sectorLeaderboardView) {
+    capabilitySources.push({ type: "research", name: "sector_conviction_leaderboard" });
+  }
+  if (pgCapabilityViews?.stockIdeaView) {
+    capabilitySources.push({ type: "research", name: "stock_idea_discovery" });
+  }
   return {
     sourcesUsed: [...researchSources, ...capabilitySources],
     freshness: snapshots.freshness ?? {},
@@ -326,6 +330,7 @@ function buildMeta(
 function inferAnswerType(classification: Classification): AskGrahamyResponse["answerType"] {
   if (classification.intent === "unknown") return "unknown";
   if (classification.intent === "sector_conviction_leaderboard") return "sector";
+  if (classification.intent === "stock_idea_discovery") return "stock";
   const stock = classification.symbols.length > 0;
   const sector = classification.sectors.length > 0;
   const regime = classification.regimeRequested;

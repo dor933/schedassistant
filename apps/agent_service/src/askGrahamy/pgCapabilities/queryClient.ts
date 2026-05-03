@@ -5,6 +5,7 @@ import type { PgCapabilityQueryName } from "./types";
 
 const QUERY_FILES: Record<PgCapabilityQueryName, string> = {
   query_sector_conviction_leaderboard: "query_sector_conviction_leaderboard.sql",
+  query_stock_idea_discovery: "query_stock_idea_discovery.sql",
 };
 
 const DEFAULT_QUERIES_DIR = path.join(__dirname, "queries");

@@ -218,6 +218,55 @@ test("publicResearchView includes PG sector leaderboard view without raw researc
   assertNoForbiddenPublicKeys(view);
 });
 
+test("publicResearchView includes stock idea discovery view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "stock_idea_discovery",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      stockIdeaView: {
+        viewSchemaVersion: 1,
+        state: "partial",
+        source: "pg_features_daily",
+        asOfDate: "2026-05-01",
+        rankingBasis: "setup_quality",
+        rows: [
+          {
+            symbol: "GSL",
+            companyName: "Global Ship Lease, Inc.",
+            sector: "Industrials",
+            rank: 1,
+            convictionScorePct: 81.2,
+            convictionBucket: "HIGH",
+            momentumBucket: "STRONG",
+            reasonBullets: ["Sector-relative conviction bucket is HIGH."],
+          },
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: ["These are research candidates to review."],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.stockIdeaView?.state, "partial");
+  assert.equal(view.stockIdeaView?.rows[0]?.symbol, "GSL");
+  assert.equal(view.evidence.stockIdeaRows, 1);
+  assertNoForbiddenPublicKeys(view);
+});
+
 test("stale cached views are rebuilt from parts and marked for persistence", async () => {
   const previousHost = process.env.EXTERNAL_PG_HOST;
   const previousDb = process.env.EXTERNAL_PG_DATABASE;
@@ -301,4 +350,6 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /path_rows/);
   assert.doesNotMatch(json, /gate_name/);
   assert.doesNotMatch(json, /internal_threshold/);
+  assert.doesNotMatch(json, /setup_score/);
+  assert.doesNotMatch(json, /feature_rules/);
 }

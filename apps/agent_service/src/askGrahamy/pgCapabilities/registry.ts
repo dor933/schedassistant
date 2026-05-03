@@ -1,5 +1,6 @@
 import type { Intent } from "../types";
 import { buildSectorConvictionLeaderboardView } from "./sectorConvictionLeaderboard";
+import { buildStockIdeaDiscoveryView } from "./stockIdeaDiscovery";
 import type {
   PgCapabilityRegistryEntry,
   PgCapabilityRunInput,
@@ -20,6 +21,21 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     fallback: "unavailable_empty_rows",
     sanitizer: "public_safe_capability_view",
     run: buildSectorConvictionLeaderboardView,
+  },
+  {
+    name: "stock_idea_discovery",
+    intent: "stock_idea_discovery",
+    requiredParams: [],
+    queryName: "query_stock_idea_discovery",
+    source: "pg_features_daily",
+    freshnessSources: [
+      "md_features_daily",
+      "md_research_sector_peer_daily",
+      "md_forward_returns",
+    ],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildStockIdeaDiscoveryView,
   },
 ];
 

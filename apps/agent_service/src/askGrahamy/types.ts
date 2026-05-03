@@ -4,6 +4,7 @@ export const INTENTS = [
   "stock",
   "sector",
   "sector_conviction_leaderboard",
+  "stock_idea_discovery",
   "regime",
   "stock_sector",
   "stock_regime",
@@ -313,8 +314,52 @@ export type SectorLeaderboardView = {
   warnings: string[];
 };
 
+export type StockIdeaRowView = {
+  symbol: string;
+  companyName?: string;
+  sector?: string;
+  rank: number;
+  convictionScorePct?: number;
+  convictionBucket?: string;
+  evidenceStrength?: string;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  p25ReturnPct?: number;
+  p75ReturnPct?: number;
+  momentumBucket?: string;
+  qualityBucket?: string;
+  valuationBucket?: string;
+  pathRiskBucket?: string;
+  p10MaxDrawdownPct?: number;
+  recoveredByHorizonRatePct?: number;
+  reasonBullets: string[];
+};
+
+export type StockIdeaView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_features_daily";
+  asOfDate?: string;
+  rankingBasis:
+    | "setup_quality"
+    | "conviction"
+    | "historical_forward"
+    | "risk_adjusted";
+  rows: StockIdeaRowView[];
+  freshness: FreshnessMetadata & {
+    state?: "fresh" | "stale" | "unknown";
+    sources?: Array<{
+      name: string;
+      completedAt?: string;
+      state?: string;
+    }>;
+  };
+  warnings: string[];
+};
+
 export type PgCapabilityViews = {
   sectorLeaderboardView?: SectorLeaderboardView;
+  stockIdeaView?: StockIdeaView;
 };
 
 export type FiveQuestionCoverage = {
@@ -366,6 +411,7 @@ export type PublicResearchView = {
   pathRisk: Record<string, PathRiskView>;
   edgeEvidence: Record<string, EdgeEvidenceView>;
   sectorLeaderboardView?: SectorLeaderboardView;
+  stockIdeaView?: StockIdeaView;
   evidence: Record<string, unknown>;
   freshness: FreshnessMetadata;
   warnings: string[];

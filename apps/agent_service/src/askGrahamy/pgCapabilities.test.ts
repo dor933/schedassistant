@@ -1,11 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSectorConvictionLeaderboardView } from "./pgCapabilities/sectorConvictionLeaderboard";
+import { buildStockIdeaDiscoveryView } from "./pgCapabilities/stockIdeaDiscovery";
+import { capabilityForIntent } from "./pgCapabilities/registry";
 import { compilePublicResearchView } from "./publicResearch";
 import type { Classification } from "./types";
 
 const leaderboardClassification: Classification = {
   intent: "sector_conviction_leaderboard",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const stockIdeaClassification: Classification = {
+  intent: "stock_idea_discovery",
   symbols: [],
   sectors: [],
   regimeRequested: false,
@@ -65,6 +78,14 @@ test("sector conviction leaderboard returns complete public view with overlay", 
   assert.equal(view.rows[0].convictionScorePct, 82.4);
   assert.equal(view.rows[0].hitRatePct, 58.2);
   assertNoForbiddenPublicKeys(view);
+});
+
+test("PG capability registry routes stock idea discovery intent", () => {
+  const entry = capabilityForIntent("stock_idea_discovery");
+  assert.ok(entry);
+  assert.equal(entry.name, "stock_idea_discovery");
+  assert.equal(entry.queryName, "query_stock_idea_discovery");
+  assert.deepEqual(entry.requiredParams, []);
 });
 
 test("sector conviction leaderboard returns partial when forward overlay is absent", async () => {
@@ -162,6 +183,160 @@ test("publicResearchView carries sectorLeaderboardView without Research Objects"
   assertNoForbiddenPublicKeys(publicView);
 });
 
+test("stock idea discovery returns partial public view with bounded forward overlay", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildStockIdeaDiscoveryView(
+    {
+      classification: stockIdeaClassification,
+      message: "Show me top conviction names today",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      candidatePoolSize: 1000,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            symbol: "GSL",
+            company_name: "Global Ship Lease, Inc.",
+            sector: "Industrials",
+            rank: 1,
+            conviction_score_pct: 84.42,
+            conviction_bucket: "HIGH",
+            evidence_strength: "ADEQUATE",
+            hit_rate_pct: 61.23,
+            median_return_pct: 5.241,
+            p25_return_pct: -8.11,
+            p75_return_pct: 26.46,
+            momentum_bucket: "STRONG",
+            quality_bucket: "CONSTRUCTIVE",
+            valuation_bucket: "ATTRACTIVE",
+            path_risk_bucket: "Numeric daily path-risk is unavailable in V1.",
+            as_of_date: "2026-05-01",
+            features_freshness_state: "FRESH",
+            features_completed_at: "2026-05-02T12:30:04Z",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_overlay_available: true,
+            setup_score: 91.2,
+            raw_sql: "must-not-leak",
+            feature_rules: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  assert.equal(replacements.CANDIDATE_POOL_SIZE, 500);
+  assert.equal(replacements.RANK_BY, "conviction");
+  const view = result.views.stockIdeaView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.source, "pg_features_daily");
+  assert.equal(view.asOfDate, "2026-05-01");
+  assert.equal(view.rows.length, 1);
+  assert.equal(view.rows[0].symbol, "GSL");
+  assert.equal(view.rows[0].convictionScorePct, 84.4);
+  assert.equal(view.rows[0].hitRatePct, 61.2);
+  assert.equal(view.rows[0].medianReturnPct, 5.24);
+  assert.equal(view.rows[0].p10MaxDrawdownPct, undefined);
+  assert.equal(view.rows[0].recoveredByHorizonRatePct, undefined);
+  assert.match(view.warnings.join(" "), /research candidates/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("stock idea discovery returns unavailable when source has no rows", async () => {
+  const result = await buildStockIdeaDiscoveryView(
+    {
+      classification: stockIdeaClassification,
+      message: "Give me an interesting stock",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.stockIdeaView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /No stock idea discovery rows/i);
+});
+
+test("stock idea discovery returns unavailable when external PG is not configured", async () => {
+  const previousHost = process.env.EXTERNAL_PG_HOST;
+  const previousDb = process.env.EXTERNAL_PG_DATABASE;
+  delete process.env.EXTERNAL_PG_HOST;
+  delete process.env.EXTERNAL_PG_DATABASE;
+
+  try {
+    const result = await buildStockIdeaDiscoveryView({
+      classification: stockIdeaClassification,
+      message: "What stock looks interesting today?",
+      snapshots: {},
+      toolOutputs: {},
+    });
+    const view = result.views.stockIdeaView;
+    assert.ok(view);
+    assert.equal(view.state, "unavailable");
+    assert.deepEqual(view.rows, []);
+    assert.match(view.warnings.join(" "), /not configured/i);
+  } finally {
+    if (previousHost == null) delete process.env.EXTERNAL_PG_HOST;
+    else process.env.EXTERNAL_PG_HOST = previousHost;
+    if (previousDb == null) delete process.env.EXTERNAL_PG_DATABASE;
+    else process.env.EXTERNAL_PG_DATABASE = previousDb;
+  }
+});
+
+test("publicResearchView carries stockIdeaView without Research Objects", async () => {
+  const result = await buildStockIdeaDiscoveryView(
+    {
+      classification: stockIdeaClassification,
+      message: "Give me an interesting stock",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          sector: "Industrials",
+          rank: 1,
+          conviction_score_pct: 80,
+          conviction_bucket: "HIGH",
+          evidence_strength: "CURRENT_ONLY",
+          momentum_bucket: "STRONG",
+          quality_bucket: "CONSTRUCTIVE",
+          valuation_bucket: "ATTRACTIVE",
+          path_risk_bucket: "Numeric daily path-risk is unavailable in V1.",
+          as_of_date: "2026-05-01",
+          forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: stockIdeaClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "stock");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.stockIdeaView?.rows[0].symbol, "GSL");
+  assertNoForbiddenPublicKeys(publicView);
+});
+
 function assertNoForbiddenPublicKeys(value: unknown): void {
   const json = JSON.stringify(value);
   assert.doesNotMatch(json, /researchObjects/);
@@ -174,4 +349,6 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /path_rows/);
   assert.doesNotMatch(json, /gate_name/);
   assert.doesNotMatch(json, /internal_threshold/);
+  assert.doesNotMatch(json, /setup_score/);
+  assert.doesNotMatch(json, /feature_rules/);
 }

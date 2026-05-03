@@ -132,6 +132,55 @@ test("classifies historical forward profile and weak price action sector leaderb
   assert.equal(divergence.intent, "sector_conviction_leaderboard");
 });
 
+test("classifies anchorless stock idea discovery questions", async () => {
+  const interesting = await classifyMessage("Give me an interesting stock", undefined, {
+    classifier: stub({
+      intent: "stock_idea_discovery",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "high",
+    }),
+  });
+  assert.equal(interesting.intent, "stock_idea_discovery");
+  assert.deepEqual(interesting.symbols, []);
+  assert.deepEqual(interesting.sectors, []);
+  assert.deepEqual(interesting.requiresTools, ["get_market_context"]);
+  assert.deepEqual(interesting.warnings, []);
+
+  const today = await classifyMessage("What should I look at today?", undefined, {
+    classifier: stub({
+      intent: "stock_idea_discovery",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "high",
+    }),
+  });
+  assert.equal(today.intent, "stock_idea_discovery");
+  assert.deepEqual(today.symbols, []);
+  assert.deepEqual(today.sectors, []);
+  assert.deepEqual(today.requiresTools, ["get_market_context"]);
+});
+
+test("does not require a ticker for stock idea discovery", async () => {
+  const result = await classifyMessage("Show me top conviction names today", undefined, {
+    classifier: stub({
+      intent: "stock_idea_discovery",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "high",
+    }),
+  });
+  assert.equal(result.intent, "stock_idea_discovery");
+  assert.deepEqual(result.symbols, []);
+  assert.equal(result.requiresTools.length, 1);
+});
+
 test("keeps anchorless follow-up for deep-agent conversation memory", async () => {
   const result = await classifyMessage(
     "Why?",
