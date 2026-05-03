@@ -58,7 +58,81 @@ test("classifies a sector question", async () => {
   assert.deepEqual(result.sectors, ["Semiconductors"]);
 });
 
-test("resolves follow-up against previous context", async () => {
+test("classifies anchorless sector conviction leaderboard questions", async () => {
+  const result = await classifyMessage(
+    "Which sectors are leading on conviction this week?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "sector_conviction_leaderboard",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(result.intent, "sector_conviction_leaderboard");
+  assert.deepEqual(result.symbols, []);
+  assert.deepEqual(result.sectors, []);
+  assert.deepEqual(result.requiresTools, ["get_market_context"]);
+});
+
+test("does not require a ticker or sector for sector conviction leaderboard", async () => {
+  const result = await classifyMessage(
+    "Show me the sector conviction leaderboard",
+    undefined,
+    {
+      classifier: stub({
+        intent: "sector_conviction_leaderboard",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(result.intent, "sector_conviction_leaderboard");
+  assert.equal(result.requiresTools.length, 1);
+});
+
+test("classifies historical forward profile and weak price action sector leaderboard phrasings", async () => {
+  const historical = await classifyMessage(
+    "Which sectors have strongest historical forward profile?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "sector_conviction_leaderboard",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(historical.intent, "sector_conviction_leaderboard");
+
+  const divergence = await classifyMessage(
+    "Which sectors have conviction but weak price action?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "sector_conviction_leaderboard",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(divergence.intent, "sector_conviction_leaderboard");
+});
+
+test("keeps anchorless follow-up for deep-agent conversation memory", async () => {
   const result = await classifyMessage(
     "Why?",
     {
@@ -81,9 +155,10 @@ test("resolves follow-up against previous context", async () => {
       }),
     },
   );
-  assert.equal(result.intent, "stock");
+  assert.equal(result.intent, "follow_up");
   assert.equal(result.isFollowUp, true);
-  assert.deepEqual(result.symbols, ["NVDA"]);
+  assert.deepEqual(result.symbols, []);
+  assert.deepEqual(result.requiresTools, []);
 });
 
 test("self-anchored follow-up phrasing bypasses missing-context warning", async () => {
@@ -107,11 +182,11 @@ test("self-anchored follow-up phrasing bypasses missing-context warning", async 
   assert.equal(result.intent, "stock_sector");
   assert.deepEqual(result.symbols, ["JPM"]);
   assert.deepEqual(result.sectors, ["Energy"]);
-  assert.equal(result.isFollowUp, false);
+  assert.equal(result.isFollowUp, true);
   assert.deepEqual(result.warnings, []);
 });
 
-test("keeps unresolved follow-up as clarification path", async () => {
+test("keeps unresolved follow-up as follow-up path for agent memory", async () => {
   const result = await classifyMessage("Why?", undefined, {
     classifier: stub({
       intent: "follow_up",
@@ -125,7 +200,47 @@ test("keeps unresolved follow-up as clarification path", async () => {
   assert.equal(result.intent, "follow_up");
   assert.equal(result.confidence, "low");
   assert.equal(result.requiresTools.length, 0);
-  assert.match(result.warnings[0], /missing prior context/i);
+  assert.deepEqual(result.warnings, []);
+});
+
+test("classifies an anchorless sector conviction leaderboard question", async () => {
+  const result = await classifyMessage(
+    "Which sectors are leading on conviction this week?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "sector_conviction_leaderboard",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(result.intent, "sector_conviction_leaderboard");
+  assert.deepEqual(result.symbols, []);
+  assert.deepEqual(result.sectors, []);
+  assert.deepEqual(result.requiresTools, ["get_market_context"]);
+});
+
+test("preserves sector conviction leaderboard without ticker or sector anchor", async () => {
+  const result = await classifyMessage(
+    "Show me the sector conviction leaderboard",
+    undefined,
+    {
+      classifier: stub({
+        intent: "sector_conviction_leaderboard",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(result.intent, "sector_conviction_leaderboard");
+  assert.equal(result.warnings.length, 0);
 });
 
 test("returns unknown with warning when classifier throws", async () => {

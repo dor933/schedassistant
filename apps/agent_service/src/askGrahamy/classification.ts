@@ -68,6 +68,7 @@ The downstream system can answer when the message is anchored to one or more of:
     "apple" → AAPL, "jp morgan" → JPM). Omit symbols you cannot confidently resolve.
   • a sector — must be exactly one of: ${CANONICAL_SECTORS.join(", ")}.
   • the current market regime / setup / VIX / macro state.
+  • an anchorless sector leaderboard / sector conviction ranking request.
 
 Set isFollowUp = true when the message references a previous turn — short questions with
 no own anchor like "what about ...?", "why?", "and the risks?", "compare to peers", "compare it",
@@ -99,7 +100,15 @@ Without prior context:
   • "and the risks?"                   → intent="unknown" (no anchor anywhere)
 
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
-stock_sector_regime, follow_up, unknown.
+stock_sector_regime, sector_conviction_leaderboard, follow_up, unknown.
+
+Use intent = "sector_conviction_leaderboard" when the user asks for a sector-wide ranking without
+naming a specific sector. Examples:
+  • "Which sectors are leading on conviction this week?"
+  • "Show me the sector conviction leaderboard"
+  • "Which sectors have strongest historical forward profile?"
+  • "Which sectors have conviction but weak price action?"
+For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
 Use intent = "unknown" only when the message is nonsensical, off-topic, or impossible to anchor
 to any stock / sector / regime EVEN AFTER inheritance from prior context.
@@ -219,7 +228,12 @@ export async function classifyMessage(
   // Trust the LLM's "unknown" verdict; otherwise re-derive intent from the
   // resolved (symbols, sectors, regime) tuple so requiresTools and intent
   // stay consistent even if the model returned a mismatched label.
-  const intent: Intent = raw.intent === "unknown" ? "unknown" : inferred;
+  const intent: Intent =
+    raw.intent === "unknown"
+      ? "unknown"
+      : isAnchorlessCapabilityIntent(raw.intent)
+        ? raw.intent
+        : inferred;
 
   return {
     intent,
@@ -246,6 +260,8 @@ export function toolsForIntent(intent: Intent): ToolName[] {
       return ["get_sector_snapshot_context", "get_market_context"];
     case "regime":
       return ["get_market_context"];
+    case "sector_conviction_leaderboard":
+      return ["get_market_context"];
     case "stock_sector":
     case "stock_sector_regime":
       return [
@@ -257,6 +273,10 @@ export function toolsForIntent(intent: Intent): ToolName[] {
     case "unknown":
       return [];
   }
+}
+
+function isAnchorlessCapabilityIntent(intent: Intent): boolean {
+  return intent === "sector_conviction_leaderboard";
 }
 
 function inferIntent(

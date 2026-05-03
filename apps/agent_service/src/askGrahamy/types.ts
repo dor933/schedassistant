@@ -3,6 +3,7 @@ import { z } from "zod";
 export const INTENTS = [
   "stock",
   "sector",
+  "sector_conviction_leaderboard",
   "regime",
   "stock_sector",
   "stock_regime",
@@ -277,6 +278,45 @@ export type PathRiskView = {
   notes: string[];
 };
 
+export type SectorLeaderboardRowView = {
+  sector: string;
+  rank: number;
+  convictionScorePct?: number;
+  convictionBucket?: string;
+  evidenceStrength?: string;
+  medianForwardReturnPct?: number;
+  hitRatePct?: number;
+  momentumBucket?: string;
+  priceMomentumSeparation?: string;
+  defensiveCyclicalLabel?: string;
+};
+
+export type SectorLeaderboardView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source:
+    | "pg_sector_peer_daily"
+    | "pg_sector_regime_forward_agg"
+    | "pg_sector_analog_bucket";
+  period: "latest" | "this_week";
+  rankingBasis: "conviction" | "historical_forward" | "divergence";
+  asOfDate?: string;
+  rows: SectorLeaderboardRowView[];
+  freshness: FreshnessMetadata & {
+    state?: "fresh" | "stale" | "unknown";
+    sources?: Array<{
+      name: string;
+      completedAt?: string;
+      state?: string;
+    }>;
+  };
+  warnings: string[];
+};
+
+export type PgCapabilityViews = {
+  sectorLeaderboardView?: SectorLeaderboardView;
+};
+
 export type FiveQuestionCoverage = {
   whatMattersNow: string[];
   whyNow?: string;
@@ -325,6 +365,7 @@ export type PublicResearchView = {
   probabilisticEvidence: Record<string, ProbabilisticEvidenceView>;
   pathRisk: Record<string, PathRiskView>;
   edgeEvidence: Record<string, EdgeEvidenceView>;
+  sectorLeaderboardView?: SectorLeaderboardView;
   evidence: Record<string, unknown>;
   freshness: FreshnessMetadata;
   warnings: string[];
@@ -399,6 +440,7 @@ export type AskGrahamyState = {
     misses: number;
     writes: number;
   };
+  pgCapabilityViews?: PgCapabilityViews;
   publicResearchView?: PublicResearchView;
   answer?: AnswerObject;
   ui?: UiHints;

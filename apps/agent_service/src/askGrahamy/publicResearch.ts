@@ -5,6 +5,7 @@ import type {
   SnapshotBundle,
   ToolOutputs,
   CachedResearchObject,
+  PgCapabilityViews,
 } from "./types";
 import {
   publicObjectViewFromCachedObject,
@@ -18,6 +19,7 @@ export function compilePublicResearchView(input: {
   snapshots: SnapshotBundle;
   toolOutputs: ToolOutputs;
   researchObjects?: CachedResearchObject[];
+  pgCapabilityViews?: PgCapabilityViews;
   warnings: string[];
 }): PublicResearchView {
   const { classification, snapshots, toolOutputs, warnings } = input;
@@ -66,6 +68,9 @@ export function compilePublicResearchView(input: {
     edgeEvidence: Object.fromEntries(
       researchObjectViews.map((item) => [item.cacheKey, item.edgeEvidence]),
     ),
+    ...(input.pgCapabilityViews?.sectorLeaderboardView
+      ? { sectorLeaderboardView: input.pgCapabilityViews.sectorLeaderboardView }
+      : {}),
     evidence: {
       snapshotNames: ["daily_brief", "metadata", "clusters", "track_record", "transparency"].filter(
         (name) => !!snapshots[name as keyof SnapshotBundle],
@@ -81,6 +86,15 @@ export function compilePublicResearchView(input: {
         researchObjectViews.map((item) => [item.cacheKey, item.pathRisk.state]),
       ),
       researchObjectSources: Array.from(new Set(researchObjects.map((item) => item.source))),
+      ...(input.pgCapabilityViews?.sectorLeaderboardView
+        ? {
+            pgCapabilityViews: ["sectorLeaderboardView"],
+            sectorLeaderboardState:
+              input.pgCapabilityViews.sectorLeaderboardView.state,
+            sectorLeaderboardRows:
+              input.pgCapabilityViews.sectorLeaderboardView.rows.length,
+          }
+        : {}),
     },
     freshness: snapshots.freshness ?? {},
     warnings: [
@@ -98,6 +112,7 @@ export function compilePublicResearchView(input: {
 }
 
 function inferObjectType(classification: Classification): PublicResearchView["objectType"] {
+  if (classification.intent === "sector_conviction_leaderboard") return "sector";
   const hasStock = classification.symbols.length > 0;
   const hasSector = classification.sectors.length > 0;
   const hasRegime = classification.regimeRequested;

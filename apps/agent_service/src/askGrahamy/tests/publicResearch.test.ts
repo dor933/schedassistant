@@ -173,6 +173,51 @@ test("publicResearchView does not leak raw objects, internal ids, raw SQL, raw a
   assertNoForbiddenPublicKeys(view);
 });
 
+test("publicResearchView includes PG sector leaderboard view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "sector_conviction_leaderboard",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      sectorLeaderboardView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_peer_daily",
+        period: "latest",
+        rankingBasis: "conviction",
+        asOfDate: "2026-05-01",
+        rows: [
+          {
+            sector: "Industrials",
+            rank: 1,
+            convictionScorePct: 81.2,
+            convictionBucket: "HIGH",
+          },
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: [],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.sectorLeaderboardView?.state, "complete");
+  assert.equal(view.sectorLeaderboardView?.rows[0]?.sector, "Industrials");
+  assertNoForbiddenPublicKeys(view);
+});
+
 test("stale cached views are rebuilt from parts and marked for persistence", async () => {
   const previousHost = process.env.EXTERNAL_PG_HOST;
   const previousDb = process.env.EXTERNAL_PG_DATABASE;

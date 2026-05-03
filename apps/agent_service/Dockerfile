@@ -17,6 +17,8 @@
     # research-object builder can find them.
     RUN cp -r apps/agent_service/src/askGrahamy/queries \
               apps/agent_service/dist/askGrahamy/queries
+    RUN cp -r apps/agent_service/src/askGrahamy/pgCapabilities/queries \
+              apps/agent_service/dist/askGrahamy/pgCapabilities/queries
     
     # --- Stage 2: Production ---
     FROM node:22-alpine AS runner

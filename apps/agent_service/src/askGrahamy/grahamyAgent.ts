@@ -4,7 +4,7 @@ import { ChatOpenAI } from "@langchain/openai";
 import { logger } from "../logger";
 import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import { getLangfuseCallbackHandler, flushLangfuse } from "../langfuse";
-import type { AskGrahamyState, CachedResearchObject } from "./types";
+import type { AskGrahamyState, CachedResearchObject, PgCapabilityViews } from "./types";
 
 /**
  * Grahamy deep-agent runner.
@@ -210,16 +210,32 @@ function formatResearchObjectForPrompt(ro: CachedResearchObject): string {
   return `${header}\n\`\`\`json\n${body}\n\`\`\``;
 }
 
-function buildSystemPrompt(state: AskGrahamyState): string {
+function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): string[] {
+  if (!views?.sectorLeaderboardView) return [];
+  const humanized = humanizeJsonValue({
+    sectorLeaderboardView: views.sectorLeaderboardView,
+    freshness: views.sectorLeaderboardView.freshness,
+    warnings: views.sectorLeaderboardView.warnings,
+  });
+  return [
+    `## SECTOR LEADERBOARD — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+  ];
+}
+
+export function buildSystemPrompt(state: AskGrahamyState): string {
   const ros = state.researchObjects ?? [];
   const classification = state.classification;
   const dailyBrief = state.snapshots?.daily_brief as Record<string, unknown> | undefined;
   const todayRegime = typeof dailyBrief?.regime === "string" ? dailyBrief.regime : undefined;
   const freshness = state.snapshots?.freshness;
 
-  const evidence = ros.length === 0
-    ? "(No specific Research Objects were loaded for this turn — answer from your conversational memory and acknowledge the limitation.)"
-    : ros.map(formatResearchObjectForPrompt).join("\n\n");
+  const evidenceBlocks = [
+    ...ros.map(formatResearchObjectForPrompt),
+    ...formatPgCapabilitiesForPrompt(state.pgCapabilityViews),
+  ];
+  const evidence = evidenceBlocks.length === 0
+    ? "(No specific Research Objects or PG capability views were loaded for this turn — answer from your conversational memory and acknowledge the limitation.)"
+    : evidenceBlocks.join("\n\n");
 
   const classifiedLine = classification
     ? `Symbols: [${classification.symbols.join(", ") || "none"}], Sectors: [${classification.sectors.join(", ") || "none"}], Regime requested: ${classification.regimeRequested ? "yes" : "no"}`
@@ -255,6 +271,9 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Use ONLY the bucket labels, percentile bands, direction descriptors, and explicit numeric public evidence fields from the EVIDENCE below. Acceptable: "in the high quintile of its sector", "FCF/NI poor conversion", "ROE above its 5-year history", "regime-challenged", or "the public view shows a 61% 60-day hit rate" when that exact field exists.
 - DO NOT invent or infer numbers. Raw PE multiples, revenue figures, prices, hit-rate percentages, drawdown percentages, and probability thresholds are allowed only when the exact number appears in \`publicResearchObjectView.probabilisticEvidence\` or \`publicResearchObjectView.pathRisk\`.
 - For temporary drawdown/path-risk claims, use only \`pathRisk.source = pg_daily_price_path\` with explicit numeric drawdown fields. If \`pathRisk.state\` is partial/unavailable or the numeric drawdown fields are absent, say path risk is partial/bucketed and do not write a sentence like "10% of cases fell more than 14%".
+- For sector leaderboard questions, use only \`sectorLeaderboardView.rows\`. Rank sectors only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent sectors, scores, or ranks.
+- Treat \`sectorLeaderboardView\` as PG base-rate/current composite evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
+- If \`sectorLeaderboardView.rows\` is empty or the view state is unavailable, say the sector leaderboard is unavailable instead of naming sectors.
 - DO NOT mention internal terms: \`signal_sql\`, \`raw_alpha\`, edge IDs, methodology details, internal model names, or pipeline mechanics.
 - If forward-return analog evidence has fewer than 30 observations, label it explicitly as low-confidence / small sample.
 

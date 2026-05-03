@@ -8,6 +8,8 @@ import { buildResearchObjects } from "./researchObjectBuilder";
 import { GrahamySnapshotClient } from "./snapshotClient";
 import { executeSnapshotTools } from "./tools";
 import { runGrahamyDeepAgent } from "./grahamyAgent";
+import { executePgCapabilities } from "./pgCapabilities/registry";
+import type { PgCapabilityRunInput, PgCapabilityRunResult } from "./pgCapabilities/types";
 import {
   DEFAULT_DISCLAIMER,
   EMPTY_CLASSIFICATION,
@@ -28,6 +30,10 @@ export type RunAskGrahamyGraphOptions = {
   // leaves this undefined so classification falls back to the model-backed
   // classifier configured in classification.ts.
   classifier?: ClassifyOptions["classifier"];
+  pgCapabilityRunner?: (
+    input: PgCapabilityRunInput,
+  ) => Promise<PgCapabilityRunResult>;
+  grahamyAgentRunner?: typeof runGrahamyDeepAgent;
 };
 
 /**
@@ -89,6 +95,7 @@ export async function runAskGrahamyGraph(
     selectTools(state);
     await executeTools(state);
     await loadResearchObjects(state);
+    await loadPgCapabilities(state, options.pgCapabilityRunner);
 
     // publicResearchView is built for response.research / UI consumption.
     // The deep agent reads its evidence from state.researchObjects directly,
@@ -99,13 +106,14 @@ export async function runAskGrahamyGraph(
       snapshots: state.snapshots ?? {},
       toolOutputs: state.toolOutputs ?? {},
       researchObjects: state.researchObjects ?? [],
+      pgCapabilityViews: state.pgCapabilityViews,
       warnings: state.warnings,
     });
 
     // Hand off to the deep agent. It composes the actual user-facing answer
     // by reading state.researchObjects + state.message + its PostgresSaver
     // thread history (prior turns in this conversation).
-    const grahamy = await runGrahamyDeepAgent(state);
+    const grahamy = await (options.grahamyAgentRunner ?? runGrahamyDeepAgent)(state);
     state.warnings.push(...grahamy.warnings);
 
     state.answer = {
@@ -132,6 +140,7 @@ export async function runAskGrahamyGraph(
       state.researchObjects ?? [],
       state.researchObjectCacheStats,
       state.researchObjectsUpdated ?? [],
+      state.pgCapabilityViews,
     );
 
     return await finalizeResponse(state);
@@ -204,6 +213,21 @@ async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
   state.warnings.push(...result.warnings);
 }
 
+async function loadPgCapabilities(
+  state: AskGrahamyState,
+  runner: RunAskGrahamyGraphOptions["pgCapabilityRunner"] = executePgCapabilities,
+): Promise<void> {
+  const input = {
+    classification: state.classification ?? EMPTY_CLASSIFICATION,
+    message: state.message,
+    snapshots: state.snapshots ?? {},
+    toolOutputs: state.toolOutputs ?? {},
+  };
+  const result = await runner(input);
+  state.pgCapabilityViews = result.views;
+  state.warnings.push(...result.warnings);
+}
+
 async function finalizeResponse(
   state: AskGrahamyState,
   overrideAnswerType?: AskGrahamyResponse["answerType"],
@@ -219,6 +243,7 @@ async function finalizeResponse(
       state.researchObjects ?? [],
       state.researchObjectCacheStats,
       state.researchObjectsUpdated ?? [],
+      state.pgCapabilityViews,
     );
   const response: AskGrahamyResponse = {
     conversationId: state.conversationId ?? crypto.randomUUID(),
@@ -264,6 +289,7 @@ function buildMeta(
   researchObjects: import("./types").CachedResearchObject[] = [],
   researchObjectCacheStats?: import("./types").ResponseMeta["researchObjectCache"],
   researchObjectsUpdated: import("./types").CachedResearchObject[] = [],
+  pgCapabilityViews?: import("./types").PgCapabilityViews,
 ): ResponseMeta {
   // Only research objects are "sources" the answer was actually grounded in.
   // Snapshots are background scaffolding the graph fetches for system-prompt
@@ -274,8 +300,11 @@ function buildMeta(
     type: "research" as const,
     name: item.cacheKey,
   }));
+  const capabilitySources = pgCapabilityViews?.sectorLeaderboardView
+    ? [{ type: "research" as const, name: "sector_conviction_leaderboard" }]
+    : [];
   return {
-    sourcesUsed: researchSources,
+    sourcesUsed: [...researchSources, ...capabilitySources],
     freshness: snapshots.freshness ?? {},
     warnings: Array.from(
       new Set([
@@ -296,6 +325,7 @@ function buildMeta(
 
 function inferAnswerType(classification: Classification): AskGrahamyResponse["answerType"] {
   if (classification.intent === "unknown") return "unknown";
+  if (classification.intent === "sector_conviction_leaderboard") return "sector";
   const stock = classification.symbols.length > 0;
   const sector = classification.sectors.length > 0;
   const regime = classification.regimeRequested;
