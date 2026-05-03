@@ -1,6 +1,6 @@
 import { execSync, spawnSync } from "child_process";
 import fs from "node:fs";
-import { QueryTypes } from "sequelize";
+import { Op, QueryTypes } from "sequelize";
 import {
   sequelize,
   Project,
@@ -259,11 +259,11 @@ export async function getReadyTasks(epicId: EpicTaskId): Promise<AgentTask[]> {
 }
 
 /**
- * Flip the next stage's `pending` agent tasks to `ready` once their preceding
- * stages are all cleared (completed AND, for code_change stages, PR
- * approved/merged), and run `propagateStatus` once so the next stage's
- * derived status (`pending` → `in_progress`) catches up immediately rather
- * than waiting for `executeTask` to start the first task.
+ * Flip the FIRST `pending` agent task of each newly-unblocked stage to `ready`
+ * (sequential-within-stage rule — only one task per stage is ever `ready` at
+ * a time), and run `propagateStatus` once so the next stage's derived status
+ * (`pending` → `in_progress`) catches up immediately rather than waiting for
+ * `executeTask` to start the first task.
  *
  * Single source of truth shared by:
  *   - `propagateStatus` auto-completion of `kind='plan'` stages
@@ -302,7 +302,25 @@ export async function advanceNextStageReadyTasks(
 
   if (newlyReady.length === 0) return [];
 
-  const ids = newlyReady.map((t) => t.id);
+  // Sequential-within-stage rule: only flip the first pending task of each
+  // unblocked stage to `ready`. The remaining tasks in those stages stay
+  // `pending` and get promoted one-by-one by `advanceNextTaskInStage` as the
+  // prior task in the same stage completes. The SQL above is already ordered
+  // by `(ts.sort_order, at.sort_order)`, so taking the first row per stage in
+  // iteration order picks the lowest-sortOrder task of each stage.
+  const firstPerStage = new Map<string, AgentTask>();
+  for (const t of newlyReady) {
+    const stageId = (t as unknown as { taskStageId?: string; task_stage_id?: string }).taskStageId
+      ?? (t as unknown as { task_stage_id?: string }).task_stage_id
+      ?? "";
+    if (!stageId) continue;
+    if (!firstPerStage.has(stageId)) {
+      firstPerStage.set(stageId, t);
+    }
+  }
+  const ids = [...firstPerStage.values()].map((t) => t.id);
+  if (ids.length === 0) return [];
+
   await AgentTask.update(
     { status: "ready" as AgentTaskStatus },
     { where: { id: ids } },
@@ -325,6 +343,47 @@ export async function advanceNextStageReadyTasks(
   }
 
   return ids;
+}
+
+/**
+ * Sequential-within-stage rule: after a task completes, hand the baton to the
+ * next sibling task in the same stage by flipping it from `pending` → `ready`.
+ *
+ * Called from `finalizeEpicTaskExecution` after `updateTaskStatus(...,'completed')`.
+ * No-op when (a) the just-completed task is the last in its stage, or (b) some
+ * later sibling is already past `pending` (defensive — should not happen under
+ * the new invariant, but guards against retries that reset multiple rows).
+ *
+ * Returns the promoted task id, or null when nothing was advanced.
+ */
+export async function advanceNextTaskInStage(
+  completedTaskId: AgentTaskId,
+): Promise<AgentTaskId | null> {
+  const completed = await AgentTask.findByPk(completedTaskId);
+  if (!completed) return null;
+
+  const next = await AgentTask.findOne({
+    where: {
+      taskStageId: completed.taskStageId,
+      status: "pending" as AgentTaskStatus,
+      sortOrder: { [Op.gt]: completed.sortOrder },
+    },
+    order: [["sortOrder", "ASC"]],
+  });
+  if (!next) return null;
+
+  await next.update({ status: "ready" as AgentTaskStatus });
+
+  try {
+    await propagateStatus(next.id);
+  } catch (err: any) {
+    logger.warn(
+      "advanceNextTaskInStage: propagateStatus failed (status will catch up on next task transition)",
+      { taskId: next.id, error: err?.message },
+    );
+  }
+
+  return next.id;
 }
 
 // ─── Active-state Resolvers ────────────────────────────────────────────────
@@ -1135,24 +1194,24 @@ export async function createEpicWithPlan(data: {
         { transaction },
       );
 
-      // Tasks in the first stage start as `ready` so the orchestrator can
-      // pick one up immediately via `resolveNextRetryableTask`. Doing this
-      // atomically with creation (vs. a post-commit UPDATE) means a crash,
-      // tool-call cancellation, or any other interruption between commit
-      // and the flip can't leave the epic stranded with all-pending tasks
-      // and no way to start. Later stages stay `pending` until
-      // `advanceNextStageReadyTasks` unblocks them after the previous
-      // stage clears.
-      const isFirstStage = si === 0;
+      // Sequential-within-stage rule: at any moment at most ONE task per
+      // stage is `ready` — the rest stay `pending` until the prior task
+      // completes. The very first task of the very first stage seeds the
+      // chain by starting `ready` so the orchestrator can pick it up via
+      // `resolveNextRetryableTask`. `advanceNextTaskInStage` (called from
+      // `finalizeEpicTaskExecution` on completion) hands the baton to the
+      // next sibling, and `advanceNextStageReadyTasks` (called when the
+      // prior stage clears) flips only the first task of the next stage.
       for (let ti = 0; ti < stageData.tasks.length; ti++) {
         const taskData = stageData.tasks[ti];
+        const isFirstTaskOfFirstStage = si === 0 && ti === 0;
         const task = await AgentTask.create(
           {
             taskStageId: stage.id,
             title: taskData.title,
             description: taskData.description,
             sortOrder: ti,
-            status: (isFirstStage ? "ready" : "pending") as AgentTaskStatus,
+            status: (isFirstTaskOfFirstStage ? "ready" : "pending") as AgentTaskStatus,
           },
           { transaction },
         );
@@ -1448,8 +1507,20 @@ function buildContinuationTag(payload: EpicContinuationPayload): string {
 }
 
 /**
- * Given a taskId, resolves its epic and checks if more tasks remain.
- * Returns the continuation tag string (or empty string if no continuation needed).
+ * Given a taskId, returns any post-task follow-up text that should be appended
+ * to the finalize tool result.
+ *
+ * Per-task pause invariant: when more tasks remain in the epic, this returns
+ * an empty string — auto-continuation is intentionally disabled. The user
+ * must explicitly tell the orchestrator to continue before the next task
+ * runs. The PR-created and plan-stage-awaiting-approval branches below still
+ * fire when the *whole stage* completes, since those messages tell the user
+ * what they need to act on next (review the PR / approve the plan).
+ *
+ * Note: name kept as `appendContinuationMarker` for callsite stability — it
+ * no longer emits the EPIC_CONTINUATION marker, but the legacy parser still
+ * lives in `parseContinuationMarker` as a defensive no-op in case any other
+ * code path emits one.
  */
 export async function appendContinuationMarker(taskId: string): Promise<string> {
   try {
@@ -1464,11 +1535,11 @@ export async function appendContinuationMarker(taskId: string): Promise<string> 
     const readyTasks = await getReadyTasks(stage.epicTaskId);
 
     if (readyTasks.length > 0) {
-      return buildContinuationTag({
-        epicId: stage.epicTaskId,
-        completedTaskTitle: task.title,
-        remainingTasks: readyTasks.length,
-      });
+      // Tasks remain — pause for explicit user continuation. The orchestrator
+      // tool result already carries the per-task summary + attachment link
+      // (see `finalizeEpicTaskExecution`), so the user gets the file in chat
+      // and the conversation simply stops until they say to proceed.
+      return "";
     }
 
     // No more ready tasks — check if this stage just finished all tasks and needs PR action

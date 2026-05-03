@@ -51,7 +51,6 @@ import {
   ListRepositoriesTool,
   GetRepositoryTool,
   CreateEpicPlanTool,
-  StartEpicTaskTool,
   PlanEpicTaskCodexTool,
   StartEpicTaskCodexTool,
   CompleteEpicTaskTool,
@@ -66,6 +65,7 @@ import {
   SearchEpicTasksByDateTool,
   GetEpicTaskStagesAndTasksTool,
   parseContinuationMarker,
+  StartAnthropicEpicTaskTool,
 } from "../../../tools/epicTaskTools";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
@@ -229,7 +229,7 @@ export async function epicCallModelNode(
     CreateEpicPlanTool(state.userId, agentId),
     // Vendor-conditional task-execution surface (slices 20 + 23):
     //   - Anthropic vendor: `start_epic_task` declares a sub-agent slice
-    //     plan, the orchestrator then fans out via `Task("<slug>", ...)`
+    //     plan, the orchestrator then fans out via `Task("<id>", ...)`
     //     calls in parallel.
     //   - OpenAI / Codex vendor: optional `plan_epic_task` (read-only
     //     scout) + `start_epic_task_codex` (detached workspace-write execute).
@@ -240,7 +240,7 @@ export async function epicCallModelNode(
     //     poll `get_epic_status` — do not pair with `complete_epic_task`.
     // `complete_epic_task` finalizes the Anthropic (`start_epic_task`) path only.
     ...(vendor.vendorSlug === "anthropic"
-      ? [StartEpicTaskTool(agentId)]
+      ? [StartAnthropicEpicTaskTool(agentId)]
       : vendor.vendorSlug === "openai"
         ? [
             PlanEpicTaskCodexTool(agentId),
@@ -303,7 +303,7 @@ export async function epicCallModelNode(
   // ─── Anthropic Agent SDK runtime branch ────────────────────────────────────
   //
   // Same as basicGraph, plus an `onToolResult` observer that watches for the
-  // `[EPIC_CONTINUATION]` marker emitted by `ExecuteEpicTaskTool`. When seen,
+  // `[EPIC_CONTINUATION]` marker emitted by `start_epic_task`. When seen,
   // we capture the parsed continuation so the worker can auto-enqueue the next
   // task — exactly the same signal the legacy loop returned via
   // `state.epicContinuation`.
@@ -315,9 +315,9 @@ export async function epicCallModelNode(
   // the marker. We just need to flag the continuation; no second invoke needed.
   if (shouldUseAgentSdk(vendor.vendorSlug)) {
     // Same sub-agent fan-out as basicGraph — epic orchestrator can also call
-    // Task("<system-agent-slug>", ...) to delegate research / inspection work
+    // Task("<sub-agent id>", ...) to delegate research / inspection work
     // to specialists. Code-change execution still flows through the epic task
-    // tools (`ExecuteEpicTaskTool` etc.), unchanged.
+    // tools (`start_epic_task` etc.), unchanged.
     const subAgents = await buildSubAgentDefinitions({
       primaryAgentId: agentId,
       userId,

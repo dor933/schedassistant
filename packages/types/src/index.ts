@@ -132,6 +132,40 @@ export function bashSkillSlugForVendor(
 }
 
 /**
+ * Epic-orchestrator workflow skill (vendor-split). The Anthropic and Codex
+ * flows differ enough that one shared skill body would force the model to
+ * constantly disambiguate which set of instructions applies — Anthropic uses
+ * `start_epic_task` + optional `Task()` sub-agent fan-out + `complete_epic_task`
+ * inside ONE synchronous orchestrator turn, while Codex uses
+ * `plan_epic_task` (optional) + `start_epic_task_codex` (detached run) + a
+ * server-side auto-finalize that explicitly forbids `complete_epic_task`.
+ *
+ * Auto-injection trigger: `autoSlugsForAgent` injects the vendor-matched
+ * variant iff the agent has the `create_epic_plan` tool granted, so we don't
+ * need a dedicated `agents.is_epic_orchestrator` flag — tool grants are the
+ * source of truth.
+ */
+export const EPIC_ORCHESTRATOR_SKILL_SLUG_SDK = "epic-orchestrator-sdk";
+export const EPIC_ORCHESTRATOR_SKILL_SLUG_CODEX = "epic-orchestrator-codex";
+export const EPIC_ORCHESTRATOR_SKILL_SLUGS: readonly string[] = [
+  EPIC_ORCHESTRATOR_SKILL_SLUG_SDK,
+  EPIC_ORCHESTRATOR_SKILL_SLUG_CODEX,
+];
+
+/**
+ * Picks the right epic-orchestrator skill slug for the agent's vendor.
+ * Anthropic → SDK variant (sub-agent fan-out + complete_epic_task).
+ * Anything else → Codex variant (detached run + server auto-finalize).
+ */
+export function epicOrchestratorSkillSlugForVendor(
+  vendorSlug: string | null | undefined,
+): string {
+  return vendorSlug === "anthropic"
+    ? EPIC_ORCHESTRATOR_SKILL_SLUG_SDK
+    : EPIC_ORCHESTRATOR_SKILL_SLUG_CODEX;
+}
+
+/**
  * @deprecated Use `FILESYSTEM_SKILL_SLUGS_SDK` /
  *             `FILESYSTEM_SKILL_SLUGS_MCP` and pick by vendor.
  *
@@ -152,6 +186,7 @@ export const AUTO_ASSIGNED_SKILL_SLUGS: readonly string[] = [
   ...FILESYSTEM_SKILL_SLUGS_MCP,
   BASH_SKILL_SLUG_SDK,
   BASH_SKILL_SLUG_CODEX,
+  ...EPIC_ORCHESTRATOR_SKILL_SLUGS,
 ];
 export const CORE_AUTO_ASSIGNED_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
   CORE_AUTO_ASSIGNED_SKILL_SLUGS,

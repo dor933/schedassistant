@@ -33,6 +33,7 @@ import {
   getEpic,
   getReadyTasks,
   advanceNextStageReadyTasks,
+  advanceNextTaskInStage,
   createEpicWithPlan,
   preExecutionSync,
   buildArchitectureContext,
@@ -53,6 +54,7 @@ import {
   EPIC_CONTINUATION_MARKER,
   parseContinuationMarker,
 } from "../utils/epicTaskUtils";
+import { buildAttachmentUrl } from "./sendFileTool";
 
 // Re-export utils that are imported by other modules
 export { getReadyTasks, parseContinuationMarker, EPIC_CONTINUATION_MARKER };
@@ -378,7 +380,12 @@ async function finalizeEpicTaskExecution(params: {
   failureReason: string | null;
   conversationCtx?: { threadId: string; userId: number };
   executionMetadataPatch?: Record<string, unknown>;
-}): Promise<{ heading: string; summary: string; continuation: string }> {
+}): Promise<{
+  heading: string;
+  summary: string;
+  continuation: string;
+  attachmentMarkdown: string | null;
+}> {
   const { ctx, epicAgentId, summary, status, failureReason, conversationCtx, executionMetadataPatch } =
     params;
   const { task, execution, cwd, preRunSha } = ctx;
@@ -427,6 +434,10 @@ async function finalizeEpicTaskExecution(params: {
   }
   await updateTaskStatus(task.id, status as AgentTaskStatus);
 
+  // Build the per-task summary file + a chat-attachment markdown link the
+  // orchestrator includes in its reply, so the user receives the summary as
+  // a downloadable file in chat after every task (per-task pause flow).
+  let attachmentMarkdown: string | null = null;
   if (conversationCtx?.threadId && conversationCtx?.userId !== undefined && epicAgentId) {
     const summaryPath = await buildTaskSummaryFilePath({
       agentId: epicAgentId,
@@ -443,6 +454,15 @@ async function finalizeEpicTaskExecution(params: {
           `\n\n`;
         fs.writeFileSync(summaryPath, header + summary, "utf8");
         await recordTaskSummaryFilePath(task.id, summaryPath);
+
+        // Build the [📎 ...](signed-url) markdown using the same helper
+        // `send_file_to_user` uses. The path layout is the deterministic one
+        // from `buildTaskSummaryFilePath`: `<workspace>/threads/<threadId>/<file>`,
+        // so the relative-to-workspace name is `threads/<threadId>/<basename>`.
+        const baseName = path.basename(summaryPath);
+        const relativeName = `threads/${conversationCtx.threadId}/${baseName}`;
+        const url = buildAttachmentUrl(epicAgentId, relativeName);
+        attachmentMarkdown = `[📎 ${baseName}](${url})`;
       } catch (err: any) {
         logger.warn("finalizeEpicTaskExecution: summary file write failed", {
           taskId: task.id,
@@ -453,67 +473,100 @@ async function finalizeEpicTaskExecution(params: {
     }
   }
 
+  // Sequential-within-stage: hand the baton to the next sibling task only
+  // when the just-completed task succeeded. A failed task stays in the
+  // failed state and is retried via the existing fallback path — promoting
+  // the next sibling there would let work jump over a failure.
+  if (status === "completed") {
+    try {
+      await advanceNextTaskInStage(task.id);
+    } catch (err: any) {
+      logger.warn("finalizeEpicTaskExecution: advanceNextTaskInStage failed", {
+        taskId: task.id,
+        error: err?.message,
+      });
+    }
+  }
+
   const continuation = await appendContinuationMarker(task.id);
   const heading =
     status === "completed" ? `# Task Completed: ${task.title}` : `# Task Failed: ${task.title}`;
-  return { heading, summary, continuation };
+  return { heading, summary, continuation, attachmentMarkdown };
 }
 
 /**
- * After a background Codex finalize, enqueue the same continuation signals the epic graph
- * would have produced from a `complete_epic_task` tool result (marker → auto-run; otherwise
- * PR/plan follow-up text).
+ * After a background Codex finalize, enqueue a system follow-up that wakes
+ * the orchestrator just long enough to deliver the per-task summary file to
+ * the user as a chat attachment and then pause.
+ *
+ * Per-task pause invariant:
+ *  - When more tasks remain in the epic, `continuationSuffix` is empty (the
+ *    legacy EPIC_CONTINUATION marker is no longer emitted in that case) — we
+ *    still enqueue a follow-up so the user sees the summary attachment, and
+ *    the prompt explicitly tells the orchestrator NOT to start the next task.
+ *  - When the whole stage just finished, `continuationSuffix` carries the
+ *    PR-created / plan-awaiting-approval text. We forward it so the user
+ *    learns what they need to act on.
+ *
+ * The legacy marker branch stays as a defensive fallback in case any other
+ * code path emits one — it routes into the same pause-and-show prompt
+ * instead of triggering auto-continuation.
  */
 async function enqueueEpicPostCodexFinalizeTurn(opts: {
   epicUserId: number;
   agentId: string;
   groupId: string | null;
   singleChatId: string | null;
+  heading: string;
+  summary: string;
+  attachmentMarkdown: string | null;
   continuationSuffix: string;
 }): Promise<void> {
-  const markerPayload = parseContinuationMarker(opts.continuationSuffix);
   try {
-    if (markerPayload) {
-      const contRequestId = `epic-continuation-${markerPayload.epicId}-${Date.now()}`;
-      await agentChatQueue.add("epic_continuation", {
-        userId: opts.epicUserId,
-        message:
-          `[Automatic continuation] Task "${markerPayload.completedTaskTitle}" completed successfully. ` +
-          `${markerPayload.remainingTasks} task(s) remain in the active epic. ` +
-          `Call \`get_epic_status\`, then continue with the next ready task (\`plan_epic_task\` / ` +
-          `\`start_epic_task_codex\` as appropriate for the Codex vendor flow). Provide a brief progress update.`,
-        requestId: contRequestId,
-        groupId: opts.groupId,
-        singleChatId: opts.singleChatId,
-        agentId: opts.agentId,
-        mentionsAgent: true,
-        displayName: "System",
-      } as any);
-      logger.info("enqueueEpicPostCodexFinalizeTurn: continuation marker job enqueued", {
-        epicId: markerPayload.epicId,
-        contRequestId,
-      });
-      return;
-    }
+    const markerPayload = parseContinuationMarker(opts.continuationSuffix);
+    // Strip the marker out of any text we forward to the orchestrator —
+    // there should be none post-change, but defend against any other path.
+    const stripMarker = (text: string): string => {
+      const idx = text.indexOf(EPIC_CONTINUATION_MARKER);
+      if (idx === -1) return text;
+      const end = text.indexOf("-->", idx);
+      return end === -1 ? text.slice(0, idx) : text.slice(0, idx) + text.slice(end + 3);
+    };
+    const continuationText = stripMarker(opts.continuationSuffix).trim();
 
-    const trimmed = opts.continuationSuffix.trim();
-    if (trimmed) {
-      const contRequestId = `epic-codex-finalize-followup-${Date.now()}`;
-      await agentChatQueue.add("epic_codex_finalize_followup", {
-        userId: opts.epicUserId,
-        message:
-          `[Codex execution finished — task finalized server-side]\n\n` + trimmed,
-        requestId: contRequestId,
-        groupId: opts.groupId,
-        singleChatId: opts.singleChatId,
-        agentId: opts.agentId,
-        mentionsAgent: true,
-        displayName: "System",
-      } as any);
-      logger.info("enqueueEpicPostCodexFinalizeTurn: non-marker follow-up enqueued", {
-        contRequestId,
-      });
-    }
+    const attachmentBlock = opts.attachmentMarkdown
+      ? `\n\n**Summary file (deliver to the user):** ${opts.attachmentMarkdown}`
+      : "";
+    const stageFollowup = continuationText ? `\n\n${continuationText}` : "";
+    const pauseHint =
+      `\n\n[System: Codex finished this task server-side. Reply to the user ` +
+      `with a brief progress update and include the summary attachment ` +
+      `markdown above verbatim so the user gets the file. ` +
+      (markerPayload || continuationText
+        ? `Then act on the stage-level follow-up text above (if any). `
+        : ``) +
+      `Do NOT call any more tools to start the next task. Wait for the ` +
+      `user to explicitly tell you to continue.]`;
+
+    const body = `${opts.heading}\n\n${opts.summary}${attachmentBlock}${stageFollowup}${pauseHint}`;
+
+    const contRequestId = `epic-codex-finalize-followup-${Date.now()}`;
+    await agentChatQueue.add("epic_codex_finalize_followup", {
+      userId: opts.epicUserId,
+      message: body,
+      requestId: contRequestId,
+      groupId: opts.groupId,
+      singleChatId: opts.singleChatId,
+      agentId: opts.agentId,
+      mentionsAgent: true,
+      displayName: "System",
+    } as any);
+    logger.info("enqueueEpicPostCodexFinalizeTurn: pause follow-up enqueued", {
+      contRequestId,
+      hasStageFollowup: continuationText.length > 0,
+      hasAttachment: !!opts.attachmentMarkdown,
+      legacyMarkerSeen: !!markerPayload,
+    });
   } catch (err: any) {
     logger.error("enqueueEpicPostCodexFinalizeTurn: failed to enqueue", {
       error: err?.message,
@@ -625,74 +678,76 @@ async function resolveInProgressExecution(): Promise<InProgressExecutionContext 
  * in_progress, snapshot HEAD onto execution.metadata, start the
  * execution row.
  */
-export function StartEpicTaskTool(callerAgentId: string) {
+export function StartAnthropicEpicTaskTool(callerAgentId: string) {
   return tool(
     async (input) => {
       try {
+        // Sub-agent fan-out is OPTIONAL. When the orchestrator wants to slice
+        // the task across specialist `claude_sub_agent` rows, it passes
+        // `assignments` and we validate each one. When it omits assignments
+        // (or passes an empty list), the orchestrator does the work itself
+        // in this same turn using its own filesystem MCP / Bash tools — the
+        // start/complete bookkeeping (HEAD snapshot, status flip, diff
+        // capture) is identical either way.
         const assignments = input.assignments ?? [];
-        if (assignments.length === 0) {
-          return (
-            `Error: \`assignments\` cannot be empty. List one entry per sub-agent ` +
-            `you want to dispatch this task across — at minimum one specialist, ` +
-            `typically 2-4 for full-stack work (frontend + backend + DB).`
-          );
-        }
-        // Reject duplicate slugs — the SDK's `agents:` map is keyed by
-        // slug, and dispatching the same sub-agent twice with different
-        // scopes inside one task would race on the same row's session
-        // state. If you need that pattern, run two separate tasks.
-        const seenIds = new Set<string>();
-        for (const a of assignments) {
-          if (seenIds.has(a.id)) {
-            return (
-              `Error: sub-agent "${a.id}" appears in \`assignments\` ` +
-              `more than once. Each slug may be used at most once per task.`
-            );
+        if (assignments.length > 0) {
+          // Reject duplicate ids — the SDK's `agents:` map is keyed by id,
+          // and dispatching the same sub-agent twice with different scopes
+          // inside one task would race on the same row's session state. If
+          // you need that pattern, run two separate tasks.
+          const seenIds = new Set<string>();
+          for (const a of assignments) {
+            if (seenIds.has(a.id)) {
+              return (
+                `Error: sub-agent "${a.id}" appears in \`assignments\` ` +
+                `more than once. Each id may be used at most once per task.`
+              );
+            }
+            seenIds.add(a.id);
+            if (!a.scope || !a.scope.trim()) {
+              return (
+                `Error: assignment for "${a.id}" has an empty scope. ` +
+                `Each assignment needs a self-contained instruction telling that ` +
+                `sub-agent which files to look at + change.`
+              );
+            }
           }
-          seenIds.add(a.id);
-          if (!a.scope || !a.scope.trim()) {
-            return (
-              `Error: assignment for "${a.id}" has an empty scope. ` +
-              `Each assignment needs a self-contained instruction telling that ` +
-              `sub-agent which files to look at + change.`
-            );
-          }
-        }
 
-        // Validate every declared slug is a claude_sub_agent owned by
-        // THIS orchestrator. Type and ownership are both required —
-        // system agents are never invocable through SDK Task() (slice 17),
-        // and another primary's sub-agent is invisible from this session.
-        const callerAgent = await Agent.findByPk(callerAgentId, {
-          attributes: ["id", "organizationId"],
-        });
-        if (!callerAgent) {
-          return `Error: caller agent "${callerAgentId}" not found.`;
-        }
+          // Validate every declared id is a claude_sub_agent owned by THIS
+          // orchestrator. Type and ownership are both required — system
+          // agents are never invocable through SDK Task() (slice 17), and
+          // another primary's sub-agent is invisible from this session.
+          const callerAgent = await Agent.findByPk(callerAgentId, {
+            attributes: ["id", "organizationId"],
+          });
+          if (!callerAgent) {
+            return `Error: caller agent "${callerAgentId}" not found.`;
+          }
           const ids = assignments.map((a) => a.id);
-        const subAgentRows = await Agent.findAll({
-          where: {
-            id: { [Op.in]: ids },
-            type: "claude_sub_agent",
-            owningPrimaryAgentId: callerAgentId,
-            organizationId: callerAgent.organizationId,
-          },
-          attributes: ["id", "slug", "agentName"],
-        });
-        const validIdsSet = new Set(
-          subAgentRows
-            .map((r) => r.id)
-            .filter((id): id is string => typeof id === "string"),
-        );
-        const invalid = ids.filter((id) => !validIdsSet.has(id));
-        if (invalid.length > 0) {
-          return (
-            `Error: the following sub-agent id(s) are not attached to you ` +
-            `or are not of type \`claude_sub_agent\`: ${invalid.map((id) => `"${id}"`).join(", ")}. ` +
-            `Run \`list_claude_sub_agents\` to see your actual roster. ` +
-            `Reminder: \`Task()\` only reaches \`claude_sub_agent\` rows — system ` +
-            `agents go through \`delegate_to_deep_agent\` instead.`
+          const subAgentRows = await Agent.findAll({
+            where: {
+              id: { [Op.in]: ids },
+              type: "claude_sub_agent",
+              owningPrimaryAgentId: callerAgentId,
+              organizationId: callerAgent.organizationId,
+            },
+            attributes: ["id", "slug", "agentName"],
+          });
+          const validIdsSet = new Set(
+            subAgentRows
+              .map((r) => r.id)
+              .filter((id): id is string => typeof id === "string"),
           );
+          const invalid = ids.filter((id) => !validIdsSet.has(id));
+          if (invalid.length > 0) {
+            return (
+              `Error: the following sub-agent id(s) are not attached to you ` +
+              `or are not of type \`claude_sub_agent\`: ${invalid.map((id) => `"${id}"`).join(", ")}. ` +
+              `Run \`list_claude_sub_agents\` to see your actual roster. ` +
+              `Reminder: \`Task()\` only reaches \`claude_sub_agent\` rows — system ` +
+              `agents go through \`delegate_to_deep_agent\` instead.`
+            );
+          }
         }
 
         const epic = await resolveActiveEpic();
@@ -768,11 +823,48 @@ export function StartEpicTaskTool(callerAgentId: string) {
           ? `Stage "${stage.title}" (${stage.kind})`
           : "Stage (unknown)";
 
-        // Echo the validated plan back so the orchestrator can copy
-        // each Task() call directly from this section. We don't issue
-        // the Task() calls server-side — that's the model's native
-        // SDK flow — but listing them here turns the dispatch into a
-        // mechanical translation.
+        const repoBlock =
+          `## Repository\n` +
+          `Working directory: \`${cwd}\`\n` +
+          `Branch base SHA: ${preRunSha ?? "(unknown — diff capture may be empty)"}\n\n`;
+
+        const taskBlock =
+          `# Epic Task Started\n\n` +
+          `**Task:** ${next.title}\n` +
+          `**${stageLabel}**\n\n` +
+          `## Description\n${next.description ?? "(no description)"}\n\n` +
+          repoBlock;
+
+        const trailer =
+          `Execution ID: \`${execution.id}\` (carried implicitly — \`complete_epic_task\` resolves it ` +
+          `automatically, no need to pass it back).`;
+
+        if (assignments.length === 0) {
+          // Sync in-process path: orchestrator does the work itself in this
+          // same turn using its own MCP filesystem / Bash tools, then calls
+          // `complete_epic_task` to finalize. No sub-agent fan-out.
+          return (
+            taskBlock +
+            `## Execution mode\n` +
+            `Direct (no sub-agent fan-out). Do the work yourself in this turn ` +
+            `using your bound tools (filesystem MCP \`read_file\` / \`write_file\` / ` +
+            `\`edit_file\`, Bash for git/tests/builds, etc.).\n\n` +
+            `## Now do this\n` +
+            `1. Make the file edits required by the task description above. Stay ` +
+            `strictly within scope — no unrelated refactors or rename churn.\n` +
+            `2. Run any tests / type checks the project provides. Commit logical ` +
+            `units locally as you go (the stage feature branch is already checked out).\n` +
+            `3. Call \`complete_epic_task\` with a markdown \`summary\` of what ` +
+            `changed (include a \`## Files changed\` list) and \`status\`. The diff ` +
+            `vs. the base SHA above is captured automatically.\n\n` +
+            trailer
+          );
+        }
+
+        // Echo the validated plan back so the orchestrator can copy each
+        // Task() call directly from this section. We don't issue the Task()
+        // calls server-side — that's the model's native SDK flow — but
+        // listing them here turns the dispatch into a mechanical translation.
         const dispatchLines = assignments
           .map(
             (a, i) =>
@@ -781,14 +873,10 @@ export function StartEpicTaskTool(callerAgentId: string) {
           .join("\n");
 
         return (
-          `# Epic Task Started\n\n` +
-          `**Task:** ${next.title}\n` +
-          `**${stageLabel}**\n\n` +
-          `## Description\n${next.description ?? "(no description)"}\n\n` +
-          `## Repository\n` +
-          `Working directory: \`${cwd}\`\n` +
-          `Branch base SHA: ${preRunSha ?? "(unknown — diff capture may be empty)"}\n\n` +
-          `## Your declared dispatch plan (${assignments.length} slice(s))\n` +
+          taskBlock +
+          `## Execution mode\n` +
+          `Sub-agent fan-out (${assignments.length} slice(s)).\n\n` +
+          `## Your declared dispatch plan\n` +
           `${dispatchLines}\n\n` +
           `## Now do this\n` +
           `1. Emit the \`Task()\` calls listed above **in a single assistant message** so the ` +
@@ -796,9 +884,8 @@ export function StartEpicTaskTool(callerAgentId: string) {
           `2. Wait for ALL \`Task()\` results to return in your tool-loop. Each result includes ` +
           `that sub-agent's \`## Files changed\` section.\n` +
           `3. Call \`complete_epic_task\` with an aggregated summary and the final status. The ` +
-          `worker auto-enqueues the next ready task afterwards.\n\n` +
-          `Execution ID: \`${execution.id}\` (carried implicitly — \`complete_epic_task\` resolves it ` +
-          `automatically, no need to pass it back).`
+          `diff vs. the base SHA above is captured automatically.\n\n` +
+          trailer
         );
       } catch (err: any) {
         logger.error("StartEpicTask: failed", {
@@ -812,13 +899,12 @@ export function StartEpicTaskTool(callerAgentId: string) {
       name: "start_epic_task",
       description:
         "Begin work on the next ready task in the active epic. Auto-resolves the epic + task — no " +
-        "IDs needed. **You must declare your slice plan via `assignments`**: one entry per " +
-        "`claude_sub_agent` you want to dispatch the task across, each with a scoped instruction. " +
-        "The tool validates every slug is a `claude_sub_agent` attached to YOU before marking " +
-        "the task in_progress; bad slugs are rejected without state changes. After this returns, " +
-        "emit the listed `Task()` calls in a single assistant message (parallel dispatch), then " +
-        "call `complete_epic_task` once they all return. **Replaces the legacy `execute_epic_task` " +
-        "Claude CLI flow.**",
+        "IDs needed. Sub-agent fan-out is OPTIONAL: pass `assignments` to slice the task across " +
+        "`claude_sub_agent` specialists you own (each gets a scoped `Task()` call), or omit it " +
+        "entirely to do the work yourself in this turn using your bound filesystem MCP / Bash " +
+        "tools. Either way, the tool snapshots HEAD, marks the task in_progress, and returns the " +
+        "cwd + base SHA. When you're done, call `complete_epic_task` with a summary — the diff " +
+        "is captured automatically. **Replaces the legacy `execute_epic_task` Claude CLI flow.**",
       schema: z.object({
         assignments: z
           .array(
@@ -842,11 +928,13 @@ export function StartEpicTaskTool(callerAgentId: string) {
                 ),
             }),
           )
-          .min(1)
+          .optional()
           .describe(
-            "One entry per sub-agent you're fanning the task out across. A typical full-stack " +
-            "task has 2-4 entries (frontend + backend + DB ± docs). A single-specialist task is " +
-            "allowed but uncommon — most epic tasks justify slicing.",
+            "OPTIONAL. Omit (or pass `[]`) to execute the task yourself directly in this turn. " +
+            "When provided, one entry per sub-agent you're fanning the task out across — a " +
+            "typical full-stack slice has 2-4 entries (frontend + backend + DB ± docs). Each id " +
+            "must be a `claude_sub_agent` attached to you; bad ids are rejected before any " +
+            "state changes.",
           ),
       }),
     },
@@ -896,12 +984,19 @@ export function CompleteEpicTaskTool(conversationCtx?: {
         const summary = input.summary.trim();
         if (!summary) {
           return (
-            `Error: summary cannot be empty. Aggregate what each sub-agent ` +
-            `did + the overall outcome into a Markdown summary.`
+            `Error: summary cannot be empty. Provide a Markdown summary of ` +
+            `what changed (aggregate each sub-agent's report when fan-out was ` +
+            `used, otherwise summarize your own edits) so the user has a clear ` +
+            `record of the task outcome.`
           );
         }
 
-        const { heading, summary: sum, continuation } = await finalizeEpicTaskExecution({
+        const {
+          heading,
+          summary: sum,
+          continuation,
+          attachmentMarkdown,
+        } = await finalizeEpicTaskExecution({
           ctx,
           epicAgentId: epic?.agentId,
           summary,
@@ -909,7 +1004,23 @@ export function CompleteEpicTaskTool(conversationCtx?: {
           failureReason,
           conversationCtx,
         });
-        return `${heading}\n\n${sum}${continuation}`;
+
+        // Per-task pause flow: surface the summary file as a chat attachment
+        // and explicitly tell the model to stop here. `continuation` is empty
+        // when more tasks remain in the epic (no auto-continue), and carries
+        // the PR-created / plan-awaiting-approval text only when the WHOLE
+        // stage just finished — those messages still need to reach the user.
+        const attachmentBlock = attachmentMarkdown
+          ? `\n\n**Summary file (deliver to the user):** ${attachmentMarkdown}`
+          : "";
+        const pauseHint = continuation
+          ? ""
+          : `\n\n[System: Reply to the user with a brief progress update for ` +
+            `this task and include the summary attachment markdown above ` +
+            `verbatim. Do NOT call any more tools. Wait for the user to ` +
+            `explicitly tell you to continue before starting the next task.]`;
+
+        return `${heading}\n\n${sum}${attachmentBlock}${continuation}${pauseHint}`;
       } catch (err: any) {
         logger.error("CompleteEpicTask: failed", {
           error: err?.message,
@@ -924,8 +1035,9 @@ export function CompleteEpicTaskTool(conversationCtx?: {
         "Finalize the currently in-progress epic task after your sub-agents have all returned. " +
         "Captures the git diff, commits leftover changes (on completed), flips the task status, " +
         "and writes the per-task summary file. Auto-resolves the active epic + in-progress task — " +
-        "no IDs needed. Required after EVERY `start_epic_task` invocation; the next task does not " +
-        "auto-enqueue until this is called.",
+        "no IDs needed. Required after EVERY `start_epic_task` invocation. After this returns, " +
+        "the orchestrator pauses — the next task does NOT start until the user explicitly says " +
+        "to continue.",
       schema: z.object({
         summary: z
           .string()
@@ -1440,6 +1552,9 @@ export function StartEpicTaskCodexTool(
                   agentId: epicFull.agentId,
                   groupId: sessionCtx.groupId ?? null,
                   singleChatId: sessionCtx.singleChatId ?? null,
+                  heading: fin.heading,
+                  summary: fin.summary,
+                  attachmentMarkdown: fin.attachmentMarkdown,
                   continuationSuffix: fin.continuation,
                 });
               }
@@ -1490,6 +1605,9 @@ export function StartEpicTaskCodexTool(
                     agentId: epicFull.agentId,
                     groupId: sessionCtx.groupId ?? null,
                     singleChatId: sessionCtx.singleChatId ?? null,
+                    heading: finFail.heading,
+                    summary: finFail.summary,
+                    attachmentMarkdown: finFail.attachmentMarkdown,
                     continuationSuffix: finFail.continuation,
                   });
                 }
@@ -2205,16 +2323,22 @@ export function RequestStageChangesTool() {
         const { stage } = await resolveActivePrPendingStage();
 
         const tasks = (stage as any).tasks as AgentTask[];
-        const completedTasks = tasks.filter((t) => t.status === "completed");
+        const completedTasks = tasks
+          .filter((t) => t.status === "completed")
+          .sort((a, b) => a.sortOrder - b.sortOrder);
         if (completedTasks.length === 0) {
           return `Error: No completed tasks found in stage "${stage.title}" to retry.`;
         }
 
         const feedback = input.feedback;
 
-        // Store feedback on each task's latest execution and reset task to "ready"
+        // Sequential-within-stage rule (also applies to retries): only the
+        // lowest-sortOrder completed task flips back to `ready`; the rest go
+        // back to `pending` and are promoted one-by-one by
+        // `advanceNextTaskInStage` as each retry task completes.
         const retryTaskIds: string[] = [];
-        for (const task of completedTasks) {
+        for (let i = 0; i < completedTasks.length; i++) {
+          const task = completedTasks[i];
           const lastExec = await TaskExecution.findOne({
             where: { agentTaskId: task.id },
             order: [["attempt_number", "DESC"]],
@@ -2224,7 +2348,7 @@ export function RequestStageChangesTool() {
           }
 
           await task.update({
-            status: "ready" as AgentTaskStatus,
+            status: (i === 0 ? "ready" : "pending") as AgentTaskStatus,
             completedAt: null,
           });
           retryTaskIds.push(task.id);

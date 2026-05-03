@@ -8,8 +8,10 @@ import {
   FILESYSTEM_SKILL_SLUGS_MCP,
   filesystemSkillSlugsForVendor,
   bashSkillSlugForVendor,
+  epicOrchestratorSkillSlugForVendor,
 } from "@scheduling-agent/types";
 import { hasFilesystemMcp } from "./hasFilesystemMcp";
+import { loadActiveToolSlugs } from "./resolveAgentTools";
 import { logger } from "../logger";
 
 /**
@@ -67,6 +69,15 @@ async function resolveAgentVendorAndFlags(
  *         related skills (`gh-cli`, `mcp-bash-build-test`, etc.) are
  *         admin-attached, not auto-assigned — admins pick the right
  *         vendor variant per agent in the admin UI.
+ *   - Epic-orchestrator skill (vendor-split, gated by `create_epic_plan`):
+ *       - When the agent has the `create_epic_plan` tool granted (i.e.
+ *         it's an epic orchestrator), inject the vendor-matched
+ *         workflow skill: `epic-orchestrator-sdk` for Anthropic
+ *         (sub-agent fan-out + `complete_epic_task` inside one sync
+ *         turn) or `epic-orchestrator-codex` for Codex (detached run +
+ *         server auto-finalize, no `complete_epic_task`). Tool grant
+ *         is the source of truth — no separate `is_epic_orchestrator`
+ *         flag.
  */
 async function autoSlugsForAgent(agentId: string): Promise<string[]> {
   const slugs: string[] = [...CORE_AUTO_ASSIGNED_SKILL_SLUGS];
@@ -80,6 +91,22 @@ async function autoSlugsForAgent(agentId: string): Promise<string[]> {
 
   if (allowSdkBash) {
     slugs.push(bashSkillSlugForVendor(vendorSlug));
+  }
+
+  // Epic-orchestrator skill — vendor-split, gated by `create_epic_plan`
+  // tool grant. `applyDefaults: false` so the default set (`consult_agent`,
+  // `list_agents`, `list_system_agents`) doesn't accidentally make every
+  // agent without explicit tool rows look like an epic orchestrator.
+  try {
+    const toolSlugs = await loadActiveToolSlugs(agentId, { applyDefaults: false });
+    if (toolSlugs.has("create_epic_plan")) {
+      slugs.push(epicOrchestratorSkillSlugForVendor(vendorSlug));
+    }
+  } catch (err) {
+    logger.warn("Failed to resolve agent tool grants for epic-skill auto-assignment", {
+      agentId,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   return slugs;

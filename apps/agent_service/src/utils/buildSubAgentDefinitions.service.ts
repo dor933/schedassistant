@@ -341,8 +341,11 @@ export async function buildSubAgentDefinitions(
     // `csa_<uuid_with_underscores>` shape we use for the in-process
     // MCP server name below, keeping the two derived identifiers
     // visually paired in trace logs.
+    // `?.trim() ||` (not `??`) so empty-string slugs also fall back to the
+    // synthetic id-derived form. `??` would let `slug = ""` through as the
+    // SDK `agents:` map key, which silently breaks Task("", ...) dispatch.
     const effectiveSlug =
-      sa.slug ?? `csa_${sa.id.replace(/-/g, "_")}`;
+      sa.slug?.trim() || `csa_${sa.id.replace(/-/g, "_")}`;
 
     try {
       const tools = await buildSubAgentTools(sa, ctx);
@@ -369,7 +372,7 @@ export async function buildSubAgentDefinitions(
       const subAgentBash = sa.allowSdkBash ? ["Bash"] : [];
 
       const definition: AgentDefinition = {
-        description: sa.description?.trim() || `${sa.agentName ?? sa.slug} specialist agent`,
+        description: sa.description?.trim() || `${sa.agentName?.trim() || effectiveSlug} specialist agent`,
         prompt: buildSubAgentPrompt(sa),
         tools: [
           ...inProcessToolNames,
@@ -397,7 +400,7 @@ export async function buildSubAgentDefinitions(
       // primary still gets the others.
       logger.error("Failed to build sub-agent bundle", {
         systemAgentId: sa.id,
-        slug: sa.slug,
+        slug: effectiveSlug,
         error: err instanceof Error ? err.message : String(err),
       });
     }
