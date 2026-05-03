@@ -604,10 +604,34 @@ export async function callModelNode(
       working = [...working, response, ...toolMsgs];
     }
 
-    logger.warn("Tool loop stopped after max rounds", { maxRounds: MAX_TOOL_ROUNDS });
+    // Soft-complete on max-rounds instead of erroring out. Returning `error`
+    // here was making every follow-up message to a chronically tool-heavy
+    // agent surface as a hard failure even though the partial work the
+    // model did is still useful and the next turn can pick up from it.
+    // Mirror the SDK runner's max-turns soft-success path: keep the
+    // accumulated AIMessage / ToolMessage pairs and append a soft notice
+    // so the UI shows a normal assistant reply rather than a red error.
+    logger.warn("Tool loop stopped after max rounds — soft-completing", {
+      maxRounds: MAX_TOOL_ROUNDS,
+      threadId,
+    });
+    newMessages.push(
+      new AIMessage({
+        content:
+          "I hit my per-turn tool-call budget while working on that. " +
+          "Some intermediate work above may have completed. Ask me to " +
+          "continue and I'll pick up from where I stopped.",
+        additional_kwargs: {
+          modelSlug,
+          vendorSlug: vendor.vendorSlug,
+          modelName: vendor.modelName,
+          hitMaxTurns: true,
+        },
+      }),
+    );
     const sessionFilesAtLimit = drainSessionFileLedger(threadId);
     return {
-      error: "The assistant requested too many tool calls in one turn. Please try again.",
+      messages: newMessages,
       ...(sessionFilesAtLimit.length > 0 ? { sessionFiles: sessionFilesAtLimit } : {}),
     };
   } catch (err) {

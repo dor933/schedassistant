@@ -249,6 +249,29 @@ async function saveClaudeSessionId(
 }
 
 /**
+ * Wipes the persisted `claudeSessionId` for a thread so the next turn starts
+ * a fresh Claude SDK session instead of resuming a poisoned one. Used when
+ * `error_max_turns` fires — the resumed session would otherwise keep tripping
+ * the same per-turn tool-call budget every time the user sends a message.
+ */
+async function clearClaudeSessionId(
+  threadId: string | null | undefined,
+): Promise<void> {
+  if (!threadId) return;
+  try {
+    await Thread.update(
+      { claudeSessionId: null },
+      { where: { id: threadId } },
+    );
+  } catch (err) {
+    logger.warn("Failed to clear claudeSessionId", {
+      threadId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * Internal helper: builds the env that gets handed to the Agent SDK process.
  *
  * Per-org credential is injected here so it never touches the parent process
@@ -1000,6 +1023,64 @@ async function runAnthropicAgentSdkImpl(
       hooks,
       workingDirectory,
     });
+  }
+
+  // Max-turns is a soft failure, not a hard error. The SDK ran the model's
+  // tool loop until our `maxTurns` cap and bailed before the model could
+  // produce final text. Two things must happen so the agent isn't stuck
+  // re-tripping the same budget every subsequent message:
+  //   1. Don't persist the SDK session id — resuming it next turn would
+  //      restart mid-tool-loop and almost certainly hit the cap again.
+  //      Clear any previously-stored value so `loadClaudeSessionId` returns
+  //      null on the next turn and we get a fresh session.
+  //   2. Treat the turn as a successful checkpoint: keep the partial work
+  //      the model already did (`result.streamMessages`) and append a soft
+  //      AIMessage telling the user we hit the cap. Returning `error`
+  //      here is what was creating the per-message error loop the user
+  //      reported.
+  if (result.hitMaxTurns) {
+    await clearClaudeSessionId(threadId);
+    const sessionFilesAtCap = drainSessionFileLedger(threadId);
+    const messagesAtCap: BaseMessage[] = [...result.streamMessages];
+    messagesAtCap.push(
+      new AIMessage({
+        content:
+          "I hit my per-turn tool-call budget while working on that. " +
+          "Some intermediate work above may have completed. Ask me to " +
+          "continue and I'll pick up from where I stopped in a fresh session.",
+      }),
+    );
+    const lastAiAtCap = [...messagesAtCap]
+      .reverse()
+      .find((m): m is AIMessage => m instanceof AIMessage);
+    if (lastAiAtCap) {
+      lastAiAtCap.additional_kwargs = {
+        ...(lastAiAtCap.additional_kwargs ?? {}),
+        modelSlug,
+        vendorSlug: vendor.vendorSlug,
+        modelName: vendor.modelName,
+        // Session is intentionally abandoned — surface that on the trace.
+        claudeSessionId: null,
+        runtime: "claude_agent_sdk",
+        hitMaxTurns: true,
+      };
+    }
+    logger.warn("Agent SDK turn hit maxTurns — session cleared, soft-completing", {
+      threadId,
+      source,
+      modelSlug,
+      vendorSlug: vendor.vendorSlug,
+      abandonedSessionId: result.sessionId ?? existingSessionId ?? null,
+      streamMessages: messagesAtCap.length,
+      sessionFiles: sessionFilesAtCap.length,
+    });
+    return {
+      messages: messagesAtCap,
+      // Explicitly null in state so the next turn doesn't read a stale
+      // value out of the in-memory checkpoint either.
+      claudeSessionId: null,
+      ...(sessionFilesAtCap.length > 0 ? { sessionFiles: sessionFilesAtCap } : {}),
+    };
   }
 
   // Persist any new session id we got back, including the fresh one after a
