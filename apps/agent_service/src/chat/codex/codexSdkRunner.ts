@@ -756,7 +756,6 @@ async function runOpenAiCodexSdkImpl(
         apiKey: effectiveApiKey,
         homeDir: effectiveHome,
       }),
-      ...(process.env.MERIDIAN_URL ? { baseUrl: process.env.MERIDIAN_URL } : {}),
       config: {
         mcp_servers: {
           // Stdio MCP, not streamable_http. Codex 0.128's rmcp client

@@ -11,7 +11,7 @@ import {
   epicOrchestratorSkillSlugForVendor,
 } from "@scheduling-agent/types";
 import { hasFilesystemMcp } from "./hasFilesystemMcp";
-import { loadActiveToolSlugs } from "./resolveAgentTools";
+import { EPIC_ORCHESTRATOR_DEFINITION } from "../constants/epicAgent";
 import { logger } from "../logger";
 
 /**
@@ -26,28 +26,35 @@ import { logger } from "../logger";
  */
 async function resolveAgentVendorAndFlags(
   agentId: string,
-): Promise<{ vendorSlug: string | null; allowSdkBash: boolean }> {
+): Promise<{
+  vendorSlug: string | null;
+  allowSdkBash: boolean;
+  definition: string | null;
+}> {
   try {
     const agent = await Agent.findByPk(agentId, {
-      attributes: ["modelId", "allowSdkBash"],
+      attributes: ["modelId", "allowSdkBash", "definition"],
     });
-    if (!agent) return { vendorSlug: null, allowSdkBash: false };
+    if (!agent) {
+      return { vendorSlug: null, allowSdkBash: false, definition: null };
+    }
     const allowSdkBash = agent.allowSdkBash !== false;
-    if (!agent.modelId) return { vendorSlug: null, allowSdkBash };
+    const definition = agent.definition ?? null;
+    if (!agent.modelId) return { vendorSlug: null, allowSdkBash, definition };
     const model = await LLMModel.findByPk(agent.modelId, {
       attributes: ["vendorId"],
     });
-    if (!model?.vendorId) return { vendorSlug: null, allowSdkBash };
+    if (!model?.vendorId) return { vendorSlug: null, allowSdkBash, definition };
     const vendor = await Vendor.findByPk(model.vendorId, {
       attributes: ["slug"],
     });
-    return { vendorSlug: vendor?.slug ?? null, allowSdkBash };
+    return { vendorSlug: vendor?.slug ?? null, allowSdkBash, definition };
   } catch (err) {
     logger.warn("Failed to resolve agent vendor/flags for skill auto-assignment", {
       agentId,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { vendorSlug: null, allowSdkBash: false };
+    return { vendorSlug: null, allowSdkBash: false, definition: null };
   }
 }
 
@@ -69,19 +76,26 @@ async function resolveAgentVendorAndFlags(
  *         related skills (`gh-cli`, `mcp-bash-build-test`, etc.) are
  *         admin-attached, not auto-assigned — admins pick the right
  *         vendor variant per agent in the admin UI.
- *   - Epic-orchestrator skill (vendor-split, gated by `create_epic_plan`):
- *       - When the agent has the `create_epic_plan` tool granted (i.e.
- *         it's an epic orchestrator), inject the vendor-matched
+ *   - Epic-orchestrator skill (vendor-split, gated by agent definition):
+ *       - When the agent's `definition` equals
+ *         `EPIC_ORCHESTRATOR_DEFINITION` (i.e. the agent_chat worker
+ *         routes its turns to `epicGraph`), inject the vendor-matched
  *         workflow skill: `epic-orchestrator-sdk` for Anthropic
  *         (sub-agent fan-out + `complete_epic_task` inside one sync
  *         turn) or `epic-orchestrator-codex` for Codex (detached run +
- *         server auto-finalize, no `complete_epic_task`). Tool grant
- *         is the source of truth — no separate `is_epic_orchestrator`
- *         flag.
+ *         server auto-finalize, no `complete_epic_task`).
+ *       - The definition string is the right signal because the epic-
+ *         specific tools are bound **unconditionally** by
+ *         `epicCallModelNode` — they are NOT gated by
+ *         `agent_available_tools`, so checking the tool-grant table
+ *         would miss every epic orchestrator that doesn't have a
+ *         redundant grant row. Definition matches the routing
+ *         decision the worker makes (see `agentChat.worker.ts:154`).
  */
 async function autoSlugsForAgent(agentId: string): Promise<string[]> {
   const slugs: string[] = [...CORE_AUTO_ASSIGNED_SKILL_SLUGS];
-  const { vendorSlug, allowSdkBash } = await resolveAgentVendorAndFlags(agentId);
+  const { vendorSlug, allowSdkBash, definition } =
+    await resolveAgentVendorAndFlags(agentId);
 
   if (vendorSlug === "anthropic") {
     slugs.push(...FILESYSTEM_SKILL_SLUGS_SDK);
@@ -93,20 +107,12 @@ async function autoSlugsForAgent(agentId: string): Promise<string[]> {
     slugs.push(bashSkillSlugForVendor(vendorSlug));
   }
 
-  // Epic-orchestrator skill — vendor-split, gated by `create_epic_plan`
-  // tool grant. `applyDefaults: false` so the default set (`consult_agent`,
-  // `list_agents`, `list_system_agents`) doesn't accidentally make every
-  // agent without explicit tool rows look like an epic orchestrator.
-  try {
-    const toolSlugs = await loadActiveToolSlugs(agentId, { applyDefaults: false });
-    if (toolSlugs.has("create_epic_plan")) {
-      slugs.push(epicOrchestratorSkillSlugForVendor(vendorSlug));
-    }
-  } catch (err) {
-    logger.warn("Failed to resolve agent tool grants for epic-skill auto-assignment", {
-      agentId,
-      error: err instanceof Error ? err.message : String(err),
-    });
+  // Epic-orchestrator skill — vendor-split, gated by the agent's
+  // definition matching the same constant the worker uses to route to
+  // `epicGraph`. Aligns the skill surface with the actual graph the
+  // agent runs through.
+  if (definition === EPIC_ORCHESTRATOR_DEFINITION) {
+    slugs.push(epicOrchestratorSkillSlugForVendor(vendorSlug));
   }
 
   return slugs;

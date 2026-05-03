@@ -1638,11 +1638,16 @@ export function StartEpicTaskCodexTool(
           `Sandbox mode: \`${sandboxMode}\`\n` +
           `Execution ID: \`${execution.id}\`\n\n` +
           `Codex is running **server-side** outside this tool call's lifetime — MCP timeouts will ` +
-          `not cancel it. **Poll \`get_epic_status\` about once per minute** until this task shows ` +
-          `\`completed\` or \`failed\`. The server auto-finalizes (git diff, execution row, task ` +
-          `status, per-task summary file, continuation) — **do not** call \`complete_epic_task\` ` +
-          `for this Codex path. If this tool appeared to fail with no output, ignore that — keep ` +
-          `polling until the task terminal state appears in \`get_epic_status\`.`
+          `not cancel it. **End your turn now**: reply to the user with one short progress line ` +
+          `("Started task X via Codex; will update when it finishes.") and **do not call any more ` +
+          `tools**. The system is event-driven — when Codex's session terminates, the server ` +
+          `auto-finalizes (git diff, execution row, task status, per-task summary file) and ` +
+          `enqueues a follow-up turn that will deliver the summary + chat attachment to the user. ` +
+          `Do **not** call \`complete_epic_task\` (the server handles that for the Codex path), ` +
+          `and do **not** poll \`get_epic_status\` in a loop — that just burns tool rounds against ` +
+          `the per-turn cap while Codex runs in the background. If the user explicitly asks for a ` +
+          `mid-run status check later, calling \`get_epic_status\` once is fine, but never as a ` +
+          `wait-for-completion mechanism.`
         );
       } catch (err: any) {
         logger.error("StartEpicTaskCodex: failed", {
@@ -1659,9 +1664,12 @@ export function StartEpicTaskCodexTool(
         "After fast setup, starts ONE Codex workspace-write session **in the background** and " +
         "returns immediately so MCP client timeouts do not abort long runs.\n\n" +
         "**Call ORDER:** first `plan_epic_task`, then pass its Markdown into `plan`. Required.\n\n" +
-        "**After this returns:** poll `get_epic_status` ~every minute until the task is `completed` " +
-        "or `failed`. Do **not** call `complete_epic_task` — the server finalizes automatically when " +
-        "Codex finishes. If the tool errors or returns empty due to MCP timeout, keep polling anyway.\n\n" +
+        "**After this returns:** end your turn with a brief progress message to the user and do " +
+        "NOT call any more tools. The system wakes you automatically with a follow-up turn when " +
+        "Codex finishes — that follow-up carries the summary + chat attachment. Do **not** call " +
+        "`complete_epic_task` (the server finalizes automatically), and do **not** poll " +
+        "`get_epic_status` waiting for completion — Codex runs can take minutes and the per-turn " +
+        "tool cap will trip first.\n\n" +
         "**Codex-vendor only — use `start_epic_task` on Anthropic.**",
       schema: z.object({
         plan: z

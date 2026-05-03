@@ -122,7 +122,6 @@ export async function runCodexInRepo(
             apiKey: effectiveApiKey,
             homeDir: materialised ? materialised.homeDir : null,
           }),
-          ...(process.env.MERIDIAN_URL ? { baseUrl: process.env.MERIDIAN_URL } : {}),
         };
 
         const threadOptions: ThreadOptions = {
