@@ -860,6 +860,20 @@ export interface EpicTaskAttributes {
   userId: UserId;
   agentId: AgentId;
   metadata: Record<string, unknown> | null;
+  /**
+   * Absolute path to the per-epic workspace folder shared by ALL tasks in
+   * this epic. Sibling to the per-thread `threads/<id>/` folders — lives at
+   * `<orchestrator.workspacePath>/epics/<epicId>/`. Sub-agents write
+   * deliverables, scratch notes, and any non-repo files here so the same
+   * folder is reachable across tasks (sub-agents don't carry memory across
+   * task dispatches; threading the path through gives them a stable shared
+   * location). Code edits still go to the repo cwd, NOT here.
+   *
+   * NULL for epics created before this column existed; populated at
+   * `create_epic_plan` time for new epics that have an orchestrator with a
+   * `workspacePath` set.
+   */
+  workspacePath: string | null;
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;

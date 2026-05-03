@@ -28,6 +28,10 @@ import type {
   PrStatus,
 } from "@scheduling-agent/types";
 import { logger } from "../logger";
+import {
+  resolveEpicWorkspacePath,
+  ensureEpicWorkspace,
+} from "../workspace/sessionWorkspace";
 
 // The agent_service container runs as root, but Claude CLI (and gh) must run
 // as the non-root `agent` user via `su-exec`. `su-exec` inherits env unchanged,
@@ -1304,6 +1308,17 @@ export async function createEpicWithPlan(data: {
     // null when the epic has no repos at all (rare — repo-less plan-only epics).
   }
 
+  // Look up the orchestrator agent's workspacePath BEFORE opening the
+  // transaction — needed to compute the per-epic workspace folder path.
+  // When the orchestrator has no workspace configured (rare; system-only
+  // agents), the column stays NULL and start_epic_task simply doesn't
+  // surface a workspace path to sub-agents. Pre-existing epics also stay
+  // NULL by design (no backfill).
+  const orchestratorRow = await Agent.findByPk(data.agentId, {
+    attributes: ["workspacePath"],
+  });
+  const orchestratorWorkspacePath = orchestratorRow?.workspacePath ?? null;
+
   const transaction = await sequelize.transaction();
   try {
     const epic = await EpicTask.create(
@@ -1316,6 +1331,18 @@ export async function createEpicWithPlan(data: {
       },
       { transaction },
     );
+
+    // Now that we have the epic id, compute the per-epic workspace folder
+    // (`<orchestrator.workspacePath>/epics/<epic.id>/`) and persist on the
+    // row inside the same transaction. Folder creation on disk happens
+    // post-commit so a mkdir error doesn't roll back epic creation.
+    const epicWorkspacePath = resolveEpicWorkspacePath(
+      orchestratorWorkspacePath,
+      epic.id,
+    );
+    if (epicWorkspacePath) {
+      await epic.update({ workspacePath: epicWorkspacePath }, { transaction });
+    }
 
     if (data.repositoryIds?.length) {
       await EpicTaskRepository.bulkCreate(
@@ -1378,6 +1405,24 @@ export async function createEpicWithPlan(data: {
     // First-stage tasks were created with `status='ready'` inside the
     // transaction above (atomic with epic/stage/task creation), so there's
     // no post-commit flip needed here.
+
+    // Best-effort folder creation post-commit. If mkdir fails (permissions,
+    // disk full, etc.) we log and continue — the column is already populated
+    // on the row, and the next caller that needs the folder can recreate it
+    // (mkdir { recursive: true } is idempotent). Failing this would be worse
+    // than letting it: the epic is fully planned in the DB and rolling back
+    // for a workspace mkdir blip would lose that work.
+    if (epicWorkspacePath) {
+      try {
+        await ensureEpicWorkspace(epicWorkspacePath);
+      } catch (err: any) {
+        logger.warn("createEpicWithPlan: failed to mkdir epic workspace folder (non-fatal)", {
+          epicId: epic.id,
+          epicWorkspacePath,
+          error: err?.message,
+        });
+      }
+    }
 
     return getEpic(epic.id, { includeStages: true, includeTasks: true }) as Promise<EpicTask>;
   } catch (err) {

@@ -27,6 +27,13 @@ import type { SessionFileEntry } from "@scheduling-agent/types";
 /** Folder name used under `agent.workspacePath` to hold per-thread folders. */
 const THREADS_DIR = "threads";
 
+/** Folder name used under the orchestrator agent's `workspacePath` to hold
+ *  per-epic shared folders. Sibling to `threads/`. Each epic gets one
+ *  subfolder named by its UUID; ALL tasks in the epic share it. Sub-agents
+ *  dispatched per task can read/write here for cross-task continuity (their
+ *  cwd stays the repo — this is just a known auxiliary location). */
+const EPICS_DIR = "epics";
+
 /**
  * Resolves the absolute per-thread workspace path for an agent + thread, or
  * `null` when the agent has no workspace configured (system agents, agents
@@ -60,6 +67,42 @@ export async function ensureSessionWorkspace(
   if (!sessionWorkspacePath) return;
   await mkdir(sessionWorkspacePath, { recursive: true });
   chownPathToAgentBestEffort(sessionWorkspacePath);
+}
+
+/**
+ * Resolves the absolute per-epic workspace path for an orchestrator agent
+ * + epic id, or `null` when the orchestrator has no `workspacePath`
+ * configured. Pure — does not touch the filesystem. Layout:
+ *
+ *     <orchestratorWorkspacePath>/epics/<epicId>/
+ *
+ * Sibling to `threads/<threadId>/`. The path is stable across thread
+ * rotations because it keys on the epic id, not the thread id.
+ */
+export function resolveEpicWorkspacePath(
+  orchestratorWorkspacePath: string | null | undefined,
+  epicId: string | null | undefined,
+): string | null {
+  if (!orchestratorWorkspacePath || !epicId) return null;
+  const trimmed = epicId.trim();
+  if (!trimmed) return null;
+  return path.join(orchestratorWorkspacePath, EPICS_DIR, trimmed);
+}
+
+/**
+ * Ensures the per-epic folder exists. Idempotent. No-op when `path` is
+ * null (e.g. the orchestrator has no `workspacePath`). Errors propagate
+ * — callers that want best-effort semantics should wrap in try/catch.
+ *
+ * Same chown-to-agent fix as `ensureSessionWorkspace` so the CLI (running
+ * as `agent` via `su-exec`) can write into the brand-new folder.
+ */
+export async function ensureEpicWorkspace(
+  epicWorkspacePath: string | null,
+): Promise<void> {
+  if (!epicWorkspacePath) return;
+  await mkdir(epicWorkspacePath, { recursive: true });
+  chownPathToAgentBestEffort(epicWorkspacePath);
 }
 
 /**
