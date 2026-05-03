@@ -1,7 +1,7 @@
 import type {
   Classification,
   EvidenceState,
-  FreshnessMetadata,
+  PublicFreshnessView,
   SectorLeaderboardView,
   SnapshotBundle,
   StockIdeaView,
@@ -53,16 +53,7 @@ export type PgCapabilityRegistryEntry = {
   run: (input: PgCapabilityRunInput) => Promise<PgCapabilityRunResult>;
 };
 
-export type CapabilityFreshnessSource = {
-  name: string;
-  completedAt?: string;
-  state?: string;
-};
-
-export type CapabilityFreshness = FreshnessMetadata & {
-  state?: "fresh" | "stale" | "unknown";
-  sources?: CapabilityFreshnessSource[];
-};
+export type CapabilityFreshness = PublicFreshnessView;
 
 export type SectorConvictionLeaderboardRow = Record<string, unknown> & {
   sector?: unknown;

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { buildSectorConvictionLeaderboardView } from "./pgCapabilities/sectorConvictionLeaderboard";
 import { buildStockIdeaDiscoveryView } from "./pgCapabilities/stockIdeaDiscovery";
 import { capabilityForIntent } from "./pgCapabilities/registry";
+import { assessCapabilityFreshness } from "./pgCapabilities/freshnessGuard";
 import { compilePublicResearchView } from "./publicResearch";
 import type { Classification } from "./types";
 
@@ -77,7 +78,100 @@ test("sector conviction leaderboard returns complete public view with overlay", 
   assert.equal(view.rows[0].sector, "Industrials");
   assert.equal(view.rows[0].convictionScorePct, 82.4);
   assert.equal(view.rows[0].hitRatePct, 58.2);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
   assertNoForbiddenPublicKeys(view);
+});
+
+test("FreshnessGuard treats Friday data as fresh on Sunday", () => {
+  const assessment = assessCapabilityFreshness({
+    capability: "stock_idea_discovery",
+    dataThrough: "2026-05-01",
+    now: new Date("2026-05-03T12:00:00Z"),
+    sources: [
+      {
+        sourceId: "features_daily",
+        tableOrView: "md_features_daily",
+        required: true,
+        refreshState: "FRESH",
+        lastSuccessAt: "2026-05-03T12:30:00Z",
+      },
+    ],
+  });
+
+  assert.equal(assessment.decision, "allow");
+  assert.equal(assessment.publicFreshness.state, "fresh");
+  assert.equal(assessment.publicFreshness.dataThrough, "2026-05-01");
+  assert.equal(assessment.publicFreshness.warning, undefined);
+});
+
+test("FreshnessGuard returns public stale warning without source names", () => {
+  const assessment = assessCapabilityFreshness({
+    capability: "sector_conviction_leaderboard",
+    dataThrough: "2026-04-30",
+    now: new Date("2026-05-03T12:00:00Z"),
+    sources: [
+      {
+        sourceId: "sector_peer_daily",
+        tableOrView: "md_research_sector_peer_daily",
+        required: true,
+        refreshState: "STALE",
+        lastSuccessAt: "2026-05-01T12:30:00Z",
+        maxAge: "28:00:00",
+      },
+    ],
+  });
+
+  assert.equal(assessment.decision, "allow_with_caveat");
+  assert.equal(assessment.publicFreshness.state, "stale");
+  assert.match(assessment.publicFreshness.warning ?? "", /data through 2026-04-30/i);
+  assertNoFreshnessInternals(assessment.publicFreshness);
+  assert.match(JSON.stringify(assessment.internalDiagnostics), /md_research_sector_peer_daily/);
+});
+
+test("FreshnessGuard marks missing dataThrough as unknown", () => {
+  const assessment = assessCapabilityFreshness({
+    capability: "stock_idea_discovery",
+    now: new Date("2026-05-03T12:00:00Z"),
+    sources: [
+      {
+        sourceId: "features_daily",
+        tableOrView: "md_features_daily",
+        required: true,
+        refreshState: "FRESH",
+      },
+    ],
+  });
+
+  assert.equal(assessment.decision, "allow_with_caveat");
+  assert.equal(assessment.reasonCode, "missing_data_through");
+  assert.deepEqual(assessment.publicFreshness, {
+    state: "unknown",
+    warning: "Freshness could not be verified for this view.",
+  });
+});
+
+test("FreshnessGuard marks hard-stale primary data unavailable", () => {
+  const assessment = assessCapabilityFreshness({
+    capability: "stock_idea_discovery",
+    dataThrough: "2026-04-20",
+    now: new Date("2026-05-03T12:00:00Z"),
+    sources: [
+      {
+        sourceId: "features_daily",
+        tableOrView: "md_features_daily",
+        required: true,
+        refreshState: "FRESH",
+      },
+    ],
+  });
+
+  assert.equal(assessment.decision, "unavailable");
+  assert.equal(assessment.reasonCode, "hard_stale");
+  assert.equal(assessment.publicFreshness.state, "stale");
+  assert.match(assessment.publicFreshness.warning ?? "", /current ranking is unavailable/i);
 });
 
 test("PG capability registry routes stock idea discovery intent", () => {
@@ -120,6 +214,44 @@ test("sector conviction leaderboard returns partial when forward overlay is abse
   assert.equal(view.rankingBasis, "divergence");
   assert.match(view.warnings.join(" "), /overlay is unavailable/i);
   assert.equal(view.rows[0].hitRatePct, undefined);
+  assert.equal(view.freshness.state, "unknown");
+  assert.match(view.freshness.warning ?? "", /Freshness could not be verified/i);
+  assertNoFreshnessInternals(view.freshness);
+});
+
+test("sector conviction leaderboard returns unavailable for hard-stale primary source", async () => {
+  const result = await buildSectorConvictionLeaderboardView(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: new Date("2026-05-03T12:00:00Z"),
+      queryRunner: async () => [
+        {
+          sector: "Utilities",
+          rank: 1,
+          conviction_score_pct: 70,
+          conviction_bucket: "CONSTRUCTIVE",
+          evidence_strength: "WEAK",
+          as_of_date: "2026-04-20",
+          peer_freshness_state: "FRESH",
+          peer_completed_at: "2026-04-20T12:31:04Z",
+          overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorLeaderboardView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.equal(view.freshness.state, "stale");
+  assert.match(view.freshness.warning ?? "", /stale data through 2026-04-20/i);
+  assertNoForbiddenPublicKeys(view);
 });
 
 test("sector conviction leaderboard returns unavailable when source has no rows", async () => {
@@ -244,6 +376,10 @@ test("stock idea discovery returns partial public view with bounded forward over
   assert.equal(view.rows[0].medianReturnPct, 5.24);
   assert.equal(view.rows[0].p10MaxDrawdownPct, undefined);
   assert.equal(view.rows[0].recoveredByHorizonRatePct, undefined);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
   assert.match(view.warnings.join(" "), /research candidates/i);
   assertNoForbiddenPublicKeys(view);
 });
@@ -337,6 +473,39 @@ test("publicResearchView carries stockIdeaView without Research Objects", async 
   assertNoForbiddenPublicKeys(publicView);
 });
 
+test("stock idea discovery public freshness is unknown when dataThrough is missing", async () => {
+  const result = await buildStockIdeaDiscoveryView(
+    {
+      classification: stockIdeaClassification,
+      message: "What stock looks interesting today?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          sector: "Industrials",
+          rank: 1,
+          conviction_score_pct: 80,
+          conviction_bucket: "HIGH",
+          features_freshness_state: "FRESH",
+          peer_freshness_state: "FRESH",
+          forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.stockIdeaView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.freshness.state, "unknown");
+  assert.match(view.freshness.warning ?? "", /Freshness could not be verified/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
 function assertNoForbiddenPublicKeys(value: unknown): void {
   const json = JSON.stringify(value);
   assert.doesNotMatch(json, /researchObjects/);
@@ -351,4 +520,20 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /internal_threshold/);
   assert.doesNotMatch(json, /setup_score/);
   assert.doesNotMatch(json, /feature_rules/);
+  assertNoFreshnessInternals(value);
+}
+
+function assertNoFreshnessInternals(value: unknown): void {
+  const json = JSON.stringify(value);
+  assert.doesNotMatch(json, /md_research_refresh_latest/);
+  assert.doesNotMatch(json, /md_research_refresh_stale/);
+  assert.doesNotMatch(json, /md_features_daily/);
+  assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /pipeline_state/);
+  assert.doesNotMatch(json, /run_id/);
+  assert.doesNotMatch(json, /stage/);
+  assert.doesNotMatch(json, /last_success_at/);
+  assert.doesNotMatch(json, /completed_at/);
+  assert.doesNotMatch(json, /max_age/);
+  assert.doesNotMatch(json, /refresh logs/);
 }

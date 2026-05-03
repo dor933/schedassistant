@@ -352,4 +352,14 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /internal_threshold/);
   assert.doesNotMatch(json, /setup_score/);
   assert.doesNotMatch(json, /feature_rules/);
+  assert.doesNotMatch(json, /md_research_refresh_latest/);
+  assert.doesNotMatch(json, /md_research_refresh_stale/);
+  assert.doesNotMatch(json, /md_features_daily/);
+  assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /pipeline_state/);
+  assert.doesNotMatch(json, /run_id/);
+  assert.doesNotMatch(json, /stage/);
+  assert.doesNotMatch(json, /last_success_at/);
+  assert.doesNotMatch(json, /completed_at/);
+  assert.doesNotMatch(json, /max_age/);
 }

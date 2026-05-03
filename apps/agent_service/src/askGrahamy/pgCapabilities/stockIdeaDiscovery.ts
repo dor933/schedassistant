@@ -8,6 +8,7 @@ import type {
   PgCapabilityRunResult,
   StockIdeaDiscoveryRow,
 } from "./types";
+import { assessCapabilityFreshness } from "./freshnessGuard";
 
 const VIEW_SCHEMA_VERSION = 1;
 const DEFAULT_MAX_ROWS = 10;
@@ -21,6 +22,7 @@ export type StockIdeaDiscoveryOptions = {
   ) => Promise<StockIdeaDiscoveryRow[]>;
   maxRows?: number;
   candidatePoolSize?: number;
+  now?: Date;
 };
 
 export async function buildStockIdeaDiscoveryView(
@@ -52,7 +54,7 @@ export async function buildStockIdeaDiscoveryView(
       CANDIDATE_POOL_SIZE: candidatePoolSize,
       RANK_BY: rankingBasis,
     });
-    const view = rowsToView(rows, rankingBasis);
+    const view = rowsToView(rows, rankingBasis, options.now);
     return { views: { stockIdeaView: view }, warnings: [] };
   } catch (err) {
     const message = "Stock idea discovery query failed.";
@@ -81,6 +83,7 @@ function defaultQueryRunner(
 function rowsToView(
   rows: StockIdeaDiscoveryRow[],
   rankingBasis: StockIdeaView["rankingBasis"],
+  now?: Date,
 ): StockIdeaView {
   if (!rows.length) {
     return unavailableView(rankingBasis, [
@@ -102,7 +105,15 @@ function rowsToView(
     boolValue(row.forward_overlay_available),
   );
   const asOfDate = dateStringValue(first.as_of_date);
-  const freshness = buildFreshness(first, asOfDate);
+  const freshnessAssessment = buildFreshness(first, asOfDate, now);
+  const freshness = freshnessAssessment.publicFreshness;
+  if (freshnessAssessment.decision === "unavailable") {
+    return unavailableView(
+      rankingBasis,
+      [freshness.warning ?? "Stock idea discovery data is stale."],
+      freshness,
+    );
+  }
   const warnings: string[] = [
     "These are research candidates to review, not buy/sell recommendations.",
     "V1 stock idea discovery does not include daily path-risk drawdown metrics.",
@@ -113,7 +124,12 @@ function rowsToView(
     );
   }
   if (freshness.state === "stale") {
-    warnings.push("One or more PG stock idea discovery sources are stale.");
+    warnings.push(
+      freshness.warning ??
+        "This stock idea discovery view uses stale data and should be treated as a snapshot.",
+    );
+  } else if (freshness.state === "unknown" && freshness.warning) {
+    warnings.push(freshness.warning);
   }
 
   return {
@@ -189,37 +205,37 @@ function buildReasonBullets(
 function buildFreshness(
   row: StockIdeaDiscoveryRow,
   asOfDate: string | undefined,
-): CapabilityFreshness {
-  const sources = [
-    {
-      name: "md_features_daily",
-      completedAt: dateTimeStringValue(row.features_completed_at),
-      state: stringValue(row.features_freshness_state),
-    },
-    {
-      name: "md_research_sector_peer_daily",
-      completedAt: dateTimeStringValue(row.peer_completed_at),
-      state: stringValue(row.peer_freshness_state),
-    },
-  ].filter((source) => source.completedAt || source.state);
-  const states = sources.map((source) => source.state?.toUpperCase());
-  const freshnessState =
-    states.length === 0
-      ? "unknown"
-      : states.some((state) => state && state !== "FRESH")
-        ? "stale"
-        : "fresh";
-
-  return {
+  now?: Date,
+): ReturnType<typeof assessCapabilityFreshness> {
+  return assessCapabilityFreshness({
+    capability: "stock_idea_discovery",
     dataThrough: asOfDate,
-    state: freshnessState,
-    sources,
-  };
+    now,
+    sources: [
+      {
+        sourceId: "features_daily",
+        tableOrView: "md_features_daily",
+        required: true,
+        dataThrough: asOfDate,
+        lastSuccessAt: dateTimeStringValue(row.features_completed_at),
+        refreshState: stringValue(row.features_freshness_state),
+      },
+      {
+        sourceId: "sector_peer_daily",
+        tableOrView: "md_research_sector_peer_daily",
+        required: true,
+        dataThrough: asOfDate,
+        lastSuccessAt: dateTimeStringValue(row.peer_completed_at),
+        refreshState: stringValue(row.peer_freshness_state),
+      },
+    ],
+  });
 }
 
 function unavailableView(
   rankingBasis: StockIdeaView["rankingBasis"],
   warnings: string[],
+  freshness: CapabilityFreshness = { state: "unknown" },
 ): StockIdeaView {
   return {
     viewSchemaVersion: VIEW_SCHEMA_VERSION,
@@ -227,7 +243,7 @@ function unavailableView(
     source: "pg_features_daily",
     rankingBasis,
     rows: [],
-    freshness: { state: "unknown" },
+    freshness,
     warnings,
   };
 }

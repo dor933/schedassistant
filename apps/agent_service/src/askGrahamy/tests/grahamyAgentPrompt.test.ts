@@ -50,6 +50,9 @@ test("LLM prompt receives public-safe sector leaderboard view", () => {
   assert.match(prompt, /Industrials/);
   assert.match(prompt, /rank sectors only/i);
   assert.match(prompt, /validated live edge/i);
+  assert.match(prompt, /this week/);
+  assert.match(prompt, /freshness\.dataThrough/);
+  assert.match(prompt, /2026-05-01/);
   assert.doesNotMatch(prompt, /researchObjects/);
   assert.doesNotMatch(prompt, /parts/);
   assert.doesNotMatch(prompt, /raw_sql/);
@@ -57,6 +60,7 @@ test("LLM prompt receives public-safe sector leaderboard view", () => {
   assert.doesNotMatch(prompt, /hypothesis_id/);
   assert.doesNotMatch(prompt, /analog_rows/);
   assert.doesNotMatch(prompt, /path_rows/);
+  assertNoFreshnessInternals(prompt);
 });
 
 test("LLM prompt receives public-safe stock idea view", () => {
@@ -116,4 +120,72 @@ test("LLM prompt receives public-safe stock idea view", () => {
   assert.doesNotMatch(prompt, /analog_rows/);
   assert.doesNotMatch(prompt, /path_rows/);
   assert.doesNotMatch(prompt, /setup_score/);
+  assertNoFreshnessInternals(prompt);
 });
+
+test("LLM prompt carries only public stale freshness caveat", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "What stock looks interesting today?",
+    warnings: [],
+    classification: {
+      intent: "stock_idea_discovery",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      stockIdeaView: {
+        viewSchemaVersion: 1,
+        state: "partial",
+        source: "pg_features_daily",
+        asOfDate: "2026-04-30",
+        rankingBasis: "setup_quality",
+        rows: [
+          {
+            symbol: "GSL",
+            rank: 1,
+            reasonBullets: ["Sector-relative conviction bucket is HIGH."],
+          },
+        ],
+        freshness: {
+          dataThrough: "2026-04-30",
+          state: "stale",
+          warning:
+            "This view uses data through 2026-04-30; treat it as a stale snapshot rather than a live current view.",
+        },
+        warnings: [
+          "This view uses data through 2026-04-30; treat it as a stale snapshot rather than a live current view.",
+        ],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /today/);
+  assert.match(prompt, /2026-04-30/);
+  assert.match(prompt, /stale snapshot/);
+  assert.match(prompt, /do not call the data current/i);
+  assertNoFreshnessInternals(prompt);
+});
+
+function assertNoFreshnessInternals(value: unknown): void {
+  const json = JSON.stringify(value);
+  assert.doesNotMatch(json, /md_research_refresh_latest/);
+  assert.doesNotMatch(json, /md_research_refresh_stale/);
+  assert.doesNotMatch(json, /md_features_daily/);
+  assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /pipeline_state/);
+  assert.doesNotMatch(json, /run_id/);
+  assert.doesNotMatch(json, /last_success_at/);
+  assert.doesNotMatch(json, /completed_at/);
+  assert.doesNotMatch(json, /max_age/);
+}

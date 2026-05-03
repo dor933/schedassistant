@@ -46,13 +46,6 @@ test("LLM prompt includes only public-safe sector leaderboard payload", () => {
         freshness: {
           dataThrough: "2026-05-01",
           state: "fresh",
-          sources: [
-            {
-              name: "md_research_sector_peer_daily",
-              completedAt: "2026-05-02T12:30:04Z",
-              state: "FRESH",
-            },
-          ],
         },
         warnings: [],
       },
@@ -74,4 +67,6 @@ test("LLM prompt includes only public-safe sector leaderboard payload", () => {
   assert.doesNotMatch(prompt, /path_rows/);
   assert.doesNotMatch(prompt, /gate_name/);
   assert.doesNotMatch(prompt, /internal_threshold/);
+  assert.doesNotMatch(prompt, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(prompt, /completedAt/);
 });

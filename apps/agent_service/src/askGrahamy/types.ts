@@ -125,6 +125,12 @@ export type FreshnessMetadata = {
   staleReason?: string;
 };
 
+export type PublicFreshnessView = {
+  dataThrough?: string;
+  state?: "fresh" | "stale" | "unknown";
+  warning?: string;
+};
+
 export type ConversationContext = {
   conversationId: string;
   /**
@@ -303,14 +309,7 @@ export type SectorLeaderboardView = {
   rankingBasis: "conviction" | "historical_forward" | "divergence";
   asOfDate?: string;
   rows: SectorLeaderboardRowView[];
-  freshness: FreshnessMetadata & {
-    state?: "fresh" | "stale" | "unknown";
-    sources?: Array<{
-      name: string;
-      completedAt?: string;
-      state?: string;
-    }>;
-  };
+  freshness: PublicFreshnessView;
   warnings: string[];
 };
 
@@ -346,14 +345,7 @@ export type StockIdeaView = {
     | "historical_forward"
     | "risk_adjusted";
   rows: StockIdeaRowView[];
-  freshness: FreshnessMetadata & {
-    state?: "fresh" | "stale" | "unknown";
-    sources?: Array<{
-      name: string;
-      completedAt?: string;
-      state?: string;
-    }>;
-  };
+  freshness: PublicFreshnessView;
   warnings: string[];
 };
 

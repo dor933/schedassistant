@@ -8,6 +8,7 @@ import type {
   PgCapabilityRunResult,
   SectorConvictionLeaderboardRow,
 } from "./types";
+import { assessCapabilityFreshness } from "./freshnessGuard";
 
 const VIEW_SCHEMA_VERSION = 1;
 const DEFAULT_MAX_ROWS = 10;
@@ -18,6 +19,7 @@ export type SectorConvictionLeaderboardOptions = {
     replacements: Record<string, unknown>,
   ) => Promise<SectorConvictionLeaderboardRow[]>;
   maxRows?: number;
+  now?: Date;
 };
 
 export async function buildSectorConvictionLeaderboardView(
@@ -43,7 +45,7 @@ export async function buildSectorConvictionLeaderboardView(
       MAX_ROWS: maxRows,
       RANK_BY: rankingBasis,
     });
-    const view = rowsToView(rows, rankingBasis);
+    const view = rowsToView(rows, rankingBasis, options.now);
     return { views: { sectorLeaderboardView: view }, warnings: [] };
   } catch (err) {
     const message = "Sector conviction leaderboard query failed.";
@@ -72,6 +74,7 @@ function defaultQueryRunner(
 function rowsToView(
   rows: SectorConvictionLeaderboardRow[],
   rankingBasis: SectorLeaderboardView["rankingBasis"],
+  now?: Date,
 ): SectorLeaderboardView {
   if (!rows.length) {
     return unavailableView(rankingBasis, [
@@ -97,9 +100,22 @@ function rowsToView(
     );
   }
 
-  const freshness = buildFreshness(first, asOfDate);
+  const freshnessAssessment = buildFreshness(first, asOfDate, now);
+  const freshness = freshnessAssessment.publicFreshness;
+  if (freshnessAssessment.decision === "unavailable") {
+    return unavailableView(
+      rankingBasis,
+      [freshness.warning ?? "Sector leaderboard data is stale."],
+      freshness,
+    );
+  }
   if (freshness.state === "stale") {
-    warnings.push("One or more PG sector leaderboard sources are stale.");
+    warnings.push(
+      freshness.warning ??
+        "This sector leaderboard uses stale data and should be treated as a snapshot.",
+    );
+  } else if (freshness.state === "unknown" && freshness.warning) {
+    warnings.push(freshness.warning);
   }
 
   return {
@@ -138,37 +154,36 @@ function rowToPublicRow(
 function buildFreshness(
   row: SectorConvictionLeaderboardRow,
   asOfDate: string | undefined,
-): CapabilityFreshness {
-  const sources = [
-    {
-      name: "md_research_sector_peer_daily",
-      completedAt: dateTimeStringValue(row.peer_completed_at),
-      state: stringValue(row.peer_freshness_state),
-    },
-    {
-      name: "md_research_sector_regime_fwd_agg",
-      completedAt: dateTimeStringValue(row.forward_completed_at),
-      state: stringValue(row.forward_freshness_state),
-    },
-  ].filter((source) => source.completedAt || source.state);
-  const states = sources.map((source) => source.state?.toUpperCase());
-  const freshnessState =
-    states.length === 0
-      ? "unknown"
-      : states.some((state) => state && state !== "FRESH")
-        ? "stale"
-        : "fresh";
-
-  return {
+  now?: Date,
+): ReturnType<typeof assessCapabilityFreshness> {
+  return assessCapabilityFreshness({
+    capability: "sector_conviction_leaderboard",
     dataThrough: asOfDate,
-    state: freshnessState,
-    sources,
-  };
+    now,
+    sources: [
+      {
+        sourceId: "sector_peer_daily",
+        tableOrView: "md_research_sector_peer_daily",
+        required: true,
+        dataThrough: asOfDate,
+        lastSuccessAt: dateTimeStringValue(row.peer_completed_at),
+        refreshState: stringValue(row.peer_freshness_state),
+      },
+      {
+        sourceId: "sector_regime_forward_aggregate",
+        tableOrView: "md_research_sector_regime_fwd_agg",
+        required: false,
+        lastSuccessAt: dateTimeStringValue(row.forward_completed_at),
+        refreshState: stringValue(row.forward_freshness_state),
+      },
+    ],
+  });
 }
 
 function unavailableView(
   rankingBasis: SectorLeaderboardView["rankingBasis"],
   warnings: string[],
+  freshness: CapabilityFreshness = { state: "unknown" },
 ): SectorLeaderboardView {
   return {
     viewSchemaVersion: VIEW_SCHEMA_VERSION,
@@ -177,7 +192,7 @@ function unavailableView(
     period: "latest",
     rankingBasis,
     rows: [],
-    freshness: { state: "unknown" },
+    freshness,
     warnings,
   };
 }
