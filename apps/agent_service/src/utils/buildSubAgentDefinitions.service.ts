@@ -20,9 +20,20 @@
  *   - Is exposed to the primary's model as one entry in `agents:` so it
  *     can call `Task("<sub-agent-slug>", "<task>")` to delegate.
  *
- * Tool list per sub-agent mirrors the per-agent slug allowlist convention
- * already used by the basic/epic graphs: `loadActiveToolSlugs(subAgentId)`
- * with the same `DEFAULT_TOOL_SLUGS` fallback when no rows exist.
+ * Tool surface per sub-agent is INTENTIONALLY MINIMAL. Sub-agents are
+ * pure specialists: they get NO auto-bound LangChain tools (no agent
+ * notes, episodic memory, thread/session helpers, skills, list_*,
+ * consult_agent, send_file, Tavily, Google Workspace, etc.). The
+ * model-visible surface is exactly:
+ *   - External MCP servers attached to the sub-agent's row via
+ *     `agent_available_mcp_servers` (filesystem, github, bash, …).
+ *   - SDK built-ins (Read/Write/Edit/Glob/Grep/MultiEdit/WebFetch) iff
+ *     the row's `allow_sdk_builtins=true`.
+ *   - SDK `Bash` iff the row's `allow_sdk_bash=true`.
+ *
+ * If the admin attaches no MCP servers and leaves both flags off, the
+ * sub-agent has zero tools and can only reason. That is by design —
+ * sub-agents are configured per-row in the admin UI, not by inheritance.
  *
  * MCP servers per sub-agent are loaded fresh from `agent_available_mcp_servers`
  * for that sub-agent's id and translated into the SDK's stdio config
@@ -44,26 +55,6 @@ import {
 import { ENABLED_BUILTIN_TOOLS } from "../chat/anthropic/agentSdkBuiltinHooks";
 import type { SubAgentBundle } from "../chat/anthropic/agentSdkRunner";
 import { logger } from "../logger";
-import { loadActiveToolSlugs } from "../tools/resolveAgentTools";
-
-// Tool factories — same imports the basic-graph callModel uses, but we'll
-// construct each one with the sub-agent's id so per-agent grants apply.
-import { ReadAgentNotesTool, AppendAgentNotesTool, EditAgentNotesTool } from "../tools/agentNotesTool";
-import { SaveEpisodicMemoryTool, RecallEpisodicMemoryTool } from "../tools/episodicMemoryTool";
-import { GetThreadSummaryTool } from "../tools/threadSummaryTool";
-import { ReadSessionFileTool } from "../tools/readSessionFileTool";
-import { GrepSessionFileTool } from "../tools/grepSessionFileTool";
-import { ListCronJobsTool } from "../tools/listCronJobsTool";
-import { ListGoogleWorkspaceGrantsTool } from "../tools/listGoogleWorkspaceGrantsTool";
-import { agentSkillTools } from "../tools/skillsTools";
-import { ConsultAgentTool } from "../tools/consultAgentTool";
-import { ListAgentsTool } from "../tools/listAgentsTool";
-import { ListSystemAgentsTool } from "../tools/listSystemAgentsTool";
-import { ListProjectsTool, ListRepositoriesTool, GetRepositoryTool } from "../tools/epicTaskTools";
-import { QueryDatabaseTool } from "../tools/queryDatabaseTool";
-import { SendFileToUserTool } from "../tools/sendFileTool";
-import { TavilySearchTool } from "../tools/tavilySearchTool";
-import { googleTools } from "../tools/googleTools";
 
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
@@ -101,103 +92,31 @@ function buildMcpEnv(envJson: Record<string, string> | null): Record<string, str
 }
 
 /**
- * Constructs the LangChain tool factories for one system agent using its
- * own slug allowlist. Mirrors the `basicGraph/nodes/callModel.ts` tool-list
- * construction, but every factory is instantiated with the sub-agent's id
- * so per-agent permission checks (e.g. `agent_user_scopes` for Google
- * Workspace, `consult_agent` org filtering, etc.) hit the correct row.
+ * `claude_sub_agent` rows are PURE — they get NO auto-bound LangChain tools.
+ * Their entire model-visible tool surface comes from:
+ *
+ *   1. External MCP servers attached to their own row via
+ *      `agent_available_mcp_servers` (filesystem, github, bash, etc.) —
+ *      built separately by `buildExternalMcpServersForAgent`.
+ *   2. SDK built-ins (Read/Write/Edit/Glob/Grep/MultiEdit/WebFetch) when
+ *      the row's `allow_sdk_builtins=true`.
+ *   3. SDK `Bash` when the row's `allow_sdk_bash=true`.
+ *
+ * Everything else (agent notes, episodic memory, thread summary, session
+ * files, cron, Google grants, skills, consult_agent, list_*, send_file,
+ * Tavily, Google Workspace, …) is intentionally NOT bound. Sub-agents are
+ * specialists that operate on whatever MCP surface the admin explicitly
+ * attaches — there is no "every agent gets these for free" baseline.
+ *
+ * This function returns an empty list so the caller's in-process MCP
+ * server registers with zero tools (cheap no-op) and the sub-agent's
+ * `definition.tools` whitelist consists only of items 1–3 above.
  */
 async function buildSubAgentTools(
-  subAgent: Agent,
-  ctx: BuildSubAgentsContext,
+  _subAgent: Agent,
+  _ctx: BuildSubAgentsContext,
 ): Promise<StructuredToolInterface[]> {
-  const subAgentId = subAgent.id;
-  const activeSlugs = await loadActiveToolSlugs(subAgentId);
-  const has = (slug: string) => activeSlugs.has(slug);
-
-  // Core tools — every system agent gets these regardless of slug grants,
-  // matching the convention used for primary agents in basicGraph/callModel.
-  // They are safe, low-privilege building blocks (notes, memory, session
-  // files, cron/grant introspection) the sub-agent's reasoning depends on.
-  const tools: StructuredToolInterface[] = [
-    ReadAgentNotesTool(subAgentId),
-    AppendAgentNotesTool(subAgentId),
-    EditAgentNotesTool(subAgentId),
-    SaveEpisodicMemoryTool(subAgentId, ctx.userId, ctx.threadId),
-    RecallEpisodicMemoryTool(subAgentId),
-    GetThreadSummaryTool(subAgentId),
-    ReadSessionFileTool(subAgentId, ctx.threadId),
-    GrepSessionFileTool(subAgentId, ctx.threadId),
-    ListCronJobsTool(subAgentId),
-    ListGoogleWorkspaceGrantsTool(subAgentId),
-    ...agentSkillTools(subAgentId),
-  ];
-
-  // Configurable tools — gated by the sub-agent's own `agent_available_tools`.
-  if (has("consult_agent"))
-    tools.push(ConsultAgentTool(subAgentId, ctx.userId, ctx.groupId, ctx.singleChatId));
-  if (has("list_agents"))
-    tools.push(ListAgentsTool(subAgentId));
-  if (has("list_system_agents"))
-    tools.push(ListSystemAgentsTool(subAgentId));
-  if (has("list_projects"))
-    tools.push(ListProjectsTool(ctx.userId));
-  if (has("list_repositories"))
-    tools.push(ListRepositoriesTool());
-  if (has("get_repository"))
-    tools.push(GetRepositoryTool());
-  if (has("query_database"))
-    tools.push(QueryDatabaseTool());
-  if (has("send_file_to_user"))
-    tools.push(SendFileToUserTool(subAgentId));
-
-  // ── Specialty system agents: tool_config-flag gated ──────────────────────
-  //
-  // Mirrors `deepAgent.worker.ts`'s wiring of these two specialist surfaces.
-  // Both are bound by the `agents.tool_config` JSONB flag, NOT by the
-  // `agent_available_tools` slug allowlist — that's the convention the
-  // legacy worker uses and we preserve it so the same DB row works under
-  // either runtime.
-  const tc = (subAgent.toolConfig ?? {}) as Record<string, unknown>;
-  const useTavily = tc.useTavily === true;
-  const useGoogleWorkspaceTools = tc.useGoogleWorkspaceTools === true;
-
-  // Tavily web search — org-wide credential, no per-user scope. Gating on
-  // `tool_config.useTavily` matches `deepAgent.worker.ts:541`.
-  //
-  // `TavilySearchTool()` throws synchronously when `TAVILY_API_KEY` env var
-  // is missing. We wrap in a try/catch and just log+skip so a misconfigured
-  // search key doesn't tank the entire sub-agent (and by extension the
-  // whole primary's `query()` call). The system agent will simply be missing
-  // its search tool — model-visible, not a hard fail.
-  if (useTavily) {
-    try {
-      tools.push(TavilySearchTool());
-    } catch (err) {
-      logger.warn("Skipping Tavily tool on sub-agent — TAVILY_API_KEY not configured", {
-        subAgentId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // Google Workspace (Gmail / Calendar / Drive) — domain-wide-delegation via
-  // service account. Permission check uses the CALLING primary's agent id
-  // (`ctx.primaryAgentId`), NOT the sub-agent's id, because per-user grants
-  // in `agent_user_scopes` live on the primary. The sub-agent is only the
-  // execution vehicle. This matches `deepAgent.worker.ts:535` exactly:
-  //   `googleTools(callerAgentId)` — the caller, not the executor.
-  if (useGoogleWorkspaceTools) {
-    tools.push(...googleTools(ctx.primaryAgentId));
-  }
-
-  // We deliberately do NOT include `delegate_to_deep_agent` /
-  // `delegate_to_epic_orchestrator` / `invoke_application_agent` here —
-  // sub-agents that need to fan out further can be addressed in a later
-  // iteration once the basic Task delegation is stable. Today system agents
-  // running via the deepagents worker also do not delegate downward.
-
-  return tools;
+  return [];
 }
 
 /**
