@@ -17,7 +17,6 @@ import { agentChatQueue } from "../queues/agentChat.bull";
 import { Group, SingleChat, Agent, DeepAgentDelegation } from "@scheduling-agent/database";
 import { EPIC_ORCHESTRATOR_DEFINITION } from "../constants/epicAgent";
 import { isEpicExecutionRequest } from "../utils/epicDetection";
-import { isEpicOrchestratorBusy } from "../utils/epicBusyCheck";
 import { saveUserAttachmentToAgentWorkspace, buildAttachmentUrl } from "../tools/sendFileTool";
 import { logger } from "../logger";
 
@@ -178,82 +177,12 @@ export function startAgentChatWorker(
         requestId?.startsWith("consultation-chain-") ||
         requestId?.startsWith("pr-approved-");
 
-      // ── Busy bounce ─────────────────────────────────────────────────
-      // If a fresh user message arrives at the Epic Orchestrator while ANY
-      // epic task is actively running (across all users — the orchestrator
-      // is a shared singleton), reply immediately with a busy notice instead
-      // of queueing behind the thread lock.
-      if (
-        isEpicOrchestrator &&
-        mentionsAgent !== false &&
-        !isSystemInternalRequest
-      ) {
-        try {
-          const busy = await isEpicOrchestratorBusy(userId);
-          if (busy.busy) {
-            const threadId = await ensureCanonicalThreadId({
-              userId,
-              groupId: groupId ?? null,
-              singleChatId: singleChatId ?? null,
-            });
-
-            const taskLabel = busy.taskTitle ? `"${busy.taskTitle}"` : "a task";
-            const epicLabel = busy.epicTitle ? ` (epic: "${busy.epicTitle}")` : "";
-            const ownerNote = busy.sameUser
-              ? ""
-              : " Another user's epic is currently running —";
-            const busyMessage =
-              `The Epic Orchestrator is currently executing ${taskLabel}${epicLabel}.${ownerNote} ` +
-              `Only one epic can run at a time system-wide, so new requests cannot be processed until the current task finishes. ` +
-              `Please try again in a few minutes.`;
-
-            logger.info("Bouncing user message — epic orchestrator busy", {
-              requestId,
-              userId,
-              epicId: busy.epicId,
-              runningTask: busy.taskTitle,
-            });
-
-            // Persist the user's message and the busy reply so the UI reflects both
-            await writeConversationMessage({
-              groupId: groupId ?? null,
-              singleChatId: singleChatId ?? null,
-              threadId,
-              role: "user",
-              content: storedContent,
-              senderName: displayName,
-              requestId,
-            });
-            await writeConversationMessage({
-              groupId: groupId ?? null,
-              singleChatId: singleChatId ?? null,
-              threadId,
-              role: "assistant",
-              content: busyMessage,
-              requestId,
-            });
-
-            emitAgentReply({
-              requestId,
-              userId,
-              threadId,
-              groupId: groupId ?? null,
-              singleChatId: singleChatId ?? null,
-              ok: true,
-              reply: busyMessage,
-              systemPrompt: null,
-            });
-
-            return { threadId, reply: busyMessage, systemPrompt: null };
-          }
-        } catch (err: any) {
-          // Busy check is best-effort — if it fails, fall through to normal processing.
-          logger.warn("Epic busy-check failed; proceeding normally", {
-            requestId,
-            error: err?.message,
-          });
-        }
-      }
+      // (Removed: busy-bounce that auto-replied "The Epic Orchestrator is
+      // currently executing ..." whenever any task was in_progress system-wide.
+      // It blocked the user from talking to the orchestrator while a task was
+      // mid-flight, including to instruct a retry or call `reset_stuck_task`.
+      // The thread lock + per-task pause already serialise execution, and
+      // `reset_stuck_task` is the recovery path for genuine orphans.)
 
       // Group message without @mention → store only, no agent invocation
       if (groupId && mentionsAgent === false) {
