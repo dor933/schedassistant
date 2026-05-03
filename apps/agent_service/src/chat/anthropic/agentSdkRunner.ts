@@ -1083,27 +1083,47 @@ async function runAnthropicAgentSdkImpl(
     };
   }
 
-  // Persist any new session id we got back, including the fresh one after a
-  // successful retry.
-  if (result.sessionId && result.sessionId !== existingSessionId) {
-    await saveClaudeSessionId(threadId, result.sessionId);
-  }
-
   const sessionFiles = drainSessionFileLedger(threadId);
 
+  // ── Hard-failure path: subprocess crashed, exited non-zero, or the SDK
+  //    raised a non-success result subtype OTHER than `error_max_turns`
+  //    (which the soft-success branch above catches). The original code
+  //    persisted `result.sessionId` here even though the run failed — and
+  //    then returned that same id on the state — which meant every
+  //    subsequent user message resumed the broken session and triggered
+  //    the same crash. The orchestrator hitting "claude exited with status
+  //    code 1" on every message was exactly this loop.
+  //
+  //    Mirror the max-turns recovery: clear the persisted session id on
+  //    BOTH the DB row and the returned state, so the next user message
+  //    starts a fresh Claude SDK session. The conversation history is
+  //    rebuilt from `state.messages` via `contextBuilder` on the next
+  //    turn, so no user-visible history is lost — only the SDK's
+  //    server-side session cache.
   if (result.errorText && !result.finalText) {
-    logger.error("Agent SDK turn failed", {
+    await clearClaudeSessionId(threadId);
+    logger.error("Agent SDK turn failed — session cleared so next turn starts fresh", {
       threadId,
       modelSlug,
       vendorSlug: vendor.vendorSlug,
       error: result.errorText,
       hitMaxTurns: result.hitMaxTurns,
+      abandonedSessionId: result.sessionId ?? existingSessionId ?? null,
     });
     return {
       error: result.errorText,
-      ...(result.sessionId ? { claudeSessionId: result.sessionId } : {}),
+      claudeSessionId: null,
       ...(sessionFiles.length > 0 ? { sessionFiles } : {}),
     };
+  }
+
+  // Success path — persist any new session id we got back, including the
+  // fresh one after a successful retry. Deliberately AFTER the error
+  // branches above: we never want to persist a session id from a run that
+  // failed (the session might have been started but never produced
+  // anything we'd want to resume into).
+  if (result.sessionId && result.sessionId !== existingSessionId) {
+    await saveClaudeSessionId(threadId, result.sessionId);
   }
 
   // Build the messages array to checkpoint. Mirrors the legacy `bindTools`
