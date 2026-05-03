@@ -799,15 +799,28 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
         const capError = await assertOrchestratorHasFsAndBash(callerAgentId);
         if (capError) return capError;
 
-        // Sub-agent fan-out is OPTIONAL. When the orchestrator wants to slice
-        // the task across specialist `claude_sub_agent` rows, it passes
-        // `assignments` and we validate each one. When it omits assignments
-        // (or passes an empty list), the orchestrator does the work itself
-        // in this same turn using its own filesystem MCP / Bash tools — the
-        // start/complete bookkeeping (HEAD snapshot, status flip, diff
-        // capture) is identical either way.
-        const assignments = input.assignments ?? [];
-        if (assignments.length > 0) {
+        // Sub-agent fan-out is REQUIRED. The legacy "do the work yourself"
+        // mode (assignments omitted / empty) was removed because the
+        // orchestrator's own tool loop reliably fails to follow through —
+        // it would mark the task in_progress, fail to actually edit any
+        // files, then call `complete_epic_task` with an empty diff and a
+        // fabricated success summary. Forcing dispatch via sub-agents
+        // means at least one Claude SDK Task() call has to run, which
+        // surfaces real failures (missing tools, scope errors, etc.) up
+        // front instead of after a silent no-op.
+        const assignments = input.assignments;
+        if (!assignments || assignments.length === 0) {
+          return (
+            `Error: \`assignments\` is required and must contain at least one ` +
+            `sub-agent slice. The "do the work yourself" mode was removed — the ` +
+            `orchestrator must declare which \`claude_sub_agent\` rows will ` +
+            `execute the task, even if it's a single sub-agent for the whole ` +
+            `slice. Run \`list_claude_sub_agents\` to see your roster, then ` +
+            `call \`start_epic_task\` again with at least one \`{ id, scope }\` ` +
+            `entry.`
+          );
+        }
+        {
           // Reject duplicate ids — the SDK's `agents:` map is keyed by id,
           // and dispatching the same sub-agent twice with different scopes
           // inside one task would race on the same row's session state. If
@@ -982,28 +995,6 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
           `Execution ID: \`${execution.id}\` (carried implicitly — \`complete_epic_task\` resolves it ` +
           `automatically, no need to pass it back).`;
 
-        if (assignments.length === 0) {
-          // Sync in-process path: orchestrator does the work itself in this
-          // same turn using its own MCP filesystem / Bash tools, then calls
-          // `complete_epic_task` to finalize. No sub-agent fan-out.
-          return (
-            taskBlock +
-            `## Execution mode\n` +
-            `Direct (no sub-agent fan-out). Do the work yourself in this turn ` +
-            `using your bound tools (filesystem MCP \`read_file\` / \`write_file\` / ` +
-            `\`edit_file\`, Bash for git/tests/builds, etc.).\n\n` +
-            `## Now do this\n` +
-            `1. Make the file edits required by the task description above. Stay ` +
-            `strictly within scope — no unrelated refactors or rename churn.\n` +
-            `2. Run any tests / type checks the project provides. Commit logical ` +
-            `units locally as you go (the stage feature branch is already checked out).\n` +
-            `3. Call \`complete_epic_task\` with a markdown \`summary\` of what ` +
-            `changed (include a \`## Files changed\` list) and \`status\`. The diff ` +
-            `vs. the base SHA above is captured automatically.\n\n` +
-            trailer
-          );
-        }
-
         // Echo the validated plan back so the orchestrator can copy each
         // Task() call directly from this section. We don't issue the Task()
         // calls server-side — that's the model's native SDK flow — but
@@ -1042,12 +1033,15 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
       name: "start_epic_task",
       description:
         "Begin work on the next ready task in the active epic. Auto-resolves the epic + task — no " +
-        "IDs needed. Sub-agent fan-out is OPTIONAL: pass `assignments` to slice the task across " +
-        "`claude_sub_agent` specialists you own (each gets a scoped `Task()` call), or omit it " +
-        "entirely to do the work yourself in this turn using your bound filesystem MCP / Bash " +
-        "tools. Either way, the tool snapshots HEAD, marks the task in_progress, and returns the " +
-        "cwd + base SHA. When you're done, call `complete_epic_task` with a summary — the diff " +
-        "is captured automatically. **Replaces the legacy `execute_epic_task` Claude CLI flow.**",
+        "IDs needed. **Sub-agent fan-out is REQUIRED**: pass `assignments` with at least one " +
+        "`claude_sub_agent` slice (each gets a scoped `Task()` call). The legacy " +
+        "\"do the work yourself\" mode was removed because the orchestrator's tool loop reliably " +
+        "fails to follow through and ends up marking the task complete with no real changes; " +
+        "every task must now be executed by a sub-agent (use a single sub-agent for the whole " +
+        "slice if no fan-out is needed). The tool snapshots HEAD, marks the task in_progress, " +
+        "and returns the cwd + base SHA + the dispatch plan. When all `Task()` calls return, " +
+        "call `complete_epic_task` with an aggregated summary — the diff is captured " +
+        "automatically. **Replaces the legacy `execute_epic_task` Claude CLI flow.**",
       schema: z.object({
         assignments: z
           .array(
@@ -1071,11 +1065,11 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
                 ),
             }),
           )
-          .optional()
+          .min(1)
           .describe(
-            "OPTIONAL. Omit (or pass `[]`) to execute the task yourself directly in this turn. " +
-            "When provided, one entry per sub-agent you're fanning the task out across — a " +
-            "typical full-stack slice has 2-4 entries (frontend + backend + DB ± docs). Each id " +
+            "REQUIRED. At least one entry. One entry per sub-agent you're fanning the task out " +
+            "across — a typical full-stack slice has 2-4 entries (frontend + backend + DB ± " +
+            "docs); a single-concern task can use one sub-agent for the whole slice. Each id " +
             "must be a `claude_sub_agent` attached to you; bad ids are rejected before any " +
             "state changes.",
           ),
