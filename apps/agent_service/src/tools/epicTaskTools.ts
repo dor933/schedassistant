@@ -421,18 +421,30 @@ async function finalizeEpicTaskExecution(params: {
     });
   }
 
-  if (status === "completed") {
-    await completeExecution(execution.id, {
-      result: summary,
-      metadata,
-    });
-  } else {
-    await failExecution(execution.id, {
-      error: failureReason!,
-      metadata: { ...metadata, summary },
-    });
-  }
-  await updateTaskStatus(task.id, status as AgentTaskStatus);
+  // Atomically: flip the execution row to completed/failed AND flip the
+  // AgentTask status (which cascades through `propagateStatus` to the stage
+  // and epic). Without the transaction a crash between the two writes
+  // would leave a "completed" execution row attached to an in_progress
+  // task — the mirror of the orphan we patched on the start side. The
+  // git-diff capture and auto-commit metadata above are computed BEFORE
+  // the transaction so the body stays small (just two writes + the
+  // status-cascade reads inside `propagateStatus`).
+  await sequelize.transaction(async (txn) => {
+    if (status === "completed") {
+      await completeExecution(
+        execution.id,
+        { result: summary, metadata },
+        { transaction: txn },
+      );
+    } else {
+      await failExecution(
+        execution.id,
+        { error: failureReason!, metadata: { ...metadata, summary } },
+        { transaction: txn },
+      );
+    }
+    await updateTaskStatus(task.id, status as AgentTaskStatus, { transaction: txn });
+  });
 
   // Build the per-task summary file + a chat-attachment markdown link the
   // orchestrator includes in its reply, so the user receives the summary as
@@ -784,38 +796,55 @@ export function StartAnthropicEpicTaskTool(callerAgentId: string) {
         // agents' commits on.
         await preExecutionSync(epic.id, next.id);
 
-        // Mark in_progress + create the execution row up front so a
-        // mid-task crash leaves a recoverable trail. Snapshot HEAD on
-        // the matching execution.metadata so complete_epic_task can
-        // diff against it. Persist the validated assignment plan too —
-        // gives `complete_epic_task` the audit trail of what was
-        // declared vs. what actually got dispatched.
-        await next.update({
-          status: "in_progress" as AgentTaskStatus,
-          startedAt: next.startedAt ?? new Date(),
-          completedAt: null,
-        });
-
+        // Mark in_progress + create the execution row inside ONE transaction.
+        // Without this, a crash / restart / DB blip between the two writes
+        // leaves the task at status='in_progress' with NO row in
+        // `task_executions` — and `resolveNextRetryableTask` (which only sees
+        // `ready` and `failed` AgentTasks) goes blind to it. The orchestrator
+        // then either picks a different task or replies "no actionable
+        // tasks", and the orphan stays stuck until someone manually calls
+        // `reset_stuck_task`. The orphan-recovery clause we added in
+        // `resolveNextRetryableTask` self-heals existing orphans, but
+        // wrapping the writes in a transaction prevents new ones from being
+        // created in the first place. The HEAD snapshot stays inside the
+        // transaction because it's a synchronous git call (no extra await
+        // window for a crash to slip into) and its output is required for
+        // the execution-row metadata.
         let preRunSha: string | null = null;
-        try {
-          preRunSha = gitAsAgent(cwd, ["rev-parse", "HEAD"]) || null;
-        } catch (err: any) {
-          logger.warn("StartEpicTask: failed to snapshot HEAD (non-fatal)", {
-            taskId: next.id,
-            cwd,
-            error: err?.message,
-          });
-        }
+        const execution = await sequelize.transaction(async (txn) => {
+          await next.update(
+            {
+              status: "in_progress" as AgentTaskStatus,
+              startedAt: next.startedAt ?? new Date(),
+              completedAt: null,
+            },
+            { transaction: txn },
+          );
 
-        const execution = await startExecution(next.id, {
-          prompt: next.description ?? next.title,
-          metadata: {
-            ...(preRunSha ? { pre_run_sha: preRunSha } : {}),
-            assignments: assignments.map((a) => ({
-              id: a.id,
-              scope: a.scope,
-            })),
-          },
+          try {
+            preRunSha = gitAsAgent(cwd, ["rev-parse", "HEAD"]) || null;
+          } catch (err: any) {
+            logger.warn("StartEpicTask: failed to snapshot HEAD (non-fatal)", {
+              taskId: next.id,
+              cwd,
+              error: err?.message,
+            });
+          }
+
+          return startExecution(
+            next.id,
+            {
+              prompt: next.description ?? next.title,
+              metadata: {
+                ...(preRunSha ? { pre_run_sha: preRunSha } : {}),
+                assignments: assignments.map((a) => ({
+                  id: a.id,
+                  scope: a.scope,
+                })),
+              },
+            },
+            { transaction: txn },
+          );
         });
 
         const stage = (next as any).stage as TaskStage | undefined;

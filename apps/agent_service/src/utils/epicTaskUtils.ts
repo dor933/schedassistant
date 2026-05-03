@@ -1,6 +1,6 @@
 import { execSync, spawnSync } from "child_process";
 import fs from "node:fs";
-import { Op, QueryTypes } from "sequelize";
+import { Op, QueryTypes, type Transaction } from "sequelize";
 import {
   sequelize,
   Project,
@@ -167,26 +167,34 @@ export async function startExecution(
     prompt?: string;
     metadata?: Record<string, unknown>;
   } = {},
+  options: { transaction?: Transaction } = {},
 ): Promise<TaskExecution> {
   const lastExec = await TaskExecution.findOne({
     where: { agentTaskId: taskId },
     order: [["attempt_number", "DESC"]],
+    transaction: options.transaction,
   });
   const attemptNumber = (lastExec?.attemptNumber ?? 0) + 1;
 
-  return TaskExecution.create({
-    agentTaskId: taskId,
-    attemptNumber,
-    prompt: data.prompt ?? null,
-    metadata: data.metadata ?? null,
-  });
+  return TaskExecution.create(
+    {
+      agentTaskId: taskId,
+      attemptNumber,
+      prompt: data.prompt ?? null,
+      metadata: data.metadata ?? null,
+    },
+    { transaction: options.transaction },
+  );
 }
 
 export async function completeExecution(
   executionId: TaskExecutionId,
   data: { result: string; metadata?: Record<string, unknown> },
+  options: { transaction?: Transaction } = {},
 ): Promise<TaskExecution> {
-  const execution = await TaskExecution.findByPk(executionId);
+  const execution = await TaskExecution.findByPk(executionId, {
+    transaction: options.transaction,
+  });
   if (!execution) throw new Error(`Task execution ${executionId} not found`);
 
   const updates: Record<string, unknown> = {
@@ -198,15 +206,18 @@ export async function completeExecution(
     updates.metadata = { ...(execution.metadata ?? {}), ...data.metadata };
   }
 
-  await execution.update(updates);
+  await execution.update(updates, { transaction: options.transaction });
   return execution;
 }
 
 export async function failExecution(
   executionId: TaskExecutionId,
   data: { error: string; metadata?: Record<string, unknown> },
+  options: { transaction?: Transaction } = {},
 ): Promise<TaskExecution> {
-  const execution = await TaskExecution.findByPk(executionId);
+  const execution = await TaskExecution.findByPk(executionId, {
+    transaction: options.transaction,
+  });
   if (!execution) throw new Error(`Task execution ${executionId} not found`);
 
   const updates: Record<string, unknown> = {
@@ -218,7 +229,7 @@ export async function failExecution(
     updates.metadata = { ...(execution.metadata ?? {}), ...data.metadata };
   }
 
-  await execution.update(updates);
+  await execution.update(updates, { transaction: options.transaction });
   return execution;
 }
 
@@ -471,6 +482,53 @@ export async function resolveNextRetryableTask(
     return AgentTask.findByPk(ready[0].id);
   }
 
+  // Orphan auto-recovery (added with the start_epic_task transaction fix).
+  //
+  // An AgentTask can land at `status='in_progress'` with NO live execution row
+  // when `start_epic_task` crashed between the `next.update({status:'in_progress'})`
+  // and the `startExecution()` calls (or the worker was killed mid-call).
+  // The historical `failed`-fallback below ignores those because it filters
+  // on `at.status='failed'`, so the task is invisible — and the orchestrator
+  // gets a "no actionable tasks" reply forever, even though the stage is
+  // clearly unfinished. The escape hatch was a manual `reset_stuck_task` call,
+  // which the orchestrator only knows to make if you tell it to.
+  //
+  // Predicate: `agent_tasks.status='in_progress'` AND no `task_executions` row
+  // for this task is currently `running`. That uniquely identifies "no live
+  // worker is doing this" — covers both zero-execution-rows (start_epic_task
+  // crashed before insert) and all-executions-completed-but-task-still-stuck
+  // (a different, even rarer crash pattern). When matched, flip the task back
+  // to `ready` and return it so the caller starts a fresh execution.
+  //
+  // We deliberately do NOT touch tasks that have a `running` execution row —
+  // those might be a genuinely live worker, and `reset_stuck_task` is still
+  // the correct (manual, deliberate) tool for that case.
+  const orphans = await sequelize.query<{ id: string }>(
+    `SELECT at.id
+       FROM agent_tasks at
+       JOIN task_stages ts ON at.task_stage_id = ts.id
+      WHERE ts.epic_task_id = :epicId
+        AND at.status = 'in_progress'
+        AND NOT EXISTS (
+          SELECT 1 FROM task_executions te
+           WHERE te.agent_task_id = at.id AND te.status = 'running'
+        )
+      ORDER BY ts.sort_order, at.sort_order
+      LIMIT 1`,
+    { replacements: { epicId }, type: QueryTypes.SELECT },
+  );
+  if (orphans[0]) {
+    const orphan = await AgentTask.findByPk(orphans[0].id);
+    if (orphan) {
+      logger.warn(
+        "resolveNextRetryableTask: auto-recovering orphan in_progress task with no running execution",
+        { taskId: orphan.id, epicId },
+      );
+      await orphan.update({ status: "ready" as AgentTaskStatus });
+      return orphan;
+    }
+  }
+
   const failed = await sequelize.query<{ id: string }>(
     `SELECT at.id
        FROM agent_tasks at
@@ -556,8 +614,12 @@ export async function resolveActivePrPendingStage(): Promise<{
 
 // ─── Status Propagation ─────────────────────────────────────────────────────
 
-export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
-  const task = await AgentTask.findByPk(taskId);
+export async function propagateStatus(
+  taskId: AgentTaskId,
+  options: { transaction?: Transaction } = {},
+): Promise<void> {
+  const txn = options.transaction;
+  const task = await AgentTask.findByPk(taskId, { transaction: txn });
   if (!task) return;
 
   // Propagate to stage. `failed` is a per-TASK concept only — a failed task
@@ -578,6 +640,7 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
   // without requiring `pr_status`.
   const stageTasks = await AgentTask.findAll({
     where: { taskStageId: task.taskStageId },
+    transaction: txn,
   });
 
   const stageStatuses = stageTasks.map((t) => t.status);
@@ -603,16 +666,20 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
     newStageStatus = "pending";
   }
 
-  await TaskStage.update({ status: newStageStatus }, { where: { id: task.taskStageId } });
+  await TaskStage.update(
+    { status: newStageStatus },
+    { where: { id: task.taskStageId }, transaction: txn },
+  );
 
   // Propagate to epic. Same rule as stages: `failed` does NOT propagate up.
   // Epic terminal status (`cancelled` / `completed`) only happens via user
   // action — `cancel_epic` for cancellation, PR approval for completion.
-  const stage = await TaskStage.findByPk(task.taskStageId);
+  const stage = await TaskStage.findByPk(task.taskStageId, { transaction: txn });
   if (!stage) return;
 
   const epicStages = await TaskStage.findAll({
     where: { epicTaskId: stage.epicTaskId },
+    transaction: txn,
   });
 
   const epicStatuses = epicStages.map((s) => s.status);
@@ -640,13 +707,21 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
   if (newEpicStatus === "completed") {
     epicUpdates.completedAt = new Date();
   }
-  await EpicTask.update(epicUpdates, { where: { id: stage.epicTaskId } });
+  await EpicTask.update(epicUpdates, {
+    where: { id: stage.epicTaskId },
+    transaction: txn,
+  });
 }
 
 // ─── Update Task Status ──────────────────────────────────────────────────────
 
-export async function updateTaskStatus(taskId: AgentTaskId, status: AgentTaskStatus): Promise<AgentTask> {
-  const task = await AgentTask.findByPk(taskId);
+export async function updateTaskStatus(
+  taskId: AgentTaskId,
+  status: AgentTaskStatus,
+  options: { transaction?: Transaction } = {},
+): Promise<AgentTask> {
+  const txn = options.transaction;
+  const task = await AgentTask.findByPk(taskId, { transaction: txn });
   if (!task) throw new Error(`Agent task ${taskId} not found`);
 
   const updates: Partial<{ status: AgentTaskStatus; startedAt: Date | null; completedAt: Date | null }> = { status };
@@ -658,8 +733,8 @@ export async function updateTaskStatus(taskId: AgentTaskId, status: AgentTaskSta
     updates.completedAt = new Date();
   }
 
-  await task.update(updates);
-  await propagateStatus(taskId);
+  await task.update(updates, { transaction: txn });
+  await propagateStatus(taskId, { transaction: txn });
   return task;
 }
 
