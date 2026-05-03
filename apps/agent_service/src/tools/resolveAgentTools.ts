@@ -2,11 +2,11 @@ import { AgentAvailableTool, Tool } from "@scheduling-agent/database";
 import { Op } from "sequelize";
 
 /**
- * Minimal default tool set for agents that have no explicit `agent_available_tools`
- * rows. These are safe, low-privilege tools that any agent can use without risk.
- *
- * To grant an agent access to powerful tools (delegate_to_deep_agent, query_database,
- * delegate_to_epic_orchestrator, etc.), explicitly add rows to `agent_available_tools`.
+ * Legacy minimal-default tool set, retained for callers that explicitly
+ * opt in via `{ applyDefaults: true }`. These three tools used to be
+ * implicitly granted to every agent that had zero `agent_available_tools`
+ * rows; that fallback is now OFF by default to enforce
+ * "no marking → no tool" — admins must tick each tool explicitly.
  */
 const DEFAULT_TOOL_SLUGS = new Set([
   "consult_agent",
@@ -16,23 +16,23 @@ const DEFAULT_TOOL_SLUGS = new Set([
 
 /**
  * Returns the set of active tool slugs assigned to the given agent via
- * `agent_available_tools`. If the agent has no assignments at all, returns
- * the minimal default set (safe tools only).
+ * `agent_available_tools`. **No implicit defaults**: if the agent has no
+ * row at all, the returned set is empty — admins must explicitly tick
+ * each tool they want the agent to have. The legacy 3-tool fallback can
+ * still be opted into per-call with `{ applyDefaults: true }` for the
+ * rare caller that genuinely needs it (none today; left for backwards
+ * compat).
  *
- * Agents must be explicitly granted access to powerful tools like
- * `delegate_to_deep_agent`, `delegate_to_epic_orchestrator`, or `query_database`
- * via the `agent_available_tools` table.
- *
- * Pass `{ applyDefaults: false }` to opt out of the default-tool fallback —
- * callers (e.g. the application graph) that require fully-explicit tool
- * assignment use this so primary-consultation tools (`consult_agent`,
- * `list_agents`) are bound only when the admin has granted them.
+ * Agents must be explicitly granted access to ALL tools they should be
+ * able to call (`consult_agent`, `list_agents`, `list_system_agents`,
+ * `delegate_to_deep_agent`, `query_database`, etc.) via
+ * `agent_available_tools` rows.
  */
 export async function loadActiveToolSlugs(
   agentId: string | null | undefined,
   options: { applyDefaults?: boolean } = {},
 ): Promise<Set<string>> {
-  const applyDefaults = options.applyDefaults ?? true;
+  const applyDefaults = options.applyDefaults ?? false;
   const emptyFallback = applyDefaults ? DEFAULT_TOOL_SLUGS : new Set<string>();
 
   if (!agentId) return emptyFallback;

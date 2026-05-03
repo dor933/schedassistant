@@ -1643,7 +1643,7 @@ export default function AdminPage() {
                 <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                   <Plug className="h-3 w-3" />
                   Tools
-                  <span className="font-normal normal-case text-gray-400">(only basic tools if none selected — select explicitly for delegation/query access)</span>
+                  <span className="font-normal normal-case text-gray-400">(no tools granted unless ticked — select each one explicitly)</span>
                 </label>
                 <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
                   {tools.map((t) => {
@@ -2075,6 +2075,33 @@ export default function AdminPage() {
                   Loading web-search configuration...
                 </p>
               )}
+            </div>
+
+            {/* Claude Sub-Agents — editable cards, parallel to Primary /
+                System / External / Application sections. The "Sub-agent
+                assignments" panel above only handles the owner-primary
+                routing; full edits (name, description, instructions,
+                model, tools, MCP servers, skills) flow through AgentCard
+                here, identical to how the other types are edited. */}
+            <div className="mb-4">
+              <h3 className="mb-2.5 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+                <Sparkles className="h-3.5 w-3.5 text-fuchsia-500" />
+                Claude Sub-Agents
+                <span className="rounded-full bg-fuchsia-50 px-1.5 py-0.5 text-[10px] font-semibold text-fuchsia-700">
+                  {agents.filter((a) => a.type === "claude_sub_agent").length}
+                </span>
+                <span className="ml-1 text-[9px] font-normal normal-case text-gray-400">
+                  Anthropic SDK Task() targets
+                </span>
+              </h3>
+              <div className="space-y-2.5">
+                {agents.filter((a) => a.type === "claude_sub_agent").map((a) => (
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
+                ))}
+                {agents.filter((a) => a.type === "claude_sub_agent").length === 0 && (
+                  <p className="py-2 text-xs text-gray-400">No Claude sub-agents yet.</p>
+                )}
+              </div>
             </div>
 
             {/* External Agents (roundtable-only) */}
