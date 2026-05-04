@@ -479,6 +479,10 @@ export interface AdminAgent {
   mcpServerIds: number[];
   /** All MCP server assignments with active status. */
   mcpServerLinks: AgentMcpServerLink[];
+  /** Attached SDK capability ids (rows from `sdk_capabilities`). Empty when
+   *  the agent has no SDK built-ins / Bash granted. Replaces the legacy
+   *  `allowSdkBuiltins` / `allowSdkBash` boolean columns. */
+  sdkCapabilityIds: number[];
   /** The LLM model assigned to this agent (references models.id). */
   modelId: string | null;
   /** Active skill IDs (backward compat). */
@@ -513,6 +517,17 @@ export interface AdminMcpServer {
   scriptContent?: string | null;
   /** Whether the row's command/args are managed via a custom script (UI hint). */
   isScript: boolean;
+}
+
+/** Read-only enum row from `sdk_capabilities` (slugs `filesystem`, `bash`).
+ *  Attach to agents via `agent_sdk_capabilities`; the runtime reads the
+ *  attachments to decide whether to expose SDK built-ins / Bash to the
+ *  Claude Code subprocess (and to drive Codex's sandbox-mode pick). */
+export interface AdminSdkCapability {
+  id: number;
+  slug: string;
+  name: string;
+  description: string | null;
 }
 
 export interface CreateMcpServerInput {
@@ -667,6 +682,7 @@ export const admin = {
     ),
   getAgents: () => request<AdminAgent[]>("/admin/agents"),
   getMcpServers: () => request<AdminMcpServer[]>("/admin/mcp-servers"),
+  getSdkCapabilities: () => request<AdminSdkCapability[]>("/admin/sdk-capabilities"),
   createMcpServer: (data: CreateMcpServerInput) =>
     request<AdminMcpServer>("/admin/mcp-servers", {
       method: "POST",
@@ -701,6 +717,8 @@ export const admin = {
     skillIds?: number[];
     toolIds?: number[];
     type?: AgentType;
+    /** SDK capability ids to attach (e.g. `filesystem`, `bash`). */
+    sdkCapabilityIds?: number[];
   }) =>
     request<AdminAgent>("/admin/agents", {
       method: "POST",
@@ -721,6 +739,8 @@ export const admin = {
       skillLinks?: AgentSkillLink[];
       toolIds?: number[];
       toolLinks?: AgentToolLink[];
+      /** SDK capability ids to attach (replaces the agent's full set). */
+      sdkCapabilityIds?: number[];
       /**
        * Owner of a system agent. `null` = shared / org-wide; UUID of a
        * primary agent in the same org = private to that primary. Only

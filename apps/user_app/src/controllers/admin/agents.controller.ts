@@ -37,6 +37,7 @@ export class AgentsController {
         req.body.toolIds,
         req.body.description,
         req.user!.organizationId,
+        req.body.sdkCapabilityIds,
       );
       return res.status(201).json(agent);
     } catch (err: any) {
@@ -65,6 +66,7 @@ export class AgentsController {
           skillLinks: req.body.skillLinks,
           toolIds: req.body.toolIds,
           toolLinks: req.body.toolLinks,
+          sdkCapabilityIds: req.body.sdkCapabilityIds,
           owningPrimaryAgentId: req.body.owningPrimaryAgentId,
         },
       );
