@@ -47,6 +47,22 @@ const sectorDeltaClassification: Classification = {
   warnings: [],
 };
 
+const comparisonClassification: Classification = {
+  intent: "comparison",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  comparison: {
+    comparisonType: "stock_vs_sector",
+    left: { type: "stock", symbol: "GSL" },
+    right: { type: "implicit_stock_sector" },
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
 test("graph loads sectorLeaderboardView for leaderboard intent without Research Object anchors", async () => {
   const response = await runAskGrahamyGraph(
     {
@@ -303,5 +319,88 @@ test("graph loads sectorDeltaView for week-over-week sector delta intent without
   ]);
   const publicView = response.research.publicResearchView as PublicResearchView;
   assert.equal(publicView.sectorDeltaView?.rows[0].sector, "Technology");
+  assert.equal(publicView.researchObjectViews.length, 0);
+});
+
+test("graph loads comparisonView for stock-vs-sector comparison without Research Object anchors", async () => {
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-1",
+      message: "Compare GSL to its sector",
+      classification: comparisonClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-01" },
+        }),
+      } as any,
+      pgCapabilityRunner: async () => ({
+        views: {
+          comparisonView: {
+            viewSchemaVersion: 1,
+            state: "partial",
+            comparisonType: "stock_vs_sector",
+            source: "pg_current_features",
+            asOfDate: "2026-05-01",
+            left: {
+              type: "stock",
+              label: "GSL",
+              symbol: "GSL",
+              sector: "Industrials",
+              metrics: {
+                convictionScorePct: 82,
+                convictionBucket: "HIGH",
+                momentumBucket: "STRONG",
+              },
+            },
+            right: {
+              type: "sector",
+              label: "Industrials",
+              sector: "Industrials",
+              metrics: {
+                convictionScorePct: 55,
+                convictionBucket: "MIXED",
+                momentumBucket: "MIXED",
+              },
+            },
+            deltas: [
+              {
+                metric: "conviction",
+                leftValue: 82,
+                rightValue: 55,
+                delta: 27,
+                interpretationBucket: "left_stronger",
+                explanation: "Compares public conviction fields.",
+              },
+            ],
+            summaryBullets: [
+              "GSL screens stronger than Industrials on conviction.",
+            ],
+            freshness: { dataThrough: "2026-05-01", state: "fresh" },
+            warnings: ["Daily path-risk comparison is unavailable in V1."],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async () => ({
+        answerText: "GSL is stronger than its sector on conviction in the supplied PG comparison view.",
+        suggestedFollowups: [],
+        warnings: [],
+      }),
+    },
+  );
+
+  assert.equal(response.answerType, "mixed");
+  assert.equal(response.meta.researchObjectKeys?.length, 0);
+  assert.deepEqual(response.meta.sourcesUsed, [
+    { type: "research", name: "stock_vs_sector_comparison" },
+  ]);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.comparisonView?.left.symbol, "GSL");
   assert.equal(publicView.researchObjectViews.length, 0);
 });

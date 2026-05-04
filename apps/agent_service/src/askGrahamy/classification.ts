@@ -46,6 +46,21 @@ const classifierOutputSchema = z.object({
   sectors: z.array(z.enum(CANONICAL_SECTORS)).max(5),
   regimeRequested: z.boolean(),
   isFollowUp: z.boolean(),
+  comparison: z
+    .discriminatedUnion("comparisonType", [
+      z.object({
+        comparisonType: z.literal("stock_vs_sector"),
+        left: z.object({
+          type: z.literal("stock"),
+          symbol: z.string(),
+        }),
+        right: z.object({
+          type: z.enum(["sector", "implicit_stock_sector"]),
+          sector: z.string().nullable(),
+        }),
+      }),
+    ])
+    .nullable(),
   confidence: z.enum(["high", "medium", "low"]),
 });
 
@@ -72,6 +87,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • an anchorless sector momentum-vs-conviction divergence request.
   • an anchorless week-over-week sector change / sector delta request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
+  • a stock-vs-sector comparison request.
 
 Set isFollowUp = true when the message references a previous turn — short questions with
 no own anchor like "what about ...?", "why?", "and the risks?", "compare to peers", "compare it",
@@ -104,7 +120,7 @@ Without prior context:
 
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
 stock_sector_regime, sector_conviction_leaderboard, sector_momentum_vs_conviction_divergence,
-week_over_week_sector_delta, stock_idea_discovery, follow_up, unknown.
+week_over_week_sector_delta, stock_idea_discovery, comparison, follow_up, unknown.
 
 Use intent = "sector_conviction_leaderboard" when the user asks for a sector-wide ranking without
 naming a specific sector. Examples:
@@ -145,6 +161,28 @@ ticker. Examples:
   • "What should I look at today?"
   • "Which names have the best setup right now?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+
+Use intent = "comparison" for stock-vs-sector comparison requests. Put
+the anchors in comparison.left/right (NOT in symbols), so the PG comparison capability can
+run without building full Stock Research Objects. For this intent, symbols=[], sectors=[],
+regimeRequested=false is valid.
+
+Supported stock-vs-sector examples:
+  • "Compare GSL to its sector"
+  • "How does GSL look versus Financial Services?"
+  • "Is GSL better than its sector?"
+  • "Compare GSL with its industry/sector"
+For implicit-sector wording ("its sector", "its industry", "the sector"):
+  comparison={ comparisonType:"stock_vs_sector", left:{type:"stock", symbol:"GSL"},
+    right:{type:"implicit_stock_sector", sector:null} }
+For explicit-sector wording:
+  comparison={ comparisonType:"stock_vs_sector", left:{type:"stock", symbol:"GSL"},
+    right:{type:"sector", sector:"Financial Services"} }   (use the best canonical sector label)
+
+Do NOT classify stock-vs-stock or sector-vs-sector comparisons as supported yet; use
+intent="unknown" for "Compare GSL vs DAC", "Compare Technology vs Industrials", or
+"Which is stronger, Energy or Industrials?".
+For every non-comparison message, set comparison=null.
 
 Use intent = "unknown" only when the message is nonsensical, off-topic, or impossible to anchor
 to any stock / sector / regime EVEN AFTER inheritance from prior context.
@@ -252,6 +290,12 @@ export async function classifyMessage(
 
   const symbols = uniqueUpper(raw.symbols).slice(0, 5);
   const sectors = unique(raw.sectors).slice(0, 5);
+  const comparison =
+    normalizeComparison(raw.comparison) ??
+    // Sector inference runs first because "Compare FAKE123 to its sector"
+    // is a supported stock-vs-sector shape even when the stock is not found
+    // later in PG. Symbol-vs-symbol remains unsupported in this phase.
+    inferStockVsSectorComparisonFromMessage(message);
 
   // Slimmed classifier — the deep agent's PostgresSaver thread carries
   // conversation memory now, so we no longer need the follow-up self-
@@ -265,18 +309,25 @@ export async function classifyMessage(
   // resolved (symbols, sectors, regime) tuple so requiresTools and intent
   // stay consistent even if the model returned a mismatched label.
   const intent: Intent =
-    raw.intent === "unknown"
-      ? "unknown"
+    raw.intent === "unknown" && comparison
+      ? "comparison"
+      : raw.intent === "unknown"
+        ? "unknown"
+      : raw.intent === "comparison" && comparison
+        ? "comparison"
+        : raw.intent === "comparison"
+          ? "unknown"
       : isAnchorlessCapabilityIntent(raw.intent)
         ? raw.intent
         : inferred;
 
   return {
     intent,
-    symbols,
-    sectors,
-    regimeRequested: raw.regimeRequested,
+    symbols: intent === "comparison" ? [] : symbols,
+    sectors: intent === "comparison" ? [] : sectors,
+    regimeRequested: intent === "comparison" ? false : raw.regimeRequested,
     isFollowUp: raw.isFollowUp,
+    ...(intent === "comparison" && comparison ? { comparison } : {}),
     requiresTools: toolsForIntent(intent),
     confidence: raw.confidence,
     warnings:
@@ -300,6 +351,7 @@ export function toolsForIntent(intent: Intent): ToolName[] {
     case "sector_momentum_vs_conviction_divergence":
     case "week_over_week_sector_delta":
     case "stock_idea_discovery":
+    case "comparison":
       return ["get_market_context"];
     case "stock_sector":
     case "stock_sector_regime":
@@ -320,6 +372,81 @@ function isAnchorlessCapabilityIntent(intent: Intent): boolean {
     intent === "sector_momentum_vs_conviction_divergence" ||
     intent === "week_over_week_sector_delta" ||
     intent === "stock_idea_discovery"
+  );
+}
+
+function normalizeComparison(
+  comparison: ClassifierOutput["comparison"],
+): import("./types").ComparisonClassification | undefined {
+  if (!comparison) return undefined;
+
+  if (comparison.comparisonType !== "stock_vs_sector") return undefined;
+  const symbol = comparison.left.symbol.trim().toUpperCase();
+  if (!symbol || symbol.length > 10) return undefined;
+  if (comparison.right.type === "implicit_stock_sector") {
+    return {
+      comparisonType: "stock_vs_sector",
+      left: { type: "stock", symbol },
+      right: { type: "implicit_stock_sector" },
+    };
+  }
+  const sector = comparison.right.sector?.trim();
+  return {
+    comparisonType: "stock_vs_sector",
+    left: { type: "stock", symbol },
+    right: {
+      type: "sector",
+      ...(sector ? { sector } : {}),
+    },
+  };
+}
+
+function inferStockVsSectorComparisonFromMessage(
+  message: string,
+): import("./types").ComparisonClassification | undefined {
+  const stockMatch = message.match(/\b(?:compare|how\s+does|is)\s+([A-Za-z][A-Za-z0-9.]{0,9})\b/i);
+  const symbol = stockMatch?.[1]?.trim();
+  if (!symbol || !looksLikeTickerAnchor(symbol)) return undefined;
+
+  if (
+    /\b(?:its|the)\s+(?:sector|industry)\b/i.test(message) ||
+    /\bindustry\/sector\b/i.test(message)
+  ) {
+    return {
+      comparisonType: "stock_vs_sector",
+      left: { type: "stock", symbol: symbol.toUpperCase() },
+      right: { type: "implicit_stock_sector" },
+    };
+  }
+
+  const targetMatch = message.match(/\b(?:versus|against|than|to)\s+(.+?)(?:[?.!]|$)/i);
+  const rawTarget = targetMatch?.[1]?.trim().replace(/^the\s+/i, "");
+  if (!rawTarget) return undefined;
+
+  const canonicalSector = canonicalSectorLabel(rawTarget);
+  if (canonicalSector || /\bsector\b/i.test(rawTarget)) {
+    return {
+      comparisonType: "stock_vs_sector",
+      left: { type: "stock", symbol: symbol.toUpperCase() },
+      right: { type: "sector", sector: canonicalSector ?? rawTarget },
+    };
+  }
+
+  return undefined;
+}
+
+function looksLikeTickerAnchor(value: string): boolean {
+  const token = value.trim();
+  if (!/^[A-Za-z][A-Za-z0-9.]{0,9}$/.test(token)) return false;
+  if (token === token.toUpperCase()) return true;
+  return token.length <= 5;
+}
+
+function canonicalSectorLabel(value: string): string | undefined {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return CANONICAL_SECTORS.find(
+    (sector) =>
+      sector.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === normalized,
   );
 }
 

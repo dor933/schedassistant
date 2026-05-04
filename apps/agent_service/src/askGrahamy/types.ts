@@ -7,6 +7,7 @@ export const INTENTS = [
   "sector_momentum_vs_conviction_divergence",
   "week_over_week_sector_delta",
   "stock_idea_discovery",
+  "comparison",
   "regime",
   "stock_sector",
   "stock_regime",
@@ -56,6 +57,14 @@ export const askGrahamyRequestSchema = z.object({
    * supply. Absent or empty → every classified key is built from scratch.
    */
   priorResearchObjects: z.array(passthroughRecord).optional(),
+  /**
+   * Optional. Existing pgCapability views the caller has cached for the
+   * classified intent (sector_conviction_leaderboard, sector_divergence,
+   * week_over_week_sector_delta, stock_idea_discovery, stock_vs_sector_comparison).
+   * agent_service skips the corresponding SQL when `cache_key` matches.
+   * Mirrors `priorResearchObjects` for the non-`stock_sector_regime` intents.
+   */
+  priorCapabilityViews: z.array(passthroughRecord).optional(),
 });
 
 export type AskGrahamyRequest = z.infer<typeof askGrahamyRequestSchema>;
@@ -100,10 +109,34 @@ export type Classification = {
   sectors: string[];
   regimeRequested: boolean;
   isFollowUp: boolean;
+  comparison?: ComparisonClassification;
   requiresTools: ToolName[];
   confidence: Confidence;
   warnings: string[];
 };
+
+export type ComparisonAnchor =
+  | {
+      type: "stock";
+      symbol: string;
+    }
+  | {
+      type: "sector";
+      sector?: string;
+    }
+  | {
+      type: "implicit_stock_sector";
+      sector?: string;
+    };
+
+export type ComparisonClassification =
+  {
+    comparisonType: "stock_vs_sector";
+    left: Extract<ComparisonAnchor, { type: "stock" }>;
+    right:
+      | Extract<ComparisonAnchor, { type: "sector" }>
+      | Extract<ComparisonAnchor, { type: "implicit_stock_sector" }>;
+  };
 
 export type SnapshotName =
   | "daily_brief"
@@ -414,11 +447,66 @@ export type StockIdeaView = {
   warnings: string[];
 };
 
+export type ComparisonSideMetrics = {
+  convictionScorePct?: number;
+  convictionBucket?: string;
+  valuationBucket?: string;
+  momentumBucket?: string;
+  qualityBucket?: string;
+  growthBucket?: string;
+  leverageBucket?: string;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  pathRiskBucket?: string;
+};
+
+export type ComparisonSideView = {
+  type: "stock" | "sector";
+  label: string;
+  symbol?: string;
+  sector?: string;
+  metrics: ComparisonSideMetrics;
+};
+
+export type ComparisonDeltaMetric =
+  | "conviction"
+  | "valuation"
+  | "momentum"
+  | "quality"
+  | "growth"
+  | "leverage"
+  | "historical_forward"
+  | "path_risk";
+
+export type ComparisonDeltaView = {
+  metric: ComparisonDeltaMetric;
+  leftValue?: number | string;
+  rightValue?: number | string;
+  delta?: number;
+  interpretationBucket: "left_stronger" | "right_stronger" | "similar" | "mixed";
+  explanation: string;
+};
+
+export type ComparisonView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  comparisonType: "stock_vs_sector";
+  source: "pg_current_features" | "pg_sector_peer_daily";
+  asOfDate?: string;
+  left: ComparisonSideView;
+  right: ComparisonSideView;
+  deltas: ComparisonDeltaView[];
+  summaryBullets: string[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
 export type PgCapabilityViews = {
   sectorLeaderboardView?: SectorLeaderboardView;
   sectorDivergenceView?: SectorDivergenceView;
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
+  comparisonView?: ComparisonView;
 };
 
 export type FiveQuestionCoverage = {
@@ -458,6 +546,13 @@ export type CachedResearchObject = {
   warnings: string[];
 };
 
+/**
+ * Re-export of the pgCapability cache shape so consumers (graph state,
+ * response meta, upstream caller types) live in one place. Definition
+ * itself sits next to the registry that produces it.
+ */
+export type { CachedCapabilityView } from "./pgCapabilities/types";
+
 export type PublicResearchView = {
   objectType: "stock" | "sector" | "regime" | "mixed";
   headline: Record<string, unknown>;
@@ -473,6 +568,7 @@ export type PublicResearchView = {
   sectorDivergenceView?: SectorDivergenceView;
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
+  comparisonView?: ComparisonView;
   evidence: Record<string, unknown>;
   freshness: FreshnessMetadata;
   warnings: string[];
@@ -512,6 +608,20 @@ export type ResponseMeta = {
    * cache hit.
    */
   researchObjectsUpdated?: CachedResearchObject[];
+  /** Cache-key listing for this turn's pgCapability view (max one per turn). */
+  capabilityViewKeys?: string[];
+  capabilityViewCache?: {
+    hits: number;
+    misses: number;
+    writes: number;
+  };
+  /**
+   * Subset of capability views freshly built this turn (cache miss). The
+   * upstream client persists them in its `cached_capability_views` table for
+   * reuse on future turns within the same `as_of_date`. Empty when the
+   * intent had no capability or the call was a cache hit.
+   */
+  capabilityViewsUpdated?: import("./pgCapabilities/types").CachedCapabilityView[];
   upstreamLatency?: Partial<Record<SnapshotName, number>>;
   moatGuardResult?: "clean" | "cleaned" | "failed";
 };
@@ -547,7 +657,25 @@ export type AskGrahamyState = {
     misses: number;
     writes: number;
   };
+  /**
+   * pgCapability views supplied by the upstream caller (StocksScanner), each
+   * keyed by `cache_key`. Used as the cache-hit lookup inside
+   * `executePgCapabilitiesWithCache` exactly the way `priorResearchObjects`
+   * is used by `buildResearchObjects`.
+   */
+  priorCapabilityViews?: import("./pgCapabilities/types").CachedCapabilityView[];
   pgCapabilityViews?: PgCapabilityViews;
+  /**
+   * Subset of capability views freshly built this turn (cache miss). The
+   * upstream caller persists them after receiving the response. Empty when
+   * the intent had no matching capability or the call was a cache hit.
+   */
+  capabilityViewsUpdated?: import("./pgCapabilities/types").CachedCapabilityView[];
+  capabilityViewCacheStats?: {
+    hits: number;
+    misses: number;
+    writes: number;
+  };
   publicResearchView?: PublicResearchView;
   answer?: AnswerObject;
   ui?: UiHints;

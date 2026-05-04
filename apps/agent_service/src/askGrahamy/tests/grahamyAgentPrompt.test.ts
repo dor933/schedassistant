@@ -307,6 +307,91 @@ test("LLM prompt carries only public stale freshness caveat", () => {
   assertNoFreshnessInternals(prompt);
 });
 
+test("LLM prompt receives public-safe comparison view", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "Compare GSL to its sector",
+    warnings: [],
+    classification: {
+      intent: "comparison",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      comparison: {
+        comparisonType: "stock_vs_sector",
+        left: { type: "stock", symbol: "GSL" },
+        right: { type: "implicit_stock_sector" },
+      },
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      comparisonView: {
+        viewSchemaVersion: 1,
+        state: "partial",
+        comparisonType: "stock_vs_sector",
+        source: "pg_current_features",
+        asOfDate: "2026-05-01",
+        left: {
+          type: "stock",
+          label: "GSL",
+          symbol: "GSL",
+          sector: "Industrials",
+          metrics: {
+            convictionScorePct: 82,
+            convictionBucket: "HIGH",
+            momentumBucket: "STRONG",
+          },
+        },
+        right: {
+          type: "sector",
+          label: "Industrials",
+          sector: "Industrials",
+          metrics: {
+            convictionScorePct: 55,
+            convictionBucket: "MIXED",
+            momentumBucket: "MIXED",
+          },
+        },
+        deltas: [
+          {
+            metric: "conviction",
+            leftValue: 82,
+            rightValue: 55,
+            delta: 27,
+            interpretationBucket: "left_stronger",
+            explanation: "Compares public conviction fields.",
+          },
+        ],
+        summaryBullets: ["GSL screens stronger than Industrials on conviction."],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: ["Daily path-risk comparison is unavailable in V1."],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /comparisonView/);
+  assert.match(prompt, /GSL/);
+  assert.match(prompt, /Industrials/);
+  assert.match(prompt, /dimensional language/i);
+  assert.match(prompt, /PG current\/base-rate comparison evidence/i);
+  assert.doesNotMatch(prompt, /researchObjects/);
+  assert.doesNotMatch(prompt, /parts/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assert.doesNotMatch(prompt, /edge_id/);
+  assert.doesNotMatch(prompt, /hypothesis_id/);
+  assert.doesNotMatch(prompt, /setup_score/);
+  assert.doesNotMatch(prompt, /comparison_formula/);
+  assertNoFreshnessInternals(prompt);
+});
+
 function assertNoFreshnessInternals(value: unknown): void {
   const json = JSON.stringify(value);
   assert.doesNotMatch(json, /md_research_refresh_latest/);

@@ -1,5 +1,6 @@
 import type {
   Classification,
+  ComparisonView,
   EvidenceState,
   PublicFreshnessView,
   SectorDeltaView,
@@ -14,19 +15,22 @@ export type PgCapabilityIntent =
   | "sector_conviction_leaderboard"
   | "sector_momentum_vs_conviction_divergence"
   | "week_over_week_sector_delta"
-  | "stock_idea_discovery";
+  | "stock_idea_discovery"
+  | "comparison";
 
 export type PgCapabilityName =
   | "sector_conviction_leaderboard"
   | "sector_momentum_vs_conviction_divergence"
   | "week_over_week_sector_delta"
-  | "stock_idea_discovery";
+  | "stock_idea_discovery"
+  | "stock_vs_sector_comparison";
 
 export type PgCapabilityQueryName =
   | "query_sector_conviction_leaderboard"
   | "query_sector_divergence"
   | "query_sector_delta"
-  | "query_stock_idea_discovery";
+  | "query_stock_idea_discovery"
+  | "query_stock_vs_sector_comparison";
 
 export type PgCapabilityRunInput = {
   classification: Classification;
@@ -40,12 +44,21 @@ export type PgCapabilityViews = {
   sectorDivergenceView?: SectorDivergenceView;
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
+  comparisonView?: ComparisonView;
 };
 
 export type PgCapabilityRunResult = {
   views: PgCapabilityViews;
   warnings: string[];
 };
+
+/**
+ * Subset of capability-input fields that, together with `as_of_date`, uniquely
+ * identify a capability view. Each capability supplies its own extractor
+ * (e.g., leaderboard's `rankingBasis`, comparison's `(leftSymbol, rightSector)`)
+ * and the orchestrator stringifies the result into `cache_key`.
+ */
+export type CapabilityCacheKeyParams = Record<string, string | number | boolean>;
 
 export type PgCapabilityRegistryEntry = {
   name: PgCapabilityName;
@@ -57,11 +70,62 @@ export type PgCapabilityRegistryEntry = {
     | "pg_sector_regime_forward_agg"
     | "pg_sector_analog_bucket"
     | "pg_sector_weekly_history"
-    | "pg_features_daily";
+    | "pg_features_daily"
+    | "pg_current_features";
   freshnessSources: string[];
   fallback: "unavailable_empty_rows";
   sanitizer: "public_safe_capability_view";
   run: (input: PgCapabilityRunInput) => Promise<PgCapabilityRunResult>;
+  /** Which slot of `PgCapabilityViews` this capability fills. */
+  viewSlot: keyof PgCapabilityViews;
+  /** Subset of input fields baked into the cache key. */
+  cacheKeyParams: (input: PgCapabilityRunInput) => CapabilityCacheKeyParams;
+  /**
+   * Anchor extractors for the cached row. Sector/leaderboard/idea capabilities
+   * are org-wide singletons per day (no anchors); comparison fills these.
+   */
+  cacheAnchors?: (
+    input: PgCapabilityRunInput,
+  ) => { anchorSymbol?: string; anchorSector?: string };
+};
+
+/**
+ * A capability view persisted by the upstream caller (StocksScanner) and
+ * passed back on the next request as `priorCapabilityViews`. Mirrors the
+ * `CachedResearchObject` round-trip used by the v6 path.
+ */
+export type CachedCapabilityView = {
+  cacheKey: string;
+  capabilityName: PgCapabilityName;
+  viewSchemaVersion: number;
+  /** Snapshot publish date used for keying — `snapshots.freshness.dataThrough`. */
+  asOfDate: string;
+  /** sector_delta only — the SQL's `prior_as_of_date` for the same row. */
+  priorAsOfDate?: string;
+  /** stock_vs_sector_comparison only — the left-side symbol. */
+  anchorSymbol?: string;
+  /** stock_vs_sector_comparison only — the resolved canonical sector. */
+  anchorSector?: string;
+  view:
+    | import("../types").SectorLeaderboardView
+    | import("../types").SectorDivergenceView
+    | import("../types").SectorDeltaView
+    | import("../types").StockIdeaView
+    | import("../types").ComparisonView;
+  generatedAt: string;
+};
+
+/**
+ * Output of the cache-aware orchestrator. Adds `viewsUpdated` and
+ * `cacheStats` on top of the per-capability `PgCapabilityRunResult` so
+ * `graph.ts` can surface them on `state` and `meta` symmetrically with
+ * `researchObjectsUpdated` / `researchObjectCache`.
+ */
+export type PgCapabilityExecuteResult = {
+  views: PgCapabilityViews;
+  warnings: string[];
+  viewsUpdated: CachedCapabilityView[];
+  cacheStats: { hits: number; misses: number; writes: number };
 };
 
 export type CapabilityFreshness = PublicFreshnessView;
@@ -151,6 +215,41 @@ export type StockIdeaDiscoveryRow = Record<string, unknown> & {
   peer_freshness_state?: unknown;
   peer_completed_at?: unknown;
   forward_overlay_available?: unknown;
+};
+
+export type StockVsSectorComparisonRow = Record<string, unknown> & {
+  symbol?: unknown;
+  company_name?: unknown;
+  stock_sector?: unknown;
+  requested_sector?: unknown;
+  resolved_sector?: unknown;
+  explicit_sector_valid?: unknown;
+  comparison_sector_found?: unknown;
+  as_of_date?: unknown;
+  stock_conviction_score_pct?: unknown;
+  stock_conviction_bucket?: unknown;
+  stock_valuation_bucket?: unknown;
+  stock_momentum_bucket?: unknown;
+  stock_quality_bucket?: unknown;
+  stock_growth_bucket?: unknown;
+  stock_leverage_bucket?: unknown;
+  stock_hit_rate_pct?: unknown;
+  stock_median_return_pct?: unknown;
+  sector_conviction_score_pct?: unknown;
+  sector_conviction_bucket?: unknown;
+  sector_momentum_bucket?: unknown;
+  sector_quality_bucket?: unknown;
+  sector_growth_bucket?: unknown;
+  sector_leverage_bucket?: unknown;
+  sector_hit_rate_pct?: unknown;
+  features_freshness_state?: unknown;
+  features_completed_at?: unknown;
+  peer_freshness_state?: unknown;
+  peer_completed_at?: unknown;
+  forward_freshness_state?: unknown;
+  forward_completed_at?: unknown;
+  stock_forward_overlay_available?: unknown;
+  sector_forward_overlay_available?: unknown;
 };
 
 export type EmptyCapabilityView = {

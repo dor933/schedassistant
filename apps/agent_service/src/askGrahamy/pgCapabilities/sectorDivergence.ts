@@ -25,6 +25,17 @@ export type SectorDivergenceOptions = {
   now?: Date;
 };
 
+/**
+ * Cache-key params for `sector_momentum_vs_conviction_divergence`. The query
+ * has no message-derived inputs (default MAX_ROWS only), so two same-day
+ * callers share one cached view.
+ */
+export function sectorDivergenceCacheKeyParams(
+  _input: PgCapabilityRunInput,
+): Record<string, string | number | boolean> {
+  return {};
+}
+
 export async function buildSectorDivergenceView(
   _input: PgCapabilityRunInput,
   options: SectorDivergenceOptions = {},

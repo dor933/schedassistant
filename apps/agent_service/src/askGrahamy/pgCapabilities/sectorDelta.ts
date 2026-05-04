@@ -35,6 +35,21 @@ export type SectorDeltaOptions = {
   now?: Date;
 };
 
+/**
+ * Cache-key params for `week_over_week_sector_delta`. Both the rankingBasis
+ * and directionFilter are inferred from the message and shape the SQL output,
+ * so they belong in the cache key.
+ */
+export function sectorDeltaCacheKeyParams(input: PgCapabilityRunInput): {
+  rankingBasis: SectorDeltaRankingBasis;
+  directionFilter: SectorDeltaDirectionFilter;
+} {
+  return {
+    rankingBasis: inferRankingBasis(input.message),
+    directionFilter: inferDirectionFilter(input.message),
+  };
+}
+
 export async function buildSectorDeltaView(
   input: PgCapabilityRunInput,
   options: SectorDeltaOptions = {},

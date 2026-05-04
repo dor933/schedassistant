@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { classifyMessage, type ClassifierOutput } from "../classification";
 
-const stub = (out: ClassifierOutput) => async () => out;
+const stub = (
+  out: Omit<ClassifierOutput, "comparison"> &
+    Partial<Pick<ClassifierOutput, "comparison">>,
+) => async (): Promise<ClassifierOutput> => ({ comparison: null, ...out });
 
 test("classifies a stock question", async () => {
   const result = await classifyMessage("What do you think about NVDA?", undefined, {
@@ -282,6 +285,155 @@ test("classifies anchorless stock idea discovery questions", async () => {
   assert.deepEqual(today.symbols, []);
   assert.deepEqual(today.sectors, []);
   assert.deepEqual(today.requiresTools, ["get_market_context"]);
+});
+
+test("classifies stock-vs-sector comparison with implicit sector anchor", async () => {
+  const result = await classifyMessage("Compare GSL to its sector", undefined, {
+    classifier: stub({
+      intent: "comparison",
+      symbols: ["GSL"],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      comparison: {
+        comparisonType: "stock_vs_sector",
+        left: { type: "stock", symbol: "GSL" },
+        right: { type: "implicit_stock_sector", sector: null },
+      },
+      confidence: "high",
+    }),
+  });
+
+  assert.equal(result.intent, "comparison");
+  assert.deepEqual(result.symbols, []);
+  assert.deepEqual(result.sectors, []);
+  assert.deepEqual(result.requiresTools, ["get_market_context"]);
+  assert.deepEqual(result.comparison, {
+    comparisonType: "stock_vs_sector",
+    left: { type: "stock", symbol: "GSL" },
+      right: { type: "implicit_stock_sector" },
+  });
+});
+
+test("classifies stock-vs-sector comparison with explicit sector anchor", async () => {
+  const result = await classifyMessage(
+    "How does GSL look versus Financial Services?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "comparison",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        comparison: {
+          comparisonType: "stock_vs_sector",
+          left: { type: "stock", symbol: "gsl" },
+          right: { type: "sector", sector: "Financial Services" },
+        },
+        confidence: "high",
+      }),
+    },
+  );
+
+  assert.equal(result.intent, "comparison");
+  assert.deepEqual(result.comparison, {
+    comparisonType: "stock_vs_sector",
+    left: { type: "stock", symbol: "GSL" },
+    right: { type: "sector", sector: "Financial Services" },
+  });
+});
+
+test("classifier-emitted intent='comparison' without metadata stays unknown for unsupported symbol-vs-symbol", async () => {
+  // The LLM said "comparison" but didn't fill the stock-vs-sector comparison
+  // object. Symbol-vs-symbol is intentionally not implemented in this phase,
+  // so we do not recover GSL-vs-DAC into a comparison capability.
+  const result = await classifyMessage("Compare GSL vs DAC", undefined, {
+    classifier: stub({
+      intent: "comparison",
+      symbols: ["GSL", "DAC"],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "high",
+    }),
+  });
+
+  assert.equal(result.intent, "unknown");
+  assert.equal(result.comparison, undefined);
+});
+
+test("fallback routes invalid stock-vs-sector-shaped anchors to comparison", async () => {
+  const invalidSymbol = await classifyMessage("Compare FAKE123 to its sector", undefined, {
+    classifier: stub({
+      intent: "unknown",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "low",
+    }),
+  });
+  assert.equal(invalidSymbol.intent, "comparison");
+  assert.deepEqual(invalidSymbol.comparison, {
+    comparisonType: "stock_vs_sector",
+    left: { type: "stock", symbol: "FAKE123" },
+    right: { type: "implicit_stock_sector" },
+  });
+
+  const invalidSector = await classifyMessage("Compare GSL to Banana Sector", undefined, {
+    classifier: stub({
+      intent: "unknown",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "low",
+    }),
+  });
+  assert.equal(invalidSector.intent, "comparison");
+  assert.deepEqual(invalidSector.comparison, {
+    comparisonType: "stock_vs_sector",
+    left: { type: "stock", symbol: "GSL" },
+    right: { type: "sector", sector: "Banana Sector" },
+  });
+});
+
+test("symbol-vs-symbol requests remain unknown until that comparison type is implemented", async () => {
+  const symbolVsSymbol = await classifyMessage("Compare GSL vs DAC", undefined, {
+    classifier: stub({
+      intent: "unknown",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "low",
+    }),
+  });
+  assert.equal(symbolVsSymbol.intent, "unknown");
+  assert.equal(symbolVsSymbol.comparison, undefined);
+});
+
+test("sector-vs-sector requests are still classified as unknown", async () => {
+  // "Compare Technology vs Industrials" — neither word looks like a ticker
+  // anchor (>5 chars, mixed case), so both the stock-vs-sector and the
+  // stock-vs-stock fallbacks bail out and the message stays unknown.
+  const sectorVsSector = await classifyMessage(
+    "Compare Technology vs Industrials",
+    undefined,
+    {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "low",
+      }),
+    },
+  );
+  assert.equal(sectorVsSector.intent, "unknown");
+  assert.equal(sectorVsSector.comparison, undefined);
 });
 
 test("does not require a ticker for stock idea discovery", async () => {

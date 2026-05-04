@@ -99,3 +99,30 @@ test("removes sector delta formulas without stripping public delta fields", () =
   assert.equal(row.momentum_formula, undefined);
   assert.equal(row.raw_rows, undefined);
 });
+
+test("removes comparison formulas without stripping public comparison fields", () => {
+  const result = runMoatGuard({
+    comparisonView: {
+      comparisonType: "stock_vs_sector",
+      left: { symbol: "GSL", metrics: { convictionScorePct: 82 } },
+      right: { sector: "Industrials", metrics: { convictionScorePct: 55 } },
+      deltas: [
+        {
+          metric: "conviction",
+          delta: 27,
+          interpretationBucket: "left_stronger",
+          comparison_formula: "internal formula",
+          raw_rows: [{ symbol: "GSL" }],
+        },
+      ],
+    },
+  });
+
+  const delta = (result.value as any).comparisonView.deltas[0];
+  assert.equal(result.result, "cleaned");
+  assert.equal((result.value as any).comparisonView.left.symbol, "GSL");
+  assert.equal(delta.metric, "conviction");
+  assert.equal(delta.delta, 27);
+  assert.equal(delta.comparison_formula, undefined);
+  assert.equal(delta.raw_rows, undefined);
+});

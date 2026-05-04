@@ -4,7 +4,14 @@ import { buildSectorConvictionLeaderboardView } from "./pgCapabilities/sectorCon
 import { buildSectorDeltaView } from "./pgCapabilities/sectorDelta";
 import { buildSectorDivergenceView } from "./pgCapabilities/sectorDivergence";
 import { buildStockIdeaDiscoveryView } from "./pgCapabilities/stockIdeaDiscovery";
-import { capabilityForIntent } from "./pgCapabilities/registry";
+import { buildStockVsSectorComparisonView } from "./pgCapabilities/stockVsSectorComparison";
+import {
+  buildCapabilityCacheKey,
+  capabilityForClassification,
+  capabilityForIntent,
+  executePgCapabilitiesWithCache,
+} from "./pgCapabilities/registry";
+import type { CachedCapabilityView } from "./pgCapabilities/types";
 import { assessCapabilityFreshness } from "./pgCapabilities/freshnessGuard";
 import { compilePublicResearchView } from "./publicResearch";
 import type { Classification } from "./types";
@@ -48,6 +55,22 @@ const sectorDeltaClassification: Classification = {
   sectors: [],
   regimeRequested: false,
   isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const comparisonClassification: Classification = {
+  intent: "comparison",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  comparison: {
+    comparisonType: "stock_vs_sector",
+    left: { type: "stock", symbol: "GSL" },
+    right: { type: "implicit_stock_sector" },
+  },
   requiresTools: ["get_market_context"],
   confidence: "high",
   warnings: [],
@@ -221,6 +244,15 @@ test("PG capability registry routes week-over-week sector delta intent", () => {
   assert.equal(entry.queryName, "query_sector_delta");
   assert.equal(entry.source, "pg_sector_weekly_history");
   assert.deepEqual(entry.requiredParams, []);
+});
+
+test("PG capability registry routes comparison intent to stock-vs-sector capability", () => {
+  const entry = capabilityForIntent("comparison");
+  assert.ok(entry);
+  assert.equal(entry.name, "stock_vs_sector_comparison");
+  assert.equal(entry.queryName, "query_stock_vs_sector_comparison");
+  assert.equal(entry.source, "pg_current_features");
+  assert.deepEqual(entry.requiredParams, ["comparison.left.symbol"]);
 });
 
 test("sector conviction leaderboard returns partial when forward overlay is absent", async () => {
@@ -1037,6 +1069,229 @@ test("publicResearchView carries stockIdeaView without Research Objects", async 
   assertNoForbiddenPublicKeys(publicView);
 });
 
+test("stock-vs-sector comparison returns partial public view with safe deltas", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: comparisonClassification,
+      message: "Compare GSL to its sector",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            symbol: "GSL",
+            company_name: "Global Ship Lease, Inc.",
+            stock_sector: "Industrials",
+            resolved_sector: "Industrials",
+            comparison_sector_found: true,
+            as_of_date: "2026-05-01",
+            stock_conviction_score_pct: 81.78,
+            stock_conviction_bucket: "HIGH",
+            stock_valuation_bucket: "ATTRACTIVE",
+            stock_momentum_bucket: "STRONG",
+            stock_quality_bucket: "CONSTRUCTIVE",
+            stock_growth_bucket: "CONSTRUCTIVE",
+            stock_leverage_bucket: "CONSTRUCTIVE",
+            stock_hit_rate_pct: 61.23,
+            stock_median_return_pct: 5.24,
+            sector_conviction_score_pct: 55.44,
+            sector_conviction_bucket: "MIXED",
+            sector_momentum_bucket: "MIXED",
+            sector_quality_bucket: "MIXED",
+            sector_growth_bucket: "MIXED",
+            sector_leverage_bucket: "CONSTRUCTIVE",
+            sector_hit_rate_pct: 54.1,
+            features_freshness_state: "FRESH",
+            features_completed_at: "2026-05-02T12:30:04Z",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_freshness_state: "FRESH",
+            forward_completed_at: "2026-05-02T12:32:04Z",
+            stock_forward_overlay_available: true,
+            sector_forward_overlay_available: true,
+            raw_sql: "must-not-leak",
+            comparison_formula: "must-not-leak",
+            setup_score: 99,
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.SYMBOL, "GSL");
+  assert.equal(replacements.SECTOR, "");
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.comparisonType, "stock_vs_sector");
+  assert.equal(view.asOfDate, "2026-05-01");
+  assert.equal(view.left.symbol, "GSL");
+  assert.equal(view.right.sector, "Industrials");
+  assert.equal(view.left.metrics.convictionScorePct, 81.8);
+  assert.equal(view.right.metrics.convictionScorePct, 55.4);
+  assert.equal(view.deltas[0].metric, "conviction");
+  assert.equal(view.deltas[0].interpretationBucket, "left_stronger");
+  assert.match(view.summaryBullets.join(" "), /GSL screens stronger/i);
+  assert.match(view.warnings.join(" "), /path-risk comparison is unavailable/i);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("stock-vs-sector comparison returns unavailable for explicit invalid sector", async () => {
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: {
+        ...comparisonClassification,
+        comparison: {
+          comparisonType: "stock_vs_sector",
+          left: { type: "stock", symbol: "GSL" },
+          right: { type: "sector", sector: "Crypto Miners" },
+        },
+      },
+      message: "How does GSL look versus Crypto Miners?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => {
+        throw new Error("should not query invalid sectors");
+      },
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.deltas, []);
+  assert.match(view.warnings.join(" "), /not supported/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("stock-vs-sector comparison returns unavailable when stock row is missing", async () => {
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: comparisonClassification,
+      message: "Compare GSL to its sector",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.match(view.warnings.join(" "), /No current PG feature row/i);
+});
+
+test("stock-vs-sector comparison returns unavailable when implicit sector cannot resolve", async () => {
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: comparisonClassification,
+      message: "Is GSL better than its sector?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          comparison_sector_found: false,
+          as_of_date: "2026-05-01",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.match(view.warnings.join(" "), /does not include a sector/i);
+});
+
+test("stock-vs-sector comparison uses explicit canonical sector parameter", async () => {
+  let replacements: Record<string, unknown> = {};
+  await buildStockVsSectorComparisonView(
+    {
+      classification: {
+        ...comparisonClassification,
+        comparison: {
+          comparisonType: "stock_vs_sector",
+          left: { type: "stock", symbol: "GSL" },
+          right: { type: "sector", sector: "financial services" },
+        },
+      },
+      message: "How does GSL look versus Financial Services?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async (params) => {
+        replacements = params;
+        return [];
+      },
+    },
+  );
+
+  assert.equal(replacements.SYMBOL, "GSL");
+  assert.equal(replacements.SECTOR, "Financial Services");
+});
+
+test("publicResearchView carries comparisonView without Research Objects", async () => {
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: comparisonClassification,
+      message: "Compare GSL to its sector",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          stock_sector: "Industrials",
+          resolved_sector: "Industrials",
+          comparison_sector_found: true,
+          as_of_date: "2026-05-01",
+          stock_conviction_score_pct: 82,
+          stock_conviction_bucket: "HIGH",
+          stock_momentum_bucket: "STRONG",
+          sector_conviction_score_pct: 55,
+          sector_conviction_bucket: "MIXED",
+          sector_momentum_bucket: "MIXED",
+          features_freshness_state: "FRESH",
+          peer_freshness_state: "FRESH",
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: comparisonClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "mixed");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.comparisonView?.left.symbol, "GSL");
+  assert.equal(publicView.evidence.comparisonType, "stock_vs_sector");
+  assertNoForbiddenPublicKeys(publicView);
+});
+
 test("stock idea discovery public freshness is unknown when dataThrough is missing", async () => {
   const result = await buildStockIdeaDiscoveryView(
     {
@@ -1070,6 +1325,251 @@ test("stock idea discovery public freshness is unknown when dataThrough is missi
   assertNoForbiddenPublicKeys(view);
 });
 
+test("executePgCapabilitiesWithCache returns empty result for non-capability intent", async () => {
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: {
+        ...leaderboardClassification,
+        intent: "stock_sector_regime",
+      },
+      message: "Tell me about MSFT",
+      snapshots: { freshness: { dataThrough: "2026-05-01" } },
+      toolOutputs: {},
+    },
+    [],
+  );
+  assert.deepEqual(result.views, {});
+  assert.deepEqual(result.viewsUpdated, []);
+  assert.deepEqual(result.cacheStats, { hits: 0, misses: 0, writes: 0 });
+});
+
+test("executePgCapabilitiesWithCache returns cache hit when prior key matches", async () => {
+  const asOfDate = "2026-05-01";
+  const cacheKey = buildCapabilityCacheKey(
+    "sector_conviction_leaderboard",
+    { rankingBasis: "conviction" },
+    asOfDate,
+  );
+  const cachedView = {
+    viewSchemaVersion: 1,
+    state: "complete" as const,
+    source: "pg_sector_peer_daily" as const,
+    period: "latest" as const,
+    rankingBasis: "conviction" as const,
+    asOfDate,
+    rows: [{ sector: "Industrials", rank: 1, convictionScorePct: 80 }],
+    freshness: { dataThrough: asOfDate, state: "fresh" as const },
+    warnings: [],
+  };
+  const prior: CachedCapabilityView = {
+    cacheKey,
+    capabilityName: "sector_conviction_leaderboard",
+    viewSchemaVersion: 1,
+    asOfDate,
+    view: cachedView,
+    generatedAt: "2026-05-01T18:00:00Z",
+  };
+
+  let runnerCalled = false;
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: { freshness: { dataThrough: asOfDate } },
+      toolOutputs: {},
+    },
+    [prior],
+    async () => {
+      runnerCalled = true;
+      return { views: {}, warnings: [] };
+    },
+  );
+
+  assert.equal(runnerCalled, false);
+  assert.equal(result.views.sectorLeaderboardView, cachedView);
+  assert.deepEqual(result.viewsUpdated, []);
+  assert.deepEqual(result.cacheStats, { hits: 1, misses: 0, writes: 0 });
+});
+
+test("executePgCapabilitiesWithCache miss runs runner and emits viewsUpdated", async () => {
+  const asOfDate = "2026-05-01";
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: { freshness: { dataThrough: asOfDate } },
+      toolOutputs: {},
+    },
+    [],
+    async () => ({
+      views: {
+        sectorLeaderboardView: {
+          viewSchemaVersion: 1,
+          state: "complete",
+          source: "pg_sector_peer_daily",
+          period: "latest",
+          rankingBasis: "conviction",
+          asOfDate,
+          rows: [{ sector: "Technology", rank: 1, convictionScorePct: 85 }],
+          freshness: { dataThrough: asOfDate, state: "fresh" },
+          warnings: [],
+        },
+      },
+      warnings: [],
+    }),
+  );
+
+  assert.equal(result.viewsUpdated.length, 1);
+  const updated = result.viewsUpdated[0];
+  assert.equal(updated.capabilityName, "sector_conviction_leaderboard");
+  assert.equal(updated.cacheKey, buildCapabilityCacheKey(
+    "sector_conviction_leaderboard",
+    { rankingBasis: "conviction" },
+    asOfDate,
+  ));
+  assert.equal(updated.viewSchemaVersion, 1);
+  assert.equal(updated.asOfDate, asOfDate);
+  assert.deepEqual(result.cacheStats, { hits: 0, misses: 1, writes: 1 });
+});
+
+test("executePgCapabilitiesWithCache different rankingBasis ⇒ different cache keys", async () => {
+  const asOfDate = "2026-05-01";
+  const k1 = buildCapabilityCacheKey(
+    "sector_conviction_leaderboard",
+    { rankingBasis: "conviction" },
+    asOfDate,
+  );
+  const k2 = buildCapabilityCacheKey(
+    "sector_conviction_leaderboard",
+    { rankingBasis: "divergence" },
+    asOfDate,
+  );
+  assert.notEqual(k1, k2);
+
+  // Prior under k1 must not satisfy a request that would key under k2.
+  const prior: CachedCapabilityView = {
+    cacheKey: k1,
+    capabilityName: "sector_conviction_leaderboard",
+    viewSchemaVersion: 1,
+    asOfDate,
+    view: {
+      viewSchemaVersion: 1,
+      state: "complete",
+      source: "pg_sector_peer_daily",
+      period: "latest",
+      rankingBasis: "conviction",
+      asOfDate,
+      rows: [],
+      freshness: { dataThrough: asOfDate, state: "fresh" },
+      warnings: [],
+    } as any,
+    generatedAt: "2026-05-01T18:00:00Z",
+  };
+
+  let runnerCalled = false;
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: { freshness: { dataThrough: asOfDate } },
+      toolOutputs: {},
+    },
+    [prior],
+    async () => {
+      runnerCalled = true;
+      return {
+        views: {
+          sectorLeaderboardView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_sector_peer_daily",
+            period: "latest",
+            rankingBasis: "divergence",
+            asOfDate,
+            rows: [],
+            freshness: { dataThrough: asOfDate, state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      };
+    },
+  );
+  assert.equal(runnerCalled, true);
+  assert.deepEqual(result.cacheStats, { hits: 0, misses: 1, writes: 1 });
+});
+
+test("executePgCapabilitiesWithCache skips cache when dataThrough is missing", async () => {
+  let runnerCalled = false;
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    [],
+    async () => {
+      runnerCalled = true;
+      return {
+        views: {
+          sectorLeaderboardView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_sector_peer_daily",
+            period: "latest",
+            rankingBasis: "conviction",
+            rows: [],
+            freshness: { state: "unknown" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      };
+    },
+  );
+  assert.equal(runnerCalled, true);
+  assert.deepEqual(result.viewsUpdated, []);
+  assert.deepEqual(result.cacheStats, { hits: 0, misses: 1, writes: 0 });
+});
+
+test("buildCapabilityCacheKey is deterministic and sorts keys", () => {
+  const a = buildCapabilityCacheKey(
+    "stock_vs_sector_comparison",
+    { leftSymbol: "GSL", rightSector: "Industrials" },
+    "2026-05-01",
+  );
+  const b = buildCapabilityCacheKey(
+    "stock_vs_sector_comparison",
+    { rightSector: "Industrials", leftSymbol: "GSL" },
+    "2026-05-01",
+  );
+  assert.equal(a, b);
+  assert.equal(
+    a,
+    "CAP:stock_vs_sector_comparison:2026-05-01:leftSymbol=GSL|rightSector=Industrials",
+  );
+});
+
+test("buildCapabilityCacheKey omits params section when none are supplied", () => {
+  assert.equal(
+    buildCapabilityCacheKey("sector_momentum_vs_conviction_divergence", {}, "2026-05-01"),
+    "CAP:sector_momentum_vs_conviction_divergence:2026-05-01",
+  );
+});
+
+test("capabilityForClassification still routes stock_vs_sector for explicit-sector compare", () => {
+  const entry = capabilityForClassification(comparisonClassification);
+  assert.ok(entry);
+  assert.equal(entry?.name, "stock_vs_sector_comparison");
+});
+
+test("capabilityForIntent('comparison') still resolves to the stock_vs_sector default", () => {
+  const entry = capabilityForIntent("comparison");
+  assert.ok(entry);
+  assert.equal(entry?.name, "stock_vs_sector_comparison");
+});
+
 function assertNoForbiddenPublicKeys(value: unknown): void {
   const json = JSON.stringify(value);
   assert.doesNotMatch(json, /researchObjects/);
@@ -1085,6 +1585,7 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /internal_threshold/);
   assert.doesNotMatch(json, /setup_score/);
   assert.doesNotMatch(json, /sector_delta_formula/);
+  assert.doesNotMatch(json, /comparison_formula/);
   assert.doesNotMatch(json, /conviction_formula/);
   assert.doesNotMatch(json, /divergence_score_pct/);
   assert.doesNotMatch(json, /divergenceScorePct/);

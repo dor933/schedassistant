@@ -53,6 +53,7 @@ export function compilePublicResearchView(input: {
       : []),
     ...(input.pgCapabilityViews?.sectorDeltaView ? ["sectorDeltaView"] : []),
     ...(input.pgCapabilityViews?.stockIdeaView ? ["stockIdeaView"] : []),
+    ...(input.pgCapabilityViews?.comparisonView ? ["comparisonView"] : []),
   ];
 
   return {
@@ -89,6 +90,9 @@ export function compilePublicResearchView(input: {
       : {}),
     ...(input.pgCapabilityViews?.stockIdeaView
       ? { stockIdeaView: input.pgCapabilityViews.stockIdeaView }
+      : {}),
+    ...(input.pgCapabilityViews?.comparisonView
+      ? { comparisonView: input.pgCapabilityViews.comparisonView }
       : {}),
     evidence: {
       snapshotNames: ["daily_brief", "metadata", "clusters", "track_record", "transparency"].filter(
@@ -136,6 +140,15 @@ export function compilePublicResearchView(input: {
             stockIdeaRows: input.pgCapabilityViews.stockIdeaView.rows.length,
           }
         : {}),
+      ...(input.pgCapabilityViews?.comparisonView
+        ? {
+            comparisonState: input.pgCapabilityViews.comparisonView.state,
+            comparisonType:
+              input.pgCapabilityViews.comparisonView.comparisonType,
+            comparisonDeltas:
+              input.pgCapabilityViews.comparisonView.deltas.length,
+          }
+        : {}),
     },
     freshness: snapshots.freshness ?? {},
     warnings: [
@@ -157,6 +170,7 @@ function inferObjectType(classification: Classification): PublicResearchView["ob
   if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
   if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
+  if (classification.intent === "comparison") return "mixed";
   const hasStock = classification.symbols.length > 0;
   const hasSector = classification.sectors.length > 0;
   const hasRegime = classification.regimeRequested;

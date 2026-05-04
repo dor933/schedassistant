@@ -15,6 +15,7 @@ export const FORBIDDEN_PATTERNS = [
   "divergence_score",
   "divergence_formula",
   "sector_delta_formula",
+  "comparison_formula",
   "conviction_formula",
   "momentum_formula",
   "feature_rules",
@@ -45,6 +46,7 @@ const FORBIDDEN_KEY_PARTS = [
   "divergence_score",
   "divergence_formula",
   "sector_delta_formula",
+  "comparison_formula",
   "conviction_formula",
   "momentum_formula",
   "feature_rules",
@@ -75,6 +77,7 @@ const FORBIDDEN_TEXT_REGEXES = [
   /\bdivergenceScorePct\b/g,
   /\bdivergence_formula\b/gi,
   /\bsector_delta_formula\b/gi,
+  /\bcomparison_formula\b/gi,
   /\bconviction_formula\b/gi,
   /\bmomentum_formula\b/gi,
   /\bfeature_rules\b/gi,
@@ -153,6 +156,7 @@ function isForbiddenKey(key: string): boolean {
   if (lower === "gate" || lower === "gates" || lower === "gate_name") return true;
   if (lower === "divergencescorepct" || lower === "divergenceformula") return true;
   if (lower === "sectordeltaformula" || lower === "convictionformula") return true;
+  if (lower === "comparisonformula") return true;
   if (lower === "scoringformula" || lower === "momentumformula") return true;
   if (lower.endsWith("_gate") || lower.startsWith("gate_")) return true;
   return FORBIDDEN_KEY_PARTS.some((part) => lower.includes(part));

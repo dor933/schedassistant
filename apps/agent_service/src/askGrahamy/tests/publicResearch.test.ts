@@ -379,6 +379,81 @@ test("publicResearchView includes sector delta view without raw research objects
   assertNoForbiddenPublicKeys(view);
 });
 
+test("publicResearchView includes comparison view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "comparison",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      comparison: {
+        comparisonType: "stock_vs_sector",
+        left: { type: "stock", symbol: "GSL" },
+        right: { type: "implicit_stock_sector" },
+      },
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      comparisonView: {
+        viewSchemaVersion: 1,
+        state: "partial",
+        comparisonType: "stock_vs_sector",
+        source: "pg_current_features",
+        asOfDate: "2026-05-01",
+        left: {
+          type: "stock",
+          label: "GSL",
+          symbol: "GSL",
+          sector: "Industrials",
+          metrics: {
+            convictionScorePct: 82,
+            convictionBucket: "HIGH",
+            momentumBucket: "STRONG",
+          },
+        },
+        right: {
+          type: "sector",
+          label: "Industrials",
+          sector: "Industrials",
+          metrics: {
+            convictionScorePct: 55,
+            convictionBucket: "MIXED",
+            momentumBucket: "MIXED",
+          },
+        },
+        deltas: [
+          {
+            metric: "conviction",
+            leftValue: 82,
+            rightValue: 55,
+            delta: 27,
+            interpretationBucket: "left_stronger",
+            explanation: "Compares public conviction fields.",
+          },
+        ],
+        summaryBullets: ["GSL screens stronger than Industrials on conviction."],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: ["Daily path-risk comparison is unavailable in V1."],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.objectType, "mixed");
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.comparisonView?.comparisonType, "stock_vs_sector");
+  assert.equal(view.comparisonView?.left.symbol, "GSL");
+  assert.equal(view.evidence.comparisonState, "partial");
+  assertNoForbiddenPublicKeys(view);
+});
+
 test("stale cached views are rebuilt from parts and marked for persistence", async () => {
   const previousHost = process.env.EXTERNAL_PG_HOST;
   const previousDb = process.env.EXTERNAL_PG_DATABASE;
@@ -465,6 +540,7 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /internal_threshold/);
   assert.doesNotMatch(json, /setup_score/);
   assert.doesNotMatch(json, /sector_delta_formula/);
+  assert.doesNotMatch(json, /comparison_formula/);
   assert.doesNotMatch(json, /conviction_formula/);
   assert.doesNotMatch(json, /divergence_score_pct/);
   assert.doesNotMatch(json, /divergenceScorePct/);

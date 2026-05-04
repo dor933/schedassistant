@@ -8,8 +8,12 @@ import { buildResearchObjects } from "./researchObjectBuilder";
 import { GrahamySnapshotClient } from "./snapshotClient";
 import { executeSnapshotTools } from "./tools";
 import { runGrahamyDeepAgent } from "./grahamyAgent";
-import { executePgCapabilities } from "./pgCapabilities/registry";
-import type { PgCapabilityRunInput, PgCapabilityRunResult } from "./pgCapabilities/types";
+import { executePgCapabilitiesWithCache } from "./pgCapabilities/registry";
+import type {
+  CachedCapabilityView,
+  PgCapabilityRunInput,
+  PgCapabilityRunResult,
+} from "./pgCapabilities/types";
 import {
   DEFAULT_DISCLAIMER,
   EMPTY_CLASSIFICATION,
@@ -30,6 +34,12 @@ export type RunAskGrahamyGraphOptions = {
   // leaves this undefined so classification falls back to the model-backed
   // classifier configured in classification.ts.
   classifier?: ClassifyOptions["classifier"];
+  /**
+   * Test seam for the underlying capability SQL run. Returns the raw
+   * `{views, warnings}` shape — `loadPgCapabilities` wraps this in cache
+   * lookup/write logic via `executePgCapabilitiesWithCache`. Production
+   * code leaves this undefined so `executePgCapabilities` is used.
+   */
   pgCapabilityRunner?: (
     input: PgCapabilityRunInput,
   ) => Promise<PgCapabilityRunResult>;
@@ -60,6 +70,9 @@ export async function runAskGrahamyGraph(
     (request as { classification?: Classification }).classification;
   const suppliedPriorObjects =
     (request as { priorResearchObjects?: CachedResearchObject[] }).priorResearchObjects;
+  const suppliedPriorCapabilityViews =
+    (request as { priorCapabilityViews?: CachedCapabilityView[] })
+      .priorCapabilityViews;
 
   const state: AskGrahamyState = {
     internalUserId,
@@ -68,6 +81,7 @@ export async function runAskGrahamyGraph(
     warnings: [],
     classification: suppliedClassification,
     priorResearchObjects: suppliedPriorObjects,
+    priorCapabilityViews: suppliedPriorCapabilityViews,
   };
 
   // Ensure we have a conversationId — the deep agent uses it as PostgresSaver
@@ -141,6 +155,8 @@ export async function runAskGrahamyGraph(
       state.researchObjectCacheStats,
       state.researchObjectsUpdated ?? [],
       state.pgCapabilityViews,
+      state.capabilityViewsUpdated ?? [],
+      state.capabilityViewCacheStats,
     );
 
     return await finalizeResponse(state);
@@ -215,7 +231,7 @@ async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
 
 async function loadPgCapabilities(
   state: AskGrahamyState,
-  runner: RunAskGrahamyGraphOptions["pgCapabilityRunner"] = executePgCapabilities,
+  runner?: RunAskGrahamyGraphOptions["pgCapabilityRunner"],
 ): Promise<void> {
   const input = {
     classification: state.classification ?? EMPTY_CLASSIFICATION,
@@ -223,8 +239,14 @@ async function loadPgCapabilities(
     snapshots: state.snapshots ?? {},
     toolOutputs: state.toolOutputs ?? {},
   };
-  const result = await runner(input);
+  const result = await executePgCapabilitiesWithCache(
+    input,
+    state.priorCapabilityViews ?? [],
+    runner,
+  );
   state.pgCapabilityViews = result.views;
+  state.capabilityViewsUpdated = result.viewsUpdated;
+  state.capabilityViewCacheStats = result.cacheStats;
   state.warnings.push(...result.warnings);
 }
 
@@ -244,6 +266,8 @@ async function finalizeResponse(
       state.researchObjectCacheStats,
       state.researchObjectsUpdated ?? [],
       state.pgCapabilityViews,
+      state.capabilityViewsUpdated ?? [],
+      state.capabilityViewCacheStats,
     );
   const response: AskGrahamyResponse = {
     conversationId: state.conversationId ?? crypto.randomUUID(),
@@ -290,6 +314,8 @@ function buildMeta(
   researchObjectCacheStats?: import("./types").ResponseMeta["researchObjectCache"],
   researchObjectsUpdated: import("./types").CachedResearchObject[] = [],
   pgCapabilityViews?: import("./types").PgCapabilityViews,
+  capabilityViewsUpdated: CachedCapabilityView[] = [],
+  capabilityViewCacheStats?: import("./types").ResponseMeta["capabilityViewCache"],
 ): ResponseMeta {
   // Only research objects are "sources" the answer was actually grounded in.
   // Snapshots are background scaffolding the graph fetches for system-prompt
@@ -319,6 +345,9 @@ function buildMeta(
   if (pgCapabilityViews?.stockIdeaView) {
     capabilitySources.push({ type: "research", name: "stock_idea_discovery" });
   }
+  if (pgCapabilityViews?.comparisonView) {
+    capabilitySources.push({ type: "research", name: "stock_vs_sector_comparison" });
+  }
   return {
     sourcesUsed: [...researchSources, ...capabilitySources],
     freshness: snapshots.freshness ?? {},
@@ -335,6 +364,13 @@ function buildMeta(
     researchObjectsUpdated: researchObjectsUpdated.length
       ? researchObjectsUpdated
       : undefined,
+    capabilityViewKeys: capabilityViewsUpdated.length
+      ? capabilityViewsUpdated.map((item) => item.cacheKey)
+      : undefined,
+    capabilityViewCache: capabilityViewCacheStats,
+    capabilityViewsUpdated: capabilityViewsUpdated.length
+      ? capabilityViewsUpdated
+      : undefined,
     upstreamLatency: snapshots.latencyMs,
   };
 }
@@ -345,6 +381,7 @@ function inferAnswerType(classification: Classification): AskGrahamyResponse["an
   if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
   if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
+  if (classification.intent === "comparison") return "mixed";
   const stock = classification.symbols.length > 0;
   const sector = classification.sectors.length > 0;
   const regime = classification.regimeRequested;
