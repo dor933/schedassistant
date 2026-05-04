@@ -631,25 +631,44 @@ async function invokeQuery(args: {
         // intermediate tool-calling turns AND the final answer. Convert to an
         // AIMessage with tool_calls extracted from `tool_use` blocks so the
         // LangGraph checkpoint mirrors the legacy `bindTools` log.
+        //
+        // Sub-agent turns (parent_tool_use_id != null) are intentionally
+        // dropped from the LangGraph checkpoint to keep state.messages
+        // bounded. A 4-way Task fan-out where each sub-agent runs ~15
+        // internal rounds otherwise leaves ~120 sub-agent messages in
+        // state, blowing past the summarization guard's MAX_MESSAGES (30)
+        // and overwhelming the summarization model on the next turn. The
+        // primary's Task tool_result already contains the sub-agent's
+        // final output, and the SDK keeps the full sub-agent transcript
+        // server-side for `resume`, so nothing user-visible is lost.
+        const fromSubAgent =
+          (msg as Record<string, unknown>).parent_tool_use_id != null;
         const converted = sdkAssistantToAIMessage(msg);
         if (converted) {
-          streamMessages.push(converted.aiMessage);
+          if (!fromSubAgent) {
+            streamMessages.push(converted.aiMessage);
+          }
 
           // Langfuse: record one "generation" span per assistant turn —
           // matching the legacy ChatAnthropic CallbackHandler behaviour.
+          // Sub-agent turns ARE recorded so the trace shows the full call
+          // tree even when the checkpoint only stores primary turns.
           // Input is omitted because the full prompt is already on the
           // outer span; per-turn input would balloon trace size with
           // duplicated history.
           recordSdkGeneration({
-            name: "anthropic_assistant",
+            name: fromSubAgent ? "anthropic_assistant_subagent" : "anthropic_assistant",
             model: args.modelSlug,
             output: converted.aiMessage.content,
-            metadata: { vendor: "anthropic" },
+            metadata: { vendor: "anthropic", fromSubAgent },
           });
 
           // Track tool_use ids → args so when the matching tool_result
           // arrives in a subsequent `user` event we can emit a tool span
-          // with the original input alongside the result output.
+          // with the original input alongside the result output. We track
+          // sub-agent tool_uses too so their tool_result events still get
+          // paired up for Langfuse — the checkpoint exclusion above is
+          // independent of trace pairing.
           if (converted.aiMessage.tool_calls) {
             for (const tc of converted.aiMessage.tool_calls) {
               if (tc.id) {
@@ -663,14 +682,22 @@ async function invokeQuery(args: {
         // back to the model. Convert each block into its own ToolMessage so
         // the LangGraph checkpoint preserves the call/response pairing the
         // legacy loop emitted via `new ToolMessage({ tool_call_id, content })`.
+        // Sub-agent tool_results (parent_tool_use_id != null) are dropped
+        // from the checkpoint for the same reason as sub-agent assistant
+        // turns above — see the comment on the assistant branch.
+        const fromSubAgent =
+          (msg as Record<string, unknown>).parent_tool_use_id != null;
         const toolMsgs = sdkUserToToolMessages(msg);
         if (toolMsgs.length > 0) {
-          streamMessages.push(...toolMsgs);
+          if (!fromSubAgent) {
+            streamMessages.push(...toolMsgs);
+          }
 
           // Langfuse: pair each tool_result with its remembered tool_use
-          // and emit a "tool" span. The pending map is keyed by SDK-side
-          // `tool_use_id`, which equals the `tool_call_id` we stamped on
-          // each ToolMessage above.
+          // and emit a "tool" span. Sub-agent tool results are still
+          // paired so the trace shows their tool calls. The pending map
+          // is keyed by SDK-side `tool_use_id`, which equals the
+          // `tool_call_id` we stamped on each ToolMessage above.
           for (const tm of toolMsgs) {
             const toolCallId = tm.tool_call_id;
             const pending = toolCallId

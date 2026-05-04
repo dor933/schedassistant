@@ -6,6 +6,7 @@ import { buildSectorDivergenceView } from "./pgCapabilities/sectorDivergence";
 import { buildSectorVsSectorComparisonView } from "./pgCapabilities/sectorVsSectorComparison";
 import { buildStockIdeaDiscoveryView } from "./pgCapabilities/stockIdeaDiscovery";
 import { buildStockVsSectorComparisonView } from "./pgCapabilities/stockVsSectorComparison";
+import { buildSymbolVsSymbolComparisonView } from "./pgCapabilities/symbolVsSymbolComparison";
 import {
   buildCapabilityCacheKey,
   capabilityForClassification,
@@ -87,6 +88,22 @@ const sectorVsSectorClassification: Classification = {
     comparisonType: "sector_vs_sector",
     left: { type: "sector", sector: "Technology" },
     right: { type: "sector", sector: "Industrials" },
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const symbolVsSymbolClassification: Classification = {
+  intent: "comparison",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  comparison: {
+    comparisonType: "symbol_vs_symbol",
+    left: { type: "stock", symbol: "GSL" },
+    right: { type: "stock", symbol: "DAC" },
   },
   requiresTools: ["get_market_context"],
   confidence: "high",
@@ -281,6 +298,18 @@ test("capabilityForClassification routes sector_vs_sector to sector comparison c
   assert.deepEqual(entry.requiredParams, [
     "comparison.left.sector",
     "comparison.right.sector",
+  ]);
+});
+
+test("capabilityForClassification routes symbol_vs_symbol to symbol comparison capability", () => {
+  const entry = capabilityForClassification(symbolVsSymbolClassification);
+  assert.ok(entry);
+  assert.equal(entry.name, "symbol_vs_symbol_comparison");
+  assert.equal(entry.queryName, "query_symbol_vs_symbol_comparison");
+  assert.equal(entry.source, "pg_current_features");
+  assert.deepEqual(entry.requiredParams, [
+    "comparison.left.symbol",
+    "comparison.right.symbol",
   ]);
 });
 
@@ -1449,6 +1478,191 @@ test("sector-vs-sector comparison returns partial when optional forward overlay 
   assertNoForbiddenPublicKeys(view);
 });
 
+test("symbol-vs-symbol comparison returns public view with safe deltas", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildSymbolVsSymbolComparisonView(
+    {
+      classification: symbolVsSymbolClassification,
+      message: "Compare GSL vs DAC",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            left_requested_symbol: "GSL",
+            right_requested_symbol: "DAC",
+            left_symbol: "GSL",
+            right_symbol: "DAC",
+            left_symbol_found: true,
+            right_symbol_found: true,
+            left_company_name: "Global Ship Lease, Inc.",
+            right_company_name: "Danaos Corporation",
+            left_sector: "Industrials",
+            right_sector: "Industrials",
+            as_of_date: "2026-05-01",
+            left_conviction_score_pct: 81.78,
+            left_conviction_bucket: "HIGH",
+            left_valuation_bucket: "ATTRACTIVE",
+            left_momentum_bucket: "STRONG",
+            left_quality_bucket: "CONSTRUCTIVE",
+            left_growth_bucket: "CONSTRUCTIVE",
+            left_leverage_bucket: "CONSTRUCTIVE",
+            left_hit_rate_pct: 61.2,
+            left_median_return_pct: 5.24,
+            right_conviction_score_pct: 58.2,
+            right_conviction_bucket: "MIXED",
+            right_valuation_bucket: "FAIR",
+            right_momentum_bucket: "MIXED",
+            right_quality_bucket: "MIXED",
+            right_growth_bucket: "WEAK",
+            right_leverage_bucket: "CONSTRUCTIVE",
+            right_hit_rate_pct: 53.1,
+            right_median_return_pct: 2.05,
+            features_freshness_state: "FRESH",
+            features_completed_at: "2026-05-02T12:30:04Z",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_freshness_state: "FRESH",
+            forward_completed_at: "2026-05-02T12:32:04Z",
+            left_forward_overlay_available: true,
+            right_forward_overlay_available: true,
+            raw_sql: "must-not-leak",
+            comparison_formula: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.LEFT_SYMBOL, "GSL");
+  assert.equal(replacements.RIGHT_SYMBOL, "DAC");
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.comparisonType, "symbol_vs_symbol");
+  assert.equal(view.source, "pg_current_features");
+  assert.equal(view.left.type, "stock");
+  assert.equal(view.left.symbol, "GSL");
+  assert.equal(view.right.symbol, "DAC");
+  assert.equal(view.left.sector, "Industrials");
+  assert.equal(view.right.sector, "Industrials");
+  assert.equal(view.deltas[0].metric, "conviction");
+  assert.equal(view.deltas[0].interpretationBucket, "left_stronger");
+  assert.match(view.summaryBullets.join(" "), /GSL screens stronger/i);
+  assert.match(view.warnings.join(" "), /path-risk comparison is unavailable/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("symbol-vs-symbol comparison returns unavailable for same symbol", async () => {
+  const result = await buildSymbolVsSymbolComparisonView(
+    {
+      classification: {
+        ...symbolVsSymbolClassification,
+        comparison: {
+          comparisonType: "symbol_vs_symbol",
+          left: { type: "stock", symbol: "GSL" },
+          right: { type: "stock", symbol: "GSL" },
+        },
+      },
+      message: "Compare GSL vs GSL",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => {
+        throw new Error("should not query same symbol");
+      },
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.equal(view.comparisonType, "symbol_vs_symbol");
+  assert.deepEqual(view.deltas, []);
+  assert.match(view.warnings.join(" "), /Cannot compare a symbol to itself/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("symbol-vs-symbol comparison returns unavailable when one symbol is missing", async () => {
+  const result = await buildSymbolVsSymbolComparisonView(
+    {
+      classification: {
+        ...symbolVsSymbolClassification,
+        comparison: {
+          comparisonType: "symbol_vs_symbol",
+          left: { type: "stock", symbol: "FAKE123" },
+          right: { type: "stock", symbol: "DAC" },
+        },
+      },
+      message: "Compare FAKE123 vs DAC",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          left_symbol_found: false,
+          right_symbol_found: true,
+          right_symbol: "DAC",
+          as_of_date: "2026-05-01",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.match(view.warnings.join(" "), /FAKE123/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("symbol-vs-symbol comparison includes cross-sector caveat", async () => {
+  const result = await buildSymbolVsSymbolComparisonView(
+    {
+      classification: {
+        ...symbolVsSymbolClassification,
+        comparison: {
+          comparisonType: "symbol_vs_symbol",
+          left: { type: "stock", symbol: "AMZN" },
+          right: { type: "stock", symbol: "NVDA" },
+        },
+      },
+      message: "Which is stronger, AMZN or NVDA?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          left_symbol: "AMZN",
+          right_symbol: "NVDA",
+          left_symbol_found: true,
+          right_symbol_found: true,
+          left_sector: "Consumer Cyclical",
+          right_sector: "Technology",
+          as_of_date: "2026-05-01",
+          left_conviction_score_pct: 65,
+          right_conviction_score_pct: 80,
+          features_freshness_state: "FRESH",
+          left_forward_overlay_available: false,
+          right_forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.match(view.warnings.join(" "), /different sectors/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
 test("stock idea discovery public freshness is unknown when dataThrough is missing", async () => {
   const result = await buildStockIdeaDiscoveryView(
     {
@@ -1725,6 +1939,12 @@ test("capabilityForClassification routes sector_vs_sector for sector comparisons
   const entry = capabilityForClassification(sectorVsSectorClassification);
   assert.ok(entry);
   assert.equal(entry?.name, "sector_vs_sector_comparison");
+});
+
+test("capabilityForClassification routes symbol_vs_symbol for stock comparisons", () => {
+  const entry = capabilityForClassification(symbolVsSymbolClassification);
+  assert.ok(entry);
+  assert.equal(entry?.name, "symbol_vs_symbol_comparison");
 });
 
 test("capabilityForIntent('comparison') still resolves to the stock_vs_sector default", () => {

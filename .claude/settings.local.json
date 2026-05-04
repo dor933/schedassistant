@@ -68,7 +68,9 @@
       "Bash(xargs -I{} sh -c 'grep -l \"skill\\\\|Skill\" \"/home/office/Dev/schedassistant/packages/database/migrations/{}\" 2>/dev/null')",
       "Bash(git mv *)",
       "Bash(git rm *)",
-      "Read(//home/office/.codex/**)"
+      "Read(//home/office/.codex/**)",
+      "Read(//home/office/Dev/StocksScanner/Web/server/**)",
+      "Bash(LOG_DIR=/tmp/schedassistant-agent-test-logs node --test -r ts-node/register src/askGrahamy/tests/*.test.ts)"
     ]
   },
   "enableAllProjectMcpServers": true,

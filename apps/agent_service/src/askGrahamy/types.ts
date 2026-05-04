@@ -141,6 +141,11 @@ export type ComparisonClassification =
       comparisonType: "sector_vs_sector";
       left: Extract<ComparisonAnchor, { type: "sector" }>;
       right: Extract<ComparisonAnchor, { type: "sector" }>;
+    }
+  | {
+      comparisonType: "symbol_vs_symbol";
+      left: Extract<ComparisonAnchor, { type: "stock" }>;
+      right: Extract<ComparisonAnchor, { type: "stock" }>;
     };
 
 export type SnapshotName =
@@ -495,7 +500,7 @@ export type ComparisonDeltaView = {
 export type ComparisonView = {
   viewSchemaVersion: number;
   state: EvidenceState;
-  comparisonType: "stock_vs_sector" | "sector_vs_sector";
+  comparisonType: "stock_vs_sector" | "sector_vs_sector" | "symbol_vs_symbol";
   source: "pg_current_features" | "pg_sector_peer_daily";
   asOfDate?: string;
   left: ComparisonSideView;

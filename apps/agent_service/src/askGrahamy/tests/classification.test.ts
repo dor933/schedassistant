@@ -344,10 +344,7 @@ test("classifies stock-vs-sector comparison with explicit sector anchor", async 
   });
 });
 
-test("classifier-emitted intent='comparison' without metadata stays unknown for unsupported symbol-vs-symbol", async () => {
-  // The LLM said "comparison" but didn't fill the stock-vs-sector comparison
-  // object. Symbol-vs-symbol is intentionally not implemented in this phase,
-  // so we do not recover GSL-vs-DAC into a comparison capability.
+test("classifier-emitted intent='comparison' without metadata falls back to symbol-vs-symbol when two tickers are named", async () => {
   const result = await classifyMessage("Compare GSL vs DAC", undefined, {
     classifier: stub({
       intent: "comparison",
@@ -359,8 +356,12 @@ test("classifier-emitted intent='comparison' without metadata stays unknown for 
     }),
   });
 
-  assert.equal(result.intent, "unknown");
-  assert.equal(result.comparison, undefined);
+  assert.equal(result.intent, "comparison");
+  assert.deepEqual(result.comparison, {
+    comparisonType: "symbol_vs_symbol",
+    left: { type: "stock", symbol: "GSL" },
+    right: { type: "stock", symbol: "DAC" },
+  });
 });
 
 test("classifies sector-vs-sector comparison with canonical sector anchors", async () => {
@@ -471,19 +472,56 @@ test("fallback routes invalid stock-vs-sector-shaped anchors to comparison", asy
   });
 });
 
-test("symbol-vs-symbol requests remain unknown until that comparison type is implemented", async () => {
-  const symbolVsSymbol = await classifyMessage("Compare GSL vs DAC", undefined, {
+test("fallback routes symbol-vs-symbol examples to comparison", async () => {
+  const examples = [
+    ["Compare GSL vs DAC", "GSL", "DAC"],
+    ["Which is stronger, AMZN or NVDA?", "AMZN", "NVDA"],
+    ["Compare AAPL and MSFT", "AAPL", "MSFT"],
+    ["Compare GSL vs GSL", "GSL", "GSL"],
+  ] as const;
+
+  for (const [message, left, right] of examples) {
+    const result = await classifyMessage(message, undefined, {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "low",
+      }),
+    });
+    assert.equal(result.intent, "comparison", message);
+    assert.deepEqual(result.comparison, {
+      comparisonType: "symbol_vs_symbol",
+      left: { type: "stock", symbol: left },
+      right: { type: "stock", symbol: right },
+    });
+  }
+});
+
+test("classifies LLM-emitted symbol-vs-symbol comparison", async () => {
+  const result = await classifyMessage("Is AMZN better than NVDA?", undefined, {
     classifier: stub({
-      intent: "unknown",
+      intent: "comparison",
       symbols: [],
       sectors: [],
       regimeRequested: false,
       isFollowUp: false,
-      confidence: "low",
+      comparison: {
+        comparisonType: "symbol_vs_symbol",
+        left: { type: "stock", symbol: "amzn" },
+        right: { type: "stock", symbol: "nvda" },
+      },
+      confidence: "high",
     }),
   });
-  assert.equal(symbolVsSymbol.intent, "unknown");
-  assert.equal(symbolVsSymbol.comparison, undefined);
+  assert.equal(result.intent, "comparison");
+  assert.deepEqual(result.comparison, {
+    comparisonType: "symbol_vs_symbol",
+    left: { type: "stock", symbol: "AMZN" },
+    right: { type: "stock", symbol: "NVDA" },
+  });
 });
 
 test("invalid sector-vs-sector-shaped request routes to comparison for public unavailable response", async () => {

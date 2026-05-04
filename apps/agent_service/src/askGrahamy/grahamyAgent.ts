@@ -179,6 +179,7 @@ const HUMANIZE_OVERRIDES: Record<string, string> = {
   flat: "flat",
   stock_vs_sector: "stock-versus-sector",
   sector_vs_sector: "sector-versus-sector",
+  symbol_vs_symbol: "symbol-versus-symbol",
   // Regime labels: keep recognizable casing but spaceful
   RISK_ON: "RISK-ON",
   RISK_OFF: "RISK-OFF",
@@ -355,12 +356,12 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Explain each stock idea only with \`reasonBullets\` and explicit public fields in the row.
 - Treat \`stockIdeaView\` as PG current/base-rate evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
 - If \`stockIdeaView.rows\` is empty or the view state is unavailable, say stock discovery data is unavailable instead of naming tickers.
-- For stock-vs-sector and sector-vs-sector comparison questions, use only \`comparisonView\`. Do not use raw Research Objects, memory, table names, formulas, or inferred metrics to compare.
+- For stock-vs-sector, sector-vs-sector, and symbol-vs-symbol comparison questions, use only \`comparisonView\`. Do not use raw Research Objects, memory, table names, formulas, or inferred metrics to compare.
 - For \`comparisonView\`, prefer dimensional language like "the left side is stronger on X and weaker on Y." Do not say "better" unless multiple public \`deltas\` and \`summaryBullets\` clearly support it.
 - Mention \`comparisonView.asOfDate\` or \`comparisonView.freshness.dataThrough\`. Treat \`comparisonView\` as PG current/base-rate comparison evidence, not validated live edge evidence.
-- Explain \`comparisonView.state = partial\` by naming the public missing area from \`warnings\`; if unavailable, ask for a valid stock/sector target or say the comparison data is unavailable.
+- Explain \`comparisonView.state = partial\` by naming the public missing area from \`warnings\`; if unavailable, ask for a valid stock/sector/symbol target or say the comparison data is unavailable.
 - Do not expose table names, SQL, raw feature values, thresholds, scoring formulas, IDs, gates, or operational source details for \`comparisonView\`.
-- Stock-versus-stock comparisons are not implemented in this phase. If no comparison view is loaded, say that the supported comparison view is unavailable rather than inventing a head-to-head ranking.
+- For symbol-vs-symbol comparisons, mention when sectors differ and keep the answer dimensional ("stronger on X, weaker on Y") rather than treating it as a buy/sell recommendation.
 - For questions using "today", "this week", "latest", or "right now", mention the public \`freshness.dataThrough\` date. If \`freshness.state\` is "stale", include the public warning/caveat. If \`freshness.state\` is "unknown", do not call the data current.
 - Never expose table names, refresh views, run IDs, pipeline stages, refresh logs, or operational diagnostics.
 - DO NOT mention internal terms: \`signal_sql\`, \`raw_alpha\`, edge IDs, methodology details, internal model names, or pipeline mechanics.

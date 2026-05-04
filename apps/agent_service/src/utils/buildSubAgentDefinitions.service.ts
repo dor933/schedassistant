@@ -21,10 +21,15 @@
  *     can call `Task("<sub-agent-slug>", "<task>")` to delegate.
  *
  * Tool surface per sub-agent is INTENTIONALLY MINIMAL. Sub-agents are
- * pure specialists: they get NO auto-bound LangChain tools (no agent
- * notes, episodic memory, thread/session helpers, skills, list_*,
- * consult_agent, send_file, Tavily, Google Workspace, etc.). The
- * model-visible surface is exactly:
+ * pure specialists: the only auto-bound LangChain tools are the
+ * read-only skill pair (`list_agent_skills` + `get_agent_skill`),
+ * scoped to the sub-agent's own id so it sees its own
+ * `agent_available_skills` rows — never the parent's. Everything else
+ * (agent notes, episodic memory, thread/session helpers, add/edit
+ * skill, consult_agent, list_*, send_file, Tavily, Google Workspace,
+ * etc.) is intentionally NOT bound. The model-visible surface is
+ * exactly:
+ *   - `list_agent_skills` + `get_agent_skill` (read-only, sub-agent-scoped).
  *   - External MCP servers attached to the sub-agent's row via
  *     `agent_available_mcp_servers` (filesystem, github, bash, …).
  *   - SDK built-ins (Read/Write/Edit/Glob/Grep/MultiEdit/WebFetch) iff
@@ -32,8 +37,9 @@
  *   - SDK `Bash` iff the row's `allow_sdk_bash=true`.
  *
  * If the admin attaches no MCP servers and leaves both flags off, the
- * sub-agent has zero tools and can only reason. That is by design —
- * sub-agents are configured per-row in the admin UI, not by inheritance.
+ * sub-agent's only tools are the read-only skill pair. That is by
+ * design — sub-agents are configured per-row in the admin UI, not by
+ * inheritance.
  *
  * MCP servers per sub-agent are loaded fresh from `agent_available_mcp_servers`
  * for that sub-agent's id and translated into the SDK's stdio config
@@ -56,6 +62,7 @@ import { ENABLED_BUILTIN_TOOLS } from "../chat/anthropic/agentSdkBuiltinHooks";
 import type { SubAgentBundle } from "../chat/anthropic/agentSdkRunner";
 import { logger } from "../logger";
 import { getAgentSdkCapabilities } from "./sdkCapabilities.service";
+import { systemAgentSkillTools } from "../tools/skillsTools";
 
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
@@ -93,8 +100,10 @@ function buildMcpEnv(envJson: Record<string, string> | null): Record<string, str
 }
 
 /**
- * `claude_sub_agent` rows are PURE — they get NO auto-bound LangChain tools.
- * Their entire model-visible tool surface comes from:
+ * `claude_sub_agent` rows get the read-only skill pair
+ * (`list_agent_skills` + `get_agent_skill`) auto-bound and scoped to
+ * the sub-agent's own id. The remaining model-visible tool surface
+ * comes from:
  *
  *   1. External MCP servers attached to their own row via
  *      `agent_available_mcp_servers` (filesystem, github, bash, etc.) —
@@ -104,20 +113,20 @@ function buildMcpEnv(envJson: Record<string, string> | null): Record<string, str
  *   3. SDK `Bash` when the row's `allow_sdk_bash=true`.
  *
  * Everything else (agent notes, episodic memory, thread summary, session
- * files, cron, Google grants, skills, consult_agent, list_*, send_file,
- * Tavily, Google Workspace, …) is intentionally NOT bound. Sub-agents are
- * specialists that operate on whatever MCP surface the admin explicitly
- * attaches — there is no "every agent gets these for free" baseline.
+ * files, cron, Google grants, add/edit skill, consult_agent, list_*,
+ * send_file, Tavily, Google Workspace, …) is intentionally NOT bound.
+ * Sub-agents are specialists that operate on whatever MCP surface the
+ * admin explicitly attaches — there is no "every agent gets these for
+ * free" baseline beyond the read-only skill pair.
  *
- * This function returns an empty list so the caller's in-process MCP
- * server registers with zero tools (cheap no-op) and the sub-agent's
- * `definition.tools` whitelist consists only of items 1–3 above.
+ * The skill tool factories close over `subAgent.id`, so each sub-agent
+ * reads its own `agent_available_skills` rows — never the parent's.
  */
 async function buildSubAgentTools(
-  _subAgent: Agent,
+  subAgent: Agent,
   _ctx: BuildSubAgentsContext,
 ): Promise<StructuredToolInterface[]> {
-  return [];
+  return systemAgentSkillTools(subAgent.id);
 }
 
 /**

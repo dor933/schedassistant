@@ -25,6 +25,11 @@ import {
   stockVsSectorComparisonAnchors,
   stockVsSectorComparisonCacheKeyParams,
 } from "./stockVsSectorComparison";
+import {
+  buildSymbolVsSymbolComparisonView,
+  symbolVsSymbolComparisonAnchors,
+  symbolVsSymbolComparisonCacheKeyParams,
+} from "./symbolVsSymbolComparison";
 import type {
   CachedCapabilityView,
   CapabilityCacheKeyParams,
@@ -133,6 +138,24 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     cacheKeyParams: sectorVsSectorComparisonCacheKeyParams,
     cacheAnchors: sectorVsSectorComparisonAnchors,
   },
+  {
+    name: "symbol_vs_symbol_comparison",
+    intent: "comparison",
+    requiredParams: ["comparison.left.symbol", "comparison.right.symbol"],
+    queryName: "query_symbol_vs_symbol_comparison",
+    source: "pg_current_features",
+    freshnessSources: [
+      "md_features_daily",
+      "md_research_sector_peer_daily",
+      "md_forward_returns",
+    ],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildSymbolVsSymbolComparisonView,
+    viewSlot: "comparisonView",
+    cacheKeyParams: symbolVsSymbolComparisonCacheKeyParams,
+    cacheAnchors: symbolVsSymbolComparisonAnchors,
+  },
 ];
 
 /**
@@ -173,6 +196,8 @@ export function capabilityForClassification(
       ? "stock_vs_sector_comparison"
       : comparisonType === "sector_vs_sector"
         ? "sector_vs_sector_comparison"
+        : comparisonType === "symbol_vs_symbol"
+          ? "symbol_vs_symbol_comparison"
       : undefined;
   if (!targetName) return REGISTRY_BY_INTENT.get("comparison");
   return PG_CAPABILITY_REGISTRY.find((entry) => entry.name === targetName);

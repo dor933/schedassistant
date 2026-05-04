@@ -346,12 +346,15 @@ function buildMeta(
     capabilitySources.push({ type: "research", name: "stock_idea_discovery" });
   }
   if (pgCapabilityViews?.comparisonView) {
+    const comparisonType = pgCapabilityViews.comparisonView.comparisonType;
     capabilitySources.push({
       type: "research",
       name:
-        pgCapabilityViews.comparisonView.comparisonType === "sector_vs_sector"
+        comparisonType === "sector_vs_sector"
           ? "sector_vs_sector_comparison"
-          : "stock_vs_sector_comparison",
+          : comparisonType === "symbol_vs_symbol"
+            ? "symbol_vs_symbol_comparison"
+            : "stock_vs_sector_comparison",
     });
   }
   return {

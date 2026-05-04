@@ -24,7 +24,8 @@ export type PgCapabilityName =
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
   | "stock_vs_sector_comparison"
-  | "sector_vs_sector_comparison";
+  | "sector_vs_sector_comparison"
+  | "symbol_vs_symbol_comparison";
 
 export type PgCapabilityQueryName =
   | "query_sector_conviction_leaderboard"
@@ -32,7 +33,8 @@ export type PgCapabilityQueryName =
   | "query_sector_delta"
   | "query_stock_idea_discovery"
   | "query_stock_vs_sector_comparison"
-  | "query_sector_vs_sector_comparison";
+  | "query_sector_vs_sector_comparison"
+  | "query_symbol_vs_symbol_comparison";
 
 export type PgCapabilityRunInput = {
   classification: Classification;
@@ -274,6 +276,46 @@ export type SectorVsSectorComparisonRow = Record<string, unknown> & {
   right_growth_bucket?: unknown;
   right_leverage_bucket?: unknown;
   right_hit_rate_pct?: unknown;
+  peer_freshness_state?: unknown;
+  peer_completed_at?: unknown;
+  forward_freshness_state?: unknown;
+  forward_completed_at?: unknown;
+  left_forward_overlay_available?: unknown;
+  right_forward_overlay_available?: unknown;
+};
+
+export type SymbolVsSymbolComparisonRow = Record<string, unknown> & {
+  left_requested_symbol?: unknown;
+  right_requested_symbol?: unknown;
+  left_symbol?: unknown;
+  right_symbol?: unknown;
+  left_symbol_found?: unknown;
+  right_symbol_found?: unknown;
+  left_company_name?: unknown;
+  right_company_name?: unknown;
+  left_sector?: unknown;
+  right_sector?: unknown;
+  as_of_date?: unknown;
+  left_conviction_score_pct?: unknown;
+  left_conviction_bucket?: unknown;
+  left_valuation_bucket?: unknown;
+  left_momentum_bucket?: unknown;
+  left_quality_bucket?: unknown;
+  left_growth_bucket?: unknown;
+  left_leverage_bucket?: unknown;
+  left_hit_rate_pct?: unknown;
+  left_median_return_pct?: unknown;
+  right_conviction_score_pct?: unknown;
+  right_conviction_bucket?: unknown;
+  right_valuation_bucket?: unknown;
+  right_momentum_bucket?: unknown;
+  right_quality_bucket?: unknown;
+  right_growth_bucket?: unknown;
+  right_leverage_bucket?: unknown;
+  right_hit_rate_pct?: unknown;
+  right_median_return_pct?: unknown;
+  features_freshness_state?: unknown;
+  features_completed_at?: unknown;
   peer_freshness_state?: unknown;
   peer_completed_at?: unknown;
   forward_freshness_state?: unknown;

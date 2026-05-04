@@ -79,6 +79,22 @@ const sectorComparisonClassification: Classification = {
   warnings: [],
 };
 
+const symbolComparisonClassification: Classification = {
+  intent: "comparison",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  comparison: {
+    comparisonType: "symbol_vs_symbol",
+    left: { type: "stock", symbol: "GSL" },
+    right: { type: "stock", symbol: "DAC" },
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
 test("graph loads sectorLeaderboardView for leaderboard intent without Research Object anchors", async () => {
   const response = await runAskGrahamyGraph(
     {
@@ -494,5 +510,81 @@ test("graph loads comparisonView for sector-vs-sector comparison without Researc
   assert.equal(publicView.comparisonView?.comparisonType, "sector_vs_sector");
   assert.equal(publicView.comparisonView?.left.sector, "Technology");
   assert.equal(publicView.comparisonView?.right.sector, "Industrials");
+  assert.equal(publicView.researchObjectViews.length, 0);
+});
+
+test("graph loads comparisonView for symbol-vs-symbol comparison without Research Object anchors", async () => {
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-1",
+      message: "Compare GSL vs DAC",
+      classification: symbolComparisonClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-01" },
+        }),
+      } as any,
+      pgCapabilityRunner: async () => ({
+        views: {
+          comparisonView: {
+            viewSchemaVersion: 1,
+            state: "partial",
+            comparisonType: "symbol_vs_symbol",
+            source: "pg_current_features",
+            asOfDate: "2026-05-01",
+            left: {
+              type: "stock",
+              label: "GSL",
+              symbol: "GSL",
+              sector: "Industrials",
+              metrics: { convictionScorePct: 82, convictionBucket: "HIGH" },
+            },
+            right: {
+              type: "stock",
+              label: "DAC",
+              symbol: "DAC",
+              sector: "Industrials",
+              metrics: { convictionScorePct: 58, convictionBucket: "MIXED" },
+            },
+            deltas: [
+              {
+                metric: "conviction",
+                leftValue: 82,
+                rightValue: 58,
+                delta: 24,
+                interpretationBucket: "left_stronger",
+                explanation: "Compares public stock conviction fields.",
+              },
+            ],
+            summaryBullets: ["GSL screens stronger than DAC on conviction."],
+            freshness: { dataThrough: "2026-05-01", state: "fresh" },
+            warnings: ["Daily path-risk comparison is unavailable in V1."],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async () => ({
+        answerText: "GSL screens stronger on the supplied PG comparison view.",
+        suggestedFollowups: [],
+        warnings: [],
+      }),
+    },
+  );
+
+  assert.equal(response.answerType, "mixed");
+  assert.equal(response.meta.researchObjectKeys?.length, 0);
+  assert.deepEqual(response.meta.sourcesUsed, [
+    { type: "research", name: "symbol_vs_symbol_comparison" },
+  ]);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.comparisonView?.comparisonType, "symbol_vs_symbol");
+  assert.equal(publicView.comparisonView?.left.symbol, "GSL");
+  assert.equal(publicView.comparisonView?.right.symbol, "DAC");
   assert.equal(publicView.researchObjectViews.length, 0);
 });

@@ -70,6 +70,17 @@ const classifierOutputSchema = z.object({
           sector: z.string(),
         }),
       }),
+      z.object({
+        comparisonType: z.literal("symbol_vs_symbol"),
+        left: z.object({
+          type: z.literal("stock"),
+          symbol: z.string(),
+        }),
+        right: z.object({
+          type: z.literal("stock"),
+          symbol: z.string(),
+        }),
+      }),
     ])
     .nullable(),
   confidence: z.enum(["high", "medium", "low"]),
@@ -98,7 +109,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • an anchorless sector momentum-vs-conviction divergence request.
   • an anchorless week-over-week sector change / sector delta request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
-  • a stock-vs-sector or sector-vs-sector comparison request.
+  • a stock-vs-sector, sector-vs-sector, or stock-vs-stock comparison request.
 
 Set isFollowUp = true when the message references a previous turn — short questions with
 no own anchor like "what about ...?", "why?", "and the risks?", "compare to peers", "compare it",
@@ -173,7 +184,7 @@ ticker. Examples:
   • "Which names have the best setup right now?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
-Use intent = "comparison" for stock-vs-sector and sector-vs-sector comparison requests. Put
+Use intent = "comparison" for stock-vs-sector, sector-vs-sector, and stock-vs-stock comparison requests. Put
 the anchors in comparison.left/right (NOT in symbols), so the PG comparison capability can
 run without building full Stock Research Objects. For this intent, symbols=[], sectors=[],
 regimeRequested=false is valid.
@@ -199,8 +210,14 @@ Use exact canonical labels when possible:
   comparison={ comparisonType:"sector_vs_sector", left:{type:"sector", sector:"Technology"},
     right:{type:"sector", sector:"Industrials"} }
 
-Do NOT classify stock-vs-stock comparisons as supported yet; use intent="unknown"
-for "Compare GSL vs DAC" or "Which is stronger, GSL or DAC?".
+Supported stock-vs-stock examples:
+  • "Compare GSL vs DAC"
+  • "Which is stronger, AMZN or NVDA?"
+  • "Is AMZN better than NVDA?"
+  • "Compare AAPL and MSFT"
+Use ticker symbols only when you can resolve them confidently:
+  comparison={ comparisonType:"symbol_vs_symbol", left:{type:"stock", symbol:"GSL"},
+    right:{type:"stock", symbol:"DAC"} }
 For every non-comparison message, set comparison=null.
 
 Use intent = "unknown" only when the message is nonsensical, off-topic, or impossible to anchor
@@ -313,9 +330,11 @@ export async function classifyMessage(
     normalizeComparison(raw.comparison) ??
     // Sector inference runs first because "Compare FAKE123 to its sector"
     // is a supported stock-vs-sector shape even when the stock is not found
-    // later in PG. Symbol-vs-symbol remains unsupported in this phase.
+    // later in PG. Symbol-vs-symbol inference runs after sector comparisons
+    // so canonical sector names do not get treated as ticker tokens.
     inferStockVsSectorComparisonFromMessage(message) ??
-    inferSectorVsSectorComparisonFromMessage(message);
+    inferSectorVsSectorComparisonFromMessage(message) ??
+    inferSymbolVsSymbolComparisonFromMessage(message);
 
   // Slimmed classifier — the deep agent's PostgresSaver thread carries
   // conversation memory now, so we no longer need the follow-up self-
@@ -414,6 +433,22 @@ function normalizeComparison(
     };
   }
 
+  if (comparison.comparisonType === "symbol_vs_symbol") {
+    const leftSymbol = comparison.left.symbol.trim().toUpperCase();
+    const rightSymbol = comparison.right.symbol.trim().toUpperCase();
+    if (!leftSymbol || !rightSymbol || leftSymbol.length > 10 || rightSymbol.length > 10) {
+      return undefined;
+    }
+    if (leftSymbol === rightSymbol) {
+      return undefined;
+    }
+    return {
+      comparisonType: "symbol_vs_symbol",
+      left: { type: "stock", symbol: leftSymbol },
+      right: { type: "stock", symbol: rightSymbol },
+    };
+  }
+
   if (comparison.comparisonType !== "stock_vs_sector") return undefined;
   const symbol = comparison.left.symbol.trim().toUpperCase();
   if (!symbol || symbol.length > 10) return undefined;
@@ -501,6 +536,53 @@ function inferSectorVsSectorComparisonFromMessage(
   }
 
   return undefined;
+}
+
+function inferSymbolVsSymbolComparisonFromMessage(
+  message: string,
+): import("./types").ComparisonClassification | undefined {
+  if (!/\b(compare|versus|vs\.?|stronger|better|weaker|worse)\b/i.test(message)) {
+    return undefined;
+  }
+  const tokens = extractTickerLikeTokens(message).filter(
+    (token) => !canonicalSectorLabel(token),
+  );
+  if (tokens.length !== 2) return undefined;
+  const [left, right] = tokens;
+  if (!left || !right || left === right) {
+    return {
+      comparisonType: "symbol_vs_symbol",
+      left: { type: "stock", symbol: left ?? "UNKNOWN" },
+      right: { type: "stock", symbol: right ?? left ?? "UNKNOWN" },
+    };
+  }
+  return {
+    comparisonType: "symbol_vs_symbol",
+    left: { type: "stock", symbol: left },
+    right: { type: "stock", symbol: right },
+  };
+}
+
+function extractTickerLikeTokens(message: string): string[] {
+  const ignored = new Set([
+    "COMPARE",
+    "WHICH",
+    "STRONGER",
+    "BETTER",
+    "WEAKER",
+    "WORSE",
+    "THAN",
+    "VERSUS",
+    "WITH",
+    "AND",
+    "LOOKS",
+    "SECTOR",
+  ]);
+  const matches = message.match(/\b[A-Z][A-Z0-9.]{0,9}\b/g) ?? [];
+  return matches
+    .map((token) => token.trim().toUpperCase())
+    .filter((token) => token.length > 0 && !ignored.has(token))
+    .slice(0, 3);
 }
 
 function findSectorMentions(message: string): Array<{ label: string; index: number }> {
