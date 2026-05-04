@@ -130,13 +130,18 @@ export type ComparisonAnchor =
     };
 
 export type ComparisonClassification =
-  {
-    comparisonType: "stock_vs_sector";
-    left: Extract<ComparisonAnchor, { type: "stock" }>;
-    right:
-      | Extract<ComparisonAnchor, { type: "sector" }>
-      | Extract<ComparisonAnchor, { type: "implicit_stock_sector" }>;
-  };
+  | {
+      comparisonType: "stock_vs_sector";
+      left: Extract<ComparisonAnchor, { type: "stock" }>;
+      right:
+        | Extract<ComparisonAnchor, { type: "sector" }>
+        | Extract<ComparisonAnchor, { type: "implicit_stock_sector" }>;
+    }
+  | {
+      comparisonType: "sector_vs_sector";
+      left: Extract<ComparisonAnchor, { type: "sector" }>;
+      right: Extract<ComparisonAnchor, { type: "sector" }>;
+    };
 
 export type SnapshotName =
   | "daily_brief"
@@ -490,7 +495,7 @@ export type ComparisonDeltaView = {
 export type ComparisonView = {
   viewSchemaVersion: number;
   state: EvidenceState;
-  comparisonType: "stock_vs_sector";
+  comparisonType: "stock_vs_sector" | "sector_vs_sector";
   source: "pg_current_features" | "pg_sector_peer_daily";
   asOfDate?: string;
   left: ComparisonSideView;

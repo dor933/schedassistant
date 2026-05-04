@@ -59,6 +59,17 @@ const classifierOutputSchema = z.object({
           sector: z.string().nullable(),
         }),
       }),
+      z.object({
+        comparisonType: z.literal("sector_vs_sector"),
+        left: z.object({
+          type: z.literal("sector"),
+          sector: z.string(),
+        }),
+        right: z.object({
+          type: z.literal("sector"),
+          sector: z.string(),
+        }),
+      }),
     ])
     .nullable(),
   confidence: z.enum(["high", "medium", "low"]),
@@ -87,7 +98,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • an anchorless sector momentum-vs-conviction divergence request.
   • an anchorless week-over-week sector change / sector delta request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
-  • a stock-vs-sector comparison request.
+  • a stock-vs-sector or sector-vs-sector comparison request.
 
 Set isFollowUp = true when the message references a previous turn — short questions with
 no own anchor like "what about ...?", "why?", "and the risks?", "compare to peers", "compare it",
@@ -162,7 +173,7 @@ ticker. Examples:
   • "Which names have the best setup right now?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
-Use intent = "comparison" for stock-vs-sector comparison requests. Put
+Use intent = "comparison" for stock-vs-sector and sector-vs-sector comparison requests. Put
 the anchors in comparison.left/right (NOT in symbols), so the PG comparison capability can
 run without building full Stock Research Objects. For this intent, symbols=[], sectors=[],
 regimeRequested=false is valid.
@@ -179,9 +190,17 @@ For explicit-sector wording:
   comparison={ comparisonType:"stock_vs_sector", left:{type:"stock", symbol:"GSL"},
     right:{type:"sector", sector:"Financial Services"} }   (use the best canonical sector label)
 
-Do NOT classify stock-vs-stock or sector-vs-sector comparisons as supported yet; use
-intent="unknown" for "Compare GSL vs DAC", "Compare Technology vs Industrials", or
-"Which is stronger, Energy or Industrials?".
+Supported sector-vs-sector examples:
+  • "Compare Technology vs Industrials"
+  • "Which sector looks better, Energy or Industrials?"
+  • "Is Healthcare stronger than Financial Services?"
+  • "Compare Consumer Defensive with Consumer Cyclical"
+Use exact canonical labels when possible:
+  comparison={ comparisonType:"sector_vs_sector", left:{type:"sector", sector:"Technology"},
+    right:{type:"sector", sector:"Industrials"} }
+
+Do NOT classify stock-vs-stock comparisons as supported yet; use intent="unknown"
+for "Compare GSL vs DAC" or "Which is stronger, GSL or DAC?".
 For every non-comparison message, set comparison=null.
 
 Use intent = "unknown" only when the message is nonsensical, off-topic, or impossible to anchor
@@ -295,7 +314,8 @@ export async function classifyMessage(
     // Sector inference runs first because "Compare FAKE123 to its sector"
     // is a supported stock-vs-sector shape even when the stock is not found
     // later in PG. Symbol-vs-symbol remains unsupported in this phase.
-    inferStockVsSectorComparisonFromMessage(message);
+    inferStockVsSectorComparisonFromMessage(message) ??
+    inferSectorVsSectorComparisonFromMessage(message);
 
   // Slimmed classifier — the deep agent's PostgresSaver thread carries
   // conversation memory now, so we no longer need the follow-up self-
@@ -380,6 +400,20 @@ function normalizeComparison(
 ): import("./types").ComparisonClassification | undefined {
   if (!comparison) return undefined;
 
+  if (comparison.comparisonType === "sector_vs_sector") {
+    return {
+      comparisonType: "sector_vs_sector",
+      left: {
+        type: "sector",
+        sector: comparison.left.sector.trim(),
+      },
+      right: {
+        type: "sector",
+        sector: comparison.right.sector.trim(),
+      },
+    };
+  }
+
   if (comparison.comparisonType !== "stock_vs_sector") return undefined;
   const symbol = comparison.left.symbol.trim().toUpperCase();
   if (!symbol || symbol.length > 10) return undefined;
@@ -435,6 +469,54 @@ function inferStockVsSectorComparisonFromMessage(
   return undefined;
 }
 
+function inferSectorVsSectorComparisonFromMessage(
+  message: string,
+): import("./types").ComparisonClassification | undefined {
+  if (!/\b(compare|versus|vs\.?|stronger|better|weaker|worse)\b/i.test(message)) {
+    return undefined;
+  }
+
+  const sectors = findSectorMentions(message);
+  if (sectors.length >= 2) {
+    return {
+      comparisonType: "sector_vs_sector",
+      left: { type: "sector", sector: sectors[0].label },
+      right: { type: "sector", sector: sectors[1].label },
+    };
+  }
+
+  const compareMatch = message.match(
+    /\bcompare\s+(.+?)\s+(?:vs\.?|versus|against|with|to|and)\s+(.+?)(?:[?.!]|$)/i,
+  );
+  if (compareMatch) {
+    const left = compareMatch[1]?.trim().replace(/^the\s+/i, "");
+    const right = compareMatch[2]?.trim().replace(/^the\s+/i, "");
+    if (left && right && (mentionsSectorWord(left) || mentionsSectorWord(right))) {
+      return {
+        comparisonType: "sector_vs_sector",
+        left: { type: "sector", sector: canonicalSectorLabel(left) ?? left },
+        right: { type: "sector", sector: canonicalSectorLabel(right) ?? right },
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function findSectorMentions(message: string): Array<{ label: string; index: number }> {
+  const mentions: Array<{ label: string; index: number }> = [];
+  for (const sector of CANONICAL_SECTORS) {
+    const pattern = new RegExp(`\\b${escapeRegExp(sector).replace(/\\s+/g, "\\\\s+")}\\b`, "i");
+    const match = message.match(pattern);
+    if (match?.index != null) mentions.push({ label: sector, index: match.index });
+  }
+  return mentions.sort((a, b) => a.index - b.index);
+}
+
+function mentionsSectorWord(value: string): boolean {
+  return /\bsector\b/i.test(value);
+}
+
 function looksLikeTickerAnchor(value: string): boolean {
   const token = value.trim();
   if (!/^[A-Za-z][A-Za-z0-9.]{0,9}$/.test(token)) return false;
@@ -448,6 +530,10 @@ function canonicalSectorLabel(value: string): string | undefined {
     (sector) =>
       sector.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === normalized,
   );
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function inferIntent(

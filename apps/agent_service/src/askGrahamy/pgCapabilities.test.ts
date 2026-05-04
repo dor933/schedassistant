@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { buildSectorConvictionLeaderboardView } from "./pgCapabilities/sectorConvictionLeaderboard";
 import { buildSectorDeltaView } from "./pgCapabilities/sectorDelta";
 import { buildSectorDivergenceView } from "./pgCapabilities/sectorDivergence";
+import { buildSectorVsSectorComparisonView } from "./pgCapabilities/sectorVsSectorComparison";
 import { buildStockIdeaDiscoveryView } from "./pgCapabilities/stockIdeaDiscovery";
 import { buildStockVsSectorComparisonView } from "./pgCapabilities/stockVsSectorComparison";
 import {
@@ -70,6 +71,22 @@ const comparisonClassification: Classification = {
     comparisonType: "stock_vs_sector",
     left: { type: "stock", symbol: "GSL" },
     right: { type: "implicit_stock_sector" },
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const sectorVsSectorClassification: Classification = {
+  intent: "comparison",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  comparison: {
+    comparisonType: "sector_vs_sector",
+    left: { type: "sector", sector: "Technology" },
+    right: { type: "sector", sector: "Industrials" },
   },
   requiresTools: ["get_market_context"],
   confidence: "high",
@@ -253,6 +270,18 @@ test("PG capability registry routes comparison intent to stock-vs-sector capabil
   assert.equal(entry.queryName, "query_stock_vs_sector_comparison");
   assert.equal(entry.source, "pg_current_features");
   assert.deepEqual(entry.requiredParams, ["comparison.left.symbol"]);
+});
+
+test("capabilityForClassification routes sector_vs_sector to sector comparison capability", () => {
+  const entry = capabilityForClassification(sectorVsSectorClassification);
+  assert.ok(entry);
+  assert.equal(entry.name, "sector_vs_sector_comparison");
+  assert.equal(entry.queryName, "query_sector_vs_sector_comparison");
+  assert.equal(entry.source, "pg_sector_peer_daily");
+  assert.deepEqual(entry.requiredParams, [
+    "comparison.left.sector",
+    "comparison.right.sector",
+  ]);
 });
 
 test("sector conviction leaderboard returns partial when forward overlay is absent", async () => {
@@ -1292,6 +1321,134 @@ test("publicResearchView carries comparisonView without Research Objects", async
   assertNoForbiddenPublicKeys(publicView);
 });
 
+test("sector-vs-sector comparison returns complete public view with safe deltas", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildSectorVsSectorComparisonView(
+    {
+      classification: sectorVsSectorClassification,
+      message: "Compare Technology vs Industrials",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            left_sector: "Technology",
+            right_sector: "Industrials",
+            left_sector_found: true,
+            right_sector_found: true,
+            as_of_date: "2026-05-01",
+            left_conviction_score_pct: 72.1,
+            left_conviction_bucket: "CONSTRUCTIVE",
+            left_momentum_bucket: "STRONG",
+            left_quality_bucket: "STRONG",
+            left_growth_bucket: "CONSTRUCTIVE",
+            left_leverage_bucket: "MIXED",
+            left_hit_rate_pct: 58.4,
+            right_conviction_score_pct: 51.2,
+            right_conviction_bucket: "MIXED",
+            right_momentum_bucket: "MIXED",
+            right_quality_bucket: "MIXED",
+            right_growth_bucket: "WEAK",
+            right_leverage_bucket: "MIXED",
+            right_hit_rate_pct: 55.1,
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_freshness_state: "FRESH",
+            forward_completed_at: "2026-05-02T12:32:04Z",
+            left_forward_overlay_available: true,
+            right_forward_overlay_available: true,
+            raw_sql: "must-not-leak",
+            comparison_formula: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.LEFT_SECTOR, "Technology");
+  assert.equal(replacements.RIGHT_SECTOR, "Industrials");
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.comparisonType, "sector_vs_sector");
+  assert.equal(view.source, "pg_sector_peer_daily");
+  assert.equal(view.left.type, "sector");
+  assert.equal(view.left.sector, "Technology");
+  assert.equal(view.right.sector, "Industrials");
+  assert.equal(view.deltas[0].metric, "conviction");
+  assert.equal(view.deltas[0].interpretationBucket, "left_stronger");
+  assert.match(view.summaryBullets.join(" "), /Technology screens stronger/i);
+  assert.deepEqual(view.warnings, []);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector-vs-sector comparison returns unavailable for invalid sector anchor", async () => {
+  const result = await buildSectorVsSectorComparisonView(
+    {
+      classification: {
+        ...sectorVsSectorClassification,
+        comparison: {
+          comparisonType: "sector_vs_sector",
+          left: { type: "sector", sector: "Banana Sector" },
+          right: { type: "sector", sector: "Industrials" },
+        },
+      },
+      message: "Compare Banana Sector vs Industrials",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => {
+        throw new Error("should not query invalid sectors");
+      },
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.equal(view.comparisonType, "sector_vs_sector");
+  assert.deepEqual(view.deltas, []);
+  assert.match(view.warnings.join(" "), /Unsupported sector comparison anchor/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector-vs-sector comparison returns partial when optional forward overlay is absent", async () => {
+  const result = await buildSectorVsSectorComparisonView(
+    {
+      classification: sectorVsSectorClassification,
+      message: "Which sector looks better, Technology or Industrials?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          left_sector_found: true,
+          right_sector_found: true,
+          as_of_date: "2026-05-01",
+          left_conviction_score_pct: 70,
+          left_conviction_bucket: "CONSTRUCTIVE",
+          right_conviction_score_pct: 50,
+          right_conviction_bucket: "MIXED",
+          peer_freshness_state: "FRESH",
+          left_forward_overlay_available: false,
+          right_forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.match(view.warnings.join(" "), /forward-return overlay is unavailable/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
 test("stock idea discovery public freshness is unknown when dataThrough is missing", async () => {
   const result = await buildStockIdeaDiscoveryView(
     {
@@ -1562,6 +1719,12 @@ test("capabilityForClassification still routes stock_vs_sector for explicit-sect
   const entry = capabilityForClassification(comparisonClassification);
   assert.ok(entry);
   assert.equal(entry?.name, "stock_vs_sector_comparison");
+});
+
+test("capabilityForClassification routes sector_vs_sector for sector comparisons", () => {
+  const entry = capabilityForClassification(sectorVsSectorClassification);
+  assert.ok(entry);
+  assert.equal(entry?.name, "sector_vs_sector_comparison");
 });
 
 test("capabilityForIntent('comparison') still resolves to the stock_vs_sector default", () => {

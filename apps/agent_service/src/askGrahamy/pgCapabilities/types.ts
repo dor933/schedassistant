@@ -23,14 +23,16 @@ export type PgCapabilityName =
   | "sector_momentum_vs_conviction_divergence"
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
-  | "stock_vs_sector_comparison";
+  | "stock_vs_sector_comparison"
+  | "sector_vs_sector_comparison";
 
 export type PgCapabilityQueryName =
   | "query_sector_conviction_leaderboard"
   | "query_sector_divergence"
   | "query_sector_delta"
   | "query_stock_idea_discovery"
-  | "query_stock_vs_sector_comparison";
+  | "query_stock_vs_sector_comparison"
+  | "query_sector_vs_sector_comparison";
 
 export type PgCapabilityRunInput = {
   classification: Classification;
@@ -250,6 +252,34 @@ export type StockVsSectorComparisonRow = Record<string, unknown> & {
   forward_completed_at?: unknown;
   stock_forward_overlay_available?: unknown;
   sector_forward_overlay_available?: unknown;
+};
+
+export type SectorVsSectorComparisonRow = Record<string, unknown> & {
+  left_sector?: unknown;
+  right_sector?: unknown;
+  left_sector_found?: unknown;
+  right_sector_found?: unknown;
+  as_of_date?: unknown;
+  left_conviction_score_pct?: unknown;
+  left_conviction_bucket?: unknown;
+  left_momentum_bucket?: unknown;
+  left_quality_bucket?: unknown;
+  left_growth_bucket?: unknown;
+  left_leverage_bucket?: unknown;
+  left_hit_rate_pct?: unknown;
+  right_conviction_score_pct?: unknown;
+  right_conviction_bucket?: unknown;
+  right_momentum_bucket?: unknown;
+  right_quality_bucket?: unknown;
+  right_growth_bucket?: unknown;
+  right_leverage_bucket?: unknown;
+  right_hit_rate_pct?: unknown;
+  peer_freshness_state?: unknown;
+  peer_completed_at?: unknown;
+  forward_freshness_state?: unknown;
+  forward_completed_at?: unknown;
+  left_forward_overlay_available?: unknown;
+  right_forward_overlay_available?: unknown;
 };
 
 export type EmptyCapabilityView = {

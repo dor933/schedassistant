@@ -63,6 +63,22 @@ const comparisonClassification: Classification = {
   warnings: [],
 };
 
+const sectorComparisonClassification: Classification = {
+  intent: "comparison",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  comparison: {
+    comparisonType: "sector_vs_sector",
+    left: { type: "sector", sector: "Technology" },
+    right: { type: "sector", sector: "Industrials" },
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
 test("graph loads sectorLeaderboardView for leaderboard intent without Research Object anchors", async () => {
   const response = await runAskGrahamyGraph(
     {
@@ -402,5 +418,81 @@ test("graph loads comparisonView for stock-vs-sector comparison without Research
   ]);
   const publicView = response.research.publicResearchView as PublicResearchView;
   assert.equal(publicView.comparisonView?.left.symbol, "GSL");
+  assert.equal(publicView.researchObjectViews.length, 0);
+});
+
+test("graph loads comparisonView for sector-vs-sector comparison without Research Object anchors", async () => {
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-1",
+      message: "Compare Technology vs Industrials",
+      classification: sectorComparisonClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-01" },
+        }),
+      } as any,
+      pgCapabilityRunner: async () => ({
+        views: {
+          comparisonView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            comparisonType: "sector_vs_sector",
+            source: "pg_sector_peer_daily",
+            asOfDate: "2026-05-01",
+            left: {
+              type: "sector",
+              label: "Technology",
+              sector: "Technology",
+              metrics: { convictionScorePct: 72, convictionBucket: "CONSTRUCTIVE" },
+            },
+            right: {
+              type: "sector",
+              label: "Industrials",
+              sector: "Industrials",
+              metrics: { convictionScorePct: 52, convictionBucket: "MIXED" },
+            },
+            deltas: [
+              {
+                metric: "conviction",
+                leftValue: 72,
+                rightValue: 52,
+                delta: 20,
+                interpretationBucket: "left_stronger",
+                explanation: "Compares public sector conviction fields.",
+              },
+            ],
+            summaryBullets: [
+              "Technology screens stronger than Industrials on conviction.",
+            ],
+            freshness: { dataThrough: "2026-05-01", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async () => ({
+        answerText: "Technology screens stronger on the supplied PG comparison view.",
+        suggestedFollowups: [],
+        warnings: [],
+      }),
+    },
+  );
+
+  assert.equal(response.answerType, "mixed");
+  assert.equal(response.meta.researchObjectKeys?.length, 0);
+  assert.deepEqual(response.meta.sourcesUsed, [
+    { type: "research", name: "sector_vs_sector_comparison" },
+  ]);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.comparisonView?.comparisonType, "sector_vs_sector");
+  assert.equal(publicView.comparisonView?.left.sector, "Technology");
+  assert.equal(publicView.comparisonView?.right.sector, "Industrials");
   assert.equal(publicView.researchObjectViews.length, 0);
 });

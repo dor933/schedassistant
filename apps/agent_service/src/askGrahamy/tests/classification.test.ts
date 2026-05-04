@@ -311,7 +311,7 @@ test("classifies stock-vs-sector comparison with implicit sector anchor", async 
   assert.deepEqual(result.comparison, {
     comparisonType: "stock_vs_sector",
     left: { type: "stock", symbol: "GSL" },
-      right: { type: "implicit_stock_sector" },
+    right: { type: "implicit_stock_sector" },
   });
 });
 
@@ -361,6 +361,78 @@ test("classifier-emitted intent='comparison' without metadata stays unknown for 
 
   assert.equal(result.intent, "unknown");
   assert.equal(result.comparison, undefined);
+});
+
+test("classifies sector-vs-sector comparison with canonical sector anchors", async () => {
+  const result = await classifyMessage("Compare Technology vs Industrials", undefined, {
+    classifier: stub({
+      intent: "comparison",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      comparison: {
+        comparisonType: "sector_vs_sector",
+        left: { type: "sector", sector: "Technology" },
+        right: { type: "sector", sector: "Industrials" },
+      },
+      confidence: "high",
+    }),
+  });
+
+  assert.equal(result.intent, "comparison");
+  assert.deepEqual(result.symbols, []);
+  assert.deepEqual(result.sectors, []);
+  assert.deepEqual(result.requiresTools, ["get_market_context"]);
+  assert.deepEqual(result.comparison, {
+    comparisonType: "sector_vs_sector",
+    left: { type: "sector", sector: "Technology" },
+    right: { type: "sector", sector: "Industrials" },
+  });
+});
+
+test("fallback routes sector-vs-sector examples to comparison", async () => {
+  const examples = [
+    {
+      message: "Compare Technology vs Industrials",
+      left: "Technology",
+      right: "Industrials",
+    },
+    {
+      message: "Which sector looks better, Energy or Industrials?",
+      left: "Energy",
+      right: "Industrials",
+    },
+    {
+      message: "Is Healthcare stronger than Financial Services?",
+      left: "Healthcare",
+      right: "Financial Services",
+    },
+    {
+      message: "Compare Consumer Defensive with Consumer Cyclical",
+      left: "Consumer Defensive",
+      right: "Consumer Cyclical",
+    },
+  ];
+
+  for (const item of examples) {
+    const result = await classifyMessage(item.message, undefined, {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "low",
+      }),
+    });
+    assert.equal(result.intent, "comparison", item.message);
+    assert.deepEqual(result.comparison, {
+      comparisonType: "sector_vs_sector",
+      left: { type: "sector", sector: item.left },
+      right: { type: "sector", sector: item.right },
+    });
+  }
 });
 
 test("fallback routes invalid stock-vs-sector-shaped anchors to comparison", async () => {
@@ -414,12 +486,9 @@ test("symbol-vs-symbol requests remain unknown until that comparison type is imp
   assert.equal(symbolVsSymbol.comparison, undefined);
 });
 
-test("sector-vs-sector requests are still classified as unknown", async () => {
-  // "Compare Technology vs Industrials" — neither word looks like a ticker
-  // anchor (>5 chars, mixed case), so both the stock-vs-sector and the
-  // stock-vs-stock fallbacks bail out and the message stays unknown.
+test("invalid sector-vs-sector-shaped request routes to comparison for public unavailable response", async () => {
   const sectorVsSector = await classifyMessage(
-    "Compare Technology vs Industrials",
+    "Compare Banana Sector vs Industrials",
     undefined,
     {
       classifier: stub({
@@ -432,8 +501,12 @@ test("sector-vs-sector requests are still classified as unknown", async () => {
       }),
     },
   );
-  assert.equal(sectorVsSector.intent, "unknown");
-  assert.equal(sectorVsSector.comparison, undefined);
+  assert.equal(sectorVsSector.intent, "comparison");
+  assert.deepEqual(sectorVsSector.comparison, {
+    comparisonType: "sector_vs_sector",
+    left: { type: "sector", sector: "Banana Sector" },
+    right: { type: "sector", sector: "Industrials" },
+  });
 });
 
 test("does not require a ticker for stock idea discovery", async () => {

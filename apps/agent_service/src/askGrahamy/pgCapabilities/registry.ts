@@ -12,6 +12,11 @@ import {
   sectorDivergenceCacheKeyParams,
 } from "./sectorDivergence";
 import {
+  buildSectorVsSectorComparisonView,
+  sectorVsSectorComparisonAnchors,
+  sectorVsSectorComparisonCacheKeyParams,
+} from "./sectorVsSectorComparison";
+import {
   buildStockIdeaDiscoveryView,
   stockIdeaDiscoveryCacheKeyParams,
 } from "./stockIdeaDiscovery";
@@ -111,12 +116,29 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     cacheKeyParams: stockVsSectorComparisonCacheKeyParams,
     cacheAnchors: stockVsSectorComparisonAnchors,
   },
+  {
+    name: "sector_vs_sector_comparison",
+    intent: "comparison",
+    requiredParams: ["comparison.left.sector", "comparison.right.sector"],
+    queryName: "query_sector_vs_sector_comparison",
+    source: "pg_sector_peer_daily",
+    freshnessSources: [
+      "md_research_sector_peer_daily",
+      "md_research_sector_regime_fwd_agg",
+    ],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildSectorVsSectorComparisonView,
+    viewSlot: "comparisonView",
+    cacheKeyParams: sectorVsSectorComparisonCacheKeyParams,
+    cacheAnchors: sectorVsSectorComparisonAnchors,
+  },
 ];
 
 /**
- * Intent → registry entry index. `comparison` currently supports only the
- * stock_vs_sector entry. Sector-vs-sector and symbol-vs-symbol are explicit
- * follow-up phases and should not be routed here yet.
+ * Intent → registry entry index. `comparison` has multiple implementation
+ * entries; this map stores the stock_vs_sector default for legacy callers.
+ * Classification-aware dispatch below chooses the concrete comparison type.
  */
 const REGISTRY_BY_INTENT = new Map<Intent, PgCapabilityRegistryEntry>();
 for (const entry of PG_CAPABILITY_REGISTRY) {
@@ -133,10 +155,11 @@ export function capabilityForIntent(
 
 /**
  * Classification-aware capability dispatcher. For most intents it behaves
- * identically to `capabilityForIntent`; for `intent="comparison"` it confirms
- * the currently-supported discriminator (`stock_vs_sector`). Missing or future
- * comparison types fall back to the stock_vs_sector entry so misclassified
- * inputs surface as `state="unavailable"` instead of crashing.
+ * identically to `capabilityForIntent`; for `intent="comparison"` it reads
+ * `classification.comparison.comparisonType` and routes to the concrete
+ * comparison capability. Missing or future comparison types fall back to the
+ * stock_vs_sector default so misclassified inputs surface as unavailable
+ * instead of crashing.
  */
 export function capabilityForClassification(
   classification: Classification,
@@ -148,6 +171,8 @@ export function capabilityForClassification(
   const targetName: PgCapabilityRegistryEntry["name"] | undefined =
     comparisonType === "stock_vs_sector"
       ? "stock_vs_sector_comparison"
+      : comparisonType === "sector_vs_sector"
+        ? "sector_vs_sector_comparison"
       : undefined;
   if (!targetName) return REGISTRY_BY_INTENT.get("comparison");
   return PG_CAPABILITY_REGISTRY.find((entry) => entry.name === targetName);

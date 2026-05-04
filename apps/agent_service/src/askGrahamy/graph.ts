@@ -346,7 +346,13 @@ function buildMeta(
     capabilitySources.push({ type: "research", name: "stock_idea_discovery" });
   }
   if (pgCapabilityViews?.comparisonView) {
-    capabilitySources.push({ type: "research", name: "stock_vs_sector_comparison" });
+    capabilitySources.push({
+      type: "research",
+      name:
+        pgCapabilityViews.comparisonView.comparisonType === "sector_vs_sector"
+          ? "sector_vs_sector_comparison"
+          : "stock_vs_sector_comparison",
+    });
   }
   return {
     sourcesUsed: [...researchSources, ...capabilitySources],
