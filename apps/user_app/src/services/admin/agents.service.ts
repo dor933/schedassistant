@@ -9,6 +9,7 @@ import {
   AgentAvailableMcpServer,
   AgentAvailableSkill,
   AgentAvailableTool,
+  AgentSdkCapability,
   Skill,
   Tool,
   LLMModel,
@@ -110,6 +111,19 @@ export class AgentsService {
       }
     }
 
+    // SDK capability assignments (post-migration-145). Same shape as the
+    // MCP-servers map above. Inactive rows are ignored — `active=false` is
+    // semantically identical to "not attached" for capability purposes.
+    const sdkCapLinks = await AgentSdkCapability.findAll({
+      attributes: ["agentId", "sdkCapabilityId", "active"],
+    });
+    const sdkCapabilityIdsByAgent: Record<string, number[]> = {};
+    for (const link of sdkCapLinks) {
+      if (link.active) {
+        (sdkCapabilityIdsByAgent[link.agentId] ??= []).push(link.sdkCapabilityId);
+      }
+    }
+
     return agents.map((a) => ({
       ...a.toJSON(),
       groupCount: groupCountByAgent[a.id] ?? 0,
@@ -118,6 +132,7 @@ export class AgentsService {
       mcpServerIds: mcpServerIdsByAgent[a.id] ?? [],
       skillIds: skillIdsByAgent[a.id] ?? [],
       toolIds: toolIdsByAgent[a.id] ?? [],
+      sdkCapabilityIds: sdkCapabilityIdsByAgent[a.id] ?? [],
       mcpServerLinks: mcpLinksByAgent[a.id] ?? [],
       skillLinks: skillLinksByAgent[a.id] ?? [],
       toolLinks: toolLinksByAgent[a.id] ?? [],
@@ -142,6 +157,7 @@ export class AgentsService {
     toolIds?: number[],
     description?: string | null,
     organizationId?: string,
+    sdkCapabilityIds?: number[],
   ) {
     const normalizedAgentName =
       agentName !== undefined && agentName !== null && String(agentName).trim() !== ""
@@ -189,6 +205,18 @@ export class AgentsService {
         mcpServerIds.map((mcpServerId) => ({
           agentId: agent.id,
           mcpServerId,
+          active: true,
+        })),
+      );
+    }
+
+    // Link SDK capabilities (filesystem / bash) to the agent. Default
+    // empty when not specified — admins opt in explicitly per agent.
+    if (sdkCapabilityIds && sdkCapabilityIds.length > 0) {
+      await AgentSdkCapability.bulkCreate(
+        sdkCapabilityIds.map((sdkCapabilityId) => ({
+          agentId: agent.id,
+          sdkCapabilityId,
           active: true,
         })),
       );
@@ -292,6 +320,8 @@ export class AgentsService {
       skillLinks?: { skillId: number; active: boolean }[];
       toolIds?: number[];
       toolLinks?: { toolId: number; active: boolean }[];
+      /** SDK capability ids to attach (replaces the agent's full set). */
+      sdkCapabilityIds?: number[];
       /**
        * Owner of a system agent. Pass `null` to mark it shared (org-wide,
        * the legacy default) or the UUID of a primary agent in the same org
@@ -469,6 +499,24 @@ export class AgentsService {
           data.mcpServerIds.map((mcpServerId) => ({
             agentId: agent.id,
             mcpServerId,
+            active: true,
+          })),
+        );
+      }
+    }
+
+    // Sync SDK capability assignments if provided. Same wipe-and-replace
+    // semantics as the MCP-server sync above. Only `sdkCapabilityIds` is
+    // supported (no separate "links" shape) — the table holds enum rows
+    // rather than user-configurable inactive states; an entry is either
+    // attached (active=true) or absent.
+    if (data.sdkCapabilityIds !== undefined) {
+      await AgentSdkCapability.destroy({ where: { agentId: agent.id } });
+      if (data.sdkCapabilityIds.length > 0) {
+        await AgentSdkCapability.bulkCreate(
+          data.sdkCapabilityIds.map((sdkCapabilityId) => ({
+            agentId: agent.id,
+            sdkCapabilityId,
             active: true,
           })),
         );

@@ -48,6 +48,7 @@ import {
   type AdminGroupMember,
   type AdminRole,
   type AdminMcpServer,
+  type AdminSdkCapability,
   type AdminSkill,
   type AdminTool,
   type AdminProject,
@@ -315,6 +316,7 @@ export default function AdminPage() {
   // OpenAI row in `vendorApiKeys` as `keyType: "auth_object"`, set/cleared
   // through the same vendor-api-keys flow as every other vendor credential.
   const [mcpServers, setMcpServers] = useState<AdminMcpServer[]>([]);
+  const [sdkCapabilities, setSdkCapabilities] = useState<AdminSdkCapability[]>([]);
   const [mcpForm, setMcpForm] = useState<McpFormState>(emptyMcpForm);
   const [editingMcpId, setEditingMcpId] = useState<number | null>(null);
   const [mcpSaving, setMcpSaving] = useState(false);
@@ -331,6 +333,7 @@ export default function AdminPage() {
   const [newAgentSkillIds, setNewAgentSkillIds] = useState<number[]>([]);
   const [newAgentToolIds, setNewAgentToolIds] = useState<number[]>([]);
   const [newAgentMcpServerIds, setNewAgentMcpServerIds] = useState<number[]>([]);
+  const [newAgentSdkCapabilityIds, setNewAgentSdkCapabilityIds] = useState<number[]>([]);
   const [newAgentModelId, setNewAgentModelId] = useState<string | null>(null);
   const [newAgentType, setNewAgentType] = useState<AgentType>("primary");
   const [newGroupName, setNewGroupName] = useState("");
@@ -434,6 +437,7 @@ export default function AdminPage() {
         m,
         r,
         mcp,
+        sdkCaps,
         sk,
         tl,
         proj,
@@ -450,6 +454,7 @@ export default function AdminPage() {
         admin.getModels(),
         admin.getRoles(),
         admin.getMcpServers(),
+        admin.getSdkCapabilities().catch(() => [] as AdminSdkCapability[]),
         admin.getSkills().catch(() => [] as AdminSkill[]),
         admin.getTools().catch(() => [] as AdminTool[]),
         admin.getProjects().catch(() => [] as AdminProject[]),
@@ -489,6 +494,7 @@ export default function AdminPage() {
       setModels(m);
       setRoles(r);
       setMcpServers(mcp);
+      setSdkCapabilities(sdkCaps);
       setSkills(sk);
       setTools(tl);
       setProjects(proj);
@@ -742,6 +748,8 @@ export default function AdminPage() {
         skillIds: newAgentSkillIds.length > 0 ? newAgentSkillIds : undefined,
         toolIds: newAgentToolIds.length > 0 ? newAgentToolIds : undefined,
         mcpServerIds: newAgentMcpServerIds.length > 0 ? newAgentMcpServerIds : undefined,
+        sdkCapabilityIds:
+          newAgentSdkCapabilityIds.length > 0 ? newAgentSdkCapabilityIds : undefined,
         type: newAgentType,
       });
       setNewAgentDefinition("");
@@ -752,6 +760,7 @@ export default function AdminPage() {
       setNewAgentSkillIds([]);
       setNewAgentToolIds([]);
       setNewAgentMcpServerIds([]);
+      setNewAgentSdkCapabilityIds([]);
       setNewAgentModelId(null);
       setNewAgentType("primary");
       flash("Agent created.");
@@ -1602,6 +1611,44 @@ export default function AdminPage() {
                 </div>
               </div>
               )}
+              {/* SDK Capabilities (filesystem / bash). Distinct from MCP
+                  servers: these are SDK-native tools the runtime injects
+                  into the Claude Code subprocess based on attachment, not
+                  external MCP subprocesses. Default empty when not set. */}
+              {sdkCapabilities.length > 0 && (
+              <div>
+                <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  <Plug className="h-3 w-3" />
+                  SDK Capabilities
+                </label>
+                <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                  {sdkCapabilities.map((c) => {
+                    const selected = newAgentSdkCapabilityIds.includes(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        title={c.description ?? undefined}
+                        onClick={() =>
+                          setNewAgentSdkCapabilityIds((prev) =>
+                            selected ? prev.filter((id) => id !== c.id) : [...prev, c.id],
+                          )
+                        }
+                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150 ${
+                          selected
+                            ? "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200 shadow-sm"
+                            : "bg-white text-gray-500 ring-1 ring-gray-200 hover:bg-gray-100 hover:text-gray-700"
+                        }`}
+                      >
+                        <Plug className="h-3 w-3" />
+                        {c.name}
+                        {selected && <X className="h-3 w-3" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              )}
               {/* Skills */}
               <div>
                 <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
@@ -1709,7 +1756,7 @@ export default function AdminPage() {
               </h3>
               <div className="space-y-2.5">
                 {agents.filter((a) => a.type === "primary").map((a) => (
-                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} allSdkCapabilities={sdkCapabilities} onSaved={reload} />
                 ))}
                 {agents.filter((a) => a.type === "primary").length === 0 && (
                   <p className="py-2 text-xs text-gray-400">No primary agents yet.</p>
@@ -1728,7 +1775,7 @@ export default function AdminPage() {
               </h3>
               <div className="space-y-2.5">
                 {agents.filter((a) => a.type === "system").map((a) => (
-                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} allSdkCapabilities={sdkCapabilities} onSaved={reload} />
                 ))}
                 {agents.filter((a) => a.type === "system").length === 0 && (
                   <p className="py-2 text-xs text-gray-400">No system agents yet.</p>
@@ -2096,7 +2143,7 @@ export default function AdminPage() {
               </h3>
               <div className="space-y-2.5">
                 {agents.filter((a) => a.type === "claude_sub_agent").map((a) => (
-                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} allSdkCapabilities={sdkCapabilities} onSaved={reload} />
                 ))}
                 {agents.filter((a) => a.type === "claude_sub_agent").length === 0 && (
                   <p className="py-2 text-xs text-gray-400">No Claude sub-agents yet.</p>
@@ -2116,7 +2163,7 @@ export default function AdminPage() {
               </h3>
               <div className="space-y-2.5">
                 {agents.filter((a) => a.type === "external").map((a) => (
-                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} allSdkCapabilities={sdkCapabilities} onSaved={reload} />
                 ))}
                 {agents.filter((a) => a.type === "external").length === 0 && (
                   <p className="py-2 text-xs text-gray-400">No external agents yet.</p>
@@ -2136,7 +2183,7 @@ export default function AdminPage() {
               </h3>
               <div className="space-y-2.5">
                 {agents.filter((a) => a.type === "application").map((a) => (
-                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} onSaved={reload} />
+                  <AgentCard key={a.id} agent={a} currentUserId={user!.id} currentUserRole={user!.role} allModels={models} allSkills={skills} allTools={tools} allMcpServers={mcpServers} allSdkCapabilities={sdkCapabilities} onSaved={reload} />
                 ))}
                 {agents.filter((a) => a.type === "application").length === 0 && (
                   <p className="py-2 text-xs text-gray-400">No application agents yet.</p>
