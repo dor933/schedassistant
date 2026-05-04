@@ -55,6 +55,7 @@ import {
 import { ENABLED_BUILTIN_TOOLS } from "../chat/anthropic/agentSdkBuiltinHooks";
 import type { SubAgentBundle } from "../chat/anthropic/agentSdkRunner";
 import { logger } from "../logger";
+import { getAgentSdkCapabilities } from "./sdkCapabilities.service";
 
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
@@ -120,9 +121,21 @@ async function buildSubAgentTools(
 }
 
 /**
- * Loads each system agent's external MCP servers (filesystem, github, etc.)
- * and translates them into the SDK's stdio config shape. Returns a flat
- * map keyed by server name.
+ * Loads each sub-agent's external MCP servers (github, etc.) and translates
+ * them into the SDK's stdio config shape. Returns a flat map keyed by
+ * server name.
+ *
+ * **Filesystem MCP servers are deliberately stripped here.** Sub-agents
+ * do filesystem work via the SDK's native built-ins (Read / Write / Edit /
+ * MultiEdit / Glob / Grep), gated by `agents.allow_sdk_builtins`. Exposing
+ * the MCP filesystem server alongside would (a) duplicate the surface
+ * the model has to choose between, and (b) re-introduce the
+ * allowed-directory mismatch class of bug — the seeded `filesystem` MCP
+ * is rooted at `/app/data` and would reject writes to the per-epic
+ * workspace folder if it lives elsewhere. If a sub-agent row has a
+ * filesystem-named MCP server attached in the admin UI, we log a warning
+ * and skip it; the row's `allow_sdk_builtins` flag is the only sanctioned
+ * filesystem path.
  */
 async function buildExternalMcpServersForAgent(
   subAgentId: string,
@@ -140,13 +153,26 @@ async function buildExternalMcpServersForAgent(
   if (servers.length === 0) return {};
 
   const out: Record<string, unknown> = {};
+  const skippedFilesystem: string[] = [];
   for (const server of servers) {
+    const lowerName = (server.name ?? "").toLowerCase();
+    if (lowerName.includes("filesystem")) {
+      skippedFilesystem.push(server.name);
+      continue;
+    }
     out[server.name] = {
       type: "stdio" as const,
       command: server.command,
       args: server.args ?? [],
       env: buildMcpEnv(server.env),
     };
+  }
+  if (skippedFilesystem.length > 0) {
+    logger.warn(
+      "Stripped filesystem MCP server(s) from claude_sub_agent — sub-agents " +
+        "use SDK built-ins for filesystem (allow_sdk_builtins) instead.",
+      { subAgentId, skipped: skippedFilesystem },
+    );
   }
   return out;
 }
@@ -277,18 +303,19 @@ export async function buildSubAgentDefinitions(
 
       // Sub-agent's tool whitelist: every in-process tool by full SDK name,
       // each external MCP server by wildcard prefix, plus built-ins iff
-      // the sub-agent has `allow_sdk_builtins = true`. Explicit list (no
+      // the sub-agent has the `filesystem` SDK capability attached, plus
+      // Bash iff it has the `bash` SDK capability. Explicit list (no
       // inheritance) so a sub-agent never accidentally calls a parent's tool.
+      // Per-sub-agent capabilities live on the same `agent_sdk_capabilities`
+      // junction as primaries — each sub-agent has independent grants, so a
+      // primary that has Bash can't smuggle it into a sub-agent without one.
       const inProcessToolNames = buildAllowedToolsForServer(tools, mcpServerName);
       const externalToolPrefixes = Object.keys(externalMcpServers).map(
         (name) => `mcp__${name}__*`,
       );
-      const subAgentBuiltins = sa.allowSdkBuiltins ? [...ENABLED_BUILTIN_TOOLS] : [];
-      // Sub-agents have their own per-row `allow_sdk_bash` flag — distinct
-      // from the parent's. A sub-agent only sees the SDK's native Bash when
-      // its OWN row has the flag set, so a primary that has Bash enabled
-      // can't smuggle it into a sub-agent that wasn't granted access.
-      const subAgentBash = sa.allowSdkBash ? ["Bash"] : [];
+      const subCaps = await getAgentSdkCapabilities(sa.id);
+      const subAgentBuiltins = subCaps.hasFilesystem ? [...ENABLED_BUILTIN_TOOLS] : [];
+      const subAgentBash = subCaps.hasBash ? ["Bash"] : [];
 
       const definition: AgentDefinition = {
         description: sa.description?.trim() || `${sa.agentName?.trim() || effectiveSlug} specialist agent`,

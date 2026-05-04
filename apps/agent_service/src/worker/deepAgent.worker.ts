@@ -999,18 +999,19 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                         maxTurns: sdkMaxTurns,
                         source: "deep_agent_executor",
                         useAnthropicWebSearch,
-                        // SDK built-ins are enabled by the agent row's
-                        // `allow_sdk_builtins` flag. Migration 125 set
-                        // this to TRUE for every Anthropic-vendor agent
-                        // and flipped the column default to TRUE, so
-                        // executor agents get `Read`/`Write`/`Edit`/
-                        // `MultiEdit`/`Glob`/`Grep` automatically. The
-                        // PreToolUse hook in the runner enforces the
-                        // `.md`/`.txt` extension policy on every write;
-                        // the PostToolUse hook captures workspace writes
-                        // into the per-thread session manifest. Bash is
-                        // gated separately by `allow_sdk_bash` (default
-                        // false) — admins opt in per agent.
+                        // SDK built-ins (Read/Write/Edit/MultiEdit/Glob/
+                        // Grep) and Bash are gated by the executor agent's
+                        // attachments on the `agent_sdk_capabilities`
+                        // junction (slugs `filesystem` and `bash` in
+                        // `sdk_capabilities`). The runner reads these via
+                        // `getAgentSdkCapabilities(state.agentId)` — no
+                        // separate lookup needed here. Replaces the legacy
+                        // `agents.allow_sdk_builtins` / `allow_sdk_bash`
+                        // boolean columns (dropped in migration 145). The
+                        // PreToolUse hook still enforces the `.md`/`.txt`
+                        // extension policy on every write; PostToolUse
+                        // captures workspace writes into the per-thread
+                        // session manifest.
                         //
                         // cwd for the spawned Claude Code subprocess.
                         // SDK file tools (Read/Write/Edit/Glob/Grep)
