@@ -68,3 +68,34 @@ test("removes divergence scoring internals without stripping public sector diver
   assert.equal(row.score_formula, undefined);
   assert.equal(row.divergence_formula, undefined);
 });
+
+test("removes sector delta formulas without stripping public delta fields", () => {
+  const result = runMoatGuard({
+    sectorDeltaView: {
+      rows: [
+        {
+          sector: "Technology",
+          rank: 1,
+          convictionDeltaPct: 8,
+          momentumDeltaPct: 5,
+          direction: "improved",
+          sector_delta_formula: "internal formula",
+          conviction_formula: "internal formula",
+          momentum_formula: "internal formula",
+          raw_rows: [{ sector: "Technology" }],
+        },
+      ],
+    },
+  });
+
+  const row = (result.value as any).sectorDeltaView.rows[0];
+  assert.equal(result.result, "cleaned");
+  assert.equal(row.sector, "Technology");
+  assert.equal(row.convictionDeltaPct, 8);
+  assert.equal(row.momentumDeltaPct, 5);
+  assert.equal(row.direction, "improved");
+  assert.equal(row.sector_delta_formula, undefined);
+  assert.equal(row.conviction_formula, undefined);
+  assert.equal(row.momentum_formula, undefined);
+  assert.equal(row.raw_rows, undefined);
+});

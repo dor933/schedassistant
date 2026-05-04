@@ -70,6 +70,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • the current market regime / setup / VIX / macro state.
   • an anchorless sector leaderboard / sector conviction ranking request.
   • an anchorless sector momentum-vs-conviction divergence request.
+  • an anchorless week-over-week sector change / sector delta request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
 
 Set isFollowUp = true when the message references a previous turn — short questions with
@@ -103,7 +104,7 @@ Without prior context:
 
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
 stock_sector_regime, sector_conviction_leaderboard, sector_momentum_vs_conviction_divergence,
-stock_idea_discovery, follow_up, unknown.
+week_over_week_sector_delta, stock_idea_discovery, follow_up, unknown.
 
 Use intent = "sector_conviction_leaderboard" when the user asks for a sector-wide ranking without
 naming a specific sector. Examples:
@@ -120,6 +121,19 @@ conviction/evidence and price action/momentum disagree without naming a specific
   • "Which sectors look fundamentally good but aren’t moving yet?"
   • "Any sectors where the market is not confirming the data yet?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+
+Use intent = "week_over_week_sector_delta" when the user asks for broad sector changes versus
+last week without naming a specific sector. Examples:
+  • "Which sectors improved most versus last week?"
+  • "Which sectors deteriorated versus last week?"
+  • "What changed since last week?"
+  • "Which sectors gained conviction week-over-week?"
+  • "Which sectors lost momentum this week?"
+For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+For "What changed since last week?":
+  • If prior context is sector / regime / market / sector leaderboard / sector divergence, use this intent.
+  • If no prior context exists, use this broad sector-delta intent.
+  • If prior context is a stock-specific turn, preserve stock follow-up behavior instead.
 
 Use intent = "stock_idea_discovery" when the user asks for stock ideas, interesting names,
 top conviction names, attractive setups, or what to look at today without naming a specific
@@ -284,6 +298,7 @@ export function toolsForIntent(intent: Intent): ToolName[] {
       return ["get_market_context"];
     case "sector_conviction_leaderboard":
     case "sector_momentum_vs_conviction_divergence":
+    case "week_over_week_sector_delta":
     case "stock_idea_discovery":
       return ["get_market_context"];
     case "stock_sector":
@@ -303,6 +318,7 @@ function isAnchorlessCapabilityIntent(intent: Intent): boolean {
   return (
     intent === "sector_conviction_leaderboard" ||
     intent === "sector_momentum_vs_conviction_divergence" ||
+    intent === "week_over_week_sector_delta" ||
     intent === "stock_idea_discovery"
   );
 }

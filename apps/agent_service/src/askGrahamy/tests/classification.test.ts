@@ -156,6 +156,101 @@ test("classifies sector conviction/momentum divergence phrasings", async () => {
   );
 });
 
+test("classifies week-over-week sector delta phrasings", async () => {
+  const improved = await classifyMessage(
+    "Which sectors improved most versus last week?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "week_over_week_sector_delta",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(improved.intent, "week_over_week_sector_delta");
+  assert.deepEqual(improved.symbols, []);
+  assert.deepEqual(improved.sectors, []);
+  assert.deepEqual(improved.requiresTools, ["get_market_context"]);
+
+  const deteriorated = await classifyMessage(
+    "Which sectors deteriorated versus last week?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "week_over_week_sector_delta",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(deteriorated.intent, "week_over_week_sector_delta");
+
+  const momentum = await classifyMessage(
+    "Which sectors lost momentum this week?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "week_over_week_sector_delta",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(momentum.intent, "week_over_week_sector_delta");
+});
+
+test("routes broad no-context changed-since-last-week to sector delta", async () => {
+  const result = await classifyMessage("What changed since last week?", undefined, {
+    classifier: stub({
+      intent: "week_over_week_sector_delta",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "high",
+    }),
+  });
+  assert.equal(result.intent, "week_over_week_sector_delta");
+  assert.deepEqual(result.requiresTools, ["get_market_context"]);
+});
+
+test("preserves stock follow-up behavior for changed-since-last-week with stock context", async () => {
+  const result = await classifyMessage(
+    "What changed since last week?",
+    {
+      conversationId: "c1",
+      userId: 1,
+      lastSymbols: ["GSL"],
+      lastSectors: [],
+      lastIntent: "stock",
+      lastSuggestedFollowups: [],
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      classifier: stub({
+        intent: "follow_up",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: true,
+        confidence: "medium",
+      }),
+    },
+  );
+  assert.equal(result.intent, "follow_up");
+  assert.deepEqual(result.requiresTools, []);
+});
+
 test("classifies anchorless stock idea discovery questions", async () => {
   const interesting = await classifyMessage("Give me an interesting stock", undefined, {
     classifier: stub({

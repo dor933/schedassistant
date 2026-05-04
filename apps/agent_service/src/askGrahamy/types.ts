@@ -5,6 +5,7 @@ export const INTENTS = [
   "sector",
   "sector_conviction_leaderboard",
   "sector_momentum_vs_conviction_divergence",
+  "week_over_week_sector_delta",
   "stock_idea_discovery",
   "regime",
   "stock_sector",
@@ -341,6 +342,42 @@ export type SectorDivergenceView = {
   warnings: string[];
 };
 
+export type SectorDeltaRankingBasis =
+  | "conviction_delta"
+  | "momentum_delta"
+  | "deterioration"
+  | "overall_change";
+
+export type SectorDeltaDirection = "improved" | "deteriorated" | "flat";
+
+export type SectorDeltaRowView = {
+  sector: string;
+  rank: number;
+  currentConvictionScorePct?: number;
+  priorConvictionScorePct?: number;
+  convictionDeltaPct?: number;
+  currentConvictionBucket?: string;
+  priorConvictionBucket?: string;
+  currentMomentumBucket?: string;
+  priorMomentumBucket?: string;
+  momentumDeltaPct?: number;
+  direction: SectorDeltaDirection;
+  interpretationBullets: string[];
+};
+
+export type SectorDeltaView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_sector_weekly_history";
+  period: "week_over_week";
+  currentAsOfDate?: string;
+  priorAsOfDate?: string;
+  rankingBasis: SectorDeltaRankingBasis;
+  rows: SectorDeltaRowView[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
 export type StockIdeaRowView = {
   symbol: string;
   companyName?: string;
@@ -380,6 +417,7 @@ export type StockIdeaView = {
 export type PgCapabilityViews = {
   sectorLeaderboardView?: SectorLeaderboardView;
   sectorDivergenceView?: SectorDivergenceView;
+  sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
 };
 
@@ -433,6 +471,7 @@ export type PublicResearchView = {
   edgeEvidence: Record<string, EdgeEvidenceView>;
   sectorLeaderboardView?: SectorLeaderboardView;
   sectorDivergenceView?: SectorDivergenceView;
+  sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
   evidence: Record<string, unknown>;
   freshness: FreshnessMetadata;

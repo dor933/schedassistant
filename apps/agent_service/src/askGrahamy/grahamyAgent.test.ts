@@ -135,3 +135,68 @@ test("LLM prompt includes only public-safe sector divergence payload", () => {
   assert.doesNotMatch(prompt, /md_historical_features_daily/);
   assert.doesNotMatch(prompt, /md_research_sector_regime_fwd_agg/);
 });
+
+test("LLM prompt includes only public-safe week-over-week sector delta payload", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "Which sectors improved most versus last week?",
+    warnings: [],
+    classification: {
+      intent: "week_over_week_sector_delta",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: {
+      freshness: { dataThrough: "2026-04-27" },
+    },
+    pgCapabilityViews: {
+      sectorDeltaView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_weekly_history",
+        period: "week_over_week",
+        currentAsOfDate: "2026-04-27",
+        priorAsOfDate: "2026-04-20",
+        rankingBasis: "overall_change",
+        rows: [
+          {
+            sector: "Technology",
+            rank: 1,
+            convictionDeltaPct: 8,
+            momentumDeltaPct: 5,
+            direction: "improved",
+            interpretationBullets: [
+              "Weekly conviction proxy improved by 8 points.",
+            ],
+          },
+        ],
+        freshness: {
+          dataThrough: "2026-04-27",
+          state: "fresh",
+        },
+        warnings: [],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /sectorDeltaView/);
+  assert.match(prompt, /Technology/);
+  assert.match(prompt, /weekly PG sector-history\/proxy delta evidence/i);
+  assert.match(prompt, /currentAsOfDate/);
+  assert.match(prompt, /priorAsOfDate/);
+  assert.doesNotMatch(prompt, /sector_delta_formula/);
+  assert.doesNotMatch(prompt, /conviction_formula/);
+  assert.doesNotMatch(prompt, /momentum_formula/);
+  assert.doesNotMatch(prompt, /researchObjects/);
+  assert.doesNotMatch(prompt, /parts/);
+  assert.doesNotMatch(prompt, /publicSummary/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assert.doesNotMatch(prompt, /md_research_sector_monday_hist/);
+});

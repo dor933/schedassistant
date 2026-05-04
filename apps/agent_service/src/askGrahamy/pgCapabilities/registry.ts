@@ -1,5 +1,6 @@
 import type { Intent } from "../types";
 import { buildSectorConvictionLeaderboardView } from "./sectorConvictionLeaderboard";
+import { buildSectorDeltaView } from "./sectorDelta";
 import { buildSectorDivergenceView } from "./sectorDivergence";
 import { buildStockIdeaDiscoveryView } from "./stockIdeaDiscovery";
 import type {
@@ -36,6 +37,17 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     fallback: "unavailable_empty_rows",
     sanitizer: "public_safe_capability_view",
     run: buildSectorDivergenceView,
+  },
+  {
+    name: "week_over_week_sector_delta",
+    intent: "week_over_week_sector_delta",
+    requiredParams: [],
+    queryName: "query_sector_delta",
+    source: "pg_sector_weekly_history",
+    freshnessSources: ["md_research_sector_monday_hist"],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildSectorDeltaView,
   },
   {
     name: "stock_idea_discovery",

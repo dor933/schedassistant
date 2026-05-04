@@ -36,6 +36,17 @@ const divergenceClassification: Classification = {
   warnings: [],
 };
 
+const sectorDeltaClassification: Classification = {
+  intent: "week_over_week_sector_delta",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
 test("graph loads sectorLeaderboardView for leaderboard intent without Research Object anchors", async () => {
   const response = await runAskGrahamyGraph(
     {
@@ -220,5 +231,77 @@ test("graph loads sectorDivergenceView for divergence intent without anchors", a
   ]);
   const publicView = response.research.publicResearchView as PublicResearchView;
   assert.equal(publicView.sectorDivergenceView?.rows[0].sector, "Utilities");
+  assert.equal(publicView.researchObjectViews.length, 0);
+});
+
+test("graph loads sectorDeltaView for week-over-week sector delta intent without anchors", async () => {
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-1",
+      message: "Which sectors improved most versus last week?",
+      classification: sectorDeltaClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-04-27" },
+        }),
+      } as any,
+      pgCapabilityRunner: async () => ({
+        views: {
+          sectorDeltaView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_sector_weekly_history",
+            period: "week_over_week",
+            currentAsOfDate: "2026-04-27",
+            priorAsOfDate: "2026-04-20",
+            rankingBasis: "overall_change",
+            rows: [
+              {
+                sector: "Technology",
+                rank: 1,
+                currentConvictionScorePct: 76,
+                priorConvictionScorePct: 68,
+                convictionDeltaPct: 8,
+                currentConvictionBucket: "HIGH",
+                priorConvictionBucket: "CONSTRUCTIVE",
+                currentMomentumBucket: "STRONG",
+                priorMomentumBucket: "MIXED",
+                momentumDeltaPct: 5,
+                direction: "improved",
+                interpretationBullets: [
+                  "Weekly conviction proxy improved by 8 points.",
+                ],
+              },
+            ],
+            freshness: { dataThrough: "2026-04-27", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async () => ({
+        answerText: "Technology improved in the supplied PG weekly sector delta view.",
+        suggestedFollowups: [],
+        warnings: [],
+      }),
+    },
+  );
+
+  assert.equal(response.answerType, "sector");
+  assert.equal(response.meta.researchObjectKeys?.length, 0);
+  assert.deepEqual(response.meta.sourcesUsed, [
+    {
+      type: "research",
+      name: "week_over_week_sector_delta",
+    },
+  ]);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.sectorDeltaView?.rows[0].sector, "Technology");
   assert.equal(publicView.researchObjectViews.length, 0);
 });

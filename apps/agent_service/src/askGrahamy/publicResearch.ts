@@ -51,6 +51,7 @@ export function compilePublicResearchView(input: {
     ...(input.pgCapabilityViews?.sectorDivergenceView
       ? ["sectorDivergenceView"]
       : []),
+    ...(input.pgCapabilityViews?.sectorDeltaView ? ["sectorDeltaView"] : []),
     ...(input.pgCapabilityViews?.stockIdeaView ? ["stockIdeaView"] : []),
   ];
 
@@ -82,6 +83,9 @@ export function compilePublicResearchView(input: {
       : {}),
     ...(input.pgCapabilityViews?.sectorDivergenceView
       ? { sectorDivergenceView: input.pgCapabilityViews.sectorDivergenceView }
+      : {}),
+    ...(input.pgCapabilityViews?.sectorDeltaView
+      ? { sectorDeltaView: input.pgCapabilityViews.sectorDeltaView }
       : {}),
     ...(input.pgCapabilityViews?.stockIdeaView
       ? { stockIdeaView: input.pgCapabilityViews.stockIdeaView }
@@ -120,6 +124,12 @@ export function compilePublicResearchView(input: {
               input.pgCapabilityViews.sectorDivergenceView.rows.length,
           }
         : {}),
+      ...(input.pgCapabilityViews?.sectorDeltaView
+        ? {
+            sectorDeltaState: input.pgCapabilityViews.sectorDeltaView.state,
+            sectorDeltaRows: input.pgCapabilityViews.sectorDeltaView.rows.length,
+          }
+        : {}),
       ...(input.pgCapabilityViews?.stockIdeaView
         ? {
             stockIdeaState: input.pgCapabilityViews.stockIdeaView.state,
@@ -145,6 +155,7 @@ export function compilePublicResearchView(input: {
 function inferObjectType(classification: Classification): PublicResearchView["objectType"] {
   if (classification.intent === "sector_conviction_leaderboard") return "sector";
   if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
+  if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
   const hasStock = classification.symbols.length > 0;
   const hasSector = classification.sectors.length > 0;

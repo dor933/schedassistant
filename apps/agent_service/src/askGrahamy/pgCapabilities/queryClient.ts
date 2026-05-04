@@ -6,6 +6,7 @@ import type { PgCapabilityQueryName } from "./types";
 const QUERY_FILES: Record<PgCapabilityQueryName, string> = {
   query_sector_conviction_leaderboard: "query_sector_conviction_leaderboard.sql",
   query_sector_divergence: "query_sector_divergence.sql",
+  query_sector_delta: "query_sector_delta.sql",
   query_stock_idea_discovery: "query_stock_idea_discovery.sql",
 };
 

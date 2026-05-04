@@ -321,6 +321,64 @@ test("publicResearchView includes sector divergence view without raw research ob
   assertNoForbiddenPublicKeys(view);
 });
 
+test("publicResearchView includes sector delta view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "week_over_week_sector_delta",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-04-27" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      sectorDeltaView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_weekly_history",
+        period: "week_over_week",
+        currentAsOfDate: "2026-04-27",
+        priorAsOfDate: "2026-04-20",
+        rankingBasis: "overall_change",
+        rows: [
+          {
+            sector: "Technology",
+            rank: 1,
+            currentConvictionScorePct: 76,
+            priorConvictionScorePct: 68,
+            convictionDeltaPct: 8,
+            currentConvictionBucket: "HIGH",
+            priorConvictionBucket: "CONSTRUCTIVE",
+            currentMomentumBucket: "STRONG",
+            priorMomentumBucket: "MIXED",
+            momentumDeltaPct: 5,
+            direction: "improved",
+            interpretationBullets: [
+              "Weekly conviction proxy improved by 8 points.",
+            ],
+          },
+        ],
+        freshness: { dataThrough: "2026-04-27", state: "fresh" },
+        warnings: [],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.objectType, "sector");
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.sectorDeltaView?.state, "complete");
+  assert.equal(view.sectorDeltaView?.rows[0]?.sector, "Technology");
+  assert.equal(view.evidence.sectorDeltaRows, 1);
+  assertNoForbiddenPublicKeys(view);
+});
+
 test("stale cached views are rebuilt from parts and marked for persistence", async () => {
   const previousHost = process.env.EXTERNAL_PG_HOST;
   const previousDb = process.env.EXTERNAL_PG_DATABASE;
@@ -399,12 +457,15 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /edge_id/);
   assert.doesNotMatch(json, /hypothesis_id/);
   assert.doesNotMatch(json, /raw_sql/);
+  assert.doesNotMatch(json, /raw_rows/);
   assert.doesNotMatch(json, /signal_sql/);
   assert.doesNotMatch(json, /analog_rows/);
   assert.doesNotMatch(json, /path_rows/);
   assert.doesNotMatch(json, /gate_name/);
   assert.doesNotMatch(json, /internal_threshold/);
   assert.doesNotMatch(json, /setup_score/);
+  assert.doesNotMatch(json, /sector_delta_formula/);
+  assert.doesNotMatch(json, /conviction_formula/);
   assert.doesNotMatch(json, /divergence_score_pct/);
   assert.doesNotMatch(json, /divergenceScorePct/);
   assert.doesNotMatch(json, /score_formula/);
@@ -414,6 +475,7 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /md_features_daily/);
   assert.doesNotMatch(json, /md_historical_features_daily/);
   assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /md_research_sector_monday_hist/);
   assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
   assert.doesNotMatch(json, /pipeline_state/);
   assert.doesNotMatch(json, /run_id/);

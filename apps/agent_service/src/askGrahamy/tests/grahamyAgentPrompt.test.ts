@@ -186,6 +186,73 @@ test("LLM prompt receives public-safe sector divergence view", () => {
   assertNoFreshnessInternals(prompt);
 });
 
+test("LLM prompt receives public-safe week-over-week sector delta view", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "Which sectors improved most versus last week?",
+    warnings: [],
+    classification: {
+      intent: "week_over_week_sector_delta",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-04-27" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      sectorDeltaView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_weekly_history",
+        period: "week_over_week",
+        currentAsOfDate: "2026-04-27",
+        priorAsOfDate: "2026-04-20",
+        rankingBasis: "overall_change",
+        rows: [
+          {
+            sector: "Technology",
+            rank: 1,
+            currentConvictionScorePct: 76,
+            priorConvictionScorePct: 68,
+            convictionDeltaPct: 8,
+            currentConvictionBucket: "HIGH",
+            priorConvictionBucket: "CONSTRUCTIVE",
+            currentMomentumBucket: "STRONG",
+            priorMomentumBucket: "MIXED",
+            momentumDeltaPct: 5,
+            direction: "improved",
+            interpretationBullets: [
+              "Weekly conviction proxy improved by 8 points.",
+            ],
+          },
+        ],
+        freshness: { dataThrough: "2026-04-27", state: "fresh" },
+        warnings: [],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /sectorDeltaView/);
+  assert.match(prompt, /Technology/);
+  assert.match(prompt, /currentAsOfDate/);
+  assert.match(prompt, /priorAsOfDate/);
+  assert.match(prompt, /weekly PG sector-history\/proxy delta evidence/i);
+  assert.match(prompt, /not the same exact live conviction composite/i);
+  assert.match(prompt, /Do not invent prior-period values/i);
+  assert.doesNotMatch(prompt, /sector_delta_formula/);
+  assert.doesNotMatch(prompt, /conviction_formula/);
+  assert.doesNotMatch(prompt, /momentum_formula/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assertNoFreshnessInternals(prompt);
+});
+
 test("LLM prompt carries only public stale freshness caveat", () => {
   const state: AskGrahamyState = {
     internalUserId: 1,
@@ -247,6 +314,7 @@ function assertNoFreshnessInternals(value: unknown): void {
   assert.doesNotMatch(json, /md_features_daily/);
   assert.doesNotMatch(json, /md_historical_features_daily/);
   assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /md_research_sector_monday_hist/);
   assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
   assert.doesNotMatch(json, /pipeline_state/);
   assert.doesNotMatch(json, /run_id/);

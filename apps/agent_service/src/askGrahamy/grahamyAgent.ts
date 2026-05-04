@@ -170,6 +170,13 @@ const HUMANIZE_OVERRIDES: Record<string, string> = {
   price_action_confirms_conviction: "price action confirms conviction",
   price_momentum_without_conviction: "price momentum without conviction support",
   in_line: "in-line",
+  conviction_delta: "conviction delta",
+  momentum_delta: "momentum delta",
+  deterioration: "deterioration",
+  overall_change: "overall change",
+  improved: "improved",
+  deteriorated: "deteriorated",
+  flat: "flat",
   // Regime labels: keep recognizable casing but spaceful
   RISK_ON: "RISK-ON",
   RISK_OFF: "RISK-OFF",
@@ -245,6 +252,16 @@ function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): st
       `## SECTOR MOMENTUM VS CONVICTION DIVERGENCE — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
     );
   }
+  if (views?.sectorDeltaView) {
+    const humanized = humanizeJsonValue({
+      sectorDeltaView: views.sectorDeltaView,
+      freshness: views.sectorDeltaView.freshness,
+      warnings: views.sectorDeltaView.warnings,
+    });
+    blocks.push(
+      `## WEEK-OVER-WEEK SECTOR DELTA — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+    );
+  }
   if (views?.stockIdeaView) {
     const humanized = humanizeJsonValue({
       stockIdeaView: views.stockIdeaView,
@@ -315,6 +332,12 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Explain divergence only with \`divergenceType\`, \`interpretationBullets\`, and explicit public row fields. Do not expose or describe scoring formulas.
 - If \`sectorDivergenceView.state\` is "complete" and \`rows\` is empty, say no clear conviction-versus-momentum divergence was found and do not name sectors from outside the rows.
 - If \`sectorDivergenceView.state\` is unavailable, say sector divergence data is unavailable instead of naming sectors.
+- For week-over-week sector change questions, use only \`sectorDeltaView.rows\`. Rank sectors only from those rows and mention both \`currentAsOfDate\` and \`priorAsOfDate\`.
+- Treat \`sectorDeltaView\` as weekly PG sector-history/proxy delta evidence, not the same exact live conviction composite used by the current sector leaderboard and not a validated live edge.
+- Distinguish conviction delta from price momentum delta. Do not say a sector "improved" or "deteriorated" unless \`convictionDeltaPct\`, \`momentumDeltaPct\`, and \`direction\` in the row support it.
+- Do not invent prior-period values or explain scoring formulas for \`sectorDeltaView\`.
+- If \`sectorDeltaView.state\` is "complete" and \`rows\` is empty, say no meaningful week-over-week sector delta was found and do not name sectors from outside the rows.
+- If \`sectorDeltaView.state\` is unavailable, say the current or prior weekly sector baseline is missing instead of naming sectors.
 - For stock idea / best setup / top conviction name questions, use only \`stockIdeaView.rows\`. Mention stocks only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent tickers, scores, hit rates, returns, or risk metrics.
 - Call \`stockIdeaView.rows\` "research candidates" or "setups to review", never buy/sell recommendations.
 - Explain each stock idea only with \`reasonBullets\` and explicit public fields in the row.

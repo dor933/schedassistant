@@ -310,6 +310,12 @@ function buildMeta(
       name: "sector_momentum_vs_conviction_divergence",
     });
   }
+  if (pgCapabilityViews?.sectorDeltaView) {
+    capabilitySources.push({
+      type: "research",
+      name: "week_over_week_sector_delta",
+    });
+  }
   if (pgCapabilityViews?.stockIdeaView) {
     capabilitySources.push({ type: "research", name: "stock_idea_discovery" });
   }
@@ -337,6 +343,7 @@ function inferAnswerType(classification: Classification): AskGrahamyResponse["an
   if (classification.intent === "unknown") return "unknown";
   if (classification.intent === "sector_conviction_leaderboard") return "sector";
   if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
+  if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
   const stock = classification.symbols.length > 0;
   const sector = classification.sectors.length > 0;

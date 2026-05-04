@@ -2,6 +2,7 @@ import type {
   Classification,
   EvidenceState,
   PublicFreshnessView,
+  SectorDeltaView,
   SectorDivergenceView,
   SectorLeaderboardView,
   SnapshotBundle,
@@ -12,16 +13,19 @@ import type {
 export type PgCapabilityIntent =
   | "sector_conviction_leaderboard"
   | "sector_momentum_vs_conviction_divergence"
+  | "week_over_week_sector_delta"
   | "stock_idea_discovery";
 
 export type PgCapabilityName =
   | "sector_conviction_leaderboard"
   | "sector_momentum_vs_conviction_divergence"
+  | "week_over_week_sector_delta"
   | "stock_idea_discovery";
 
 export type PgCapabilityQueryName =
   | "query_sector_conviction_leaderboard"
   | "query_sector_divergence"
+  | "query_sector_delta"
   | "query_stock_idea_discovery";
 
 export type PgCapabilityRunInput = {
@@ -34,6 +38,7 @@ export type PgCapabilityRunInput = {
 export type PgCapabilityViews = {
   sectorLeaderboardView?: SectorLeaderboardView;
   sectorDivergenceView?: SectorDivergenceView;
+  sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
 };
 
@@ -51,6 +56,7 @@ export type PgCapabilityRegistryEntry = {
     | "pg_sector_peer_daily"
     | "pg_sector_regime_forward_agg"
     | "pg_sector_analog_bucket"
+    | "pg_sector_weekly_history"
     | "pg_features_daily";
   freshnessSources: string[];
   fallback: "unavailable_empty_rows";
@@ -98,6 +104,29 @@ export type SectorDivergenceRow = Record<string, unknown> & {
   forward_freshness_state?: unknown;
   forward_completed_at?: unknown;
   overlay_available?: unknown;
+};
+
+export type SectorDeltaRow = Record<string, unknown> & {
+  sector?: unknown;
+  rank?: unknown;
+  current_conviction_score_pct?: unknown;
+  prior_conviction_score_pct?: unknown;
+  conviction_delta_pct?: unknown;
+  current_conviction_bucket?: unknown;
+  prior_conviction_bucket?: unknown;
+  current_momentum_score_pct?: unknown;
+  prior_momentum_score_pct?: unknown;
+  momentum_delta_pct?: unknown;
+  current_momentum_bucket?: unknown;
+  prior_momentum_bucket?: unknown;
+  direction?: unknown;
+  include_in_public?: unknown;
+  current_as_of_date?: unknown;
+  prior_as_of_date?: unknown;
+  weekly_freshness_state?: unknown;
+  weekly_completed_at?: unknown;
+  evaluated_sector_count?: unknown;
+  meaningful_delta_count?: unknown;
 };
 
 export type StockIdeaDiscoveryRow = Record<string, unknown> & {
