@@ -69,6 +69,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • a sector — must be exactly one of: ${CANONICAL_SECTORS.join(", ")}.
   • the current market regime / setup / VIX / macro state.
   • an anchorless sector leaderboard / sector conviction ranking request.
+  • an anchorless sector momentum-vs-conviction divergence request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
 
 Set isFollowUp = true when the message references a previous turn — short questions with
@@ -101,14 +102,23 @@ Without prior context:
   • "and the risks?"                   → intent="unknown" (no anchor anywhere)
 
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
-stock_sector_regime, sector_conviction_leaderboard, stock_idea_discovery, follow_up, unknown.
+stock_sector_regime, sector_conviction_leaderboard, sector_momentum_vs_conviction_divergence,
+stock_idea_discovery, follow_up, unknown.
 
 Use intent = "sector_conviction_leaderboard" when the user asks for a sector-wide ranking without
 naming a specific sector. Examples:
   • "Which sectors are leading on conviction this week?"
   • "Show me the sector conviction leaderboard"
   • "Which sectors have strongest historical forward profile?"
+For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+
+Use intent = "sector_momentum_vs_conviction_divergence" when the user asks for sectors where
+conviction/evidence and price action/momentum disagree without naming a specific sector. Examples:
   • "Which sectors have conviction but weak price action?"
+  • "Which sectors have strong evidence but poor momentum?"
+  • "Where is there divergence between conviction and momentum?"
+  • "Which sectors look fundamentally good but aren’t moving yet?"
+  • "Any sectors where the market is not confirming the data yet?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
 Use intent = "stock_idea_discovery" when the user asks for stock ideas, interesting names,
@@ -273,6 +283,7 @@ export function toolsForIntent(intent: Intent): ToolName[] {
     case "regime":
       return ["get_market_context"];
     case "sector_conviction_leaderboard":
+    case "sector_momentum_vs_conviction_divergence":
     case "stock_idea_discovery":
       return ["get_market_context"];
     case "stock_sector":
@@ -289,7 +300,11 @@ export function toolsForIntent(intent: Intent): ToolName[] {
 }
 
 function isAnchorlessCapabilityIntent(intent: Intent): boolean {
-  return intent === "sector_conviction_leaderboard" || intent === "stock_idea_discovery";
+  return (
+    intent === "sector_conviction_leaderboard" ||
+    intent === "sector_momentum_vs_conviction_divergence" ||
+    intent === "stock_idea_discovery"
+  );
 }
 
 function inferIntent(

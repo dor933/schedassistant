@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSectorConvictionLeaderboardView } from "./pgCapabilities/sectorConvictionLeaderboard";
+import { buildSectorDivergenceView } from "./pgCapabilities/sectorDivergence";
 import { buildStockIdeaDiscoveryView } from "./pgCapabilities/stockIdeaDiscovery";
 import { capabilityForIntent } from "./pgCapabilities/registry";
 import { assessCapabilityFreshness } from "./pgCapabilities/freshnessGuard";
@@ -20,6 +21,17 @@ const leaderboardClassification: Classification = {
 
 const stockIdeaClassification: Classification = {
   intent: "stock_idea_discovery",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const divergenceClassification: Classification = {
+  intent: "sector_momentum_vs_conviction_divergence",
   symbols: [],
   sectors: [],
   regimeRequested: false,
@@ -182,6 +194,14 @@ test("PG capability registry routes stock idea discovery intent", () => {
   assert.deepEqual(entry.requiredParams, []);
 });
 
+test("PG capability registry routes sector divergence intent", () => {
+  const entry = capabilityForIntent("sector_momentum_vs_conviction_divergence");
+  assert.ok(entry);
+  assert.equal(entry.name, "sector_momentum_vs_conviction_divergence");
+  assert.equal(entry.queryName, "query_sector_divergence");
+  assert.deepEqual(entry.requiredParams, []);
+});
+
 test("sector conviction leaderboard returns partial when forward overlay is absent", async () => {
   const result = await buildSectorConvictionLeaderboardView(
     {
@@ -312,6 +332,288 @@ test("publicResearchView carries sectorLeaderboardView without Research Objects"
   assert.equal(publicView.researchObjectViews.length, 0);
   assert.deepEqual(publicView.researchObjectKeys, []);
   assert.equal(publicView.sectorLeaderboardView?.rows[0].sector, "Technology");
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("sector divergence returns complete public view with optional overlay", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            sector: "Utilities",
+            rank: 1,
+            conviction_score_pct: 70.04,
+            conviction_bucket: "CONSTRUCTIVE",
+            momentum_score_pct: 30,
+            momentum_bucket: "WEAK",
+            divergence_type: "conviction_but_weak_price_action",
+            evidence_strength: "ADEQUATE",
+            hit_rate_pct: 58.22,
+            as_of_date: "2026-05-01",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:30:04Z",
+            forward_freshness_state: "FRESH",
+            forward_completed_at: "2026-04-28T10:55:23Z",
+            overlay_available: true,
+            evaluated_sector_count: 2,
+            clear_divergence_count: 1,
+            divergence_score_pct: 91,
+            score_formula: "must-not-leak",
+            raw_sql: "must-not-leak",
+          },
+          {
+            sector: "Industrials",
+            rank: 2,
+            conviction_score_pct: 50,
+            conviction_bucket: "MIXED",
+            momentum_score_pct: 75,
+            momentum_bucket: "STRONG",
+            divergence_type: "in_line",
+            evidence_strength: "ROBUST",
+            hit_rate_pct: 56.2,
+            as_of_date: "2026-05-01",
+            overlay_available: true,
+            evaluated_sector_count: 2,
+            clear_divergence_count: 1,
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_sector_peer_daily");
+  assert.equal(view.asOfDate, "2026-05-01");
+  assert.equal(view.evaluatedSectorCount, 2);
+  assert.equal(view.clearDivergenceCount, 1);
+  assert.equal(view.rows.length, 1);
+  assert.deepEqual(view.rows[0], {
+    sector: "Utilities",
+    rank: 1,
+    convictionScorePct: 70,
+    convictionBucket: "CONSTRUCTIVE",
+    momentumScorePct: 30,
+    momentumBucket: "WEAK",
+    divergenceType: "conviction_but_weak_price_action",
+    hitRatePct: 58.2,
+    evidenceStrength: "ADEQUATE",
+    interpretationBullets: [
+      "Conviction bucket is CONSTRUCTIVE.",
+      "Price momentum bucket is WEAK.",
+      "Conviction is constructive but current price action is not confirming it.",
+      "Historical forward hit-rate evidence is available.",
+    ],
+  });
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector divergence returns complete empty view when no clear divergence exists", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Industrials",
+          rank: 1,
+          conviction_score_pct: 50,
+          conviction_bucket: "MIXED",
+          momentum_score_pct: 75,
+          momentum_bucket: "STRONG",
+          divergence_type: "in_line",
+          evidence_strength: "ROBUST",
+          hit_rate_pct: 56.2,
+          as_of_date: "2026-05-01",
+          peer_freshness_state: "FRESH",
+          peer_completed_at: "2026-05-02T12:30:04Z",
+          overlay_available: true,
+          evaluated_sector_count: 10,
+          clear_divergence_count: 0,
+        },
+        {
+          sector: "Technology",
+          rank: 2,
+          conviction_score_pct: 50,
+          conviction_bucket: "MIXED",
+          momentum_score_pct: 90,
+          momentum_bucket: "STRONG",
+          divergence_type: "in_line",
+          evidence_strength: "ROBUST",
+          hit_rate_pct: 54.2,
+          as_of_date: "2026-05-01",
+          overlay_available: true,
+          evaluated_sector_count: 10,
+          clear_divergence_count: 0,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.evaluatedSectorCount, 10);
+  assert.equal(view.clearDivergenceCount, 0);
+  assert.deepEqual(view.rows, []);
+  assert.match(
+    view.warnings.join(" "),
+    /No clear conviction-versus-momentum divergence was found/i,
+  );
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector divergence returns partial when forward overlay is absent", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have strong evidence but poor momentum?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Healthcare",
+          rank: 1,
+          conviction_score_pct: 66,
+          conviction_bucket: "CONSTRUCTIVE",
+          momentum_score_pct: 55,
+          momentum_bucket: "MIXED",
+          divergence_type: "conviction_but_weak_price_action",
+          evidence_strength: "WEAK",
+          as_of_date: "2026-05-01",
+          overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.rows[0].hitRatePct, undefined);
+  assert.match(view.warnings.join(" "), /overlay is unavailable/i);
+  assert.equal(view.freshness.state, "unknown");
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector divergence returns unavailable for hard-stale primary source", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: new Date("2026-05-03T12:00:00Z"),
+      queryRunner: async () => [
+        {
+          sector: "Healthcare",
+          rank: 1,
+          conviction_score_pct: 66,
+          conviction_bucket: "CONSTRUCTIVE",
+          momentum_score_pct: 55,
+          momentum_bucket: "MIXED",
+          divergence_type: "conviction_but_weak_price_action",
+          as_of_date: "2026-04-20",
+          peer_freshness_state: "FRESH",
+          peer_completed_at: "2026-04-20T12:31:04Z",
+          overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.equal(view.freshness.state, "stale");
+  assert.match(view.freshness.warning ?? "", /stale data through 2026-04-20/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector divergence returns unavailable when source has no rows", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Where is there divergence between conviction and momentum?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /No sector divergence rows/i);
+});
+
+test("publicResearchView carries sectorDivergenceView without Research Objects", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Utilities",
+          rank: 1,
+          conviction_score_pct: 70,
+          conviction_bucket: "CONSTRUCTIVE",
+          momentum_score_pct: 30,
+          momentum_bucket: "WEAK",
+          divergence_type: "conviction_but_weak_price_action",
+          evidence_strength: "ADEQUATE",
+          hit_rate_pct: 58.2,
+          as_of_date: "2026-05-01",
+          overlay_available: true,
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: divergenceClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "sector");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.sectorDivergenceView?.rows[0].sector, "Utilities");
+  assert.equal(publicView.evidence.sectorDivergenceRows, 1);
   assertNoForbiddenPublicKeys(publicView);
 });
 
@@ -519,6 +821,11 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /gate_name/);
   assert.doesNotMatch(json, /internal_threshold/);
   assert.doesNotMatch(json, /setup_score/);
+  assert.doesNotMatch(json, /divergence_score_pct/);
+  assert.doesNotMatch(json, /divergenceScorePct/);
+  assert.doesNotMatch(json, /score_formula/);
+  assert.doesNotMatch(json, /scoring_formula/);
+  assert.doesNotMatch(json, /divergence_formula/);
   assert.doesNotMatch(json, /feature_rules/);
   assertNoFreshnessInternals(value);
 }
@@ -528,7 +835,9 @@ function assertNoFreshnessInternals(value: unknown): void {
   assert.doesNotMatch(json, /md_research_refresh_latest/);
   assert.doesNotMatch(json, /md_research_refresh_stale/);
   assert.doesNotMatch(json, /md_features_daily/);
+  assert.doesNotMatch(json, /md_historical_features_daily/);
   assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
   assert.doesNotMatch(json, /pipeline_state/);
   assert.doesNotMatch(json, /run_id/);
   assert.doesNotMatch(json, /stage/);

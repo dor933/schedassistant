@@ -267,6 +267,60 @@ test("publicResearchView includes stock idea discovery view without raw research
   assertNoForbiddenPublicKeys(view);
 });
 
+test("publicResearchView includes sector divergence view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "sector_momentum_vs_conviction_divergence",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      sectorDivergenceView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_peer_daily",
+        period: "latest",
+        asOfDate: "2026-05-01",
+        rows: [
+          {
+            sector: "Utilities",
+            rank: 1,
+            convictionScorePct: 70,
+            convictionBucket: "CONSTRUCTIVE",
+            momentumScorePct: 30,
+            momentumBucket: "WEAK",
+            divergenceType: "conviction_but_weak_price_action",
+            hitRatePct: 58.2,
+            evidenceStrength: "ADEQUATE",
+            interpretationBullets: [
+              "Conviction is constructive but current price action is not confirming it.",
+            ],
+          },
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: [],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.objectType, "sector");
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.sectorDivergenceView?.state, "complete");
+  assert.equal(view.sectorDivergenceView?.rows[0]?.sector, "Utilities");
+  assert.equal(view.evidence.sectorDivergenceRows, 1);
+  assertNoForbiddenPublicKeys(view);
+});
+
 test("stale cached views are rebuilt from parts and marked for persistence", async () => {
   const previousHost = process.env.EXTERNAL_PG_HOST;
   const previousDb = process.env.EXTERNAL_PG_DATABASE;
@@ -351,11 +405,16 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /gate_name/);
   assert.doesNotMatch(json, /internal_threshold/);
   assert.doesNotMatch(json, /setup_score/);
+  assert.doesNotMatch(json, /divergence_score_pct/);
+  assert.doesNotMatch(json, /divergenceScorePct/);
+  assert.doesNotMatch(json, /score_formula/);
   assert.doesNotMatch(json, /feature_rules/);
   assert.doesNotMatch(json, /md_research_refresh_latest/);
   assert.doesNotMatch(json, /md_research_refresh_stale/);
   assert.doesNotMatch(json, /md_features_daily/);
+  assert.doesNotMatch(json, /md_historical_features_daily/);
   assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
   assert.doesNotMatch(json, /pipeline_state/);
   assert.doesNotMatch(json, /run_id/);
   assert.doesNotMatch(json, /stage/);

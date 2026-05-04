@@ -123,6 +123,69 @@ test("LLM prompt receives public-safe stock idea view", () => {
   assertNoFreshnessInternals(prompt);
 });
 
+test("LLM prompt receives public-safe sector divergence view", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "Which sectors have conviction but weak price action?",
+    warnings: [],
+    classification: {
+      intent: "sector_momentum_vs_conviction_divergence",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      sectorDivergenceView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_peer_daily",
+        period: "latest",
+        asOfDate: "2026-05-01",
+        rows: [
+          {
+            sector: "Utilities",
+            rank: 1,
+            convictionScorePct: 70,
+            convictionBucket: "CONSTRUCTIVE",
+            momentumScorePct: 30,
+            momentumBucket: "WEAK",
+            divergenceType: "conviction_but_weak_price_action",
+            hitRatePct: 58.2,
+            evidenceStrength: "ADEQUATE",
+            interpretationBullets: [
+              "Conviction is constructive but current price action is not confirming it.",
+            ],
+          },
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: [],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /sectorDivergenceView/);
+  assert.match(prompt, /Utilities/);
+  assert.match(prompt, /sector conviction\/momentum divergence/i);
+  assert.match(prompt, /not confirmed sector leadership/i);
+  assert.match(prompt, /Do not expose or describe scoring formulas/i);
+  assert.doesNotMatch(prompt, /divergenceScorePct/);
+  assert.doesNotMatch(prompt, /setup_score/);
+  assert.doesNotMatch(prompt, /score_formula/);
+  assert.doesNotMatch(prompt, /researchObjects/);
+  assert.doesNotMatch(prompt, /parts/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assertNoFreshnessInternals(prompt);
+});
+
 test("LLM prompt carries only public stale freshness caveat", () => {
   const state: AskGrahamyState = {
     internalUserId: 1,
@@ -182,7 +245,9 @@ function assertNoFreshnessInternals(value: unknown): void {
   assert.doesNotMatch(json, /md_research_refresh_latest/);
   assert.doesNotMatch(json, /md_research_refresh_stale/);
   assert.doesNotMatch(json, /md_features_daily/);
+  assert.doesNotMatch(json, /md_historical_features_daily/);
   assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
   assert.doesNotMatch(json, /pipeline_state/);
   assert.doesNotMatch(json, /run_id/);
   assert.doesNotMatch(json, /last_success_at/);

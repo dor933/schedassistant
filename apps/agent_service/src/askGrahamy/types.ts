@@ -4,6 +4,7 @@ export const INTENTS = [
   "stock",
   "sector",
   "sector_conviction_leaderboard",
+  "sector_momentum_vs_conviction_divergence",
   "stock_idea_discovery",
   "regime",
   "stock_sector",
@@ -313,6 +314,33 @@ export type SectorLeaderboardView = {
   warnings: string[];
 };
 
+export type SectorDivergenceRowView = {
+  sector: string;
+  rank: number;
+  convictionScorePct?: number;
+  convictionBucket?: string;
+  momentumScorePct?: number;
+  momentumBucket?: string;
+  divergenceType?: string;
+  hitRatePct?: number;
+  medianForwardReturnPct?: number;
+  evidenceStrength?: string;
+  interpretationBullets: string[];
+};
+
+export type SectorDivergenceView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_sector_peer_daily";
+  period: "latest";
+  asOfDate?: string;
+  evaluatedSectorCount?: number;
+  clearDivergenceCount?: number;
+  rows: SectorDivergenceRowView[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
 export type StockIdeaRowView = {
   symbol: string;
   companyName?: string;
@@ -351,6 +379,7 @@ export type StockIdeaView = {
 
 export type PgCapabilityViews = {
   sectorLeaderboardView?: SectorLeaderboardView;
+  sectorDivergenceView?: SectorDivergenceView;
   stockIdeaView?: StockIdeaView;
 };
 
@@ -403,6 +432,7 @@ export type PublicResearchView = {
   pathRisk: Record<string, PathRiskView>;
   edgeEvidence: Record<string, EdgeEvidenceView>;
   sectorLeaderboardView?: SectorLeaderboardView;
+  sectorDivergenceView?: SectorDivergenceView;
   stockIdeaView?: StockIdeaView;
   evidence: Record<string, unknown>;
   freshness: FreshnessMetadata;

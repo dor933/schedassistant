@@ -2,6 +2,7 @@ import type {
   Classification,
   EvidenceState,
   PublicFreshnessView,
+  SectorDivergenceView,
   SectorLeaderboardView,
   SnapshotBundle,
   StockIdeaView,
@@ -10,14 +11,17 @@ import type {
 
 export type PgCapabilityIntent =
   | "sector_conviction_leaderboard"
+  | "sector_momentum_vs_conviction_divergence"
   | "stock_idea_discovery";
 
 export type PgCapabilityName =
   | "sector_conviction_leaderboard"
+  | "sector_momentum_vs_conviction_divergence"
   | "stock_idea_discovery";
 
 export type PgCapabilityQueryName =
   | "query_sector_conviction_leaderboard"
+  | "query_sector_divergence"
   | "query_stock_idea_discovery";
 
 export type PgCapabilityRunInput = {
@@ -29,6 +33,7 @@ export type PgCapabilityRunInput = {
 
 export type PgCapabilityViews = {
   sectorLeaderboardView?: SectorLeaderboardView;
+  sectorDivergenceView?: SectorDivergenceView;
   stockIdeaView?: StockIdeaView;
 };
 
@@ -67,6 +72,27 @@ export type SectorConvictionLeaderboardRow = Record<string, unknown> & {
   defensive_cyclical_label?: unknown;
   as_of_date?: unknown;
   current_market_regime?: unknown;
+  peer_freshness_state?: unknown;
+  peer_completed_at?: unknown;
+  forward_freshness_state?: unknown;
+  forward_completed_at?: unknown;
+  overlay_available?: unknown;
+  evaluated_sector_count?: unknown;
+  clear_divergence_count?: unknown;
+};
+
+export type SectorDivergenceRow = Record<string, unknown> & {
+  sector?: unknown;
+  rank?: unknown;
+  conviction_score_pct?: unknown;
+  conviction_bucket?: unknown;
+  momentum_score_pct?: unknown;
+  momentum_bucket?: unknown;
+  divergence_type?: unknown;
+  evidence_strength?: unknown;
+  hit_rate_pct?: unknown;
+  median_forward_return_pct?: unknown;
+  as_of_date?: unknown;
   peer_freshness_state?: unknown;
   peer_completed_at?: unknown;
   forward_freshness_state?: unknown;

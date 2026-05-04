@@ -1,5 +1,6 @@
 import type { Intent } from "../types";
 import { buildSectorConvictionLeaderboardView } from "./sectorConvictionLeaderboard";
+import { buildSectorDivergenceView } from "./sectorDivergence";
 import { buildStockIdeaDiscoveryView } from "./stockIdeaDiscovery";
 import type {
   PgCapabilityRegistryEntry,
@@ -21,6 +22,20 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     fallback: "unavailable_empty_rows",
     sanitizer: "public_safe_capability_view",
     run: buildSectorConvictionLeaderboardView,
+  },
+  {
+    name: "sector_momentum_vs_conviction_divergence",
+    intent: "sector_momentum_vs_conviction_divergence",
+    requiredParams: [],
+    queryName: "query_sector_divergence",
+    source: "pg_sector_peer_daily",
+    freshnessSources: [
+      "md_research_sector_peer_daily",
+      "md_research_sector_regime_fwd_agg",
+    ],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildSectorDivergenceView,
   },
   {
     name: "stock_idea_discovery",

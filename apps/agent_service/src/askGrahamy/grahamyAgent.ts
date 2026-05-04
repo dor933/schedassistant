@@ -165,6 +165,11 @@ const HUMANIZE_OVERRIDES: Record<string, string> = {
   DEEP_VALUE: "deep value",
   BOLT_ON: "bolt-on (small)",
   MID_SIZED: "mid-sized",
+  conviction_but_weak_price_action:
+    "conviction is constructive but price action is weak",
+  price_action_confirms_conviction: "price action confirms conviction",
+  price_momentum_without_conviction: "price momentum without conviction support",
+  in_line: "in-line",
   // Regime labels: keep recognizable casing but spaceful
   RISK_ON: "RISK-ON",
   RISK_OFF: "RISK-OFF",
@@ -228,6 +233,16 @@ function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): st
     });
     blocks.push(
       `## SECTOR LEADERBOARD — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+    );
+  }
+  if (views?.sectorDivergenceView) {
+    const humanized = humanizeJsonValue({
+      sectorDivergenceView: views.sectorDivergenceView,
+      freshness: views.sectorDivergenceView.freshness,
+      warnings: views.sectorDivergenceView.warnings,
+    });
+    blocks.push(
+      `## SECTOR MOMENTUM VS CONVICTION DIVERGENCE — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
     );
   }
   if (views?.stockIdeaView) {
@@ -295,6 +310,11 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - For sector leaderboard questions, use only \`sectorLeaderboardView.rows\`. Rank sectors only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent sectors, scores, or ranks.
 - Treat \`sectorLeaderboardView\` as PG base-rate/current composite evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
 - If \`sectorLeaderboardView.rows\` is empty or the view state is unavailable, say the sector leaderboard is unavailable instead of naming sectors.
+- For sector conviction/momentum divergence questions, use only \`sectorDivergenceView.rows\`. Rank sectors only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent sectors, scores, or ranks.
+- Treat \`sectorDivergenceView\` as PG current/base-rate evidence, not confirmed sector leadership or validated live edge evidence.
+- Explain divergence only with \`divergenceType\`, \`interpretationBullets\`, and explicit public row fields. Do not expose or describe scoring formulas.
+- If \`sectorDivergenceView.state\` is "complete" and \`rows\` is empty, say no clear conviction-versus-momentum divergence was found and do not name sectors from outside the rows.
+- If \`sectorDivergenceView.state\` is unavailable, say sector divergence data is unavailable instead of naming sectors.
 - For stock idea / best setup / top conviction name questions, use only \`stockIdeaView.rows\`. Mention stocks only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent tickers, scores, hit rates, returns, or risk metrics.
 - Call \`stockIdeaView.rows\` "research candidates" or "setups to review", never buy/sell recommendations.
 - Explain each stock idea only with \`reasonBullets\` and explicit public fields in the row.

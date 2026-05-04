@@ -25,6 +25,17 @@ const stockIdeaClassification: Classification = {
   warnings: [],
 };
 
+const divergenceClassification: Classification = {
+  intent: "sector_momentum_vs_conviction_divergence",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
 test("graph loads sectorLeaderboardView for leaderboard intent without Research Object anchors", async () => {
   const response = await runAskGrahamyGraph(
     {
@@ -141,5 +152,73 @@ test("graph loads stockIdeaView for stock idea intent without ticker anchors", a
   ]);
   const publicView = response.research.publicResearchView as PublicResearchView;
   assert.equal(publicView.stockIdeaView?.rows[0].symbol, "GSL");
+  assert.equal(publicView.researchObjectViews.length, 0);
+});
+
+test("graph loads sectorDivergenceView for divergence intent without anchors", async () => {
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-1",
+      message: "Which sectors have conviction but weak price action?",
+      classification: divergenceClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-01" },
+        }),
+      } as any,
+      pgCapabilityRunner: async () => ({
+        views: {
+          sectorDivergenceView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_sector_peer_daily",
+            period: "latest",
+            asOfDate: "2026-05-01",
+            rows: [
+              {
+                sector: "Utilities",
+                rank: 1,
+                convictionScorePct: 70,
+                convictionBucket: "CONSTRUCTIVE",
+                momentumScorePct: 30,
+                momentumBucket: "WEAK",
+                divergenceType: "conviction_but_weak_price_action",
+                hitRatePct: 58.2,
+                evidenceStrength: "ADEQUATE",
+                interpretationBullets: [
+                  "Conviction is constructive but current price action is not confirming it.",
+                ],
+              },
+            ],
+            freshness: { dataThrough: "2026-05-01", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async () => ({
+        answerText: "Utilities has conviction but weak price action in the supplied PG view.",
+        suggestedFollowups: [],
+        warnings: [],
+      }),
+    },
+  );
+
+  assert.equal(response.answerType, "sector");
+  assert.equal(response.meta.researchObjectKeys?.length, 0);
+  assert.deepEqual(response.meta.sourcesUsed, [
+    {
+      type: "research",
+      name: "sector_momentum_vs_conviction_divergence",
+    },
+  ]);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.sectorDivergenceView?.rows[0].sector, "Utilities");
   assert.equal(publicView.researchObjectViews.length, 0);
 });

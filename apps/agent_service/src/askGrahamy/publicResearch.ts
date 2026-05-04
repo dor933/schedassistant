@@ -44,6 +44,15 @@ export function compilePublicResearchView(input: {
   );
   const researchObjectKeys = researchObjects.map((item) => item.cacheKey);
   const researchObjectViews = researchObjects.map(publicObjectViewFromCachedObject);
+  const pgCapabilityViewNames = [
+    ...(input.pgCapabilityViews?.sectorLeaderboardView
+      ? ["sectorLeaderboardView"]
+      : []),
+    ...(input.pgCapabilityViews?.sectorDivergenceView
+      ? ["sectorDivergenceView"]
+      : []),
+    ...(input.pgCapabilityViews?.stockIdeaView ? ["stockIdeaView"] : []),
+  ];
 
   return {
     objectType,
@@ -71,6 +80,9 @@ export function compilePublicResearchView(input: {
     ...(input.pgCapabilityViews?.sectorLeaderboardView
       ? { sectorLeaderboardView: input.pgCapabilityViews.sectorLeaderboardView }
       : {}),
+    ...(input.pgCapabilityViews?.sectorDivergenceView
+      ? { sectorDivergenceView: input.pgCapabilityViews.sectorDivergenceView }
+      : {}),
     ...(input.pgCapabilityViews?.stockIdeaView
       ? { stockIdeaView: input.pgCapabilityViews.stockIdeaView }
       : {}),
@@ -89,23 +101,27 @@ export function compilePublicResearchView(input: {
         researchObjectViews.map((item) => [item.cacheKey, item.pathRisk.state]),
       ),
       researchObjectSources: Array.from(new Set(researchObjects.map((item) => item.source))),
+      ...(pgCapabilityViewNames.length
+        ? { pgCapabilityViews: pgCapabilityViewNames }
+        : {}),
       ...(input.pgCapabilityViews?.sectorLeaderboardView
         ? {
-            pgCapabilityViews: ["sectorLeaderboardView"],
             sectorLeaderboardState:
               input.pgCapabilityViews.sectorLeaderboardView.state,
             sectorLeaderboardRows:
               input.pgCapabilityViews.sectorLeaderboardView.rows.length,
           }
         : {}),
+      ...(input.pgCapabilityViews?.sectorDivergenceView
+        ? {
+            sectorDivergenceState:
+              input.pgCapabilityViews.sectorDivergenceView.state,
+            sectorDivergenceRows:
+              input.pgCapabilityViews.sectorDivergenceView.rows.length,
+          }
+        : {}),
       ...(input.pgCapabilityViews?.stockIdeaView
         ? {
-            pgCapabilityViews: [
-              ...(input.pgCapabilityViews?.sectorLeaderboardView
-                ? ["sectorLeaderboardView"]
-                : []),
-              "stockIdeaView",
-            ],
             stockIdeaState: input.pgCapabilityViews.stockIdeaView.state,
             stockIdeaRows: input.pgCapabilityViews.stockIdeaView.rows.length,
           }
@@ -128,6 +144,7 @@ export function compilePublicResearchView(input: {
 
 function inferObjectType(classification: Classification): PublicResearchView["objectType"] {
   if (classification.intent === "sector_conviction_leaderboard") return "sector";
+  if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
   const hasStock = classification.symbols.length > 0;
   const hasSector = classification.sectors.length > 0;

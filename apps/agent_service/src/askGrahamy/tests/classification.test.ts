@@ -98,7 +98,7 @@ test("does not require a ticker or sector for sector conviction leaderboard", as
   assert.equal(result.requiresTools.length, 1);
 });
 
-test("classifies historical forward profile and weak price action sector leaderboard phrasings", async () => {
+test("classifies historical forward profile sector leaderboard phrasing", async () => {
   const historical = await classifyMessage(
     "Which sectors have strongest historical forward profile?",
     undefined,
@@ -114,13 +114,15 @@ test("classifies historical forward profile and weak price action sector leaderb
     },
   );
   assert.equal(historical.intent, "sector_conviction_leaderboard");
+});
 
+test("classifies sector conviction/momentum divergence phrasings", async () => {
   const divergence = await classifyMessage(
     "Which sectors have conviction but weak price action?",
     undefined,
     {
       classifier: stub({
-        intent: "sector_conviction_leaderboard",
+        intent: "sector_momentum_vs_conviction_divergence",
         symbols: [],
         sectors: [],
         regimeRequested: false,
@@ -129,7 +131,29 @@ test("classifies historical forward profile and weak price action sector leaderb
       }),
     },
   );
-  assert.equal(divergence.intent, "sector_conviction_leaderboard");
+  assert.equal(divergence.intent, "sector_momentum_vs_conviction_divergence");
+  assert.deepEqual(divergence.symbols, []);
+  assert.deepEqual(divergence.sectors, []);
+  assert.deepEqual(divergence.requiresTools, ["get_market_context"]);
+
+  const notConfirming = await classifyMessage(
+    "Any sectors where the market is not confirming the data yet?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "sector_momentum_vs_conviction_divergence",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    },
+  );
+  assert.equal(
+    notConfirming.intent,
+    "sector_momentum_vs_conviction_divergence",
+  );
 });
 
 test("classifies anchorless stock idea discovery questions", async () => {

@@ -70,3 +70,68 @@ test("LLM prompt includes only public-safe sector leaderboard payload", () => {
   assert.doesNotMatch(prompt, /md_research_sector_peer_daily/);
   assert.doesNotMatch(prompt, /completedAt/);
 });
+
+test("LLM prompt includes only public-safe sector divergence payload", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "Which sectors have conviction but weak price action?",
+    warnings: [],
+    classification: {
+      intent: "sector_momentum_vs_conviction_divergence",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: {
+      freshness: { dataThrough: "2026-05-01" },
+    },
+    pgCapabilityViews: {
+      sectorDivergenceView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_peer_daily",
+        period: "latest",
+        asOfDate: "2026-05-01",
+        rows: [
+          {
+            sector: "Utilities",
+            rank: 1,
+            convictionScorePct: 70,
+            convictionBucket: "CONSTRUCTIVE",
+            momentumScorePct: 30,
+            momentumBucket: "WEAK",
+            divergenceType: "conviction_but_weak_price_action",
+            evidenceStrength: "ADEQUATE",
+            interpretationBullets: [
+              "Conviction is constructive but current price action is not confirming it.",
+            ],
+          },
+        ],
+        freshness: {
+          dataThrough: "2026-05-01",
+          state: "fresh",
+        },
+        warnings: [],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /sectorDivergenceView/);
+  assert.match(prompt, /Utilities/);
+  assert.match(prompt, /not confirmed sector leadership/i);
+  assert.doesNotMatch(prompt, /divergenceScorePct/);
+  assert.doesNotMatch(prompt, /score_formula/);
+  assert.doesNotMatch(prompt, /researchObjects/);
+  assert.doesNotMatch(prompt, /parts/);
+  assert.doesNotMatch(prompt, /publicSummary/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assert.doesNotMatch(prompt, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(prompt, /md_historical_features_daily/);
+  assert.doesNotMatch(prompt, /md_research_sector_regime_fwd_agg/);
+});

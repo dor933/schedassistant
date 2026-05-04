@@ -304,6 +304,12 @@ function buildMeta(
   if (pgCapabilityViews?.sectorLeaderboardView) {
     capabilitySources.push({ type: "research", name: "sector_conviction_leaderboard" });
   }
+  if (pgCapabilityViews?.sectorDivergenceView) {
+    capabilitySources.push({
+      type: "research",
+      name: "sector_momentum_vs_conviction_divergence",
+    });
+  }
   if (pgCapabilityViews?.stockIdeaView) {
     capabilitySources.push({ type: "research", name: "stock_idea_discovery" });
   }
@@ -330,6 +336,7 @@ function buildMeta(
 function inferAnswerType(classification: Classification): AskGrahamyResponse["answerType"] {
   if (classification.intent === "unknown") return "unknown";
   if (classification.intent === "sector_conviction_leaderboard") return "sector";
+  if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
   const stock = classification.symbols.length > 0;
   const sector = classification.sectors.length > 0;
