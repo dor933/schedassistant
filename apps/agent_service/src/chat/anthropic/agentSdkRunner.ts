@@ -42,7 +42,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 
-import { Agent, Thread } from "@scheduling-agent/database";
+import { Thread } from "@scheduling-agent/database";
 
 import {
   AGENT_TOOLS_MCP_SERVER_NAME,
@@ -59,6 +59,7 @@ import type { AgentState } from "../../state";
 import { logger } from "../../logger";
 import type { ResolvedOrgVendor } from "../../utils/resolveOrgVendor.service";
 import { drainSessionFileLedger } from "../../workspace/sessionWorkspace";
+import { getAgentSdkCapabilities } from "../../utils/sdkCapabilities.service";
 import {
   observeWithContext,
   recordSdkGeneration,
@@ -849,36 +850,15 @@ async function runAnthropicAgentSdkImpl(
   const existingSessionId =
     state.claudeSessionId ?? (await loadClaudeSessionId(threadId));
 
-  // ── Built-in opt-in ────────────────────────────────────────────────────
-  // Two flags on the agent row drive whether SDK built-ins / Bash are exposed:
-  //   - `allow_sdk_builtins` → Read/Write/Edit/MultiEdit/Glob/Grep/WebFetch
-  //                           (the read+edit surface). Migration 125
-  //                           flipped the column default to TRUE and
-  //                           backfilled existing Anthropic rows, so the
-  //                           typical case is "always on" — admins can
-  //                           still opt a specific agent OUT for an
-  //                           unusual reason by toggling the row flag.
-  //   - `allow_sdk_bash`     → Bash. Defaults to FALSE; admins opt in per
-  //                           agent. The blast radius (arbitrary shell)
-  //                           is meaningfully larger than the file-tool
-  //                           surface, so the runner never auto-enables
-  //                           it without the row flag.
-  let allowBuiltins = false;
-  let allowBash = false;
-  if (agentId) {
-    try {
-      const agentRow = await Agent.findByPk(agentId, {
-        attributes: ["allowSdkBuiltins", "allowSdkBash"],
-      });
-      allowBuiltins = agentRow?.allowSdkBuiltins === true;
-      allowBash = agentRow?.allowSdkBash === true;
-    } catch (err) {
-      logger.warn("Failed to load SDK builtin flags — defaulting both to false", {
-        agentId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  // ── SDK capability lookup ─────────────────────────────────────────────
+  // Migration 145 moved the legacy `allow_sdk_builtins` / `allow_sdk_bash`
+  // boolean columns into the `sdk_capabilities` table + the
+  // `agent_sdk_capabilities` junction. The helper does the join and returns
+  // `{ hasFilesystem, hasBash }`. Same conservative deny-by-default on
+  // lookup failure as the legacy code path.
+  const caps = await getAgentSdkCapabilities(agentId ?? null);
+  const allowBuiltins = caps.hasFilesystem;
+  const allowBash = caps.hasBash;
 
   const mcpServer = await createAgentToolsMcpServer(tools, onToolResult);
 

@@ -18,6 +18,8 @@ export { DeepAgentDelegation } from "./models/DeepAgentDelegation";
 export { Skill } from "./models/Skill";
 export { Tool } from "./models/Tool";
 export { AgentAvailableMcpServer } from "./models/AgentAvailableMcpServer";
+export { SdkCapability } from "./models/SdkCapability";
+export { AgentSdkCapability } from "./models/AgentSdkCapability";
 export { AgentAvailableTool } from "./models/AgentAvailableTool";
 export { AgentAvailableSkill } from "./models/AgentAvailableSkill";
 export { Project } from "./models/Project";

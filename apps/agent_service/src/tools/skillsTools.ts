@@ -13,16 +13,19 @@ import {
 import { hasFilesystemMcp } from "./hasFilesystemMcp";
 import { EPIC_ORCHESTRATOR_DEFINITION } from "../constants/epicAgent";
 import { logger } from "../logger";
+import { getAgentSdkCapabilities } from "../utils/sdkCapabilities.service";
 
 /**
- * Best-effort vendor + bash-flag lookup for an agent. Reads the
+ * Best-effort vendor + bash-capability lookup for an agent. Reads the
  * agent's modelId → llm_models row → vendorId → vendors row → slug,
- * and `allow_sdk_bash` from the agent row. Returns null fields when
- * the lookup fails so the caller can fall back to safe defaults.
+ * and the `bash` SDK capability via `getAgentSdkCapabilities` (junction
+ * table — replaces the old `agents.allow_sdk_bash` column lookup,
+ * dropped in migration 145). Returns null fields when the lookup fails
+ * so the caller can fall back to safe defaults.
  *
- * Not cached at module scope: the agent's model and flags can change
- * at runtime (admin UI), and a stale cache would point at the wrong
- * skill surface.
+ * Not cached at module scope: the agent's model and capabilities can
+ * change at runtime (admin UI), and a stale cache would point at the
+ * wrong skill surface.
  */
 async function resolveAgentVendorAndFlags(
   agentId: string,
@@ -33,12 +36,13 @@ async function resolveAgentVendorAndFlags(
 }> {
   try {
     const agent = await Agent.findByPk(agentId, {
-      attributes: ["modelId", "allowSdkBash", "definition"],
+      attributes: ["modelId", "definition"],
     });
     if (!agent) {
       return { vendorSlug: null, allowSdkBash: false, definition: null };
     }
-    const allowSdkBash = agent.allowSdkBash !== false;
+    const caps = await getAgentSdkCapabilities(agentId);
+    const allowSdkBash = caps.hasBash;
     const definition = agent.definition ?? null;
     if (!agent.modelId) return { vendorSlug: null, allowSdkBash, definition };
     const model = await LLMModel.findByPk(agent.modelId, {

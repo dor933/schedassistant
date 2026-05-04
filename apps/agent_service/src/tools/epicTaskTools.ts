@@ -12,14 +12,13 @@ import {
   TaskStage,
   AgentTask,
   TaskExecution,
-  AgentAvailableMcpServer,
-  McpServer,
 } from "@scheduling-agent/database";
 import { runCodexInRepo } from "../chat/codex/codexInRepo";
 import { loadCodexAuthObjectForAgent } from "../utils/codexAuthJson.service";
 import { resolveOrgVendor } from "../utils/resolveOrgVendor.service";
 import { resolveModelSlug } from "../chat/modelResolution";
 import { ensureSessionWorkspace } from "../workspace/sessionWorkspace";
+import { getAgentSdkCapabilities } from "../utils/sdkCapabilities.service";
 import type {
   AgentTaskStatus,
   TaskStageStatus,
@@ -685,20 +684,17 @@ async function resolveInProgressExecution(): Promise<InProgressExecutionContext 
 /**
  * Capability gate for `start_epic_task` (Anthropic SDK path).
  *
- * The orchestrator does the work itself in-loop after `start_epic_task`
- * returns — that requires both a way to read/edit files AND a way to run
- * shell commands. Without those, the model has nothing to call between
- * `start_epic_task` and `complete_epic_task`, the task gets pinned to
- * `in_progress` with no progress, and the user has to call
- * `reset_stuck_task` to clear it. We refuse to start in that case.
+ * The orchestrator + each dispatched sub-agent need both a way to read /
+ * edit files AND a way to run shell commands. Without those, the agent
+ * has nothing to call between `start_epic_task` and `complete_epic_task`,
+ * the task gets pinned to `in_progress` with no progress, and the user
+ * has to call `reset_stuck_task` to clear it. We refuse to start in that
+ * case.
  *
- * Filesystem source = either the SDK built-ins (Read/Write/Edit, gated by
- * `agents.allow_sdk_builtins`) OR a filesystem MCP server attached via
- * `agent_available_mcp_servers` (server name contains "filesystem").
- *
- * Bash source = either the SDK Bash tool (gated by `agents.allow_sdk_bash`)
- * OR a shell/bash MCP server attached (server name in {"bash","mcp-shell",
- * "shell"}).
+ * Source of truth post-migration-145: the `agent_sdk_capabilities`
+ * junction (slugs `filesystem` and `bash` in `sdk_capabilities`). The
+ * `mcp_servers` table is reserved for external MCP subprocesses and is
+ * NOT consulted here.
  *
  * Returns null on success, or a user-facing error string when a capability
  * is missing — the caller surfaces it directly to the orchestrator.
@@ -706,61 +702,28 @@ async function resolveInProgressExecution(): Promise<InProgressExecutionContext 
 async function assertOrchestratorHasFsAndBash(
   agentId: string,
 ): Promise<string | null> {
-  const agentRow = await Agent.findByPk(agentId, {
-    attributes: ["allowSdkBuiltins", "allowSdkBash"],
-  });
-  let hasFs = agentRow?.allowSdkBuiltins === true;
-  let hasBash = agentRow?.allowSdkBash === true;
-
-  if (!hasFs || !hasBash) {
-    const links = await AgentAvailableMcpServer.findAll({
-      where: { agentId, active: true },
-      attributes: ["mcpServerId"],
-    });
-    const serverIds = links.map((l) => l.mcpServerId);
-    if (serverIds.length > 0) {
-      const servers = await McpServer.findAll({
-        where: { id: { [Op.in]: serverIds } },
-        attributes: ["name"],
-      });
-      const names = new Set(
-        servers.map((s) => (s.name ?? "").toLowerCase()).filter(Boolean),
-      );
-      if (!hasFs && Array.from(names).some((n) => n.includes("filesystem"))) {
-        hasFs = true;
-      }
-      if (
-        !hasBash &&
-        (names.has("bash") || names.has("mcp-shell") || names.has("shell"))
-      ) {
-        hasBash = true;
-      }
-    }
-  }
-
-  if (hasFs && hasBash) return null;
+  const caps = await getAgentSdkCapabilities(agentId);
+  if (caps.hasFilesystem && caps.hasBash) return null;
 
   const missing: string[] = [];
-  if (!hasFs) {
+  if (!caps.hasFilesystem) {
     missing.push(
-      `filesystem (set \`agents.allow_sdk_builtins=true\` to expose the SDK ` +
-        `Read/Write/Edit tools, or attach a filesystem MCP server via ` +
-        `\`agent_available_mcp_servers\`)`,
+      `filesystem — attach the \`filesystem\` SDK capability to this ` +
+        `agent in the admin UI (\`agent_sdk_capabilities\` junction)`,
     );
   }
-  if (!hasBash) {
+  if (!caps.hasBash) {
     missing.push(
-      `bash (set \`agents.allow_sdk_bash=true\` to expose the SDK Bash tool, ` +
-        `or attach a bash/shell MCP server via \`agent_available_mcp_servers\`)`,
+      `bash — attach the \`bash\` SDK capability to this agent in the ` +
+        `admin UI (\`agent_sdk_capabilities\` junction)`,
     );
   }
 
   return (
     `Error: cannot start epic task — orchestrator agent "${agentId}" is missing ` +
-    `the capabilities required to execute the task in-loop: ${missing.join("; ")}. ` +
+    `the SDK capabilities required to execute the task: ${missing.join("; ")}. ` +
     `Refusing to mark the task in_progress with no way to do the work — that ` +
-    `would just leave it pinned and require a \`reset_stuck_task\` call to clear. ` +
-    `Fix the agent's tool grants in the admin UI and try again.`
+    `would just leave it pinned and require a \`reset_stuck_task\` call to clear.`
   );
 }
 
@@ -1339,13 +1302,11 @@ async function resolveCodexAgentCredential(
 }
 
 /**
- * Mirrors the rule the regular Codex SDK runner already uses
- * (`codexSdkRunner.ts:662-679`): an agent's `allow_sdk_bash` column gates
- * the sandbox mode for any Codex run on its behalf. TRUE → full shell
- * access (`danger-full-access`), FALSE → workspace-bounded
- * (`workspace-write`). Migration 126 flipped the column default to TRUE
- * for both vendors, so absence-of-row is treated as TRUE; admins opt OUT
- * for restricted agents.
+ * Mirrors the rule the regular Codex SDK runner uses: the `bash` SDK
+ * capability gates the sandbox mode for any Codex run on this agent's
+ * behalf. Attached → full shell access (`danger-full-access`), not
+ * attached → workspace-bounded (`workspace-write`). Replaces the legacy
+ * `agents.allow_sdk_bash` column lookup (dropped in migration 145).
  *
  * Runtime relevance: when the agent_service container can't host
  * bubblewrap (e.g. Docker without `seccomp:unconfined`, no
@@ -1360,19 +1321,8 @@ async function resolveCodexAgentCredential(
 async function resolveCodexExecuteSandboxMode(
   agentId: string,
 ): Promise<"workspace-write" | "danger-full-access"> {
-  try {
-    const agentRow = await Agent.findByPk(agentId, {
-      attributes: ["allowSdkBash"],
-    });
-    const allowBash = agentRow?.allowSdkBash !== false;
-    return allowBash ? "danger-full-access" : "workspace-write";
-  } catch (err: any) {
-    logger.warn(
-      "resolveCodexExecuteSandboxMode: agent lookup failed — defaulting to workspace-write",
-      { agentId, error: err?.message },
-    );
-    return "workspace-write";
-  }
+  const caps = await getAgentSdkCapabilities(agentId);
+  return caps.hasBash ? "danger-full-access" : "workspace-write";
 }
 
 /**
