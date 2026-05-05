@@ -25,13 +25,6 @@ const MAX_CONTEXT_TOKENS = parseInt(
   process.env.MAX_CONTEXT_TOKENS ?? "80000",
   10,
 );
-// Escape hatch: once a thread is this bloated the summarizer itself OOMs on
-// the prompt, so we stop trying and let the turn proceed. Lets pre-fix
-// threads (sub-agent spam) move past the wedge without manual intervention.
-const HARD_SKIP_SUMMARIZATION_MESSAGES = parseInt(
-  process.env.HARD_SKIP_SUMMARIZATION_MESSAGES ?? "200",
-  10,
-);
 
 /**
  * Estimates the token count for a list of messages.
@@ -74,44 +67,6 @@ export async function summarizationGuardNode(
   const { threadId, messages } = state;
 
   try {
-    // ── Hard skip: thread already too bloated to summarize ───────────
-    // The summarizer stringifies every message into one Haiku prompt; past
-    // ~200 messages it exceeds Haiku's context and soft-fails (returns {}
-    // without bumping `Thread.summarizedAt`), so `executeChatTurn`'s rotation
-    // trigger never fires and the thread stays wedged at this size forever.
-    //
-    // Skip the LLM summary BUT still bump `summarizedAt` here so
-    // `executeChatTurn` sees the change after invoke and rotates the thread
-    // for the next turn. The user loses the LLM-derived summary blurb for
-    // this transition (acceptable — the alternative is a permanently-stuck
-    // thread), but the bloated thread is properly closed and the next message
-    // lands on a fresh thread.
-    if (
-      messages &&
-      messages.length >= HARD_SKIP_SUMMARIZATION_MESSAGES
-    ) {
-      logger.warn(
-        "Thread message count above hard-skip threshold — bumping summarizedAt to force rotation, no LLM summary",
-        {
-          threadId,
-          messageCount: messages.length,
-          threshold: HARD_SKIP_SUMMARIZATION_MESSAGES,
-        },
-      );
-      try {
-        await Thread.update(
-          { summarizedAt: new Date() },
-          { where: { id: threadId } },
-        );
-      } catch (err) {
-        logger.error("Hard-skip summarizedAt bump failed", {
-          threadId,
-          error: String(err),
-        });
-      }
-      return { needsSummarization: false, error: null };
-    }
-
     // ── Size check: message count ────────────────────────────────────
     if (messages && messages.length >= MAX_MESSAGES) {
       logger.info("Thread size exceeded — summarization required", { threadId, messageCount: messages.length, threshold: MAX_MESSAGES });
