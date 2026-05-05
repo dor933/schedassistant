@@ -688,7 +688,10 @@ test("Golden QA prompt rules enforce public-only, no-current-factor, and no-trad
   } satisfies AskGrahamyState);
 
   assert.match(riskPrompt, /If classification focus is `risk`, answer only/i);
-  assert.match(riskPrompt, /Do not give stop-loss, position sizing, buy\/sell/i);
+  assert.match(
+    riskPrompt,
+    /Do not give stop-loss, position sizing, investment recommendation/i,
+  );
   assertNoForbiddenPublicPayload(
     compileGoldenView({
       classification: RO_CLASSIFICATIONS.risk,

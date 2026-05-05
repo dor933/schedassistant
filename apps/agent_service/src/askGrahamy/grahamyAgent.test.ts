@@ -56,7 +56,7 @@ test("LLM prompt includes only public-safe sector leaderboard payload", () => {
   assert.match(prompt, /sectorLeaderboardView/);
   assert.match(prompt, /Industrials/);
   assert.match(prompt, /Rank sectors only from those rows/i);
-  assert.match(prompt, /PG base-rate\/current composite evidence/i);
+  assert.match(prompt, /PG historical\/current composite evidence/i);
   assert.doesNotMatch(prompt, /researchObjects/);
   assert.doesNotMatch(prompt, /parts/);
   assert.doesNotMatch(prompt, /publicSummary/);
@@ -275,7 +275,7 @@ test("LLM prompt includes only public-safe comparison payload", () => {
   assert.match(prompt, /comparisonView/);
   assert.match(prompt, /GSL/);
   assert.match(prompt, /Industrials/);
-  assert.match(prompt, /PG current\/base-rate comparison evidence/i);
+  assert.match(prompt, /PG current\/historical comparison evidence/i);
   assert.doesNotMatch(prompt, /comparison_formula/);
   assert.doesNotMatch(prompt, /raw_sql/);
   assert.doesNotMatch(prompt, /researchObjects/);

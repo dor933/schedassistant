@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { AnalystBrief, EvidencePack } from "./analystTypes";
 
 export const INTENTS = [
   "stock",
@@ -866,6 +867,13 @@ export type AskGrahamyState = {
   priorCapabilityViews?: import("./pgCapabilities/types").CachedCapabilityView[];
   pgCapabilityViews?: PgCapabilityViews;
   pipelineOverlayViews?: PipelineOverlayViews;
+  /**
+   * Internal analyst orchestration layer. Built only from public-safe views
+   * and used to guide answer synthesis; not exposed as a customer payload in
+   * Phase 1.
+   */
+  evidencePack?: EvidencePack;
+  analystBrief?: AnalystBrief;
   /**
    * Subset of capability views freshly built this turn (cache miss). The
    * upstream caller persists them after receiving the response. Empty when

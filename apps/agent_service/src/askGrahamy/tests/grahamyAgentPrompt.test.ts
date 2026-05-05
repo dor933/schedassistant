@@ -92,6 +92,49 @@ test("LLM prompt receives only validatedEdgeEvidenceView for validated evidence 
   assertNoFreshnessInternals(prompt);
 });
 
+test("LLM prompt includes Analyst Orchestration Layer, Evidence Pack, and Hebrew language policy", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-hebrew-quality",
+    message: "מה דעתך על AMZN",
+    warnings: [],
+    classification: {
+      intent: "stock",
+      symbols: ["AMZN"],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_stock_snapshot_context", "get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /Analyst orchestration layer/i);
+  assert.match(prompt, /Evidence Pack \(public-only analyst synthesis\)/i);
+  assert.match(prompt, /AnalystBrief contract/i);
+  assert.match(prompt, /Start every serious investment answer with a clear bottom line/i);
+  assert.match(prompt, /support, concern, risk, what would change the view, data limitations, and confidence/i);
+  assert.match(prompt, /Always mention important missing evidence/i);
+  assert.match(prompt, /Always explain contradictions/i);
+  assert.match(prompt, /Do not repeat the assistant name/i);
+  assert.match(prompt, /Hebrew answers, use clean professional Hebrew/i);
+  assert.match(prompt, /סט־אפ טקטי/);
+  assert.match(prompt, /סיכון לירידה זמנית בדרך/);
+  assert.match(prompt, /מה קרה בעבר במקרים דומים/);
+  assert.match(prompt, /ראיה מחקרית מאומתת/);
+  assert.match(prompt, /stop-loss, sizing/i);
+  assert.match(prompt, /investment recommendation/i);
+  assert.doesNotMatch(prompt, /After your prose answer and the disclaimer/i);
+  assert.doesNotMatch(prompt, /researchObjects/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assertNoFreshnessInternals(prompt);
+});
+
 test("LLM prompt receives public-safe sector leaderboard view", () => {
   const state: AskGrahamyState = {
     internalUserId: 1,
@@ -199,8 +242,8 @@ test("LLM prompt receives public-safe stock idea view", () => {
   assert.match(prompt, /stockIdeaView/);
   assert.match(prompt, /GSL/);
   assert.match(prompt, /research candidates/i);
-  assert.match(prompt, /buy\/sell recommendations/i);
-  assert.match(prompt, /PG current\/base-rate evidence/i);
+  assert.match(prompt, /investment recommendations/i);
+  assert.match(prompt, /PG current\/historical evidence/i);
   assert.doesNotMatch(prompt, /researchObjects/);
   assert.doesNotMatch(prompt, /parts/);
   assert.doesNotMatch(prompt, /raw_sql/);
@@ -268,7 +311,7 @@ test("LLM prompt receives public-safe feature screen view", () => {
   assert.match(prompt, /screenCriteria/);
   assert.match(prompt, /GSL/);
   assert.match(prompt, /screen results/i);
-  assert.match(prompt, /never buy\/sell recommendations/i);
+  assert.match(prompt, /never investment recommendations/i);
   assert.match(prompt, /PG current-feature screening evidence/i);
   assert.doesNotMatch(prompt, /researchObjects/);
   assert.doesNotMatch(prompt, /parts/);
@@ -335,7 +378,7 @@ test("LLM prompt receives public-safe factor backtest view", () => {
   assert.match(prompt, /factorBacktestView/);
   assert.match(prompt, /sampleSize/);
   assert.match(prompt, /sampleAdequacy/);
-  assert.match(prompt, /historical\/base-rate evidence/i);
+  assert.match(prompt, /historical evidence/i);
   assert.match(prompt, /Do not overstate thin samples/i);
   assert.doesNotMatch(prompt, /researchObjects/);
   assert.doesNotMatch(prompt, /parts/);
@@ -604,7 +647,7 @@ test("LLM prompt receives public-safe comparison view", () => {
   assert.match(prompt, /GSL/);
   assert.match(prompt, /Industrials/);
   assert.match(prompt, /dimensional language/i);
-  assert.match(prompt, /PG current\/base-rate comparison evidence/i);
+  assert.match(prompt, /PG current\/historical comparison evidence/i);
   assert.doesNotMatch(prompt, /researchObjects/);
   assert.doesNotMatch(prompt, /parts/);
   assert.doesNotMatch(prompt, /raw_sql/);
@@ -674,7 +717,7 @@ test("LLM prompt receives public-safe regime historical playbook view", () => {
   assert.match(prompt, /regimeHistoricalPlaybookView/);
   assert.match(prompt, /NEUTRAL/);
   assert.match(prompt, /Industrials/);
-  assert.match(prompt, /PG historical\/base-rate evidence/i);
+  assert.match(prompt, /PG historical evidence/i);
   assert.match(prompt, /Leaders and laggards must come only/i);
   assert.match(prompt, /Risks must come only/i);
   assert.match(prompt, /Do not invent sector leadership/i);
@@ -782,7 +825,7 @@ test("LLM prompt restricts risk-focused answers to public path risk evidence", (
   assert.match(prompt, /answer only from `publicResearchObjectView\.pathRisk`/);
   assert.match(prompt, /Never substitute `p25ReturnPct`/);
   assert.match(prompt, /h60\/final forward returns/);
-  assert.match(prompt, /stop-loss, position sizing, buy\/sell/);
+  assert.match(prompt, /stop-loss, position sizing, investment recommendation/);
   assert.doesNotMatch(prompt, /whatMattersNow/);
   assert.doesNotMatch(prompt, /"edgeEvidence"\s*:/);
   assert.doesNotMatch(prompt, /h60_return_pct/);

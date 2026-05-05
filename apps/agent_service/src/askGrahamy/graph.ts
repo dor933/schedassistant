@@ -8,6 +8,10 @@ import { buildResearchObjects } from "./researchObjectBuilder";
 import { GrahamySnapshotClient } from "./snapshotClient";
 import { executeSnapshotTools } from "./tools";
 import { runGrahamyDeepAgent } from "./grahamyAgent";
+import {
+  buildAnalystBriefContract,
+  buildEvidencePack,
+} from "./analystOrchestration";
 import { executePgCapabilitiesWithCache } from "./pgCapabilities/registry";
 import { executePipelineOverlays } from "./pipelineOverlays/registry";
 import type {
@@ -133,6 +137,8 @@ export async function runAskGrahamyGraph(
       pipelineOverlayViews: state.pipelineOverlayViews,
       warnings: state.warnings,
     });
+    state.evidencePack = buildEvidencePack(state);
+    state.analystBrief = buildAnalystBriefContract(state.evidencePack);
 
     // Hand off to the deep agent. It composes the actual user-facing answer
     // by reading state.researchObjects + state.message + its PostgresSaver

@@ -5,6 +5,16 @@ import { logger } from "../logger";
 import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import { getLangfuseCallbackHandler, flushLangfuse } from "../langfuse";
 import type {
+  AnalystBrief,
+  EvidencePack,
+} from "./analystTypes";
+import {
+  buildAnalystBriefContract,
+  buildEvidencePack,
+  formatAnalystBriefContractForPrompt,
+  formatEvidencePackForPrompt,
+} from "./analystOrchestration";
+import type {
   AskGrahamyState,
   CachedResearchObject,
   ClassificationFocus,
@@ -215,9 +225,21 @@ function humanizeEnum(value: string): string {
   return value.toLowerCase().replace(/_/g, " ");
 }
 
+function polishPromptText(value: string): string {
+  return value
+    .replace(/\bhistorical\/base-rate\b/gi, "historical")
+    .replace(/\bbase-rate\b/gi, "historical evidence")
+    .replace(/\bpublic safety cap\b/gi, "bounded public sample")
+    .replace(/\bsafety cap\b/gi, "bounded sample")
+    .replace(/\bwarehouse\b/gi, "historical dataset")
+    .replace(/\bpath-risk\b/gi, "daily drawdown risk")
+    .replace(/\bbuy\/sell recommendations?\b/gi, "investment recommendations")
+    .replace(/\bbuy\/sell recommendation language\b/gi, "investment recommendation language");
+}
+
 function humanizeJsonValue(value: unknown, key?: string): unknown {
   if (SYMBOL_PRESERVE_KEYS.has(key ?? "")) return value;
-  if (typeof value === "string") return humanizeEnum(value);
+  if (typeof value === "string") return polishPromptText(humanizeEnum(value));
   if (Array.isArray(value)) return value.map((item) => humanizeJsonValue(item, key));
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
@@ -321,7 +343,7 @@ function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): st
       warnings: views.factorBacktestView.warnings,
     });
     blocks.push(
-      `## FACTOR-CONDITIONED BACKTEST — PG historical base-rate evidence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+      `## FACTOR-CONDITIONED BACKTEST — PG historical evidence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
     );
   }
   if (views?.comparisonView) {
@@ -370,6 +392,10 @@ export function buildSystemPrompt(state: AskGrahamyState): string {
   const dailyBrief = state.snapshots?.daily_brief as Record<string, unknown> | undefined;
   const todayRegime = typeof dailyBrief?.regime === "string" ? dailyBrief.regime : undefined;
   const freshness = state.snapshots?.freshness;
+  const evidencePack: EvidencePack =
+    state.evidencePack ?? buildEvidencePack(state);
+  const analystBrief: AnalystBrief =
+    state.analystBrief ?? buildAnalystBriefContract(evidencePack);
 
   const evidenceBlocks =
     classification?.focus === "validated_evidence"
@@ -399,10 +425,26 @@ Your job is to answer the user's specific question, conversationally, using the 
 - Reference earlier turns when natural ("as I mentioned about NVDA's ROIC trend...").
 - Render bucket / band labels as natural language. The evidence already comes pre-humanized (lower-case prose). Do NOT type identifiers like \`STRONG_UNDERPERFORM\`, \`HIGH_QUINTILE\`, \`BELOW_OWN_HISTORY\` — write "strongly underperforming", "in the high quintile", "below its 10-year history".
 - Do NOT append disclaimers like "This is not financial advice." anywhere in your answer.
-- When the user asks for a full Research Object, cover the five-question view, validated edge evidence when present, base-rate probability evidence, and path-risk evidence. If a section is marked partial/unavailable, say that clearly instead of inventing the missing field.
+- When the user asks for a full Research Object, cover the five-question view, validated edge evidence when present, historical probability evidence, and daily drawdown-risk evidence. If a section is marked partial/unavailable, say that clearly instead of inventing the missing field.
+
+# Analyst orchestration layer (strict)
+- You are not a chatbot summarizing fields. Act as an institutional research analyst using the Evidence Pack below.
+- Reason from the Evidence Pack first, then write the answer. The raw public views remain available only to verify exact fields.
+- Start every serious investment answer with a clear bottom line. Then separate support, concern, risk, what would change the view, data limitations, and confidence.
+- Lead with judgment, not metric dumping. Use numbers only when they change the conclusion.
+- Always mention important missing evidence from \`missingEvidence\`.
+- Always explain contradictions from \`contradictions\` instead of smoothing them over.
+- Always state the public confidence level from \`confidence\` and explain it in plain language.
+- Do not repeat the assistant name or write a standalone ticker/title heading. The UI owns the title and assistant label.
+- Do not turn evidence into buy/sell, stop-loss, sizing, entry, exit, or trade-instruction language.
+- For Hebrew answers, use clean professional Hebrew with short sentences. Avoid mixed Hebrew-English jargon.
+- Banned Hebrew/mixed phrases: "סט־אפ טקטי", "path-risk", "base-rate", "edge מאומת", "סיכון המסלול לא נעים", "שם חזק עסקית", "קונסטרקטיבי".
+- Preferred Hebrew phrasing: "התמונה לטווח של 60 יום", "סיכון לירידה זמנית בדרך", "מה קרה בעבר במקרים דומים", "ראיה מחקרית מאומתת", "לפי הנתונים", "חיובי", "מעורב", "חלש".
+- If a table is useful, use only values that appear in the Evidence Pack or public views. Never invent table values.
+- Keep the output compatible with the current UI: markdown prose plus the required Suggested follow-ups section. Do not output raw JSON to the user.
 
 # Suggested follow-ups (REQUIRED — every response)
-After your prose answer and the disclaimer, append a section in this exact shape:
+After your prose answer, append a section in this exact shape:
 
 \`\`\`
 ### Suggested follow-ups
@@ -416,25 +458,26 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 # MOAT discipline (strict)
 - Use ONLY the bucket labels, percentile bands, direction descriptors, and explicit numeric public evidence fields from the EVIDENCE below. Acceptable: "in the high quintile of its sector", "FCF/NI poor conversion", "ROE above its 5-year history", "regime-challenged", or "the public view shows a 61% 60-day hit rate" when that exact field exists.
 - DO NOT invent or infer numbers. Raw PE multiples, revenue figures, prices, hit-rate percentages, drawdown percentages, and probability thresholds are allowed only when the exact number appears in \`publicResearchObjectView.probabilisticEvidence\` or \`publicResearchObjectView.pathRisk\`.
-- For temporary drawdown/path-risk claims, use only \`pathRisk.source = pg_daily_price_path\` with explicit numeric drawdown fields. If \`pathRisk.state\` is partial/unavailable or the numeric drawdown fields are absent, say path risk is partial/bucketed and do not write a sentence like "10% of cases fell more than 14%".
+- In user-facing prose, prefer "daily drawdown risk", "temporary downside risk", or "risk of a temporary decline" over "path-risk".
+- For temporary drawdown-risk claims, use only \`pathRisk.source = pg_daily_price_path\` with explicit numeric drawdown fields. If \`pathRisk.state\` is partial/unavailable or the numeric drawdown fields are absent, say drawdown-risk evidence is partial/bucketed and do not write a sentence like "10% of cases fell more than 14%".
 - If classification focus is \`risk\`, answer only from \`publicResearchObjectView.pathRisk\`, \`publicResearchObjectView.probabilisticEvidence\`, freshness, and warnings. Do not use the five-question thesis, edgeEvidence, or memory to make risk claims.
 - For a question asking the probability of losing more than 10%, use only \`pathRisk.probDrawdownGt10Pct\` when \`pathRisk.state = complete\`, \`pathRisk.source = pg_daily_price_path\`, and the field is explicitly present. If absent, say that numeric threshold probability is unavailable.
-- Never substitute \`p25ReturnPct\`, \`medianReturnPct\`, \`hitRatePct\`, h60/final forward returns, or any horizon return for drawdown or temporary path-risk probability.
-- Do not give stop-loss, position sizing, buy/sell, or trade recommendation language in risk-focused answers.
+- Never substitute \`p25ReturnPct\`, \`medianReturnPct\`, \`hitRatePct\`, h60/final forward returns, or any horizon return for drawdown or temporary downside probability.
+- Do not give stop-loss, position sizing, investment recommendation, or trade recommendation language in risk-focused answers.
 - If classification focus is \`validated_evidence\`, answer only from \`validatedEdgeEvidenceView\`, freshness, and warnings. Do not use Research Object thesis sections, PG capability views, or memory to make validated Pipeline claims.
 - For \`validatedEdgeEvidenceView\`, say "pipeline-validated evidence" only when \`evidenceState\` is \`edge_evidence_strong\` or \`edge_evidence_present\`. If \`evidenceState\` is \`mixed\`, \`insufficient_data\`, or \`unavailable\`, state that clearly.
 - Mention \`validatedEdgeEvidenceView.freshness.dataThrough\` when present. If freshness is stale or unknown, include the public caveat.
-- Distinguish PG historical/base-rate evidence, Pipeline validated evidence, Pipeline risk band, and PG daily drawdown pathRisk. \`pipelineRiskBand\` is not daily drawdown/path-risk and must not be used for drawdown probability claims.
+- Distinguish PG historical evidence, Pipeline validated evidence, Pipeline risk band, and PG daily drawdown risk. \`pipelineRiskBand\` is not daily drawdown risk and must not be used for drawdown probability claims.
 - Treat \`liveConfirmationBucket\` as aggregate live tracking confirmation context only. It is not trade advice, not a trade signal, and must not change \`evidenceState\`.
 - Treat \`decayRiskBucket\` as an aggregate caution signal only. It is not proof that validated evidence is invalid, and must not change \`evidenceState\`.
 - Do not expose Client API endpoint names, raw sections, raw anchors, derivation, manifest internals, IDs, gates, thresholds, feature rules, table names, SQL, or raw rows for \`validatedEdgeEvidenceView\`.
 - Do not expose Sentinel lifecycle state names/counts, raw Sentinel rows, Coroner classifications, Coroner postmortems, parent-refined-out language, raw discovery/convergence fields, or raw Pipeline lifecycle detail.
 - Do not turn validated evidence into stop-loss, sizing, trade instruction, or buy/sell language.
 - For sector leaderboard questions, use only \`sectorLeaderboardView.rows\`. Rank sectors only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent sectors, scores, or ranks.
-- Treat \`sectorLeaderboardView\` as PG base-rate/current composite evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
+- Treat \`sectorLeaderboardView\` as PG historical/current composite evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
 - If \`sectorLeaderboardView.rows\` is empty or the view state is unavailable, say the sector leaderboard is unavailable instead of naming sectors.
 - For sector conviction/momentum divergence questions, use only \`sectorDivergenceView.rows\`. Rank sectors only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent sectors, scores, or ranks.
-- Treat \`sectorDivergenceView\` as PG current/base-rate evidence, not confirmed sector leadership or validated live edge evidence.
+- Treat \`sectorDivergenceView\` as PG current/historical evidence, not confirmed sector leadership or validated live edge evidence.
 - Explain divergence only with \`divergenceType\`, \`interpretationBullets\`, and explicit public row fields. Do not expose or describe scoring formulas.
 - If \`sectorDivergenceView.state\` is "complete" and \`rows\` is empty, say no clear conviction-versus-momentum divergence was found and do not name sectors from outside the rows.
 - If \`sectorDivergenceView.state\` is unavailable, say sector divergence data is unavailable instead of naming sectors.
@@ -445,29 +488,30 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - If \`sectorDeltaView.state\` is "complete" and \`rows\` is empty, say no meaningful week-over-week sector delta was found and do not name sectors from outside the rows.
 - If \`sectorDeltaView.state\` is unavailable, say the current or prior weekly sector baseline is missing instead of naming sectors.
 - For stock idea / best setup / top conviction name questions, use only \`stockIdeaView.rows\`. Mention stocks only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent tickers, scores, hit rates, returns, or risk metrics.
-- Call \`stockIdeaView.rows\` "research candidates" or "setups to review", never buy/sell recommendations.
+- Call \`stockIdeaView.rows\` "research candidates" or "setups to review", never investment recommendations.
 - Explain each stock idea only with \`reasonBullets\` and explicit public fields in the row.
-- Treat \`stockIdeaView\` as PG current/base-rate evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
+- Treat \`stockIdeaView\` as PG current/historical evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
 - If \`stockIdeaView.rows\` is empty or the view state is unavailable, say stock discovery data is unavailable instead of naming tickers.
 - For current-feature stock screen questions, use only \`featureScreenView.rows\` and \`featureScreenView.screenCriteria\`. Rank stocks only from those rows, mention \`asOfDate\` or \`freshness.dataThrough\`, and do not invent tickers, buckets, hit rates, or return metrics.
-- Call \`featureScreenView.rows\` "screen results" or "research candidates", never buy/sell recommendations or trade instructions.
+- Call \`featureScreenView.rows\` "screen results" or "research candidates", never investment recommendations or trade instructions.
 - Explain each screen result only with \`reasonBullets\` and explicit public bucket fields in the row. Do not expose thresholds, formulas, SQL, raw rows, table names, feature rules, IDs, gates, or scoring internals.
 - Treat \`featureScreenView\` as PG current-feature screening evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
 - If \`featureScreenView.state = complete\` and \`rows\` is empty, say no matching candidates were found. If unavailable, say the feature screen is unavailable.
 - For historical factor-combination questions, use only \`factorBacktestView\`. Mention \`horizon\`, \`sampleSize\`, and \`sampleAdequacy\`.
-- Treat \`factorBacktestView\` as historical/base-rate evidence, not a prediction, recommendation, validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
+- Treat \`factorBacktestView\` as historical evidence, not a prediction, recommendation, validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
 - Do not describe \`factorBacktestView\` as current, latest market data, or today's data. Use \`freshness.dataThrough\` only as the historical sample-through date for the selected horizon.
 - Do not overstate thin samples. If \`factorBacktestView.state = partial\`, explain the public sample limitation from \`warnings\`.
 - Do not expose thresholds, formulas, SQL, raw rows, table names, internal factor definitions, feature rules, IDs, gates, scoring internals, or operational source details for \`factorBacktestView\`.
 - If \`factorBacktestView.state = complete\` and \`sampleSize = 0\`, say no matching historical observations were found. If unavailable, say factor backtest data is unavailable.
 - For stock-vs-sector, sector-vs-sector, and symbol-vs-symbol comparison questions, use only \`comparisonView\`. Do not use raw Research Objects, memory, table names, formulas, or inferred metrics to compare.
 - For \`comparisonView\`, prefer dimensional language like "the left side is stronger on X and weaker on Y." Do not say "better" unless multiple public \`deltas\` and \`summaryBullets\` clearly support it.
-- Mention \`comparisonView.asOfDate\` or \`comparisonView.freshness.dataThrough\`. Treat \`comparisonView\` as PG current/base-rate comparison evidence, not validated live edge evidence.
+- Mention \`comparisonView.asOfDate\` or \`comparisonView.freshness.dataThrough\`. Treat \`comparisonView\` as PG current/historical comparison evidence, not validated live edge evidence.
 - Explain \`comparisonView.state = partial\` by naming the public missing area from \`warnings\`; if unavailable, ask for a valid stock/sector/symbol target or say the comparison data is unavailable.
 - Do not expose table names, SQL, raw feature values, thresholds, scoring formulas, IDs, gates, or operational source details for \`comparisonView\`.
-- For symbol-vs-symbol comparisons, mention when sectors differ and keep the answer dimensional ("stronger on X, weaker on Y") rather than treating it as a buy/sell recommendation.
+- For symbol-vs-symbol comparisons, mention when sectors differ and keep the answer dimensional ("stronger on X, weaker on Y") rather than treating it as an investment recommendation.
 - For current-regime historical playbook questions, use only \`regimeHistoricalPlaybookView\`. Mention the \`regime\` and \`asOfDate\` or \`freshness.dataThrough\`.
-- Treat \`regimeHistoricalPlaybookView\` as PG historical/base-rate evidence, not a live edge validation, prediction, Sentinel signal, Coroner result, trade card, accepted hypothesis, or recommendation.
+- Treat \`regimeHistoricalPlaybookView\` as PG historical evidence, not a live edge validation, prediction, Sentinel signal, Coroner result, trade card, accepted hypothesis, or recommendation.
+- Do not expose query safety caps, candidate caps, sample caps, operational safeguards, endpoint names, or implementation details. If a view is bounded, describe only the public sample size and public warnings.
 - Leaders and laggards must come only from \`regimeHistoricalPlaybookView.rows\`. Risks must come only from \`regimeHistoricalPlaybookView.risks\`.
 - Do not invent sector leadership, underperformance, risk buckets, hit rates, or return metrics for \`regimeHistoricalPlaybookView\`.
 - If \`regimeHistoricalPlaybookView.state = partial\`, explain the public missing area from \`warnings\`. If unavailable, say the regime historical playbook is unavailable.
@@ -484,6 +528,16 @@ ${freshness?.staleReason ? `Freshness caveat: ${freshness.staleReason}` : ""}
 
 # Classification for this turn
 ${classifiedLine}
+
+# Evidence Pack (public-only analyst synthesis)
+\`\`\`json
+${formatEvidencePackForPrompt(humanizeJsonValue(evidencePack) as EvidencePack)}
+\`\`\`
+
+# AnalystBrief contract (internal structure to follow)
+\`\`\`json
+${formatAnalystBriefContractForPrompt(humanizeJsonValue(analystBrief) as AnalystBrief)}
+\`\`\`
 
 # Evidence
 ${evidence}
