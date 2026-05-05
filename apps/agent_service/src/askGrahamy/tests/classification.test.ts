@@ -111,6 +111,116 @@ test("risk-only follow-up without prior anchor returns unknown", async () => {
   assert.match(result.warnings[0], /could not classify/i);
 });
 
+test("classifies validated evidence questions with anchored focus", async () => {
+  const examples = [
+    {
+      message: "Is GSL evidence-backed?",
+      out: {
+        intent: "stock" as const,
+        symbols: ["GSL"],
+        sectors: [],
+        regimeRequested: false,
+      },
+      expectedIntent: "stock",
+    },
+    {
+      message: "Does GSL have validated edge evidence?",
+      out: {
+        intent: "stock" as const,
+        symbols: ["GSL"],
+        sectors: [],
+        regimeRequested: false,
+      },
+      expectedIntent: "stock",
+    },
+    {
+      message: "Does Energy have validated edge evidence?",
+      out: {
+        intent: "sector" as const,
+        symbols: [],
+        sectors: ["Energy" as const],
+        regimeRequested: false,
+      },
+      expectedIntent: "sector",
+    },
+    {
+      message: "Is the current regime evidence-backed?",
+      out: {
+        intent: "regime" as const,
+        symbols: [],
+        sectors: [],
+        regimeRequested: true,
+      },
+      expectedIntent: "regime",
+    },
+  ];
+
+  for (const item of examples) {
+    const result = await classifyMessage(item.message, undefined, {
+      classifier: stub({
+        ...item.out,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    });
+    assert.equal(result.intent, item.expectedIntent, item.message);
+    assert.equal(result.focus, "validated_evidence", item.message);
+  }
+});
+
+test("validated evidence follow-up inherits prior stock anchor", async () => {
+  const result = await classifyMessage(
+    "Is this setup supported by the pipeline?",
+    {
+      conversationId: "c1",
+      userId: 1,
+      lastSymbols: ["GSL"],
+      lastSectors: [],
+      lastIntent: "stock",
+      lastSuggestedFollowups: [],
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: true,
+        focus: "validated_evidence",
+        confidence: "medium",
+      }),
+    },
+  );
+
+  assert.equal(result.intent, "stock");
+  assert.deepEqual(result.symbols, ["GSL"]);
+  assert.equal(result.focus, "validated_evidence");
+  assert.equal(result.isFollowUp, true);
+});
+
+test("validated evidence follow-up without prior anchor returns unknown", async () => {
+  const result = await classifyMessage(
+    "Is this setup supported by the pipeline?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: true,
+        focus: "validated_evidence",
+        confidence: "low",
+      }),
+    },
+  );
+
+  assert.equal(result.intent, "unknown");
+  assert.equal(result.focus, undefined);
+  assert.match(result.warnings[0], /could not classify/i);
+});
+
 test("ordinary stock analysis does not set risk focus", async () => {
   const result = await classifyMessage("Tell me about GSL", undefined, {
     classifier: stub({

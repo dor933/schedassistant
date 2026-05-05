@@ -93,8 +93,7 @@ export type PipelineOverlayRegistryEntry = {
   overlayName: PipelineOverlayName;
   supportedAnchors: PipelineOverlayAnchorType[];
   allowedClientApiSources: PipelineClientApiSource[];
-  mapperStatus: "placeholder";
+  mapperStatus: "implemented" | "placeholder";
   freshnessPolicy: "manifest_public_freshness";
   forbiddenFieldPolicy: "pipeline_overlay_public_safe";
 };
-

@@ -9,6 +9,7 @@ import type {
   CachedResearchObject,
   ClassificationFocus,
   PgCapabilityViews,
+  PipelineOverlayViews,
 } from "./types";
 
 /**
@@ -346,6 +347,23 @@ function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): st
   return blocks;
 }
 
+function formatPipelineOverlaysForPrompt(
+  views: PipelineOverlayViews | undefined,
+): string[] {
+  const blocks: string[] = [];
+  if (views?.validatedEdgeEvidenceView) {
+    const humanized = humanizeJsonValue({
+      validatedEdgeEvidenceView: views.validatedEdgeEvidenceView,
+      freshness: views.validatedEdgeEvidenceView.freshness,
+      warnings: views.validatedEdgeEvidenceView.warnings,
+    });
+    blocks.push(
+      `## VALIDATED EDGE EVIDENCE — Grahamy Client API public overlay\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+    );
+  }
+  return blocks;
+}
+
 export function buildSystemPrompt(state: AskGrahamyState): string {
   const ros = state.researchObjects ?? [];
   const classification = state.classification;
@@ -353,10 +371,14 @@ export function buildSystemPrompt(state: AskGrahamyState): string {
   const todayRegime = typeof dailyBrief?.regime === "string" ? dailyBrief.regime : undefined;
   const freshness = state.snapshots?.freshness;
 
-  const evidenceBlocks = [
-    ...ros.map((ro) => formatResearchObjectForPrompt(ro, classification?.focus)),
-    ...formatPgCapabilitiesForPrompt(state.pgCapabilityViews),
-  ];
+  const evidenceBlocks =
+    classification?.focus === "validated_evidence"
+      ? formatPipelineOverlaysForPrompt(state.pipelineOverlayViews)
+      : [
+          ...ros.map((ro) => formatResearchObjectForPrompt(ro, classification?.focus)),
+          ...formatPgCapabilitiesForPrompt(state.pgCapabilityViews),
+          ...formatPipelineOverlaysForPrompt(state.pipelineOverlayViews),
+        ];
   const evidence = evidenceBlocks.length === 0
     ? "(No specific Research Objects or PG capability views were loaded for this turn — answer from your conversational memory and acknowledge the limitation.)"
     : evidenceBlocks.join("\n\n");
@@ -399,6 +421,12 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - For a question asking the probability of losing more than 10%, use only \`pathRisk.probDrawdownGt10Pct\` when \`pathRisk.state = complete\`, \`pathRisk.source = pg_daily_price_path\`, and the field is explicitly present. If absent, say that numeric threshold probability is unavailable.
 - Never substitute \`p25ReturnPct\`, \`medianReturnPct\`, \`hitRatePct\`, h60/final forward returns, or any horizon return for drawdown or temporary path-risk probability.
 - Do not give stop-loss, position sizing, buy/sell, or trade recommendation language in risk-focused answers.
+- If classification focus is \`validated_evidence\`, answer only from \`validatedEdgeEvidenceView\`, freshness, and warnings. Do not use Research Object thesis sections, PG capability views, or memory to make validated Pipeline claims.
+- For \`validatedEdgeEvidenceView\`, say "pipeline-validated evidence" only when \`evidenceState\` is \`edge_evidence_strong\` or \`edge_evidence_present\`. If \`evidenceState\` is \`mixed\`, \`insufficient_data\`, or \`unavailable\`, state that clearly.
+- Mention \`validatedEdgeEvidenceView.freshness.dataThrough\` when present. If freshness is stale or unknown, include the public caveat.
+- Distinguish PG historical/base-rate evidence, Pipeline validated evidence, Pipeline risk band, and PG daily drawdown pathRisk. \`pipelineRiskBand\` is not daily drawdown/path-risk and must not be used for drawdown probability claims.
+- Do not expose Client API endpoint names, raw sections, raw anchors, derivation, manifest internals, IDs, gates, thresholds, feature rules, table names, SQL, or raw rows for \`validatedEdgeEvidenceView\`.
+- Do not turn validated evidence into stop-loss, sizing, trade instruction, or buy/sell language.
 - For sector leaderboard questions, use only \`sectorLeaderboardView.rows\`. Rank sectors only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent sectors, scores, or ranks.
 - Treat \`sectorLeaderboardView\` as PG base-rate/current composite evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
 - If \`sectorLeaderboardView.rows\` is empty or the view state is unavailable, say the sector leaderboard is unavailable instead of naming sectors.

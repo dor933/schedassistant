@@ -105,7 +105,7 @@ export type Intent = (typeof INTENTS)[number];
 export type AnswerType = (typeof ANSWER_TYPES)[number];
 export type Confidence = "high" | "medium" | "low";
 export type ToolName = (typeof TOOL_NAMES)[number];
-export type ClassificationFocus = "risk";
+export type ClassificationFocus = "risk" | "validated_evidence";
 export type FeatureScreenFactor =
   | "valuation"
   | "quality"
@@ -633,6 +633,48 @@ export type RegimeHistoricalPlaybookView = {
   warnings: string[];
 };
 
+export type ValidatedEdgeEvidenceState =
+  | "edge_evidence_strong"
+  | "edge_evidence_present"
+  | "mixed"
+  | "insufficient_data"
+  | "unavailable";
+
+export type ValidatedEdgeEvidenceAnchorView = {
+  type: "stock" | "sector" | "regime" | "comparison";
+  symbol?: string;
+  sector?: string;
+  regime?: string;
+  label?: string;
+};
+
+export type ValidatedEdgeEvidenceHorizonView = {
+  horizon: string;
+  hitRatePct?: number;
+  alphaBucket?: string;
+  evidenceStrength?: string;
+};
+
+export type ValidatedEdgeEvidenceView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "client_api_research_object";
+  anchor: ValidatedEdgeEvidenceAnchorView;
+  evidenceState?: ValidatedEdgeEvidenceState;
+  edgeCountBucket?: string;
+  eventSampleBucket?: string;
+  horizonEvidence?: ValidatedEdgeEvidenceHorizonView[];
+  baseRateSummary?: {
+    sampleAdequacy?: string;
+    hitRatePct?: number;
+    medianReturnPct?: number;
+  };
+  pipelineRiskBand?: string;
+  interpretationBullets: string[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
 export type PgCapabilityViews = {
   sectorLeaderboardView?: SectorLeaderboardView;
   sectorDivergenceView?: SectorDivergenceView;
@@ -642,6 +684,10 @@ export type PgCapabilityViews = {
   factorBacktestView?: FactorBacktestView;
   comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
+};
+
+export type PipelineOverlayViews = {
+  validatedEdgeEvidenceView?: ValidatedEdgeEvidenceView;
 };
 
 export type FiveQuestionCoverage = {
@@ -707,6 +753,7 @@ export type PublicResearchView = {
   factorBacktestView?: FactorBacktestView;
   comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
+  validatedEdgeEvidenceView?: ValidatedEdgeEvidenceView;
   evidence: Record<string, unknown>;
   freshness: FreshnessMetadata;
   warnings: string[];
@@ -803,6 +850,7 @@ export type AskGrahamyState = {
    */
   priorCapabilityViews?: import("./pgCapabilities/types").CachedCapabilityView[];
   pgCapabilityViews?: PgCapabilityViews;
+  pipelineOverlayViews?: PipelineOverlayViews;
   /**
    * Subset of capability views freshly built this turn (cache miss). The
    * upstream caller persists them after receiving the response. Empty when

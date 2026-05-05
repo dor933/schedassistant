@@ -20,7 +20,6 @@ export const PIPELINE_OVERLAY_FORBIDDEN_KEYS = [
   "rows",
   "table",
   "tables",
-  "anchor",
   "anchors",
   "derivation",
   "run_id",
@@ -74,4 +73,3 @@ export function containsPipelineOverlayForbiddenTerm(value: string): boolean {
 function normalizeKey(value: string): string {
   return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
 }
-

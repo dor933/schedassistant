@@ -13,6 +13,10 @@ import {
   PIPELINE_OVERLAY_REGISTRY,
   pipelineOverlayRegistryEntry,
 } from "./pipelineOverlays/registry";
+import {
+  executeValidatedEdgeEvidenceOverlay,
+  mapValidatedEdgeEvidenceView,
+} from "./pipelineOverlays/validatedEdgeEvidence";
 
 type CapturedRequest = {
   url: string;
@@ -315,7 +319,7 @@ test("public mapper result cannot pass raw sections, anchors, or table names", (
   });
 });
 
-test("overlay registry is skeleton-only and contains no business implementation", () => {
+test("overlay registry keeps non-validated overlays as placeholders", () => {
   assert.deepEqual(
     PIPELINE_OVERLAY_REGISTRY.map((entry) => entry.overlayName),
     [
@@ -328,12 +332,213 @@ test("overlay registry is skeleton-only and contains no business implementation"
     ],
   );
   for (const entry of PIPELINE_OVERLAY_REGISTRY) {
-    assert.equal(entry.mapperStatus, "placeholder");
     assert.equal(entry.freshnessPolicy, "manifest_public_freshness");
     assert.equal(entry.forbiddenFieldPolicy, "pipeline_overlay_public_safe");
     assert.equal("run" in entry, false);
+    if (entry.overlayName === "validatedEdgeEvidence") {
+      assert.equal(entry.mapperStatus, "implemented");
+    } else {
+      assert.equal(entry.mapperStatus, "placeholder");
+    }
   }
-  assert.equal(pipelineOverlayRegistryEntry("validatedEdgeEvidence")?.mapperStatus, "placeholder");
+  assert.equal(pipelineOverlayRegistryEntry("validatedEdgeEvidence")?.mapperStatus, "implemented");
+});
+
+test("validated edge evidence mapper whitelists public fields only", () => {
+  const mapped = mapValidatedEdgeEvidenceView({
+    anchor: { type: "stock", symbol: "GSL", label: "GSL" },
+    freshness: { dataThrough: "2026-05-01", state: "fresh" },
+    rawEnvelope: {
+      data: {
+        symbol: "GSL",
+        evidence_state: "edge_evidence_present",
+        base_rate: {
+          value: 0.61,
+          median_return_pct: 3.2,
+          sample_adequacy: "ADEQUATE",
+        },
+        path_risk: {
+          band: "moderate",
+          prob_drawdown_gt_10_pct: 42,
+        },
+        pipeline_evidence: {
+          total_edges: 4,
+          events_total: 48,
+          mean_hit_rate_by_horizon: { h60: 0.62 },
+          mean_alpha_by_horizon: { h60: 0.018 },
+          edge_id: "edge-1",
+          hypothesis_id: "hyp-1",
+          table: "md_hypotheses",
+          raw_rows: [{ id: 1 }],
+        },
+        sections: { raw: true },
+        anchors: [{ table: "md_event_returns" }],
+        derivation: "internal",
+        manifest: { run_id: "run-1" },
+      },
+    },
+  });
+
+  assert.equal(mapped.view.state, "complete");
+  assert.equal(mapped.view.anchor.symbol, "GSL");
+  assert.equal(mapped.view.evidenceState, "edge_evidence_present");
+  assert.equal(mapped.view.edgeCountBucket, "present");
+  assert.equal(mapped.view.eventSampleBucket, "adequate");
+  assert.equal(mapped.view.horizonEvidence?.[0].horizon, "60-day");
+  assert.equal(mapped.view.horizonEvidence?.[0].hitRatePct, 62);
+  assert.equal(mapped.view.horizonEvidence?.[0].alphaBucket, "positive");
+  assert.equal(mapped.view.baseRateSummary?.hitRatePct, 61);
+  assert.equal(mapped.view.baseRateSummary?.medianReturnPct, 3.2);
+  assert.equal(mapped.view.pipelineRiskBand, "moderate");
+
+  const json = JSON.stringify(mapped.view);
+  for (const forbidden of [
+    "edge_id",
+    "hypothesis_id",
+    "raw_rows",
+    "sections",
+    "anchors",
+    "derivation",
+    "manifest",
+    "md_hypotheses",
+    "md_event_returns",
+    "prob_drawdown_gt_10_pct",
+  ]) {
+    assert.equal(json.includes(forbidden), false, forbidden);
+  }
+});
+
+test("validated edge evidence overlay calls manifest and ticker Client API endpoints", async () => {
+  const captures: CapturedRequest[] = [];
+  const client = new PipelineOverlayClient({
+    baseUrl: "http://client-api.local",
+    fetchImpl: fakeFetch([
+      jsonResponse({ data: { as_of_date: "2026-05-01", pipeline_complete: true } }),
+      jsonResponse({
+        data: {
+          evidence_state: "edge_evidence_strong",
+          pipeline_evidence: {
+            total_edges: 12,
+            events_total: 160,
+          },
+        },
+      }),
+    ], captures),
+  });
+
+  const result = await executeValidatedEdgeEvidenceOverlay({
+    message: "Is GSL evidence-backed?",
+    classification: {
+      intent: "stock",
+      symbols: ["GSL"],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      focus: "validated_evidence",
+      requiresTools: ["get_stock_snapshot_context", "get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+  }, client);
+
+  assert.deepEqual(captures.map((item) => item.url), [
+    "http://client-api.local/v1/manifest/current",
+    "http://client-api.local/v1/research/ticker/GSL",
+  ]);
+  assert.equal(result.views.validatedEdgeEvidenceView?.state, "complete");
+  assert.equal(result.views.validatedEdgeEvidenceView?.evidenceState, "edge_evidence_strong");
+  assert.equal(result.views.validatedEdgeEvidenceView?.freshness.dataThrough, "2026-05-01");
+});
+
+test("validated edge evidence overlay maps upstream failures to unavailable", async () => {
+  const client = new PipelineOverlayClient({
+    baseUrl: "http://client-api.local",
+    fetchImpl: fakeFetch([
+      jsonResponse({ data: { as_of_date: "2026-05-01", pipeline_complete: true } }),
+      jsonResponse({ error: "rate limited" }, 429),
+    ]),
+  });
+
+  const result = await executeValidatedEdgeEvidenceOverlay({
+    message: "Does Energy have validated edge evidence?",
+    classification: {
+      intent: "sector",
+      symbols: [],
+      sectors: ["Energy"],
+      regimeRequested: false,
+      isFollowUp: false,
+      focus: "validated_evidence",
+      requiresTools: ["get_sector_snapshot_context", "get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+  }, client);
+
+  assert.equal(result.views.validatedEdgeEvidenceView?.state, "unavailable");
+  assert.equal(result.views.validatedEdgeEvidenceView?.evidenceState, "unavailable");
+  assert.match(result.views.validatedEdgeEvidenceView?.warnings.join(" ") ?? "", /rate-limited/i);
+});
+
+test("validated edge evidence overlay exposes stale manifest caveat publicly", async () => {
+  const client = new PipelineOverlayClient({
+    baseUrl: "http://client-api.local",
+    fetchImpl: fakeFetch([
+      jsonResponse({
+        data: {
+          as_of_date: "2026-05-01",
+          pipeline_complete: true,
+          mv_stale: true,
+        },
+      }),
+      jsonResponse({
+        data: {
+          evidence_state: "insufficient_data",
+          base_rate: { hit_rate_pct: 54.2 },
+        },
+      }),
+    ]),
+  });
+
+  const result = await executeValidatedEdgeEvidenceOverlay({
+    message: "Is the current regime evidence-backed?",
+    classification: {
+      intent: "regime",
+      symbols: [],
+      sectors: [],
+      regimeRequested: true,
+      isFollowUp: false,
+      focus: "validated_evidence",
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+  }, client);
+
+  const view = result.views.validatedEdgeEvidenceView;
+  assert.equal(view?.state, "complete");
+  assert.equal(view?.anchor.type, "regime");
+  assert.equal(view?.freshness.state, "stale");
+  assert.match(view?.warnings.join(" ") ?? "", /fully refreshed/i);
+});
+
+test("validated edge evidence overlay returns unavailable without an anchor", async () => {
+  const result = await executeValidatedEdgeEvidenceOverlay({
+    message: "Is this setup supported by the pipeline?",
+    classification: {
+      intent: "unknown",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: true,
+      focus: "validated_evidence",
+      requiresTools: [],
+      confidence: "low",
+      warnings: [],
+    },
+  }, new PipelineOverlayClient({ baseUrl: "" }));
+
+  assert.equal(result.views.validatedEdgeEvidenceView?.state, "unavailable");
+  assert.match(result.warnings.join(" "), /specific stock, sector, or regime/i);
 });
 
 test("pipeline overlay production files contain no direct database access hooks", async () => {

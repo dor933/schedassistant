@@ -79,7 +79,7 @@ const classifierOutputSchema = z.object({
   sectors: z.array(z.enum(CANONICAL_SECTORS)).max(5),
   regimeRequested: z.boolean(),
   isFollowUp: z.boolean(),
-  focus: z.enum(["risk"]).nullable().optional(),
+  focus: z.enum(["risk", "validated_evidence"]).nullable().optional(),
   featureCriteria: z
     .array(
       z.object({
@@ -175,6 +175,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • an anchorless current-regime historical playbook request.
   • a stock-vs-sector, sector-vs-sector, or stock-vs-stock comparison request.
   • an anchored risk / path-risk / drawdown / probability-of-loss question.
+  • an anchored Pipeline validated-evidence / evidence-backed question.
 
 Set isFollowUp = true when the message references a previous turn — short questions with
 no own anchor like "what about ...?", "why?", "and the risks?", "compare to peers", "compare it",
@@ -369,6 +370,19 @@ Risk-focus examples:
   • Without prior context, "What is the probability of losing more than 10%?"
     → intent="unknown", symbols=[], sectors=[], focus="risk"
 
+Set focus="validated_evidence" only when the user asks whether a stock, sector, regime, or
+comparison is evidence-backed, validated by Grahamy's Pipeline, supported by the validation
+pipeline, or has validated edge evidence. Keep the normal anchor intent; do not create a separate
+intent. Examples:
+  • "Is GSL evidence-backed?"                         → intent="stock", symbols=["GSL"], focus="validated_evidence"
+  • "Does GSL have validated edge evidence?"          → intent="stock", symbols=["GSL"], focus="validated_evidence"
+  • "Does Energy have validated edge evidence?"       → intent="sector", sectors=["Energy"], focus="validated_evidence"
+  • "Is the current regime evidence-backed?"          → intent="regime", regimeRequested=true, focus="validated_evidence"
+  • With prior context lastSymbols=["GSL"], "Is this setup supported by the pipeline?"
+    → intent="stock", symbols=["GSL"], isFollowUp=true, focus="validated_evidence"
+  • Without prior context, "Is this setup supported by the pipeline?"
+    → intent="unknown", symbols=[], sectors=[], focus="validated_evidence"
+
 Use intent = "unknown" only when the message is nonsensical, off-topic, or impossible to anchor
 to any stock / sector / regime EVEN AFTER inheritance from prior context.
 
@@ -492,6 +506,21 @@ export async function classifyMessage(
       typeof previousContext?.lastIntent === "string" &&
       previousContext.lastIntent.includes("regime");
   }
+  if (
+    focus === "validated_evidence" &&
+    !symbols.length &&
+    !sectors.length &&
+    !regimeRequested &&
+    shouldInheritValidatedEvidenceAnchor(raw, previousContext)
+  ) {
+    symbols = uniqueUpper(previousContext?.lastSymbols ?? []).slice(0, 5);
+    sectors = unique(previousContext?.lastSectors ?? []).slice(0, 5);
+    regimeRequested =
+      !symbols.length &&
+      !sectors.length &&
+      typeof previousContext?.lastIntent === "string" &&
+      previousContext.lastIntent.includes("regime");
+  }
   const comparison =
     normalizeComparison(raw.comparison) ??
     // Sector inference runs first because "Compare FAKE123 to its sector"
@@ -520,6 +549,9 @@ export async function classifyMessage(
   // resolves them via thread memory.
   const inferred = inferIntent(symbols, sectors, regimeRequested, raw.isFollowUp);
   const hasRiskAnchor = focus === "risk" && (symbols.length > 0 || sectors.length > 0 || regimeRequested);
+  const hasValidatedEvidenceAnchor =
+    focus === "validated_evidence" &&
+    (symbols.length > 0 || sectors.length > 0 || regimeRequested || !!comparison);
   // Trust the LLM's "unknown" verdict; otherwise re-derive intent from the
   // resolved (symbols, sectors, regime) tuple so requiresTools and intent
   // stay consistent even if the model returned a mismatched label.
@@ -532,8 +564,12 @@ export async function classifyMessage(
       ? inferredAnchorlessCapability
       : focus === "risk" && !hasRiskAnchor && !comparison
       ? "unknown"
+      : focus === "validated_evidence" && !hasValidatedEvidenceAnchor
+      ? "unknown"
       : hasRiskAnchor && !comparison
         ? inferred
+        : hasValidatedEvidenceAnchor && !comparison
+          ? inferred
         : raw.intent === "unknown" && comparison
           ? "comparison"
           : raw.intent === "unknown"
@@ -546,10 +582,10 @@ export async function classifyMessage(
                   ? raw.intent
                   : inferredAnchorlessCapability ?? inferred;
   const includeFocus =
-    focus === "risk" &&
+    (focus === "risk" || focus === "validated_evidence") &&
     intent !== "unknown" &&
     !isAnchorlessCapabilityIntent(intent) &&
-    intent !== "comparison";
+    (focus === "validated_evidence" || intent !== "comparison");
 
   return {
     intent,
@@ -572,17 +608,40 @@ export async function classifyMessage(
   };
 }
 
-function normalizeFocus(focus: ClassifierOutput["focus"]): "risk" | undefined {
-  return focus === "risk" ? "risk" : undefined;
+function normalizeFocus(
+  focus: ClassifierOutput["focus"],
+): "risk" | "validated_evidence" | undefined {
+  return focus === "risk" || focus === "validated_evidence" ? focus : undefined;
 }
 
-function inferFocusFromMessage(message: string): "risk" | undefined {
+function inferFocusFromMessage(message: string): "risk" | "validated_evidence" | undefined {
+  if (
+    /\b(evidence[-\s]?backed|validated\s+edge|edge\s+evidence|validated\s+evidence|validation\s+pipeline|supported\s+by\s+(?:the\s+)?pipeline|pipeline\s+(?:confirm|confirms|validated|validation)|evidence\s+behind)\b/i.test(
+      message,
+    )
+  ) {
+    return "validated_evidence";
+  }
   return /\b(risky|risk|drawdown|downside|fall|drop|lose|losing|loss|path\s+risk)\b/i.test(message)
     ? "risk"
     : undefined;
 }
 
 function shouldInheritRiskAnchor(
+  raw: ClassifierOutput,
+  previousContext?: ConversationContext,
+): boolean {
+  if (!previousContext) return false;
+  if (!raw.isFollowUp && raw.intent !== "follow_up" && raw.intent !== "unknown") return false;
+  return (
+    previousContext.lastSymbols.length > 0 ||
+    previousContext.lastSectors.length > 0 ||
+    (typeof previousContext.lastIntent === "string" &&
+      previousContext.lastIntent.includes("regime"))
+  );
+}
+
+function shouldInheritValidatedEvidenceAnchor(
   raw: ClassifierOutput,
   previousContext?: ConversationContext,
 ): boolean {

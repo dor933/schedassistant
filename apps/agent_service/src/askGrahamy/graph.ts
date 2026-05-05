@@ -9,11 +9,16 @@ import { GrahamySnapshotClient } from "./snapshotClient";
 import { executeSnapshotTools } from "./tools";
 import { runGrahamyDeepAgent } from "./grahamyAgent";
 import { executePgCapabilitiesWithCache } from "./pgCapabilities/registry";
+import { executePipelineOverlays } from "./pipelineOverlays/registry";
 import type {
   CachedCapabilityView,
   PgCapabilityRunInput,
   PgCapabilityRunResult,
 } from "./pgCapabilities/types";
+import type {
+  PipelineOverlayRunInput,
+  PipelineOverlayRunResult,
+} from "./pipelineOverlays/registry";
 import {
   DEFAULT_DISCLAIMER,
   EMPTY_CLASSIFICATION,
@@ -43,6 +48,9 @@ export type RunAskGrahamyGraphOptions = {
   pgCapabilityRunner?: (
     input: PgCapabilityRunInput,
   ) => Promise<PgCapabilityRunResult>;
+  pipelineOverlayRunner?: (
+    input: PipelineOverlayRunInput,
+  ) => Promise<PipelineOverlayRunResult>;
   grahamyAgentRunner?: typeof runGrahamyDeepAgent;
 };
 
@@ -110,6 +118,7 @@ export async function runAskGrahamyGraph(
     await executeTools(state);
     await loadResearchObjects(state);
     await loadPgCapabilities(state, options.pgCapabilityRunner);
+    await loadPipelineOverlays(state, options.pipelineOverlayRunner);
 
     // publicResearchView is built for response.research / UI consumption.
     // The deep agent reads its evidence from state.researchObjects directly,
@@ -121,6 +130,7 @@ export async function runAskGrahamyGraph(
       toolOutputs: state.toolOutputs ?? {},
       researchObjects: state.researchObjects ?? [],
       pgCapabilityViews: state.pgCapabilityViews,
+      pipelineOverlayViews: state.pipelineOverlayViews,
       warnings: state.warnings,
     });
 
@@ -157,6 +167,7 @@ export async function runAskGrahamyGraph(
       state.pgCapabilityViews,
       state.capabilityViewsUpdated ?? [],
       state.capabilityViewCacheStats,
+      state.pipelineOverlayViews,
     );
 
     return await finalizeResponse(state);
@@ -217,6 +228,12 @@ async function executeTools(state: AskGrahamyState): Promise<void> {
 }
 
 async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
+  if (state.classification?.focus === "validated_evidence") {
+    state.researchObjects = [];
+    state.researchObjectsUpdated = [];
+    state.researchObjectCacheStats = { hits: 0, misses: 0, writes: 0 };
+    return;
+  }
   const result = await buildResearchObjects({
     classification: state.classification ?? EMPTY_CLASSIFICATION,
     snapshots: state.snapshots ?? {},
@@ -250,6 +267,19 @@ async function loadPgCapabilities(
   state.warnings.push(...result.warnings);
 }
 
+async function loadPipelineOverlays(
+  state: AskGrahamyState,
+  runner?: RunAskGrahamyGraphOptions["pipelineOverlayRunner"],
+): Promise<void> {
+  const input = {
+    classification: state.classification ?? EMPTY_CLASSIFICATION,
+    message: state.message,
+  };
+  const result = await (runner ?? executePipelineOverlays)(input);
+  state.pipelineOverlayViews = result.views;
+  state.warnings.push(...result.warnings);
+}
+
 async function finalizeResponse(
   state: AskGrahamyState,
   overrideAnswerType?: AskGrahamyResponse["answerType"],
@@ -268,6 +298,7 @@ async function finalizeResponse(
       state.pgCapabilityViews,
       state.capabilityViewsUpdated ?? [],
       state.capabilityViewCacheStats,
+      state.pipelineOverlayViews,
     );
   const response: AskGrahamyResponse = {
     conversationId: state.conversationId ?? crypto.randomUUID(),
@@ -316,6 +347,7 @@ function buildMeta(
   pgCapabilityViews?: import("./types").PgCapabilityViews,
   capabilityViewsUpdated: CachedCapabilityView[] = [],
   capabilityViewCacheStats?: import("./types").ResponseMeta["capabilityViewCache"],
+  pipelineOverlayViews?: import("./types").PipelineOverlayViews,
 ): ResponseMeta {
   // Only research objects are "sources" the answer was actually grounded in.
   // Snapshots are background scaffolding the graph fetches for system-prompt
@@ -370,6 +402,12 @@ function buildMeta(
     capabilitySources.push({
       type: "research",
       name: "market_regime_historical_playbook",
+    });
+  }
+  if (pipelineOverlayViews?.validatedEdgeEvidenceView) {
+    capabilitySources.push({
+      type: "research",
+      name: "validated_edge_evidence",
     });
   }
   return {

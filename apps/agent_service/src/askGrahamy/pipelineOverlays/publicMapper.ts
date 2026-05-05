@@ -68,9 +68,34 @@ function stripForbidden(value: unknown, seen: WeakSet<object>): unknown {
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
     if (isPipelineOverlayForbiddenKey(key)) continue;
+    if (normalizeKey(key) === "anchor") {
+      const safeAnchor = stripPublicAnchor(item, seen);
+      if (safeAnchor !== undefined) out[key] = safeAnchor;
+      continue;
+    }
     const next = stripForbidden(item, seen);
     if (next !== undefined) out[key] = next;
   }
+  if (Object.keys(out).length === 0) return undefined;
   return out;
 }
 
+function stripPublicAnchor(value: unknown, seen: WeakSet<object>): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  if (seen.has(value)) return undefined;
+  seen.add(value);
+  const allowed = new Set(["type", "symbol", "sector", "regime", "label"]);
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (!allowed.has(key)) continue;
+    const next = stripForbidden(item, seen);
+    if (next !== undefined) out[key] = next;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function normalizeKey(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}

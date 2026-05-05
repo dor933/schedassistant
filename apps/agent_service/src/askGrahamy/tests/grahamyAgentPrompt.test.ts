@@ -3,6 +3,85 @@ import assert from "node:assert/strict";
 import { buildSystemPrompt } from "../grahamyAgent";
 import type { AskGrahamyState } from "../types";
 
+test("LLM prompt receives only validatedEdgeEvidenceView for validated evidence focus", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-validated-evidence",
+    message: "Is GSL evidence-backed?",
+    warnings: [],
+    classification: {
+      intent: "stock",
+      symbols: ["GSL"],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      focus: "validated_evidence",
+      requiresTools: ["get_stock_snapshot_context", "get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      stockIdeaView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_features_daily",
+        asOfDate: "2026-05-01",
+        rankingBasis: "setup_quality",
+        rows: [
+          {
+            symbol: "GSL",
+            rank: 1,
+            reasonBullets: ["This should not be used for validated evidence focus."],
+          },
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: [],
+      },
+    },
+    pipelineOverlayViews: {
+      validatedEdgeEvidenceView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "client_api_research_object",
+        anchor: { type: "stock", symbol: "GSL", label: "GSL" },
+        evidenceState: "edge_evidence_present",
+        edgeCountBucket: "present",
+        eventSampleBucket: "adequate",
+        horizonEvidence: [
+          { horizon: "60-day", hitRatePct: 62, alphaBucket: "positive" },
+        ],
+        pipelineRiskBand: "moderate",
+        interpretationBullets: [
+          "Validated pipeline evidence is present for GSL.",
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: [],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  const evidenceSection = prompt.split("# Evidence")[1] ?? prompt;
+  assert.match(prompt, /validatedEdgeEvidenceView/);
+  assert.match(prompt, /edge_evidence_present/);
+  assert.match(prompt, /pipelineRiskBand/);
+  assert.match(prompt, /not daily drawdown/i);
+  assert.match(prompt, /focus is `validated_evidence`/i);
+  assert.match(prompt, /pipeline-validated evidence/i);
+  assert.match(prompt, /2026-05-01/);
+  assert.doesNotMatch(evidenceSection, /stockIdeaView/);
+  assert.doesNotMatch(evidenceSection, /This should not be used/);
+  assert.doesNotMatch(evidenceSection, /researchObjects/);
+  assert.doesNotMatch(evidenceSection, /parts/);
+  assert.doesNotMatch(evidenceSection, /raw_sql/);
+  assert.doesNotMatch(evidenceSection, /edge_id/);
+  assert.doesNotMatch(evidenceSection, /hypothesis_id/);
+  assertNoFreshnessInternals(prompt);
+});
+
 test("LLM prompt receives public-safe sector leaderboard view", () => {
   const state: AskGrahamyState = {
     internalUserId: 1,

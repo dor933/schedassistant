@@ -1,4 +1,9 @@
 import type { PipelineOverlayRegistryEntry } from "./types";
+import {
+  executeValidatedEdgeEvidenceOverlay,
+  type PipelineOverlayRunInput,
+  type PipelineOverlayRunResult,
+} from "./validatedEdgeEvidence";
 
 export const PIPELINE_OVERLAY_REGISTRY: readonly PipelineOverlayRegistryEntry[] = [
   {
@@ -11,7 +16,7 @@ export const PIPELINE_OVERLAY_REGISTRY: readonly PipelineOverlayRegistryEntry[] 
       "symbolComparison",
       "sectorComparison",
     ],
-    mapperStatus: "placeholder",
+    mapperStatus: "implemented",
     freshnessPolicy: "manifest_public_freshness",
     forbiddenFieldPolicy: "pipeline_overlay_public_safe",
   },
@@ -69,3 +74,13 @@ export function pipelineOverlayRegistryEntry(
   return PIPELINE_OVERLAY_REGISTRY.find((entry) => entry.overlayName === overlayName);
 }
 
+export async function executePipelineOverlays(
+  input: PipelineOverlayRunInput,
+): Promise<PipelineOverlayRunResult> {
+  return executeValidatedEdgeEvidenceOverlay(input);
+}
+
+export type {
+  PipelineOverlayRunInput,
+  PipelineOverlayRunResult,
+} from "./validatedEdgeEvidence";

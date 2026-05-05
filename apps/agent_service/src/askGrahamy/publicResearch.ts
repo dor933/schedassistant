@@ -6,6 +6,7 @@ import type {
   ToolOutputs,
   CachedResearchObject,
   PgCapabilityViews,
+  PipelineOverlayViews,
 } from "./types";
 import {
   publicObjectViewFromCachedObject,
@@ -20,6 +21,7 @@ export function compilePublicResearchView(input: {
   toolOutputs: ToolOutputs;
   researchObjects?: CachedResearchObject[];
   pgCapabilityViews?: PgCapabilityViews;
+  pipelineOverlayViews?: PipelineOverlayViews;
   warnings: string[];
 }): PublicResearchView {
   const { classification, snapshots, toolOutputs, warnings } = input;
@@ -115,6 +117,12 @@ export function compilePublicResearchView(input: {
             input.pgCapabilityViews.regimeHistoricalPlaybookView,
         }
       : {}),
+    ...(input.pipelineOverlayViews?.validatedEdgeEvidenceView
+      ? {
+          validatedEdgeEvidenceView:
+            input.pipelineOverlayViews.validatedEdgeEvidenceView,
+        }
+      : {}),
     evidence: {
       snapshotNames: ["daily_brief", "metadata", "clusters", "track_record", "transparency"].filter(
         (name) => !!snapshots[name as keyof SnapshotBundle],
@@ -195,6 +203,14 @@ export function compilePublicResearchView(input: {
               input.pgCapabilityViews.regimeHistoricalPlaybookView.rows.length,
             regimeHistoricalPlaybookRisks:
               input.pgCapabilityViews.regimeHistoricalPlaybookView.risks.length,
+          }
+        : {}),
+      ...(input.pipelineOverlayViews?.validatedEdgeEvidenceView
+        ? {
+            validatedEdgeEvidenceState:
+              input.pipelineOverlayViews.validatedEdgeEvidenceView.state,
+            validatedEdgeEvidenceAnchor:
+              input.pipelineOverlayViews.validatedEdgeEvidenceView.anchor,
           }
         : {}),
     },

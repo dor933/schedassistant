@@ -139,6 +139,74 @@ const regimePlaybookClassification: Classification = {
   warnings: [],
 };
 
+const validatedEvidenceClassification: Classification = {
+  intent: "stock",
+  symbols: ["GSL"],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  focus: "validated_evidence",
+  requiresTools: ["get_stock_snapshot_context", "get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+test("graph loads validatedEdgeEvidenceView for validated evidence focus", async () => {
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-validated-evidence",
+      message: "Is GSL evidence-backed?",
+      classification: validatedEvidenceClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-01" },
+        }),
+      } as any,
+      pipelineOverlayRunner: async () => ({
+        views: {
+          validatedEdgeEvidenceView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "client_api_research_object",
+            anchor: { type: "stock", symbol: "GSL", label: "GSL" },
+            evidenceState: "edge_evidence_present",
+            edgeCountBucket: "present",
+            eventSampleBucket: "adequate",
+            interpretationBullets: [
+              "Validated pipeline evidence is present for GSL.",
+            ],
+            freshness: { dataThrough: "2026-05-01", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async (state) => {
+        assert.equal(state.pipelineOverlayViews?.validatedEdgeEvidenceView?.anchor.symbol, "GSL");
+        return {
+          answerText: "Validated pipeline evidence is present for GSL.",
+          suggestedFollowups: [],
+          warnings: [],
+        };
+      },
+    },
+  );
+
+  assert.equal(response.answerType, "stock");
+  assert.deepEqual(response.meta.sourcesUsed.map((item) => item.name), [
+    "validated_edge_evidence",
+  ]);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.validatedEdgeEvidenceView?.anchor.symbol, "GSL");
+  assert.equal(publicView.validatedEdgeEvidenceView?.evidenceState, "edge_evidence_present");
+});
+
 test("graph loads sectorLeaderboardView for leaderboard intent without Research Object anchors", async () => {
   const response = await runAskGrahamyGraph(
     {
