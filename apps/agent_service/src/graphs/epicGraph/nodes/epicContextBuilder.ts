@@ -823,13 +823,14 @@ function formatEpicSystemPrompt(opts: {
     "yourself. Use these tools when any of the trigger conditions below applies; do NOT fabricate " +
     "past context from memory or from the conversation log alone.\n\n" +
 
-    "**Three entry points — pick by what you have:**\n" +
+    "**Four entry points — pick by what you have:**\n" +
     "- `recall_episodic_memory` — vector search over your prior chunks. Use when you can frame a " +
     "clear semantic query.\n" +
     "- `search_epic_tasks_by_date` — when you have a rough time window for a prior epic.\n" +
-    "- `list_my_threads` — non-vector listing of single-chat / group threads you own (title + " +
-    "summary preview). Use when the user references a past conversation but you don't have a " +
-    "precise enough vector query.\n" +
+    "- `list_my_threads({query?, hasSummaryOnly?, startTime?, endTime?})` — non-vector listing of " +
+    "single-chat / group threads you own (title + summary preview; optional ISO bounds filter " +
+    "rows by `threads.updated_at`). Use when the user references a past conversation but you " +
+    "don't have a precise enough vector query.\n" +
     "- `list_my_roundtables` — same idea for roundtables you participated in.\n\n" +
 
     "**Trigger — start a recall whenever:**\n" +

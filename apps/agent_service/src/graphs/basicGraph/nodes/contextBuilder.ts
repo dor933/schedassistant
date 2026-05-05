@@ -1124,12 +1124,13 @@ function formatSystemPrompt(
     "any of the trigger conditions below applies; do NOT fabricate past context from memory or " +
     "from the conversation log alone.\n\n" +
 
-    "**Two entry points — pick by what you have:**\n" +
+    "**Three entry points — pick by what you have:**\n" +
     "- `recall_episodic_memory` — vector search. Use when you can frame a clear semantic query " +
     "(\"prior decisions about session-folder persistence\", \"how the user prefers PR descriptions\").\n" +
-    "- `list_my_threads` — non-vector listing of single-chat / group threads you own, with title + " +
-    "summary preview. Use when the user references a past conversation but you don't have a " +
-    "precise enough query, or when no episodic chunk has matched.\n" +
+    "- `list_my_threads({query?, hasSummaryOnly?, startTime?, endTime?})` — non-vector listing of " +
+    "single-chat / group threads you own, with title + summary preview; optional ISO `startTime` / " +
+    "`endTime` filter rows by `threads.updated_at`. Use when the user references a past conversation " +
+    "but you don't have a precise enough query, or when no episodic chunk has matched.\n" +
     "- `list_my_roundtables` — same idea for roundtables you participated in (returns topic + " +
     "`hasShortSummary` flag).\n\n" +
 
