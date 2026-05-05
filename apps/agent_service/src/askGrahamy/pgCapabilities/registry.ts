@@ -1,5 +1,9 @@
 import type { Classification, Intent } from "../types";
 import {
+  buildRegimeHistoricalPlaybookView,
+  regimeHistoricalPlaybookCacheKeyParams,
+} from "./regimeHistoricalPlaybook";
+import {
   buildSectorConvictionLeaderboardView,
   sectorConvictionLeaderboardCacheKeyParams,
 } from "./sectorConvictionLeaderboard";
@@ -102,6 +106,22 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     run: buildStockIdeaDiscoveryView,
     viewSlot: "stockIdeaView",
     cacheKeyParams: stockIdeaDiscoveryCacheKeyParams,
+  },
+  {
+    name: "market_regime_historical_playbook",
+    intent: "market_regime_historical_playbook",
+    requiredParams: [],
+    queryName: "query_regime_historical_playbook",
+    source: "pg_regime_history",
+    freshnessSources: [
+      "md_research_sector_regime_fwd_agg",
+      "md_macro_daily_snapshot",
+    ],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildRegimeHistoricalPlaybookView,
+    viewSlot: "regimeHistoricalPlaybookView",
+    cacheKeyParams: regimeHistoricalPlaybookCacheKeyParams,
   },
   {
     name: "stock_vs_sector_comparison",

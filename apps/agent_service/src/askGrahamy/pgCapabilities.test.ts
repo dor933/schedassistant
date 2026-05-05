@@ -4,6 +4,7 @@ import { buildSectorConvictionLeaderboardView } from "./pgCapabilities/sectorCon
 import { buildSectorDeltaView } from "./pgCapabilities/sectorDelta";
 import { buildSectorDivergenceView } from "./pgCapabilities/sectorDivergence";
 import { buildSectorVsSectorComparisonView } from "./pgCapabilities/sectorVsSectorComparison";
+import { buildRegimeHistoricalPlaybookView } from "./pgCapabilities/regimeHistoricalPlaybook";
 import { buildStockIdeaDiscoveryView } from "./pgCapabilities/stockIdeaDiscovery";
 import { buildStockVsSectorComparisonView } from "./pgCapabilities/stockVsSectorComparison";
 import { buildSymbolVsSymbolComparisonView } from "./pgCapabilities/symbolVsSymbolComparison";
@@ -105,6 +106,17 @@ const symbolVsSymbolClassification: Classification = {
     left: { type: "stock", symbol: "GSL" },
     right: { type: "stock", symbol: "DAC" },
   },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const regimePlaybookClassification: Classification = {
+  intent: "market_regime_historical_playbook",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
   requiresTools: ["get_market_context"],
   confidence: "high",
   warnings: [],
@@ -280,6 +292,15 @@ test("PG capability registry routes week-over-week sector delta intent", () => {
   assert.equal(entry.name, "week_over_week_sector_delta");
   assert.equal(entry.queryName, "query_sector_delta");
   assert.equal(entry.source, "pg_sector_weekly_history");
+  assert.deepEqual(entry.requiredParams, []);
+});
+
+test("PG capability registry routes market regime historical playbook intent", () => {
+  const entry = capabilityForIntent("market_regime_historical_playbook");
+  assert.ok(entry);
+  assert.equal(entry.name, "market_regime_historical_playbook");
+  assert.equal(entry.queryName, "query_regime_historical_playbook");
+  assert.equal(entry.source, "pg_regime_history");
   assert.deepEqual(entry.requiredParams, []);
 });
 
@@ -970,6 +991,251 @@ test("publicResearchView carries sectorDeltaView without Research Objects", asyn
   assert.deepEqual(publicView.researchObjectKeys, []);
   assert.equal(publicView.sectorDeltaView?.rows[0].sector, "Technology");
   assert.equal(publicView.evidence.sectorDeltaRows, 1);
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("regime historical playbook returns complete public view", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "Which sectors historically lead in the current regime?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      now: new Date("2026-05-05T12:00:00Z"),
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            regime: "NEUTRAL",
+            as_of_date: "2026-05-04",
+            sector: "Industrials",
+            rank: 1,
+            role: "leader",
+            include_in_public: true,
+            sample_size: 110744,
+            hit_rate_pct: 56.23,
+            median_forward_return_pct: 2.08,
+            evidence_strength: "ROBUST",
+            vix_risk_bucket: "MODERATE",
+            breadth_risk_bucket: "BROAD",
+            dispersion_risk_bucket: "NORMAL",
+            trend_risk_bucket: "STRONG_RALLY",
+            risk_context_available: true,
+            regime_freshness_state: "FRESH",
+            regime_completed_at: "2026-05-04T12:30:04Z",
+            macro_freshness_state: "FRESH",
+            macro_completed_at: "2026-05-04T12:30:04Z",
+            raw_sql: "must-not-leak",
+            vix_close: 18.3,
+          },
+          {
+            regime: "NEUTRAL",
+            as_of_date: "2026-05-04",
+            sector: "Real Estate",
+            rank: 2,
+            role: "laggard",
+            include_in_public: true,
+            sample_size: 44290,
+            hit_rate_pct: 55,
+            evidence_strength: "ROBUST",
+            vix_risk_bucket: "MODERATE",
+            breadth_risk_bucket: "BROAD",
+            dispersion_risk_bucket: "NORMAL",
+            trend_risk_bucket: "STRONG_RALLY",
+            risk_context_available: true,
+            regime_freshness_state: "FRESH",
+            regime_completed_at: "2026-05-04T12:30:04Z",
+            macro_freshness_state: "FRESH",
+            macro_completed_at: "2026-05-04T12:30:04Z",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  assert.equal(replacements.ROLE_FILTER, "leaders");
+  const view = result.views.regimeHistoricalPlaybookView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_regime_history");
+  assert.equal(view.regime, "NEUTRAL");
+  assert.equal(view.asOfDate, "2026-05-04");
+  assert.equal(view.rows.length, 2);
+  assert.deepEqual(view.rows[0], {
+    sector: "Industrials",
+    rank: 1,
+    role: "leader",
+    hitRatePct: 56.2,
+    medianForwardReturnPct: 2.08,
+    evidenceStrength: "ROBUST",
+    interpretationBullets: [
+      "Industrials has historically screened among stronger sectors in NEUTRAL regimes.",
+      "Historical positive-return hit-rate evidence is available.",
+      "Historical median forward-return evidence is available.",
+      "Sample adequacy is ROBUST.",
+    ],
+  });
+  assert.equal(view.risks.length, 4);
+  assert.match(view.summaryBullets.join(" "), /NEUTRAL regimes/i);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-04",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("regime historical playbook returns partial when risk context is missing", async () => {
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "What usually works in this regime?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          regime: "NEUTRAL",
+          as_of_date: "2026-05-04",
+          sector: "Technology",
+          rank: 1,
+          role: "leader",
+          include_in_public: true,
+          sample_size: 84207,
+          hit_rate_pct: 54.2,
+          evidence_strength: "ROBUST",
+          vix_risk_bucket: "UNKNOWN",
+          breadth_risk_bucket: "UNKNOWN",
+          dispersion_risk_bucket: "UNKNOWN",
+          trend_risk_bucket: "UNKNOWN",
+          risk_context_available: false,
+          regime_freshness_state: "FRESH",
+          regime_completed_at: "2026-05-04T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.regimeHistoricalPlaybookView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.rows.length, 1);
+  assert.deepEqual(view.risks, []);
+  assert.match(view.warnings.join(" "), /macro risk context is unavailable/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("regime historical playbook returns unavailable when current regime is missing", async () => {
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "What does a neutral regime usually favor?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.regimeHistoricalPlaybookView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.deepEqual(view.risks, []);
+  assert.match(view.warnings.join(" "), /Current regime/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("regime historical playbook returns complete empty view when no rows are public", async () => {
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "What historically underperforms in this regime?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          regime: "NEUTRAL",
+          as_of_date: "2026-05-04",
+          sector: "Utilities",
+          rank: 1,
+          role: "mixed",
+          include_in_public: false,
+          vix_risk_bucket: "MODERATE",
+          breadth_risk_bucket: "BROAD",
+          dispersion_risk_bucket: "NORMAL",
+          trend_risk_bucket: "POSITIVE",
+          risk_context_available: true,
+          regime_freshness_state: "FRESH",
+          regime_completed_at: "2026-05-04T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.regimeHistoricalPlaybookView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.deepEqual(view.rows, []);
+  assert.match(
+    view.warnings.join(" "),
+    /No meaningful historical regime leaders or laggards/i,
+  );
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("publicResearchView carries regimeHistoricalPlaybookView without Research Objects", async () => {
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "What usually works in this regime?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          regime: "NEUTRAL",
+          as_of_date: "2026-05-04",
+          sector: "Industrials",
+          rank: 1,
+          role: "leader",
+          include_in_public: true,
+          hit_rate_pct: 56.2,
+          evidence_strength: "ROBUST",
+          vix_risk_bucket: "MODERATE",
+          breadth_risk_bucket: "BROAD",
+          dispersion_risk_bucket: "NORMAL",
+          trend_risk_bucket: "STRONG_RALLY",
+          risk_context_available: true,
+          regime_freshness_state: "FRESH",
+          regime_completed_at: "2026-05-04T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: regimePlaybookClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-04" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "regime");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.regimeHistoricalPlaybookView?.regime, "NEUTRAL");
+  assert.equal(publicView.regimeHistoricalPlaybookView?.rows[0].sector, "Industrials");
+  assert.equal(publicView.evidence.regimeHistoricalPlaybookRows, 1);
   assertNoForbiddenPublicKeys(publicView);
 });
 
@@ -1995,6 +2261,8 @@ function assertNoFreshnessInternals(value: unknown): void {
   assert.doesNotMatch(json, /md_research_sector_peer_daily/);
   assert.doesNotMatch(json, /md_research_sector_monday_hist/);
   assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
+  assert.doesNotMatch(json, /md_macro_daily_snapshot/);
+  assert.doesNotMatch(json, /md_historical_benchmark_daily/);
   assert.doesNotMatch(json, /pipeline_state/);
   assert.doesNotMatch(json, /run_id/);
   assert.doesNotMatch(json, /stage/);

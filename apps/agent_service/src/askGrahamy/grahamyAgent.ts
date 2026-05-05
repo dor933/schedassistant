@@ -185,6 +185,13 @@ const HUMANIZE_OVERRIDES: Record<string, string> = {
   stock_vs_sector: "stock-versus-sector",
   sector_vs_sector: "sector-versus-sector",
   symbol_vs_symbol: "symbol-versus-symbol",
+  leader: "leader",
+  laggard: "laggard",
+  mixed: "mixed",
+  BROAD: "broad",
+  NARROW: "narrow",
+  STRESSED: "stressed",
+  DRAWDOWN: "drawdown",
   // Regime labels: keep recognizable casing but spaceful
   RISK_ON: "RISK-ON",
   RISK_OFF: "RISK-OFF",
@@ -306,6 +313,16 @@ function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): st
       `## COMPARISON — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
     );
   }
+  if (views?.regimeHistoricalPlaybookView) {
+    const humanized = humanizeJsonValue({
+      regimeHistoricalPlaybookView: views.regimeHistoricalPlaybookView,
+      freshness: views.regimeHistoricalPlaybookView.freshness,
+      warnings: views.regimeHistoricalPlaybookView.warnings,
+    });
+    blocks.push(
+      `## MARKET REGIME HISTORICAL PLAYBOOK — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+    );
+  }
   return blocks;
 }
 
@@ -387,6 +404,12 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Explain \`comparisonView.state = partial\` by naming the public missing area from \`warnings\`; if unavailable, ask for a valid stock/sector/symbol target or say the comparison data is unavailable.
 - Do not expose table names, SQL, raw feature values, thresholds, scoring formulas, IDs, gates, or operational source details for \`comparisonView\`.
 - For symbol-vs-symbol comparisons, mention when sectors differ and keep the answer dimensional ("stronger on X, weaker on Y") rather than treating it as a buy/sell recommendation.
+- For current-regime historical playbook questions, use only \`regimeHistoricalPlaybookView\`. Mention the \`regime\` and \`asOfDate\` or \`freshness.dataThrough\`.
+- Treat \`regimeHistoricalPlaybookView\` as PG historical/base-rate evidence, not a live edge validation, prediction, Sentinel signal, Coroner result, trade card, accepted hypothesis, or recommendation.
+- Leaders and laggards must come only from \`regimeHistoricalPlaybookView.rows\`. Risks must come only from \`regimeHistoricalPlaybookView.risks\`.
+- Do not invent sector leadership, underperformance, risk buckets, hit rates, or return metrics for \`regimeHistoricalPlaybookView\`.
+- If \`regimeHistoricalPlaybookView.state = partial\`, explain the public missing area from \`warnings\`. If unavailable, say the regime historical playbook is unavailable.
+- Do not expose table names, SQL, raw rows, raw VIX/SPY values, feature rules, thresholds, formulas, IDs, gates, refresh internals, or operational source details for \`regimeHistoricalPlaybookView\`.
 - For questions using "today", "this week", "latest", or "right now", mention the public \`freshness.dataThrough\` date. If \`freshness.state\` is "stale", include the public warning/caveat. If \`freshness.state\` is "unknown", do not call the data current.
 - Never expose table names, refresh views, run IDs, pipeline stages, refresh logs, or operational diagnostics.
 - DO NOT mention internal terms: \`signal_sql\`, \`raw_alpha\`, edge IDs, methodology details, internal model names, or pipeline mechanics.

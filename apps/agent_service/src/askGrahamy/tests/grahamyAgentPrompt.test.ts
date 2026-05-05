@@ -392,6 +392,78 @@ test("LLM prompt receives public-safe comparison view", () => {
   assertNoFreshnessInternals(prompt);
 });
 
+test("LLM prompt receives public-safe regime historical playbook view", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "What usually works in this regime?",
+    warnings: [],
+    classification: {
+      intent: "market_regime_historical_playbook",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-04" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      regimeHistoricalPlaybookView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_regime_history",
+        regime: "NEUTRAL",
+        asOfDate: "2026-05-04",
+        rows: [
+          {
+            sector: "Industrials",
+            rank: 1,
+            role: "leader",
+            hitRatePct: 56.2,
+            evidenceStrength: "ROBUST",
+            interpretationBullets: [
+              "Industrials has historically screened among stronger sectors in NEUTRAL regimes.",
+            ],
+          },
+        ],
+        risks: [
+          {
+            riskLabel: "Volatility backdrop",
+            riskBucket: "MODERATE",
+            interpretation:
+              "Volatility backdrop is moderate in the latest public bucket.",
+          },
+        ],
+        summaryBullets: [
+          "In NEUTRAL regimes, historical sector leaders in this view include Industrials.",
+        ],
+        freshness: { dataThrough: "2026-05-04", state: "fresh" },
+        warnings: [],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /regimeHistoricalPlaybookView/);
+  assert.match(prompt, /NEUTRAL/);
+  assert.match(prompt, /Industrials/);
+  assert.match(prompt, /PG historical\/base-rate evidence/i);
+  assert.match(prompt, /Leaders and laggards must come only/i);
+  assert.match(prompt, /Risks must come only/i);
+  assert.match(prompt, /Do not invent sector leadership/i);
+  assert.doesNotMatch(prompt, /researchObjects/);
+  assert.doesNotMatch(prompt, /parts/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assert.doesNotMatch(prompt, /edge_id/);
+  assert.doesNotMatch(prompt, /hypothesis_id/);
+  assert.doesNotMatch(prompt, /vix_close/);
+  assertNoFreshnessInternals(prompt);
+});
+
 test("LLM prompt restricts risk-focused answers to public path risk evidence", () => {
   const state: AskGrahamyState = {
     internalUserId: 1,
@@ -595,6 +667,8 @@ function assertNoFreshnessInternals(value: unknown): void {
   assert.doesNotMatch(json, /md_research_sector_peer_daily/);
   assert.doesNotMatch(json, /md_research_sector_monday_hist/);
   assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
+  assert.doesNotMatch(json, /md_macro_daily_snapshot/);
+  assert.doesNotMatch(json, /md_historical_benchmark_daily/);
   assert.doesNotMatch(json, /pipeline_state/);
   assert.doesNotMatch(json, /run_id/);
   assert.doesNotMatch(json, /last_success_at/);

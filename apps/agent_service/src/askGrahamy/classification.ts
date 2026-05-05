@@ -110,6 +110,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • an anchorless sector momentum-vs-conviction divergence request.
   • an anchorless week-over-week sector change / sector delta request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
+  • an anchorless current-regime historical playbook request.
   • a stock-vs-sector, sector-vs-sector, or stock-vs-stock comparison request.
   • an anchored risk / path-risk / drawdown / probability-of-loss question.
 
@@ -145,7 +146,8 @@ Without prior context:
 
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
 stock_sector_regime, sector_conviction_leaderboard, sector_momentum_vs_conviction_divergence,
-week_over_week_sector_delta, stock_idea_discovery, comparison, follow_up, unknown.
+week_over_week_sector_delta, stock_idea_discovery, market_regime_historical_playbook,
+comparison, follow_up, unknown.
 
 Use intent = "sector_conviction_leaderboard" when the user asks for a sector-wide ranking without
 naming a specific sector. Examples:
@@ -185,6 +187,16 @@ ticker. Examples:
   • "Any attractive setup right now?"
   • "What should I look at today?"
   • "Which names have the best setup right now?"
+For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+
+Use intent = "market_regime_historical_playbook" when the user asks what historically works,
+leads, underperforms, or matters in the current market regime. This is different from asking
+"what is the market regime now?", which should remain intent="regime". Examples:
+  • "What usually works in this regime?"
+  • "Which sectors historically lead in the current regime?"
+  • "What historically underperforms in this regime?"
+  • "What are the risks in this regime?"
+  • "What does a neutral regime usually favor?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
 Use intent = "comparison" for stock-vs-sector, sector-vs-sector, and stock-vs-stock comparison requests. Put
@@ -371,6 +383,10 @@ export async function classifyMessage(
     inferStockVsSectorComparisonFromMessage(message) ??
     inferSectorVsSectorComparisonFromMessage(message) ??
     inferSymbolVsSymbolComparisonFromMessage(message);
+  const inferredAnchorlessCapability = inferAnchorlessCapabilityFromMessage(
+    message,
+    previousContext,
+  );
 
   // Slimmed classifier — the deep agent's PostgresSaver thread carries
   // conversation memory now, so we no longer need the follow-up self-
@@ -385,7 +401,9 @@ export async function classifyMessage(
   // resolved (symbols, sectors, regime) tuple so requiresTools and intent
   // stay consistent even if the model returned a mismatched label.
   const intent: Intent =
-    focus === "risk" && !hasRiskAnchor && !comparison
+    inferredAnchorlessCapability && !comparison
+      ? inferredAnchorlessCapability
+      : focus === "risk" && !hasRiskAnchor && !comparison
       ? "unknown"
       : hasRiskAnchor && !comparison
         ? inferred
@@ -399,7 +417,12 @@ export async function classifyMessage(
                 ? "unknown"
                 : isAnchorlessCapabilityIntent(raw.intent)
                   ? raw.intent
-                  : inferred;
+                  : inferredAnchorlessCapability ?? inferred;
+  const includeFocus =
+    focus === "risk" &&
+    intent !== "unknown" &&
+    !isAnchorlessCapabilityIntent(intent) &&
+    intent !== "comparison";
 
   return {
     intent,
@@ -407,7 +430,7 @@ export async function classifyMessage(
     sectors: intent === "comparison" ? [] : sectors,
     regimeRequested: intent === "comparison" ? false : regimeRequested,
     isFollowUp: raw.isFollowUp,
-    ...(focus === "risk" && intent !== "unknown" ? { focus } : {}),
+    ...(includeFocus ? { focus } : {}),
     ...(intent === "comparison" && comparison ? { comparison } : {}),
     requiresTools: toolsForIntent(intent),
     confidence: raw.confidence,
@@ -456,6 +479,7 @@ export function toolsForIntent(intent: Intent): ToolName[] {
     case "sector_momentum_vs_conviction_divergence":
     case "week_over_week_sector_delta":
     case "stock_idea_discovery":
+    case "market_regime_historical_playbook":
     case "comparison":
       return ["get_market_context"];
     case "stock_sector":
@@ -476,8 +500,36 @@ function isAnchorlessCapabilityIntent(intent: Intent): boolean {
     intent === "sector_conviction_leaderboard" ||
     intent === "sector_momentum_vs_conviction_divergence" ||
     intent === "week_over_week_sector_delta" ||
-    intent === "stock_idea_discovery"
+    intent === "stock_idea_discovery" ||
+    intent === "market_regime_historical_playbook"
   );
+}
+
+function inferAnchorlessCapabilityFromMessage(
+  message: string,
+  previousContext?: ConversationContext,
+): Intent | undefined {
+  if (
+    /\bwhat\s+is\s+(?:the\s+)?(?:current\s+)?market\s+regime\s+(?:now|today|currently)\b/i.test(
+      message,
+    )
+  ) {
+    return undefined;
+  }
+  if (
+    /\bwhat\s+changed\s+since\s+last\s+week\b/i.test(message) &&
+    previousContext?.lastSymbols.length
+  ) {
+    return undefined;
+  }
+  if (
+    /\b(?:what\s+usually\s+works|what\s+usually\s+underperforms|historically\s+lead|historically\s+leads|historically\s+underperform|historically\s+underperforms|usually\s+favou?r|interpret\s+the\s+current\s+regime\s+historically|risks?\s+(?:matter|in|for).*regime|regime\s+risks?)\b/i.test(
+      message,
+    )
+  ) {
+    return "market_regime_historical_playbook";
+  }
+  return undefined;
 }
 
 function normalizeComparison(

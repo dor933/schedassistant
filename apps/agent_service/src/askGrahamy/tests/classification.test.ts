@@ -389,6 +389,101 @@ test("classifies anchorless stock idea discovery questions", async () => {
   assert.deepEqual(today.requiresTools, ["get_market_context"]);
 });
 
+test("classifies market regime historical playbook questions", async () => {
+  const examples = [
+    "What usually works in this regime?",
+    "Which sectors historically lead in the current regime?",
+    "What historically underperforms in this regime?",
+    "What are the risks in this regime?",
+    "What does a neutral regime usually favor?",
+  ];
+
+  for (const message of examples) {
+    const result = await classifyMessage(message, undefined, {
+      classifier: stub({
+        intent: "market_regime_historical_playbook",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    });
+    assert.equal(result.intent, "market_regime_historical_playbook", message);
+    assert.deepEqual(result.symbols, [], message);
+    assert.deepEqual(result.sectors, [], message);
+    assert.deepEqual(result.requiresTools, ["get_market_context"], message);
+  }
+});
+
+test("fallback routes regime-risk playbook phrasing without risk focus", async () => {
+  const result = await classifyMessage("What risks matter in this regime?", undefined, {
+    classifier: stub({
+      intent: "unknown",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "low",
+    }),
+  });
+
+  assert.equal(result.intent, "market_regime_historical_playbook");
+  assert.equal(result.focus, undefined);
+  assert.deepEqual(result.requiresTools, ["get_market_context"]);
+});
+
+test("fallback routes follow-up-like regime playbook risk phrasing", async () => {
+  const result = await classifyMessage("What risks matter in this regime?", undefined, {
+    classifier: stub({
+      intent: "follow_up",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: true,
+      confidence: "medium",
+    }),
+  });
+
+  assert.equal(result.intent, "market_regime_historical_playbook");
+  assert.equal(result.focus, undefined);
+  assert.deepEqual(result.requiresTools, ["get_market_context"]);
+});
+
+test("regime-risk playbook phrasing wins over generic risk focus", async () => {
+  const result = await classifyMessage("What risks matter in this regime?", undefined, {
+    classifier: stub({
+      intent: "regime",
+      symbols: [],
+      sectors: [],
+      regimeRequested: true,
+      isFollowUp: false,
+      confidence: "high",
+    }),
+  });
+
+  assert.equal(result.intent, "market_regime_historical_playbook");
+  assert.equal(result.focus, undefined);
+  assert.deepEqual(result.requiresTools, ["get_market_context"]);
+});
+
+test("keeps current-regime status question on existing regime route", async () => {
+  const result = await classifyMessage("What is the market regime now?", undefined, {
+    classifier: stub({
+      intent: "regime",
+      symbols: [],
+      sectors: [],
+      regimeRequested: true,
+      isFollowUp: false,
+      confidence: "high",
+    }),
+  });
+
+  assert.equal(result.intent, "regime");
+  assert.equal(result.regimeRequested, true);
+  assert.deepEqual(result.requiresTools, ["get_market_context"]);
+});
+
 test("classifies stock-vs-sector comparison with implicit sector anchor", async () => {
   const result = await classifyMessage("Compare GSL to its sector", undefined, {
     classifier: stub({

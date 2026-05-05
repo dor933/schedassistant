@@ -357,6 +357,12 @@ function buildMeta(
             : "stock_vs_sector_comparison",
     });
   }
+  if (pgCapabilityViews?.regimeHistoricalPlaybookView) {
+    capabilitySources.push({
+      type: "research",
+      name: "market_regime_historical_playbook",
+    });
+  }
   return {
     sourcesUsed: [...researchSources, ...capabilitySources],
     freshness: snapshots.freshness ?? {},
@@ -391,6 +397,7 @@ function inferAnswerType(classification: Classification): AskGrahamyResponse["an
   if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
   if (classification.intent === "comparison") return "mixed";
+  if (classification.intent === "market_regime_historical_playbook") return "regime";
   const stock = classification.symbols.length > 0;
   const sector = classification.sectors.length > 0;
   const regime = classification.regimeRequested;

@@ -54,6 +54,9 @@ export function compilePublicResearchView(input: {
     ...(input.pgCapabilityViews?.sectorDeltaView ? ["sectorDeltaView"] : []),
     ...(input.pgCapabilityViews?.stockIdeaView ? ["stockIdeaView"] : []),
     ...(input.pgCapabilityViews?.comparisonView ? ["comparisonView"] : []),
+    ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
+      ? ["regimeHistoricalPlaybookView"]
+      : []),
   ];
 
   return {
@@ -93,6 +96,12 @@ export function compilePublicResearchView(input: {
       : {}),
     ...(input.pgCapabilityViews?.comparisonView
       ? { comparisonView: input.pgCapabilityViews.comparisonView }
+      : {}),
+    ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
+      ? {
+          regimeHistoricalPlaybookView:
+            input.pgCapabilityViews.regimeHistoricalPlaybookView,
+        }
       : {}),
     evidence: {
       snapshotNames: ["daily_brief", "metadata", "clusters", "track_record", "transparency"].filter(
@@ -149,6 +158,16 @@ export function compilePublicResearchView(input: {
               input.pgCapabilityViews.comparisonView.deltas.length,
           }
         : {}),
+      ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
+        ? {
+            regimeHistoricalPlaybookState:
+              input.pgCapabilityViews.regimeHistoricalPlaybookView.state,
+            regimeHistoricalPlaybookRows:
+              input.pgCapabilityViews.regimeHistoricalPlaybookView.rows.length,
+            regimeHistoricalPlaybookRisks:
+              input.pgCapabilityViews.regimeHistoricalPlaybookView.risks.length,
+          }
+        : {}),
     },
     freshness: snapshots.freshness ?? {},
     warnings: [
@@ -171,6 +190,7 @@ function inferObjectType(classification: Classification): PublicResearchView["ob
   if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
   if (classification.intent === "comparison") return "mixed";
+  if (classification.intent === "market_regime_historical_playbook") return "regime";
   const hasStock = classification.symbols.length > 0;
   const hasSector = classification.sectors.length > 0;
   const hasRegime = classification.regimeRequested;

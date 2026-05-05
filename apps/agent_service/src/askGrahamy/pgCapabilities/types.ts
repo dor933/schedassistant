@@ -3,6 +3,7 @@ import type {
   ComparisonView,
   EvidenceState,
   PublicFreshnessView,
+  RegimeHistoricalPlaybookView,
   SectorDeltaView,
   SectorDivergenceView,
   SectorLeaderboardView,
@@ -16,6 +17,7 @@ export type PgCapabilityIntent =
   | "sector_momentum_vs_conviction_divergence"
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
+  | "market_regime_historical_playbook"
   | "comparison";
 
 export type PgCapabilityName =
@@ -23,6 +25,7 @@ export type PgCapabilityName =
   | "sector_momentum_vs_conviction_divergence"
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
+  | "market_regime_historical_playbook"
   | "stock_vs_sector_comparison"
   | "sector_vs_sector_comparison"
   | "symbol_vs_symbol_comparison";
@@ -32,6 +35,7 @@ export type PgCapabilityQueryName =
   | "query_sector_divergence"
   | "query_sector_delta"
   | "query_stock_idea_discovery"
+  | "query_regime_historical_playbook"
   | "query_stock_vs_sector_comparison"
   | "query_sector_vs_sector_comparison"
   | "query_symbol_vs_symbol_comparison";
@@ -49,6 +53,7 @@ export type PgCapabilityViews = {
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
   comparisonView?: ComparisonView;
+  regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
 };
 
 export type PgCapabilityRunResult = {
@@ -75,7 +80,8 @@ export type PgCapabilityRegistryEntry = {
     | "pg_sector_analog_bucket"
     | "pg_sector_weekly_history"
     | "pg_features_daily"
-    | "pg_current_features";
+    | "pg_current_features"
+    | "pg_regime_history";
   freshnessSources: string[];
   fallback: "unavailable_empty_rows";
   sanitizer: "public_safe_capability_view";
@@ -115,7 +121,8 @@ export type CachedCapabilityView = {
     | import("../types").SectorDivergenceView
     | import("../types").SectorDeltaView
     | import("../types").StockIdeaView
-    | import("../types").ComparisonView;
+    | import("../types").ComparisonView
+    | import("../types").RegimeHistoricalPlaybookView;
   generatedAt: string;
 };
 
@@ -322,6 +329,30 @@ export type SymbolVsSymbolComparisonRow = Record<string, unknown> & {
   forward_completed_at?: unknown;
   left_forward_overlay_available?: unknown;
   right_forward_overlay_available?: unknown;
+};
+
+export type RegimeHistoricalPlaybookRow = Record<string, unknown> & {
+  regime?: unknown;
+  as_of_date?: unknown;
+  sector?: unknown;
+  rank?: unknown;
+  role?: unknown;
+  include_in_public?: unknown;
+  sample_size?: unknown;
+  hit_rate_pct?: unknown;
+  median_forward_return_pct?: unknown;
+  evidence_strength?: unknown;
+  vix_risk_bucket?: unknown;
+  breadth_risk_bucket?: unknown;
+  dispersion_risk_bucket?: unknown;
+  trend_risk_bucket?: unknown;
+  risk_context_available?: unknown;
+  regime_freshness_state?: unknown;
+  regime_completed_at?: unknown;
+  macro_freshness_state?: unknown;
+  macro_completed_at?: unknown;
+  evaluated_sector_count?: unknown;
+  meaningful_sector_count?: unknown;
 };
 
 export type EmptyCapabilityView = {

@@ -8,6 +8,7 @@ const QUERY_FILES: Record<PgCapabilityQueryName, string> = {
   query_sector_divergence: "query_sector_divergence.sql",
   query_sector_delta: "query_sector_delta.sql",
   query_stock_idea_discovery: "query_stock_idea_discovery.sql",
+  query_regime_historical_playbook: "query_regime_historical_playbook.sql",
   query_stock_vs_sector_comparison: "query_stock_vs_sector_comparison.sql",
   query_sector_vs_sector_comparison: "query_sector_vs_sector_comparison.sql",
   query_symbol_vs_symbol_comparison: "query_symbol_vs_symbol_comparison.sql",

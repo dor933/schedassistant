@@ -8,6 +8,7 @@ export const INTENTS = [
   "week_over_week_sector_delta",
   "stock_idea_discovery",
   "comparison",
+  "market_regime_historical_playbook",
   "regime",
   "stock_sector",
   "stock_regime",
@@ -513,12 +514,44 @@ export type ComparisonView = {
   warnings: string[];
 };
 
+export type RegimeHistoricalPlaybookRole = "leader" | "laggard" | "mixed";
+
+export type RegimeHistoricalPlaybookRowView = {
+  sector: string;
+  rank: number;
+  role: RegimeHistoricalPlaybookRole;
+  hitRatePct?: number;
+  medianForwardReturnPct?: number;
+  evidenceStrength?: string;
+  interpretationBullets: string[];
+};
+
+export type RegimeHistoricalPlaybookRiskView = {
+  riskLabel: string;
+  riskBucket?: string;
+  interpretation: string;
+};
+
+export type RegimeHistoricalPlaybookView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_regime_history";
+  regime?: string;
+  asOfDate?: string;
+  rows: RegimeHistoricalPlaybookRowView[];
+  risks: RegimeHistoricalPlaybookRiskView[];
+  summaryBullets: string[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
 export type PgCapabilityViews = {
   sectorLeaderboardView?: SectorLeaderboardView;
   sectorDivergenceView?: SectorDivergenceView;
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
   comparisonView?: ComparisonView;
+  regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
 };
 
 export type FiveQuestionCoverage = {
@@ -581,6 +614,7 @@ export type PublicResearchView = {
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
   comparisonView?: ComparisonView;
+  regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
   evidence: Record<string, unknown>;
   freshness: FreshnessMetadata;
   warnings: string[];

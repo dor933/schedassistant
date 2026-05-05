@@ -95,6 +95,17 @@ const symbolComparisonClassification: Classification = {
   warnings: [],
 };
 
+const regimePlaybookClassification: Classification = {
+  intent: "market_regime_historical_playbook",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
 test("graph loads sectorLeaderboardView for leaderboard intent without Research Object anchors", async () => {
   const response = await runAskGrahamyGraph(
     {
@@ -586,5 +597,79 @@ test("graph loads comparisonView for symbol-vs-symbol comparison without Researc
   assert.equal(publicView.comparisonView?.comparisonType, "symbol_vs_symbol");
   assert.equal(publicView.comparisonView?.left.symbol, "GSL");
   assert.equal(publicView.comparisonView?.right.symbol, "DAC");
+  assert.equal(publicView.researchObjectViews.length, 0);
+});
+
+test("graph loads regimeHistoricalPlaybookView without changing Regime RO route", async () => {
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-1",
+      message: "What usually works in this regime?",
+      classification: regimePlaybookClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-04" },
+        }),
+      } as any,
+      pgCapabilityRunner: async () => ({
+        views: {
+          regimeHistoricalPlaybookView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_regime_history",
+            regime: "NEUTRAL",
+            asOfDate: "2026-05-04",
+            rows: [
+              {
+                sector: "Industrials",
+                rank: 1,
+                role: "leader",
+                hitRatePct: 56.2,
+                evidenceStrength: "ROBUST",
+                interpretationBullets: [
+                  "Industrials has historically screened among stronger sectors in NEUTRAL regimes.",
+                ],
+              },
+            ],
+            risks: [
+              {
+                riskLabel: "Volatility backdrop",
+                riskBucket: "MODERATE",
+                interpretation:
+                  "Volatility backdrop is moderate in the latest public bucket.",
+              },
+            ],
+            summaryBullets: [
+              "In NEUTRAL regimes, historical sector leaders in this view include Industrials.",
+            ],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async () => ({
+        answerText: "Industrials leads the supplied PG historical regime playbook.",
+        suggestedFollowups: [],
+        warnings: [],
+      }),
+    },
+  );
+
+  assert.equal(response.answerType, "regime");
+  assert.equal(response.meta.researchObjectKeys?.length, 0);
+  assert.deepEqual(response.meta.sourcesUsed, [
+    { type: "research", name: "market_regime_historical_playbook" },
+  ]);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.objectType, "regime");
+  assert.equal(publicView.regimeHistoricalPlaybookView?.regime, "NEUTRAL");
+  assert.equal(publicView.regimeHistoricalPlaybookView?.rows[0].sector, "Industrials");
   assert.equal(publicView.researchObjectViews.length, 0);
 });
