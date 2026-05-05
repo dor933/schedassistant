@@ -15,7 +15,7 @@ stock_current AS (
     req.symbol AS requested_symbol,
     f.symbol,
     ms.name AS company_name,
-    p.sector,
+    COALESCE(p.sector, sec.name) AS sector,
     f.computed_date AS as_of_date,
     f.relative_strength_12w,
     f.perf_month,
@@ -36,6 +36,7 @@ stock_current AS (
     ON f.computed_date = c.target_date
    AND f.symbol = req.symbol
   LEFT JOIN md_symbols ms ON ms.symbol = f.symbol
+  LEFT JOIN md_sectors sec ON sec.id = ms.sector_id
   LEFT JOIN md_research_sector_peer_daily p
     ON p.symbol = f.symbol
    AND p.as_of_date = c.target_date

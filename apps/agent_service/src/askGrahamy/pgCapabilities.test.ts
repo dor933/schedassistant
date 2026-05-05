@@ -110,6 +110,8 @@ const symbolVsSymbolClassification: Classification = {
   warnings: [],
 };
 
+const FRESH_FIXTURE_NOW = new Date("2026-05-03T12:00:00Z");
+
 test("sector conviction leaderboard returns complete public view with overlay", async () => {
   let replacements: Record<string, unknown> = {};
   const result = await buildSectorConvictionLeaderboardView(
@@ -121,6 +123,7 @@ test("sector conviction leaderboard returns complete public view with overlay", 
     },
     {
       maxRows: 50,
+      now: FRESH_FIXTURE_NOW,
       queryRunner: async (params) => {
         replacements = params;
         return [
@@ -457,6 +460,7 @@ test("sector divergence returns complete public view with optional overlay", asy
     },
     {
       maxRows: 50,
+      now: FRESH_FIXTURE_NOW,
       queryRunner: async (params) => {
         replacements = params;
         return [
@@ -981,6 +985,7 @@ test("stock idea discovery returns partial public view with bounded forward over
     {
       maxRows: 50,
       candidatePoolSize: 1000,
+      now: FRESH_FIXTURE_NOW,
       queryRunner: async (params) => {
         replacements = params;
         return [
@@ -1137,6 +1142,7 @@ test("stock-vs-sector comparison returns partial public view with safe deltas", 
       toolOutputs: {},
     },
     {
+      now: FRESH_FIXTURE_NOW,
       queryRunner: async (params) => {
         replacements = params;
         return [
@@ -1360,6 +1366,7 @@ test("sector-vs-sector comparison returns complete public view with safe deltas"
       toolOutputs: {},
     },
     {
+      now: FRESH_FIXTURE_NOW,
       queryRunner: async (params) => {
         replacements = params;
         return [
