@@ -345,6 +345,9 @@ function buildMeta(
   if (pgCapabilityViews?.stockIdeaView) {
     capabilitySources.push({ type: "research", name: "stock_idea_discovery" });
   }
+  if (pgCapabilityViews?.featureScreenView) {
+    capabilitySources.push({ type: "research", name: "feature_screen" });
+  }
   if (pgCapabilityViews?.comparisonView) {
     const comparisonType = pgCapabilityViews.comparisonView.comparisonType;
     capabilitySources.push({
@@ -396,6 +399,7 @@ function inferAnswerType(classification: Classification): AskGrahamyResponse["an
   if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
   if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
+  if (classification.intent === "feature_screen") return "stock";
   if (classification.intent === "comparison") return "mixed";
   if (classification.intent === "market_regime_historical_playbook") return "regime";
   const stock = classification.symbols.length > 0;

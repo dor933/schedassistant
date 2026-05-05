@@ -7,6 +7,7 @@ export const INTENTS = [
   "sector_momentum_vs_conviction_divergence",
   "week_over_week_sector_delta",
   "stock_idea_discovery",
+  "feature_screen",
   "comparison",
   "market_regime_historical_playbook",
   "regime",
@@ -104,6 +105,19 @@ export type AnswerType = (typeof ANSWER_TYPES)[number];
 export type Confidence = "high" | "medium" | "low";
 export type ToolName = (typeof TOOL_NAMES)[number];
 export type ClassificationFocus = "risk";
+export type FeatureScreenFactor =
+  | "valuation"
+  | "quality"
+  | "momentum"
+  | "growth"
+  | "leverage"
+  | "sector"
+  | "risk";
+
+export type FeatureScreenCriterion = {
+  factor: FeatureScreenFactor;
+  bucket: string;
+};
 
 export type Classification = {
   intent: Intent;
@@ -112,6 +126,7 @@ export type Classification = {
   regimeRequested: boolean;
   isFollowUp: boolean;
   focus?: ClassificationFocus;
+  featureCriteria?: FeatureScreenCriterion[];
   comparison?: ComparisonClassification;
   requiresTools: ToolName[];
   confidence: Confidence;
@@ -460,6 +475,33 @@ export type StockIdeaView = {
   warnings: string[];
 };
 
+export type FeatureScreenRowView = {
+  symbol: string;
+  companyName?: string;
+  sector?: string;
+  rank: number;
+  valuationBucket?: string;
+  qualityBucket?: string;
+  momentumBucket?: string;
+  growthBucket?: string;
+  leverageBucket?: string;
+  convictionBucket?: string;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  reasonBullets: string[];
+};
+
+export type FeatureScreenView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_current_features";
+  asOfDate?: string;
+  screenCriteria: FeatureScreenCriterion[];
+  rows: FeatureScreenRowView[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
 export type ComparisonSideMetrics = {
   convictionScorePct?: number;
   convictionBucket?: string;
@@ -550,6 +592,7 @@ export type PgCapabilityViews = {
   sectorDivergenceView?: SectorDivergenceView;
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
+  featureScreenView?: FeatureScreenView;
   comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
 };
@@ -613,6 +656,7 @@ export type PublicResearchView = {
   sectorDivergenceView?: SectorDivergenceView;
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
+  featureScreenView?: FeatureScreenView;
   comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
   evidence: Record<string, unknown>;

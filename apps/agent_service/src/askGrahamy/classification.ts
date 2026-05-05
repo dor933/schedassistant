@@ -6,6 +6,8 @@ import {
   INTENTS,
   type Classification,
   type ConversationContext,
+  type FeatureScreenCriterion,
+  type FeatureScreenFactor,
   type Intent,
   type ToolName,
 } from "./types";
@@ -29,6 +31,16 @@ const CANONICAL_SECTORS = [
   "Semiconductors",
 ] as const;
 
+const FEATURE_SCREEN_FACTORS = [
+  "valuation",
+  "quality",
+  "momentum",
+  "growth",
+  "leverage",
+  "sector",
+  "risk",
+] as const;
+
 const CLASSIFIER_MODEL =
   process.env.ASK_GRAHAMY_CLASSIFIER_MODEL ?? "gpt-4o";
 
@@ -47,6 +59,16 @@ const classifierOutputSchema = z.object({
   regimeRequested: z.boolean(),
   isFollowUp: z.boolean(),
   focus: z.enum(["risk"]).nullable().optional(),
+  featureCriteria: z
+    .array(
+      z.object({
+        factor: z.enum(FEATURE_SCREEN_FACTORS),
+        bucket: z.string(),
+      }),
+    )
+    .max(7)
+    .nullable()
+    .optional(),
   comparison: z
     .discriminatedUnion("comparisonType", [
       z.object({
@@ -110,6 +132,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • an anchorless sector momentum-vs-conviction divergence request.
   • an anchorless week-over-week sector change / sector delta request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
+  • an anchorless bounded stock screen request with user-specified current feature buckets.
   • an anchorless current-regime historical playbook request.
   • a stock-vs-sector, sector-vs-sector, or stock-vs-stock comparison request.
   • an anchored risk / path-risk / drawdown / probability-of-loss question.
@@ -147,7 +170,7 @@ Without prior context:
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
 stock_sector_regime, sector_conviction_leaderboard, sector_momentum_vs_conviction_divergence,
 week_over_week_sector_delta, stock_idea_discovery, market_regime_historical_playbook,
-comparison, follow_up, unknown.
+feature_screen, comparison, follow_up, unknown.
 
 Use intent = "sector_conviction_leaderboard" when the user asks for a sector-wide ranking without
 naming a specific sector. Examples:
@@ -180,13 +203,38 @@ For "What changed since last week?":
 
 Use intent = "stock_idea_discovery" when the user asks for stock ideas, interesting names,
 top conviction names, attractive setups, or what to look at today without naming a specific
-ticker. Examples:
+ticker AND without specifying concrete screening criteria. Examples:
   • "Give me an interesting stock"
   • "What stock looks interesting today?"
   • "Show me top conviction names today"
   • "Any attractive setup right now?"
   • "What should I look at today?"
   • "Which names have the best setup right now?"
+For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+
+Use intent = "feature_screen" when the user asks to find/screen/list stocks using specific
+current public feature criteria such as valuation, quality, momentum, growth, leverage, sector,
+or safe risk bucket. Put the parsed filters in featureCriteria. Do not use this intent for generic
+"give me an interesting stock" idea requests with no criteria.
+Supported featureCriteria factors and buckets:
+  • valuation: ATTRACTIVE, FAIR, RICH
+  • quality: STRONG, CONSTRUCTIVE, WEAK
+  • momentum: STRONG, CONSTRUCTIVE, WEAK
+  • growth: STRONG, WEAK
+  • leverage: STRONG, STRESSED
+  • sector: exact canonical sector label
+  • risk: ELEVATED, LOW
+Examples:
+  • "Find me cheap quality stocks"
+    → intent="feature_screen", featureCriteria=[{factor:"valuation", bucket:"ATTRACTIVE"}, {factor:"quality", bucket:"STRONG"}]
+  • "Which stocks have strong quality but weak momentum?"
+    → featureCriteria=[{factor:"quality", bucket:"STRONG"}, {factor:"momentum", bucket:"WEAK"}]
+  • "Show stocks with attractive valuation and positive momentum"
+    → featureCriteria=[{factor:"valuation", bucket:"ATTRACTIVE"}, {factor:"momentum", bucket:"CONSTRUCTIVE"}]
+  • "Find high-quality stocks in Industrials"
+    → featureCriteria=[{factor:"quality", bucket:"STRONG"}, {factor:"sector", bucket:"Industrials"}]
+  • "Show cheap stocks with strong momentum"
+    → featureCriteria=[{factor:"valuation", bucket:"ATTRACTIVE"}, {factor:"momentum", bucket:"STRONG"}]
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
 Use intent = "market_regime_historical_playbook" when the user asks what historically works,
@@ -387,6 +435,8 @@ export async function classifyMessage(
     message,
     previousContext,
   );
+  const featureCriteria = normalizeFeatureCriteria(raw.featureCriteria) ??
+    inferFeatureScreenCriteriaFromMessage(message);
 
   // Slimmed classifier — the deep agent's PostgresSaver thread carries
   // conversation memory now, so we no longer need the follow-up self-
@@ -401,7 +451,9 @@ export async function classifyMessage(
   // resolved (symbols, sectors, regime) tuple so requiresTools and intent
   // stay consistent even if the model returned a mismatched label.
   const intent: Intent =
-    inferredAnchorlessCapability && !comparison
+    featureCriteria.length && !comparison
+      ? "feature_screen"
+      : inferredAnchorlessCapability && !comparison
       ? inferredAnchorlessCapability
       : focus === "risk" && !hasRiskAnchor && !comparison
       ? "unknown"
@@ -431,6 +483,7 @@ export async function classifyMessage(
     regimeRequested: intent === "comparison" ? false : regimeRequested,
     isFollowUp: raw.isFollowUp,
     ...(includeFocus ? { focus } : {}),
+    ...(intent === "feature_screen" ? { featureCriteria } : {}),
     ...(intent === "comparison" && comparison ? { comparison } : {}),
     requiresTools: toolsForIntent(intent),
     confidence: raw.confidence,
@@ -479,6 +532,7 @@ export function toolsForIntent(intent: Intent): ToolName[] {
     case "sector_momentum_vs_conviction_divergence":
     case "week_over_week_sector_delta":
     case "stock_idea_discovery":
+    case "feature_screen":
     case "market_regime_historical_playbook":
     case "comparison":
       return ["get_market_context"];
@@ -501,6 +555,7 @@ function isAnchorlessCapabilityIntent(intent: Intent): boolean {
     intent === "sector_momentum_vs_conviction_divergence" ||
     intent === "week_over_week_sector_delta" ||
     intent === "stock_idea_discovery" ||
+    intent === "feature_screen" ||
     intent === "market_regime_historical_playbook"
   );
 }
@@ -530,6 +585,152 @@ function inferAnchorlessCapabilityFromMessage(
     return "market_regime_historical_playbook";
   }
   return undefined;
+}
+
+function normalizeFeatureCriteria(
+  criteria: ClassifierOutput["featureCriteria"],
+): FeatureScreenCriterion[] | undefined {
+  if (!criteria?.length) return undefined;
+  const normalized = uniqueCriteria(
+    criteria
+      .map((item) => normalizeFeatureCriterion(item.factor, item.bucket))
+      .filter((item): item is FeatureScreenCriterion => !!item),
+  );
+  return normalized.length ? normalized : undefined;
+}
+
+function inferFeatureScreenCriteriaFromMessage(
+  message: string,
+): FeatureScreenCriterion[] {
+  if (!looksLikeFeatureScreenRequest(message)) return [];
+  const normalized = message.toLowerCase();
+  const criteria: FeatureScreenCriterion[] = [];
+
+  if (/\b(cheap|value|undervalued|attractive\s+valuation|attractively\s+valued)\b/i.test(message)) {
+    criteria.push({ factor: "valuation", bucket: "ATTRACTIVE" });
+  } else if (/\bfair(?:ly)?\s+(?:valued|valuation)\b/i.test(message)) {
+    criteria.push({ factor: "valuation", bucket: "FAIR" });
+  } else if (/\b(expensive|rich|overvalued)\b/i.test(message)) {
+    criteria.push({ factor: "valuation", bucket: "RICH" });
+  }
+
+  if (/\b(strong|high)[-\s]?quality\b/i.test(message) || /\bquality\s+stocks\b/i.test(message)) {
+    criteria.push({ factor: "quality", bucket: "STRONG" });
+  } else if (/\bconstructive\s+quality\b/i.test(message)) {
+    criteria.push({ factor: "quality", bucket: "CONSTRUCTIVE" });
+  } else if (/\bweak\s+quality\b/i.test(message)) {
+    criteria.push({ factor: "quality", bucket: "WEAK" });
+  }
+
+  if (/\bstrong\s+momentum\b/i.test(message)) {
+    criteria.push({ factor: "momentum", bucket: "STRONG" });
+  } else if (/\b(positive|constructive)\s+momentum\b/i.test(message)) {
+    criteria.push({ factor: "momentum", bucket: "CONSTRUCTIVE" });
+  } else if (/\bweak\s+momentum\b/i.test(message)) {
+    criteria.push({ factor: "momentum", bucket: "WEAK" });
+  }
+
+  if (/\bstrong\s+growth\b/i.test(message)) {
+    criteria.push({ factor: "growth", bucket: "STRONG" });
+  } else if (/\bweak\s+growth\b/i.test(message)) {
+    criteria.push({ factor: "growth", bucket: "WEAK" });
+  }
+
+  if (/\b(strong\s+(?:balance\s+sheet|leverage)|low\s+leverage)\b/i.test(message)) {
+    criteria.push({ factor: "leverage", bucket: "STRONG" });
+  } else if (/\b(stressed\s+leverage|high\s+leverage|debt\s+stressed|stressed\s+balance\s+sheet)\b/i.test(message)) {
+    criteria.push({ factor: "leverage", bucket: "STRESSED" });
+  }
+
+  if (/\belevated\s+risk\b/i.test(message)) {
+    criteria.push({ factor: "risk", bucket: "ELEVATED" });
+  } else if (/\blow\s+risk\b/i.test(message)) {
+    criteria.push({ factor: "risk", bucket: "LOW" });
+  }
+
+  for (const mention of findSectorMentions(message)) {
+    criteria.push({ factor: "sector", bucket: mention.label });
+    break;
+  }
+
+  return uniqueCriteria(criteria);
+}
+
+function looksLikeFeatureScreenRequest(message: string): boolean {
+  const hasScreenVerb =
+    /\b(find|screen|show|list|which\s+stocks|stocks\s+with|stocks\s+that|give\s+me)\b/i.test(
+      message,
+    );
+  const hasScreenNoun = /\bstocks?\b/i.test(message);
+  const hasCriteria =
+    /\b(cheap|value|undervalued|attractive|valuation|expensive|rich|quality|momentum|growth|leverage|balance\s+sheet|risk|Industrials|Technology|Healthcare|Energy|Utilities|Financial Services|Basic Materials|Consumer Defensive|Consumer Cyclical|Communication Services|Real Estate|Semiconductors)\b/i.test(
+      message,
+    );
+  return (hasScreenVerb || hasScreenNoun) && hasCriteria;
+}
+
+function normalizeFeatureCriterion(
+  factor: FeatureScreenFactor,
+  bucket: string,
+): FeatureScreenCriterion | undefined {
+  const normalizedBucket = bucket.trim();
+  if (!normalizedBucket) return undefined;
+  const upper = normalizedBucket.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  switch (factor) {
+    case "valuation":
+      if (["CHEAP", "ATTRACTIVE", "UNDERVALUED", "VALUE"].includes(upper)) {
+        return { factor, bucket: "ATTRACTIVE" };
+      }
+      if (["FAIR", "FAIR_VALUE", "FAIRLY_VALUED"].includes(upper)) {
+        return { factor, bucket: "FAIR" };
+      }
+      if (["EXPENSIVE", "RICH", "OVERVALUED"].includes(upper)) {
+        return { factor, bucket: "RICH" };
+      }
+      return undefined;
+    case "quality":
+      if (["STRONG", "HIGH", "HIGH_QUALITY"].includes(upper)) return { factor, bucket: "STRONG" };
+      if (["CONSTRUCTIVE", "MODERATE"].includes(upper)) return { factor, bucket: "CONSTRUCTIVE" };
+      if (["WEAK", "LOW"].includes(upper)) return { factor, bucket: "WEAK" };
+      return undefined;
+    case "momentum":
+      if (["STRONG", "HIGH"].includes(upper)) return { factor, bucket: "STRONG" };
+      if (["POSITIVE", "CONSTRUCTIVE"].includes(upper)) return { factor, bucket: "CONSTRUCTIVE" };
+      if (["WEAK", "NEGATIVE", "LOW"].includes(upper)) return { factor, bucket: "WEAK" };
+      return undefined;
+    case "growth":
+      if (["STRONG", "HIGH"].includes(upper)) return { factor, bucket: "STRONG" };
+      if (["WEAK", "LOW", "NEGATIVE"].includes(upper)) return { factor, bucket: "WEAK" };
+      return undefined;
+    case "leverage":
+      if (["STRONG", "LOW", "LOW_LEVERAGE", "HEALTHY"].includes(upper)) {
+        return { factor, bucket: "STRONG" };
+      }
+      if (["STRESSED", "HIGH", "HIGH_LEVERAGE", "WEAK"].includes(upper)) {
+        return { factor, bucket: "STRESSED" };
+      }
+      return undefined;
+    case "risk":
+      if (["ELEVATED", "HIGH"].includes(upper)) return { factor, bucket: "ELEVATED" };
+      if (["LOW"].includes(upper)) return { factor, bucket: "LOW" };
+      return undefined;
+    case "sector": {
+      const sector = canonicalSectorLabel(normalizedBucket);
+      return sector ? { factor, bucket: sector } : undefined;
+    }
+  }
+}
+
+function uniqueCriteria(criteria: FeatureScreenCriterion[]): FeatureScreenCriterion[] {
+  const seen = new Set<string>();
+  const out: FeatureScreenCriterion[] = [];
+  for (const item of criteria) {
+    const key = `${item.factor}:${item.bucket}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out.slice(0, 7);
 }
 
 function normalizeComparison(

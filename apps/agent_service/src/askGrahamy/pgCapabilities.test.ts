@@ -16,6 +16,7 @@ import {
 } from "./pgCapabilities/registry";
 import type { CachedCapabilityView } from "./pgCapabilities/types";
 import { assessCapabilityFreshness } from "./pgCapabilities/freshnessGuard";
+import { buildFeatureScreenView } from "./pgCapabilities/featureScreen";
 import { compilePublicResearchView } from "./publicResearch";
 import type { Classification } from "./types";
 
@@ -36,6 +37,21 @@ const stockIdeaClassification: Classification = {
   sectors: [],
   regimeRequested: false,
   isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const featureScreenClassification: Classification = {
+  intent: "feature_screen",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  featureCriteria: [
+    { factor: "valuation", bucket: "ATTRACTIVE" },
+    { factor: "quality", bucket: "STRONG" },
+  ],
   requiresTools: ["get_market_context"],
   confidence: "high",
   warnings: [],
@@ -276,6 +292,15 @@ test("PG capability registry routes stock idea discovery intent", () => {
   assert.equal(entry.name, "stock_idea_discovery");
   assert.equal(entry.queryName, "query_stock_idea_discovery");
   assert.deepEqual(entry.requiredParams, []);
+});
+
+test("PG capability registry routes feature screen intent", () => {
+  const entry = capabilityForIntent("feature_screen");
+  assert.ok(entry);
+  assert.equal(entry.name, "feature_screen");
+  assert.equal(entry.queryName, "query_feature_screen");
+  assert.equal(entry.source, "pg_current_features");
+  assert.deepEqual(entry.requiredParams, ["featureCriteria"]);
 });
 
 test("PG capability registry routes sector divergence intent", () => {
@@ -1395,6 +1420,175 @@ test("publicResearchView carries stockIdeaView without Research Objects", async 
   assert.equal(publicView.researchObjectViews.length, 0);
   assert.deepEqual(publicView.researchObjectKeys, []);
   assert.equal(publicView.stockIdeaView?.rows[0].symbol, "GSL");
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("feature screen returns partial public view with bounded criteria", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildFeatureScreenView(
+    {
+      classification: featureScreenClassification,
+      message: "Find me cheap quality stocks",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      candidatePoolSize: 1000,
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            symbol: "GSL",
+            company_name: "Global Ship Lease, Inc.",
+            sector: "Industrials",
+            rank: 1,
+            valuation_bucket: "ATTRACTIVE",
+            quality_bucket: "STRONG",
+            momentum_bucket: "CONSTRUCTIVE",
+            growth_bucket: "STRONG",
+            leverage_bucket: "CONSTRUCTIVE",
+            risk_bucket: "MODERATE",
+            conviction_bucket: "HIGH",
+            hit_rate_pct: 61.23,
+            median_return_pct: 5.241,
+            as_of_date: "2026-05-01",
+            current_row_count: 3200,
+            matched_row_count: 18,
+            features_freshness_state: "FRESH",
+            features_completed_at: "2026-05-02T12:30:04Z",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_overlay_available: true,
+            internal_rank_score: 99,
+            raw_sql: "must-not-leak",
+            feature_rules: "must-not-leak",
+            score_formula: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  assert.equal(replacements.CANDIDATE_POOL_SIZE, 500);
+  assert.equal(replacements.VALUATION_BUCKET, "ATTRACTIVE");
+  assert.equal(replacements.QUALITY_BUCKET, "STRONG");
+  const view = result.views.featureScreenView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_current_features");
+  assert.equal(view.asOfDate, "2026-05-01");
+  assert.deepEqual(view.screenCriteria, featureScreenClassification.featureCriteria);
+  assert.equal(view.rows.length, 1);
+  assert.equal(view.rows[0].symbol, "GSL");
+  assert.equal(view.rows[0].valuationBucket, "ATTRACTIVE");
+  assert.equal(view.rows[0].qualityBucket, "STRONG");
+  assert.equal(view.rows[0].hitRatePct, 61.2);
+  assert.equal(view.rows[0].medianReturnPct, 5.24);
+  assert.match(view.rows[0].reasonBullets.join(" "), /Valuation bucket matched ATTRACTIVE/i);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("feature screen returns complete empty view when no stocks match", async () => {
+  const result = await buildFeatureScreenView(
+    {
+      classification: {
+        ...featureScreenClassification,
+        featureCriteria: [{ factor: "sector", bucket: "Technology" }],
+      },
+      message: "Find high-quality stocks in Technology",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          as_of_date: "2026-05-01",
+          current_row_count: 3200,
+          matched_row_count: 0,
+          features_freshness_state: "FRESH",
+          features_completed_at: "2026-05-02T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.featureScreenView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /No stocks matched/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("feature screen returns unavailable when no supported criteria exist", async () => {
+  const result = await buildFeatureScreenView({
+    classification: {
+      ...featureScreenClassification,
+      featureCriteria: [],
+    },
+    message: "Find stocks with moonshot potential",
+    snapshots: {},
+    toolOutputs: {},
+  });
+
+  const view = result.views.featureScreenView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /No supported public screen criteria/i);
+});
+
+test("publicResearchView carries featureScreenView without Research Objects", async () => {
+  const result = await buildFeatureScreenView(
+    {
+      classification: featureScreenClassification,
+      message: "Find me cheap quality stocks",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          sector: "Industrials",
+          rank: 1,
+          valuation_bucket: "ATTRACTIVE",
+          quality_bucket: "STRONG",
+          momentum_bucket: "CONSTRUCTIVE",
+          growth_bucket: "STRONG",
+          leverage_bucket: "CONSTRUCTIVE",
+          conviction_bucket: "HIGH",
+          as_of_date: "2026-05-01",
+          current_row_count: 3200,
+          matched_row_count: 18,
+          forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: featureScreenClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "stock");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.featureScreenView?.rows[0].symbol, "GSL");
+  assert.equal(publicView.evidence.featureScreenRows, 1);
   assertNoForbiddenPublicKeys(publicView);
 });
 

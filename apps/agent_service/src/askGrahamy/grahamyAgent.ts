@@ -303,6 +303,16 @@ function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): st
       `## STOCK IDEA DISCOVERY — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
     );
   }
+  if (views?.featureScreenView) {
+    const humanized = humanizeJsonValue({
+      featureScreenView: views.featureScreenView,
+      freshness: views.featureScreenView.freshness,
+      warnings: views.featureScreenView.warnings,
+    });
+    blocks.push(
+      `## FEATURE SCREEN — PG current-feature screen\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+    );
+  }
   if (views?.comparisonView) {
     const humanized = humanizeJsonValue({
       comparisonView: views.comparisonView,
@@ -398,6 +408,11 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Explain each stock idea only with \`reasonBullets\` and explicit public fields in the row.
 - Treat \`stockIdeaView\` as PG current/base-rate evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
 - If \`stockIdeaView.rows\` is empty or the view state is unavailable, say stock discovery data is unavailable instead of naming tickers.
+- For current-feature stock screen questions, use only \`featureScreenView.rows\` and \`featureScreenView.screenCriteria\`. Rank stocks only from those rows, mention \`asOfDate\` or \`freshness.dataThrough\`, and do not invent tickers, buckets, hit rates, or return metrics.
+- Call \`featureScreenView.rows\` "screen results" or "research candidates", never buy/sell recommendations or trade instructions.
+- Explain each screen result only with \`reasonBullets\` and explicit public bucket fields in the row. Do not expose thresholds, formulas, SQL, raw rows, table names, feature rules, IDs, gates, or scoring internals.
+- Treat \`featureScreenView\` as PG current-feature screening evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
+- If \`featureScreenView.state = complete\` and \`rows\` is empty, say no matching candidates were found. If unavailable, say the feature screen is unavailable.
 - For stock-vs-sector, sector-vs-sector, and symbol-vs-symbol comparison questions, use only \`comparisonView\`. Do not use raw Research Objects, memory, table names, formulas, or inferred metrics to compare.
 - For \`comparisonView\`, prefer dimensional language like "the left side is stronger on X and weaker on Y." Do not say "better" unless multiple public \`deltas\` and \`summaryBullets\` clearly support it.
 - Mention \`comparisonView.asOfDate\` or \`comparisonView.freshness.dataThrough\`. Treat \`comparisonView\` as PG current/base-rate comparison evidence, not validated live edge evidence.

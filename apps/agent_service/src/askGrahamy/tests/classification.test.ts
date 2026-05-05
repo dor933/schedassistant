@@ -221,6 +221,64 @@ test("classifies historical forward profile sector leaderboard phrasing", async 
   assert.equal(historical.intent, "sector_conviction_leaderboard");
 });
 
+test("classifies bounded feature screen phrasings with public criteria", async () => {
+  const examples = [
+    {
+      message: "Find me cheap quality stocks",
+      expected: [
+        { factor: "valuation", bucket: "ATTRACTIVE" },
+        { factor: "quality", bucket: "STRONG" },
+      ],
+    },
+    {
+      message: "Which stocks have strong quality but weak momentum?",
+      expected: [
+        { factor: "quality", bucket: "STRONG" },
+        { factor: "momentum", bucket: "WEAK" },
+      ],
+    },
+    {
+      message: "Show stocks with attractive valuation and positive momentum",
+      expected: [
+        { factor: "valuation", bucket: "ATTRACTIVE" },
+        { factor: "momentum", bucket: "CONSTRUCTIVE" },
+      ],
+    },
+    {
+      message: "Find high-quality stocks in Industrials",
+      expected: [
+        { factor: "quality", bucket: "STRONG" },
+        { factor: "sector", bucket: "Industrials" },
+      ],
+    },
+    {
+      message: "Show cheap stocks with strong momentum",
+      expected: [
+        { factor: "valuation", bucket: "ATTRACTIVE" },
+        { factor: "momentum", bucket: "STRONG" },
+      ],
+    },
+  ];
+
+  for (const example of examples) {
+    const result = await classifyMessage(example.message, undefined, {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "medium",
+      }),
+    });
+    assert.equal(result.intent, "feature_screen", example.message);
+    assert.deepEqual(result.symbols, [], example.message);
+    assert.deepEqual(result.sectors, [], example.message);
+    assert.deepEqual(result.featureCriteria, example.expected, example.message);
+    assert.deepEqual(result.requiresTools, ["get_market_context"]);
+  }
+});
+
 test("classifies sector conviction/momentum divergence phrasings", async () => {
   const divergence = await classifyMessage(
     "Which sectors have conviction but weak price action?",

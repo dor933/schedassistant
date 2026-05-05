@@ -2,6 +2,8 @@ import type {
   Classification,
   ComparisonView,
   EvidenceState,
+  FeatureScreenCriterion,
+  FeatureScreenView,
   PublicFreshnessView,
   RegimeHistoricalPlaybookView,
   SectorDeltaView,
@@ -17,6 +19,7 @@ export type PgCapabilityIntent =
   | "sector_momentum_vs_conviction_divergence"
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
+  | "feature_screen"
   | "market_regime_historical_playbook"
   | "comparison";
 
@@ -25,6 +28,7 @@ export type PgCapabilityName =
   | "sector_momentum_vs_conviction_divergence"
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
+  | "feature_screen"
   | "market_regime_historical_playbook"
   | "stock_vs_sector_comparison"
   | "sector_vs_sector_comparison"
@@ -35,6 +39,7 @@ export type PgCapabilityQueryName =
   | "query_sector_divergence"
   | "query_sector_delta"
   | "query_stock_idea_discovery"
+  | "query_feature_screen"
   | "query_regime_historical_playbook"
   | "query_stock_vs_sector_comparison"
   | "query_sector_vs_sector_comparison"
@@ -52,6 +57,7 @@ export type PgCapabilityViews = {
   sectorDivergenceView?: SectorDivergenceView;
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
+  featureScreenView?: FeatureScreenView;
   comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
 };
@@ -121,6 +127,7 @@ export type CachedCapabilityView = {
     | import("../types").SectorDivergenceView
     | import("../types").SectorDeltaView
     | import("../types").StockIdeaView
+    | import("../types").FeatureScreenView
     | import("../types").ComparisonView
     | import("../types").RegimeHistoricalPlaybookView;
   generatedAt: string;
@@ -226,6 +233,31 @@ export type StockIdeaDiscoveryRow = Record<string, unknown> & {
   peer_freshness_state?: unknown;
   peer_completed_at?: unknown;
   forward_overlay_available?: unknown;
+};
+
+export type FeatureScreenRow = Record<string, unknown> & {
+  symbol?: unknown;
+  company_name?: unknown;
+  sector?: unknown;
+  rank?: unknown;
+  valuation_bucket?: unknown;
+  quality_bucket?: unknown;
+  momentum_bucket?: unknown;
+  growth_bucket?: unknown;
+  leverage_bucket?: unknown;
+  risk_bucket?: unknown;
+  conviction_bucket?: unknown;
+  hit_rate_pct?: unknown;
+  median_return_pct?: unknown;
+  as_of_date?: unknown;
+  current_row_count?: unknown;
+  matched_row_count?: unknown;
+  features_freshness_state?: unknown;
+  features_completed_at?: unknown;
+  peer_freshness_state?: unknown;
+  peer_completed_at?: unknown;
+  forward_overlay_available?: unknown;
+  criteria?: FeatureScreenCriterion[];
 };
 
 export type StockVsSectorComparisonRow = Record<string, unknown> & {

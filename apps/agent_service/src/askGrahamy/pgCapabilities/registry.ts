@@ -1,5 +1,9 @@
 import type { Classification, Intent } from "../types";
 import {
+  buildFeatureScreenView,
+  featureScreenCacheKeyParams,
+} from "./featureScreen";
+import {
   buildRegimeHistoricalPlaybookView,
   regimeHistoricalPlaybookCacheKeyParams,
 } from "./regimeHistoricalPlaybook";
@@ -106,6 +110,23 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     run: buildStockIdeaDiscoveryView,
     viewSlot: "stockIdeaView",
     cacheKeyParams: stockIdeaDiscoveryCacheKeyParams,
+  },
+  {
+    name: "feature_screen",
+    intent: "feature_screen",
+    requiredParams: ["featureCriteria"],
+    queryName: "query_feature_screen",
+    source: "pg_current_features",
+    freshnessSources: [
+      "md_features_daily",
+      "md_research_sector_peer_daily",
+      "md_forward_returns",
+    ],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildFeatureScreenView,
+    viewSlot: "featureScreenView",
+    cacheKeyParams: featureScreenCacheKeyParams,
   },
   {
     name: "market_regime_historical_playbook",

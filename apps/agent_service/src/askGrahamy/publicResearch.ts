@@ -53,6 +53,9 @@ export function compilePublicResearchView(input: {
       : []),
     ...(input.pgCapabilityViews?.sectorDeltaView ? ["sectorDeltaView"] : []),
     ...(input.pgCapabilityViews?.stockIdeaView ? ["stockIdeaView"] : []),
+    ...(input.pgCapabilityViews?.featureScreenView
+      ? ["featureScreenView"]
+      : []),
     ...(input.pgCapabilityViews?.comparisonView ? ["comparisonView"] : []),
     ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
       ? ["regimeHistoricalPlaybookView"]
@@ -93,6 +96,9 @@ export function compilePublicResearchView(input: {
       : {}),
     ...(input.pgCapabilityViews?.stockIdeaView
       ? { stockIdeaView: input.pgCapabilityViews.stockIdeaView }
+      : {}),
+    ...(input.pgCapabilityViews?.featureScreenView
+      ? { featureScreenView: input.pgCapabilityViews.featureScreenView }
       : {}),
     ...(input.pgCapabilityViews?.comparisonView
       ? { comparisonView: input.pgCapabilityViews.comparisonView }
@@ -149,6 +155,13 @@ export function compilePublicResearchView(input: {
             stockIdeaRows: input.pgCapabilityViews.stockIdeaView.rows.length,
           }
         : {}),
+      ...(input.pgCapabilityViews?.featureScreenView
+        ? {
+            featureScreenState: input.pgCapabilityViews.featureScreenView.state,
+            featureScreenRows:
+              input.pgCapabilityViews.featureScreenView.rows.length,
+          }
+        : {}),
       ...(input.pgCapabilityViews?.comparisonView
         ? {
             comparisonState: input.pgCapabilityViews.comparisonView.state,
@@ -189,6 +202,7 @@ function inferObjectType(classification: Classification): PublicResearchView["ob
   if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
   if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
+  if (classification.intent === "feature_screen") return "stock";
   if (classification.intent === "comparison") return "mixed";
   if (classification.intent === "market_regime_historical_playbook") return "regime";
   const hasStock = classification.symbols.length > 0;

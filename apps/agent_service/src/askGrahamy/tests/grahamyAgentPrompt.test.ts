@@ -123,6 +123,77 @@ test("LLM prompt receives public-safe stock idea view", () => {
   assertNoFreshnessInternals(prompt);
 });
 
+test("LLM prompt receives public-safe feature screen view", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "Find me cheap quality stocks",
+    warnings: [],
+    classification: {
+      intent: "feature_screen",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      featureCriteria: [
+        { factor: "valuation", bucket: "ATTRACTIVE" },
+        { factor: "quality", bucket: "STRONG" },
+      ],
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      featureScreenView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_current_features",
+        asOfDate: "2026-05-01",
+        screenCriteria: [
+          { factor: "valuation", bucket: "ATTRACTIVE" },
+          { factor: "quality", bucket: "STRONG" },
+        ],
+        rows: [
+          {
+            symbol: "GSL",
+            companyName: "Global Ship Lease, Inc.",
+            sector: "Industrials",
+            rank: 1,
+            valuationBucket: "ATTRACTIVE",
+            qualityBucket: "STRONG",
+            convictionBucket: "HIGH",
+            reasonBullets: ["Valuation bucket matched ATTRACTIVE."],
+          },
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: ["These are screen results to review."],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /featureScreenView/);
+  assert.match(prompt, /screenCriteria/);
+  assert.match(prompt, /GSL/);
+  assert.match(prompt, /screen results/i);
+  assert.match(prompt, /never buy\/sell recommendations/i);
+  assert.match(prompt, /PG current-feature screening evidence/i);
+  assert.doesNotMatch(prompt, /researchObjects/);
+  assert.doesNotMatch(prompt, /parts/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assert.doesNotMatch(prompt, /edge_id/);
+  assert.doesNotMatch(prompt, /hypothesis_id/);
+  assert.doesNotMatch(prompt, /analog_rows/);
+  assert.doesNotMatch(prompt, /path_rows/);
+  assert.doesNotMatch(prompt, /setup_score/);
+  assert.doesNotMatch(prompt, /score_formula/);
+  assert.doesNotMatch(prompt, /feature_rules/);
+  assertNoFreshnessInternals(prompt);
+});
+
 test("LLM prompt receives public-safe sector divergence view", () => {
   const state: AskGrahamyState = {
     internalUserId: 1,
