@@ -268,7 +268,7 @@ export async function roundtableContextBuilderNode(
       "prior decision or position is directly relevant to this turn:\n" +
       "- `recall_episodic_memory(query)` — vector search over your prior chunks. Use when you " +
       "can frame a clear semantic query.\n" +
-      "- `list_my_threads({query?, hasSummaryOnly?})` — single-chat / group threads you own, " +
+      "- `list_my_threads({query?, hasSummaryOnly?, startTime?, endTime?})` — single-chat / group threads you own, " +
       "with summary previews. Use when you don't have a precise vector query.\n" +
       "- `list_my_roundtables({status?, query?})` → `get_roundtable_overview(roundtableId)` — " +
       "discover and read the short summary of a past roundtable.\n" +

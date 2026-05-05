@@ -42,12 +42,20 @@ const listThreadsSchema = z.object({
       "When true, only return threads that already have a saved session summary " +
         "(i.e. ones you can immediately follow up on with `get_thread_summary`).",
     ),
-  includeArchived: z
-    .boolean()
+  startTime: z
+    .coerce.date()
     .optional()
     .describe(
-      "Include threads that have been archived. Defaults to false — most recall " +
-        "use cases want only live threads.",
+      "Optional inclusive lower bound on `threads.updated_at` (when the thread row was last " +
+        "modified in the database). Pass an ISO 8601 datetime (e.g. `2026-05-01T00:00:00.000Z`). " +
+        "Omit to leave the start open.",
+    ),
+  endTime: z
+    .coerce.date()
+    .optional()
+    .describe(
+      "Optional inclusive upper bound on `threads.updated_at`. Pass an ISO 8601 datetime. " +
+        "Omit to leave the end open. Use with `startTime` to narrow the recall window.",
     ),
   limit: z
     .number()
@@ -64,12 +72,17 @@ export function ListMyThreadsTool(callerAgentId: AgentId | null) {
       if (!callerAgentId) {
         return "No agent context — cannot list your threads.";
       }
-      const { query, hasSummaryOnly, includeArchived } = input;
+      const { query, hasSummaryOnly, startTime, endTime } = input;
       const limit = input.limit ?? 20;
 
       try {
         const where: Record<string, unknown> = { agentId: callerAgentId };
-        if (!includeArchived) where.archivedAt = null;
+        if (startTime !== undefined || endTime !== undefined) {
+          where.updatedAt = {
+            ...(startTime !== undefined ? { [Op.gte]: startTime } : {}),
+            ...(endTime !== undefined ? { [Op.lte]: endTime } : {}),
+          };
+        }
         // Substring match on the title column happens in SQL; matching
         // against the JSONB summary text is done in JS below — there's
         // no precedent in this codebase for Sequelize.literal-based
@@ -94,6 +107,7 @@ export function ListMyThreadsTool(callerAgentId: AgentId | null) {
             "lastActivityAt",
             "archivedAt",
             "createdAt",
+            "updatedAt",
           ],
           // Most-recently-active first — matches what the user sees in
           // their conversations list and what the agent most likely
@@ -122,7 +136,14 @@ export function ListMyThreadsTool(callerAgentId: AgentId | null) {
           const extras = await Thread.findAll({
             where: {
               agentId: callerAgentId,
-              ...(includeArchived ? {} : { archivedAt: null }),
+              ...(startTime !== undefined || endTime !== undefined
+                ? {
+                    updatedAt: {
+                      ...(startTime !== undefined ? { [Op.gte]: startTime } : {}),
+                      ...(endTime !== undefined ? { [Op.lte]: endTime } : {}),
+                    },
+                  }
+                : {}),
               id: { [Op.notIn]: filtered.map((t) => t.id) },
               summary: { [Op.ne]: null },
             },
@@ -134,6 +155,7 @@ export function ListMyThreadsTool(callerAgentId: AgentId | null) {
               "lastActivityAt",
               "archivedAt",
               "createdAt",
+              "updatedAt",
             ],
             order: [
               ["last_activity_at", "DESC NULLS LAST"],
@@ -179,6 +201,7 @@ export function ListMyThreadsTool(callerAgentId: AgentId | null) {
                 : null,
               archivedAt: t.archivedAt ? t.archivedAt.toISOString() : null,
               createdAt: t.createdAt.toISOString(),
+              updatedAt: t.updatedAt.toISOString(),
             };
           }),
           note:
@@ -204,7 +227,8 @@ export function ListMyThreadsTool(callerAgentId: AgentId | null) {
       description:
         "List the conversation threads (single chats and group chats) where YOU are the " +
         "owning agent. Returns metadata only — id, title, summary preview (~240 chars), " +
-        "file count, last-activity timestamp. Cheap to call; surfaces NO full session " +
+        "file count, last-activity (`last_activity_at`), row last-modified (`updated_at`), " +
+        "created and archived timestamps. Cheap to call; surfaces NO full session " +
         "transcripts or full summaries. Roundtable threads are NOT included here — use " +
         "`list_my_roundtables` for those.\n\n" +
         "Use this as the entry point when the user asks about something you remember from " +
@@ -216,7 +240,8 @@ export function ListMyThreadsTool(callerAgentId: AgentId | null) {
         "directly with your built-in file tools (`Read`/`Grep`/`Glob` for Anthropic SDK, " +
         "`shell` for Codex SDK). Do NOT invent filenames the manifest doesn't list.\n\n" +
         "Filters: `query` (substring match against title + summary text), `hasSummaryOnly` " +
-        "(skip threads not yet summarized), `includeArchived` (default false).",
+        "(skip threads not yet summarized), optional `startTime` / `endTime` (ISO 8601) — " +
+        "inclusive bounds on `threads.updated_at` (last time the thread row was modified).",
       schema: listThreadsSchema,
     },
   );
