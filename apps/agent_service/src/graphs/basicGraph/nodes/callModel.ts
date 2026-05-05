@@ -41,8 +41,6 @@ import {
   ListMyRoundtablesTool,
   GetRoundtableOverviewTool,
 } from "../../../tools/roundtableRecallTools";
-import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
-import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool, GetRepositoryTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
@@ -311,11 +309,13 @@ export async function callModelNode(
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
-    // Thread recall — non-vector entry point into the existing
-    // get_thread_summary → grep_session_file → read_session_file
-    // cascade. Lists single-chat / group threads where this agent is
-    // the owner (`threads.agent_id`). Roundtable threads are listed by
-    // ListMyRoundtablesTool below.
+    // Thread recall — non-vector entry point into past single-chat /
+    // group threads where this agent is the owner (`threads.agent_id`).
+    // After picking a thread, `get_thread_summary` returns the manifest
+    // and the agent reads files from `<workspacePath>/threads/<threadId>/`
+    // using its own filesystem tools (Read/Glob/Grep for SDK built-ins,
+    // read_text_file/search_files for filesystem MCP). Roundtable threads
+    // are listed by ListMyRoundtablesTool below.
     ListMyThreadsTool(agentId),
     // Roundtable recall — primary agents always get the listing + overview
     // tools so they can pull the topic + short_summary of past discussions
@@ -324,8 +324,6 @@ export async function callModelNode(
     // agentId actually belongs to.
     ListMyRoundtablesTool(agentId),
     GetRoundtableOverviewTool(agentId),
-    ReadSessionFileTool(agentId, threadId),
-    GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),

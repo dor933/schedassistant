@@ -1,7 +1,9 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import MailComposer from "nodemailer/lib/mail-composer";
 import { resolveScopedSubject } from "../google/authz";
 import { fetchAsSubject, DWDNotConfiguredError } from "../google/dwdClient";
+import { genericMessageTemplate } from "../emailTemplates/genericMessage";
 import { logger } from "../logger";
 
 /**
@@ -332,18 +334,36 @@ export function googleTools(authorityAgentId: string) {
   );
 
   const sendGmail = tool(
-    async ({ subjectEmail, to, subject, body }) => {
+    async ({ subjectEmail, to, cc, bcc, subject, recipientName, headline, bodyHtml, ctaText, ctaUrl, fromName, language }) => {
+      if ((ctaText && !ctaUrl) || (ctaUrl && !ctaText)) {
+        return "Error sending gmail: 'ctaText' and 'ctaUrl' must be provided together.";
+      }
       const authz = await authorizeOrError(authorityAgentId, subjectEmail, "gmail.send");
       if ("error" in authz) return authz.error;
       try {
-        const raw = b64url(
-          `To: ${to.join(", ")}\r\n` +
-          `From: ${authz.email}\r\n` +
-          `Subject: ${subject}\r\n` +
-          `Content-Type: text/plain; charset="UTF-8"\r\n` +
-          `MIME-Version: 1.0\r\n\r\n` +
-          body,
-        );
+        const html = genericMessageTemplate({
+          recipientName,
+          headline,
+          bodyHtml,
+          ctaText,
+          ctaUrl,
+          preview: subject,
+          language,
+        });
+        const composer = new MailComposer({
+          from: `${fromName ?? "Grahamy"} <${authz.email}>`,
+          to,
+          cc,
+          bcc,
+          subject,
+          html,
+        });
+        const mime = await composer.compile().build();
+        const raw = mime
+          .toString("base64")
+          .replace(/\+/g, "-")
+          .replace(/\//g, "_")
+          .replace(/=+$/, "");
         const res = await fetchAsSubject(
           authz.email,
           [GMAIL_SEND],
@@ -353,19 +373,46 @@ export function googleTools(authorityAgentId: string) {
         const json = (await res.json()) as { id?: string; threadId?: string };
         return JSON.stringify({ ok: true, id: json.id, threadId: json.threadId });
       } catch (err) {
+        logger.warn("googleTools send_gmail failed", {
+          authorityAgentId,
+          subjectEmail,
+          error: formatError(err),
+        });
         return `Error sending gmail: ${formatError(err)}`;
       }
     },
     {
       name: "google_send_gmail",
       description:
-        "Send an email from another user's Gmail account. Requires a 'gmail.send' grant. " +
-        "The 'From' address is always the subject user — you cannot spoof other senders.",
+        "Send a Grahamy-branded HTML email from another user's Gmail account. Requires a " +
+        "'gmail.send' grant. The 'From' address is always the subject user (only the display " +
+        "name is configurable via 'fromName') — you cannot spoof other senders. The body is " +
+        "always rendered through the shared generic MJML template: pass 'headline' and " +
+        "'bodyHtml' (HTML allowed inside the message body), and optionally a CTA button via " +
+        "'ctaText' + 'ctaUrl'.",
       schema: z.object({
         subjectEmail: z.string().email().describe("Email of the user whose Gmail account sends the message."),
         to: z.array(z.string().email()).min(1),
+        cc: z.array(z.string().email()).optional(),
+        bcc: z.array(z.string().email()).optional(),
         subject: z.string().min(1),
-        body: z.string().min(1),
+        recipientName: z.string().optional().describe(
+          "Display name of the PERSON RECEIVING this email (i.e. the human listed in 'to'), " +
+          "used as the greeting at the top: 'Hello, <recipientName>'. NOT the sender's name " +
+          "and NOT the agent's name. If you don't know the recipient's name, omit this field " +
+          "and the greeting will fall back to a generic 'Hello'.",
+        ),
+        headline: z.string().min(1).describe("Main headline shown at the top of the message card."),
+        bodyHtml: z.string().min(1).describe("Message body. Inline HTML (e.g. <strong>, <a>, <br/>) is allowed."),
+        ctaText: z.string().optional().describe("Label for the CTA button. Required if 'ctaUrl' is set."),
+        ctaUrl: z.string().url().optional().describe("Target URL for the CTA button. Required if 'ctaText' is set."),
+        fromName: z.string().optional().describe("Display name for the From header. Defaults to 'Grahamy'."),
+        language: z.enum(["en", "he"]).optional().describe(
+          "Language for the email's fixed chrome (greeting, support line, copyright) and " +
+          "default text direction. 'he' renders the email RTL with Hebrew strings " +
+          "(שלום, זקוקים לסיוע..., כל הזכויות שמורות); 'en' is LTR English. " +
+          "Defaults to 'en'. Pick this based on the language of the recipient.",
+        ),
       }),
     },
   );

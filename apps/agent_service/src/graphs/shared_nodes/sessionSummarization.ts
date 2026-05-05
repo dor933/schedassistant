@@ -539,8 +539,9 @@ export async function sessionSummarizationNode(
         // One chunk per summarised file. Each chunk = the file summary plus
         // a structured `[source: ...]` tail so semantic search hits the
         // file's topic and the agent recovers the path for free. Per-chunk
-        // metadata carries the exact path for a precise read_session_file
-        // follow-up, plus kind="file_summary" for downstream filtering.
+        // metadata carries the exact path so the agent can open it with
+        // its built-in file tools, plus kind="file_summary" for downstream
+        // filtering.
         const fileChunkInputs = mergedFiles.filter(
           (f): f is SessionFileEntry & { summary: string } =>
             typeof f.summary === "string" && f.summary.trim().length > 0,

@@ -24,8 +24,8 @@ import {
  * the per-thread folder already scopes the session. This caps the
  * per-turn token cost of oversized user pastes (long SQL, log dumps, pasted
  * docs) without losing the content — the file is captured into the session
- * manifest and becomes retrievable via `read_session_file` the same way
- * agent-written artifacts are.
+ * manifest and becomes retrievable by reading the listed path with the
+ * agent's built-in file tools, the same way agent-written artifacts are.
  *
  * Design notes:
  *   - We operate only on the LAST message, which is the one appended this
@@ -148,7 +148,8 @@ export async function inboundMessageSpillNode(
   const reference =
     `${SPILL_MARKER} Original message from ${senderRaw} was ${content.length} chars — ` +
     `saved verbatim to \`${relPath}\` under this thread's session folder. ` +
-    `Use \`read_session_file\` with path="${relPath}" to load the full body when you need it.\n\n` +
+    `Open that exact path with your built-in file tools (\`Read\` for Anthropic SDK, ` +
+    `\`shell\` cat/sed for Codex SDK) to load the full body when you need it.\n\n` +
     `Preview (first ${preview.length} chars):\n${preview}` +
     (elided > 0 ? `\n\n[... ${elided} more chars in the saved file ...]` : "");
 

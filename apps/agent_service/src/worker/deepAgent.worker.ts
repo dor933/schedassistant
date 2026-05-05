@@ -790,7 +790,8 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                   `analyses, research dumps) inside this folder, not at the workspace root.** Writes here are ` +
                   `captured into the caller's session manifest, summarised when the thread closes, and indexed ` +
                   `for vector retrieval — so a future session can recover them via \`recall_episodic_memory\` → ` +
-                  `\`get_thread_summary\` → \`read_session_file\`. Writes elsewhere in the workspace are still ` +
+                  `\`get_thread_summary\` (which returns the manifest), then reading the listed paths ` +
+                  `with built-in file tools. Writes elsewhere in the workspace are still ` +
                   `saved but won't appear in the per-thread manifest.\n`
                 )
                 : "";

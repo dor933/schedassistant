@@ -580,7 +580,7 @@ export interface ThreadAttributes {
  *  - "conversation" (default, also implied when absent): a slice of dialogue.
  *  - "file_summary": describes a file written into a session workspace; the
  *    `sessionFilePath` field gives the file's path relative to the per-thread
- *    workspace root so an agent can call `read_session_file` to fetch it.
+ *    workspace root so an agent can open it with its built-in file tools.
  */
 export type EpisodicChunkKind = "conversation" | "file_summary";
 

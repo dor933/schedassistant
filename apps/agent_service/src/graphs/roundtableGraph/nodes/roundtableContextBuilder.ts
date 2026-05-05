@@ -225,39 +225,31 @@ export async function roundtableContextBuilderNode(
     }
 
     // ── Workspace ───────────────────────────────────────────────────────
-    if (agentWorkspacePath && (await hasFilesystemMcp(agentId))) {
+    if (agentWorkspacePath) {
       const sessionFolder = state.threadId
         ? `${agentWorkspacePath}/threads/${state.threadId}`
         : null;
       sections.push("## Workspace");
       sections.push(
-        `Your persistent workspace lives at \`${agentWorkspacePath}\`. Access it via the ` +
-        "**filesystem MCP** (server `filesystem`, rooted at `/app/data`): `list_directory`, " +
-        "`read_text_file`, `write_file`, `edit_file`, `search_files`. Always use the absolute " +
-        "path above as the prefix.\n\n" +
-        "**Reading files — what each tool gives you.** Two tool families are available; pick " +
-        "whichever fits the task.\n" +
-        "- `read_text_file` (filesystem MCP) — any file under `/app/data`. Supports `head` " +
-        "(first N lines) or `tail` (last N lines); cannot combine both or take middle slices.\n" +
-        "- `search_files` (filesystem MCP) — filename glob. Not a content grep.\n" +
-        "- `read_session_file` — files **inside a per-thread session folder**. Adds `offset` " +
-        "+ `limit` for arbitrary line ranges, cross-thread access (past threads you " +
-        "participated in), and a manifest-summary fallback when a file is missing.\n" +
-        "- `grep_session_file` — content search with line numbers **inside a session-folder " +
-        "file**. The filesystem MCP has no equivalent.\n\n" +
-        "Rule of thumb: library / long references are usually read in full with " +
-        "`read_text_file`; session files are usually *located* with `grep_session_file` + " +
-        "`read_session_file` rather than pulled whole — but nothing forces this.\n\n" +
+        `Your persistent workspace lives at \`${agentWorkspacePath}\`.\n\n` +
+        `**Use your built-in file tools** to read, write, and search inside the workspace:\n` +
+        `- Anthropic SDK: \`Read\`, \`Write\`, \`Edit\`, \`MultiEdit\`, \`Glob\`, \`Grep\` (rooted at the ` +
+        `workspace path — relative paths resolve under it).\n` +
+        `- Codex SDK: \`shell\` (use \`cat\`, \`rg\`, \`ls\`, \`sed -n\` against absolute paths under the ` +
+        `workspace).\n` +
+        `- If the filesystem MCP server is attached: \`read_text_file\`, \`write_file\`, \`edit_file\`, ` +
+        `\`search_files\`, \`list_directory\` (absolute paths under \`/app/data\`).\n\n` +
         "**Allowed file formats — writes are restricted to `.md` and `.txt` only.** Other " +
         "extensions are rejected before they hit disk.\n\n" +
         (sessionFolder
           ? (
               `**Per-thread session folder.** This roundtable thread has its own subfolder at ` +
               `**\`${sessionFolder}/\`**. Write any durable contributions (notes, drafts, position ` +
-              `briefs) into that exact path — e.g. \`write_file("${sessionFolder}/my_notes.md", "...")\` — ` +
-              `so they're captured into the session manifest and recoverable later via ` +
-              `\`read_session_file\` and \`get_thread_summary\`. Writes outside this folder are saved ` +
-              `but won't appear in the per-thread manifest.`
+              `briefs) into that exact path so they're captured into the session manifest and ` +
+              `recoverable later via \`get_thread_summary\` (which returns the manifest) — then read ` +
+              `the listed paths directly with your built-in file tools. **Do not invent filenames the ` +
+              `manifest does not list.** Writes outside this folder are saved but won't appear in the ` +
+              `per-thread manifest.`
             )
           : ""),
       );
@@ -280,8 +272,10 @@ export async function roundtableContextBuilderNode(
       "with summary previews. Use when you don't have a precise vector query.\n" +
       "- `list_my_roundtables({status?, query?})` → `get_roundtable_overview(roundtableId)` — " +
       "discover and read the short summary of a past roundtable.\n" +
-      "- `get_thread_summary(threadId)` → `grep_session_file` / `read_session_file` for any " +
-      "files the manifest points at.\n\n" +
+      "- `get_thread_summary(threadId)` → returns a file manifest; open the listed paths " +
+      "(`<workspacePath>/threads/<threadId>/...`) with your built-in file tools (`Read`/`Grep`/" +
+      "`Glob` for Anthropic SDK, `shell` for Codex SDK). Do not invent filenames the manifest " +
+      "doesn't list.\n\n" +
       "Don't gratuitously recall on every turn — fetch when there's a real connection to make.",
     );
     sections.push("");

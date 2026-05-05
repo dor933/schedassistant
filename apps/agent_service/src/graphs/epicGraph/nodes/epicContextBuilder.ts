@@ -631,33 +631,20 @@ function formatEpicSystemPrompt(opts: {
   }
 
   // ── Workspace ──
-  if (opts.agentWorkspacePath && opts.agentHasFilesystemMcp) {
+  if (opts.agentWorkspacePath) {
     const sessionFolder = opts.threadId
       ? `${opts.agentWorkspacePath}/threads/${opts.threadId}`
       : null;
     sections.push("## Workspace");
     sections.push(
-      `Your persistent workspace lives at \`${opts.agentWorkspacePath}\`. Access it via the ` +
-      "**filesystem MCP** (server `filesystem`, rooted at `/app/data`): `list_directory`, " +
-      "`read_text_file`, `write_file`, `edit_file`, `search_files`. Always use the absolute " +
-      "path above as the prefix.\n\n" +
-      "**Reading files — what each tool gives you.** Two tool families are available; pick " +
-      "whichever fits the task.\n" +
-      "- `read_text_file` (filesystem MCP) — reads any file under `/app/data`. Supports " +
-      "`head` (first N lines) or `tail` (last N lines); cannot combine both or take middle " +
-      "slices.\n" +
-      "- `search_files` (filesystem MCP) — filename glob across the filesystem. Not a " +
-      "content grep.\n" +
-      "- `read_session_file` — reads files **inside a per-thread session folder**. Adds " +
-      "`offset` + `limit` for arbitrary line ranges, cross-thread access (any past thread you " +
-      "participated in — single-chat / group thread you own, or roundtable thread you joined), " +
-      "and a manifest-summary fallback when a file is missing.\n" +
-      "- `grep_session_file` — content search with line numbers **inside a session-folder " +
-      "file**. The filesystem MCP has no equivalent.\n\n" +
-      "Rule of thumb: library and long-form references are usually read in full with " +
-      "`read_text_file`; session files (captures, plans, working memory) are usually " +
-      "*located* with `grep_session_file` + `read_session_file` rather than pulled whole — " +
-      "but nothing forces this, do whatever the task needs.\n\n" +
+      `Your persistent workspace lives at \`${opts.agentWorkspacePath}\`.\n\n` +
+      `**Use your built-in file tools** to read, write, and search inside the workspace:\n` +
+      `- Anthropic SDK: \`Read\`, \`Write\`, \`Edit\`, \`MultiEdit\`, \`Glob\`, \`Grep\` (rooted at the ` +
+      `workspace path — relative paths resolve under it).\n` +
+      `- Codex SDK: \`shell\` (use \`cat\`, \`rg\`, \`ls\`, \`sed -n\` against absolute paths under the ` +
+      `workspace).\n` +
+      `- If the filesystem MCP server is attached: \`read_text_file\`, \`write_file\`, \`edit_file\`, ` +
+      `\`search_files\`, \`list_directory\` (absolute paths under \`/app/data\`).\n\n` +
       "**Allowed file formats — writes are restricted to `.md` and `.txt` only.** Other " +
       "extensions are rejected before they hit disk. Render structured data as Markdown " +
       "(tables, fenced code blocks) inside a `.md` file when you need it.\n\n" +
@@ -666,10 +653,11 @@ function formatEpicSystemPrompt(opts: {
             `**Per-thread session folder — write durable artifacts here, NOT at the workspace root.**\n` +
             `This conversation's session folder is **\`${sessionFolder}/\`** (already created). ` +
             `Every durable artifact (epic plans, audit reports, large analyses) **MUST be written under ` +
-            `this exact absolute path**, e.g. \`write_file("${sessionFolder}/epic_plan.md", "...")\`. ` +
-            `Writes here are captured into the session manifest, summarised, and indexed for vector ` +
-            `retrieval — so a future epic run can recover them via \`recall_episodic_memory\` → ` +
-            `\`get_thread_summary\` → \`read_session_file\`. Writes anywhere else under ` +
+            `this exact absolute path**. Writes here are captured into the session manifest, ` +
+            `summarised, and indexed for vector retrieval — so a future epic run can recover them via ` +
+            `\`recall_episodic_memory\` → \`get_thread_summary\` (which returns the manifest), then ` +
+            `read the listed paths directly with your built-in file tools. **Do not invent filenames ` +
+            `the manifest does not list.** Writes anywhere else under ` +
             `\`${opts.agentWorkspacePath}\` are still saved but **will NOT appear in the per-thread ` +
             `manifest** and won't surface in future sessions.\n\n` +
 
@@ -681,8 +669,8 @@ function formatEpicSystemPrompt(opts: {
             `in plain English — e.g. *"Write the plan as \`<filename>.md\` in the current session ` +
             `folder."* The CLI executor receives the **current** thread's session-folder path in its ` +
             `system prompt at run time, so it always writes to the right place. **The same rule ` +
-            `applies for your own writes via filesystem MCP for the current turn** — using the ` +
-            `interpolated path above is fine because it's resolved against the active thread.`
+            `applies for your own writes for the current turn** — using the interpolated path above ` +
+            `is fine because it's resolved against the active thread.`
           )
         : ""),
     );
@@ -860,8 +848,10 @@ function formatEpicSystemPrompt(opts: {
     "**Cascade after you have a thread_id (from any of the entry points above):**\n" +
     "  1. `get_thread_summary(threadId)` — full saved summary + a manifest of every session file " +
     "written.\n" +
-    "  2. If a manifest entry looks promising, `grep_session_file(threadId, path, pattern)` then " +
-    "`read_session_file(threadId, path, offset, limit)` for the slice that matters.\n" +
+    "  2. If a manifest entry looks promising, open the listed path " +
+    "(`<workspacePath>/threads/<threadId>/...`) directly with your built-in file tools " +
+    "(`Read`/`Grep`/`Glob` for Anthropic SDK, `shell` for Codex SDK). Do not invent filenames " +
+    "the manifest doesn't list.\n" +
     "  3. For a roundtable, prefer `get_roundtable_overview(roundtableId)` — its `shortSummary` " +
     "(one paragraph) is usually enough; drop into the long structured `summary` only when you need " +
     "the full breakdown.\n\n" +

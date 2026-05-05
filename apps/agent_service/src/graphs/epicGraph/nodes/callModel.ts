@@ -44,8 +44,6 @@ import {
   ListMyRoundtablesTool,
   GetRoundtableOverviewTool,
 } from "../../../tools/roundtableRecallTools";
-import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
-import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import {
   ListProjectsTool,
   ListRepositoriesTool,
@@ -203,10 +201,12 @@ export async function epicCallModelNode(
     SaveEpisodicMemoryTool(agentId, userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
-    // Thread recall — same reason as basicGraph: gives the epic
-    // orchestrator a non-vector entry point to past single-chat / group
-    // conversations it owned, before the existing get_thread_summary →
-    // grep_session_file → read_session_file cascade.
+    // Thread recall — non-vector entry point into past single-chat /
+    // group conversations the epic orchestrator owned. After picking a
+    // thread, `get_thread_summary` returns the manifest and the agent
+    // reads files from `<workspacePath>/threads/<threadId>/` using its
+    // own filesystem tools (Read/Glob/Grep SDK built-ins or
+    // read_text_file/search_files via filesystem MCP).
     ListMyThreadsTool(agentId),
     // Roundtable recall — the epic orchestrator can pull short summaries
     // of past roundtables it participated in to inform planning. Same
@@ -214,8 +214,6 @@ export async function epicCallModelNode(
     // roundtable_agents for the row in question).
     ListMyRoundtablesTool(agentId),
     GetRoundtableOverviewTool(agentId),
-    ReadSessionFileTool(agentId, threadId),
-    GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),

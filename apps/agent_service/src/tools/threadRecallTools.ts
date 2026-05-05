@@ -7,11 +7,13 @@ import type { AgentId, SessionSummary } from "@scheduling-agent/types";
 import { logger } from "../logger";
 
 /**
- * Discovery counterpart to `get_thread_summary` / `read_session_file` /
- * `grep_session_file`. Lets a primary agent enumerate the threads it
- * actually owns (single-chat / group threads where `threads.agent_id`
- * matches), so it has a non-vector entry point into the existing
- * cascade.
+ * Discovery counterpart to `get_thread_summary`. Lets a primary agent
+ * enumerate the threads it actually owns (single-chat / group threads
+ * where `threads.agent_id` matches), so it has a non-vector entry point
+ * into past conversations. After picking a threadId, the agent calls
+ * `get_thread_summary` for the manifest and reads the listed paths
+ * (`<workspacePath>/threads/<threadId>/...`) with its built-in file
+ * tools.
  *
  * Roundtable threads are intentionally excluded — they're discoverable
  * through `list_my_roundtables`. Keeping the two listings cleanly
@@ -183,8 +185,10 @@ export function ListMyThreadsTool(callerAgentId: AgentId | null) {
             "These are single-chat and group threads where YOU are the agent. " +
             "For roundtables you participated in, use `list_my_roundtables` instead. " +
             "Once you find a candidate threadId, follow up with `get_thread_summary` " +
-            "(full session summary + file manifest) and then `grep_session_file` / " +
-            "`read_session_file` for any artifacts the manifest points at.",
+            "(full session summary + file manifest) and then read the listed paths " +
+            "(`<workspacePath>/threads/<threadId>/...`) directly with your built-in " +
+            "file tools (`Read`/`Grep`/`Glob` for Anthropic SDK, `shell` for Codex SDK). " +
+            "Do NOT invent filenames the manifest doesn't list.",
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -208,8 +212,9 @@ export function ListMyThreadsTool(callerAgentId: AgentId | null) {
         "`recall_episodic_memory` to surface it. Pick a candidate threadId from the list, " +
         "then call:\n" +
         "  - `get_thread_summary(threadId)` for the full structured summary + file manifest.\n" +
-        "  - `grep_session_file(threadId, path, pattern)` to locate a specific term in a file.\n" +
-        "  - `read_session_file(threadId, path)` to read a file the manifest points at.\n\n" +
+        "  - Open any path the manifest lists (under `<workspacePath>/threads/<threadId>/`) " +
+        "directly with your built-in file tools (`Read`/`Grep`/`Glob` for Anthropic SDK, " +
+        "`shell` for Codex SDK). Do NOT invent filenames the manifest doesn't list.\n\n" +
         "Filters: `query` (substring match against title + summary text), `hasSummaryOnly` " +
         "(skip threads not yet summarized), `includeArchived` (default false).",
       schema: listThreadsSchema,

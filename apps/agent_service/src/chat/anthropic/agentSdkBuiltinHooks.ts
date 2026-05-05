@@ -8,8 +8,8 @@
  *   2. Writes that land inside the per-thread session workspace are recorded
  *      into the `recordSessionFileWrite` ledger so they show up in the session
  *      summary's `files` manifest and become searchable via the episodic-memory
- *      cascade (`recall_episodic_memory` → `get_thread_summary` →
- *      `read_session_file`).
+ *      cascade (`recall_episodic_memory` → `get_thread_summary` → read
+ *      the listed manifest paths with built-in file tools).
  *
  * When we let the model use the SDK's built-in `Write` / `Edit` / `MultiEdit`
  * tools, those LangChain wrappers do not run — Claude Agent SDK invokes the

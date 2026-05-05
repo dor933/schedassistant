@@ -36,8 +36,6 @@ import {
   ListMyRoundtablesTool,
   GetRoundtableOverviewTool,
 } from "../../../tools/roundtableRecallTools";
-import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
-import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import { ListProjectsTool, ListRepositoriesTool, GetRepositoryTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
@@ -240,8 +238,6 @@ export async function roundtableCallModelNode(
     // roundtable_agents for the row in question).
     ListMyRoundtablesTool(agentId),
     GetRoundtableOverviewTool(agentId),
-    ReadSessionFileTool(agentId, threadId),
-    GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),
