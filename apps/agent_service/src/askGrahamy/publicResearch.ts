@@ -56,6 +56,9 @@ export function compilePublicResearchView(input: {
     ...(input.pgCapabilityViews?.featureScreenView
       ? ["featureScreenView"]
       : []),
+    ...(input.pgCapabilityViews?.factorBacktestView
+      ? ["factorBacktestView"]
+      : []),
     ...(input.pgCapabilityViews?.comparisonView ? ["comparisonView"] : []),
     ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
       ? ["regimeHistoricalPlaybookView"]
@@ -99,6 +102,9 @@ export function compilePublicResearchView(input: {
       : {}),
     ...(input.pgCapabilityViews?.featureScreenView
       ? { featureScreenView: input.pgCapabilityViews.featureScreenView }
+      : {}),
+    ...(input.pgCapabilityViews?.factorBacktestView
+      ? { factorBacktestView: input.pgCapabilityViews.factorBacktestView }
       : {}),
     ...(input.pgCapabilityViews?.comparisonView
       ? { comparisonView: input.pgCapabilityViews.comparisonView }
@@ -162,6 +168,16 @@ export function compilePublicResearchView(input: {
               input.pgCapabilityViews.featureScreenView.rows.length,
           }
         : {}),
+      ...(input.pgCapabilityViews?.factorBacktestView
+        ? {
+            factorBacktestState:
+              input.pgCapabilityViews.factorBacktestView.state,
+            factorBacktestSampleSize:
+              input.pgCapabilityViews.factorBacktestView.sampleSize ?? 0,
+            factorBacktestHorizon:
+              input.pgCapabilityViews.factorBacktestView.horizon,
+          }
+        : {}),
       ...(input.pgCapabilityViews?.comparisonView
         ? {
             comparisonState: input.pgCapabilityViews.comparisonView.state,
@@ -203,6 +219,7 @@ function inferObjectType(classification: Classification): PublicResearchView["ob
   if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
   if (classification.intent === "feature_screen") return "stock";
+  if (classification.intent === "factor_conditioned_backtest") return "stock";
   if (classification.intent === "comparison") return "mixed";
   if (classification.intent === "market_regime_historical_playbook") return "regime";
   const hasStock = classification.symbols.length > 0;

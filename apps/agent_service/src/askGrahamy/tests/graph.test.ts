@@ -40,6 +40,24 @@ const featureScreenClassification: Classification = {
   warnings: [],
 };
 
+const factorBacktestClassification: Classification = {
+  intent: "factor_conditioned_backtest",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  factorBacktest: {
+    horizon: "60-day",
+    criteria: [
+      { factor: "valuation", bucket: "ATTRACTIVE" },
+      { factor: "quality", bucket: "STRONG" },
+    ],
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
 const divergenceClassification: Classification = {
   intent: "sector_momentum_vs_conviction_divergence",
   symbols: [],
@@ -298,6 +316,61 @@ test("graph loads featureScreenView for bounded stock screen intent without tick
   ]);
   const publicView = response.research.publicResearchView as PublicResearchView;
   assert.equal(publicView.featureScreenView?.rows[0].symbol, "GSL");
+  assert.equal(publicView.researchObjectViews.length, 0);
+});
+
+test("graph loads factorBacktestView for historical factor questions without ticker anchors", async () => {
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-1",
+      message: "Do cheap high-quality stocks work historically?",
+      classification: factorBacktestClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-01" },
+        }),
+      } as any,
+      pgCapabilityRunner: async () => ({
+        views: {
+          factorBacktestView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_factor_history",
+            horizon: "60-day",
+            criteria: factorBacktestClassification.factorBacktest?.criteria ?? [],
+            sampleSize: 125,
+            hitRatePct: 57.5,
+            medianReturnPct: 2.35,
+            p25ReturnPct: -6.79,
+            p75ReturnPct: 11.23,
+            sampleAdequacy: "ROBUST",
+            freshness: { dataThrough: "2026-02-02", state: "fresh" },
+            warnings: ["This is historical/base-rate factor evidence."],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async () => ({
+        answerText: "The supplied PG factor backtest is robust.",
+        suggestedFollowups: [],
+        warnings: [],
+      }),
+    },
+  );
+
+  assert.equal(response.answerType, "stock");
+  assert.equal(response.meta.researchObjectKeys?.length, 0);
+  assert.deepEqual(response.meta.sourcesUsed, [
+    { type: "research", name: "factor_conditioned_backtest" },
+  ]);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.factorBacktestView?.sampleSize, 125);
   assert.equal(publicView.researchObjectViews.length, 0);
 });
 

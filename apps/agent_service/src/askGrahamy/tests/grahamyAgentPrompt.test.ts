@@ -194,6 +194,69 @@ test("LLM prompt receives public-safe feature screen view", () => {
   assertNoFreshnessInternals(prompt);
 });
 
+test("LLM prompt receives public-safe factor backtest view", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "Do cheap high-quality stocks work historically?",
+    warnings: [],
+    classification: {
+      intent: "factor_conditioned_backtest",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      factorBacktest: {
+        horizon: "60-day",
+        criteria: [
+          { factor: "valuation", bucket: "ATTRACTIVE" },
+          { factor: "quality", bucket: "STRONG" },
+        ],
+      },
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      factorBacktestView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_factor_history",
+        horizon: "60-day",
+        criteria: [
+          { factor: "valuation", bucket: "ATTRACTIVE" },
+          { factor: "quality", bucket: "STRONG" },
+        ],
+        sampleSize: 125,
+        hitRatePct: 57.5,
+        medianReturnPct: 2.35,
+        p25ReturnPct: -6.79,
+        p75ReturnPct: 11.23,
+        sampleAdequacy: "ROBUST",
+        freshness: { dataThrough: "2026-02-02", state: "fresh" },
+        warnings: ["This is historical/base-rate factor evidence."],
+      },
+    },
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /factorBacktestView/);
+  assert.match(prompt, /sampleSize/);
+  assert.match(prompt, /sampleAdequacy/);
+  assert.match(prompt, /historical\/base-rate evidence/i);
+  assert.match(prompt, /Do not overstate thin samples/i);
+  assert.doesNotMatch(prompt, /researchObjects/);
+  assert.doesNotMatch(prompt, /parts/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assert.doesNotMatch(prompt, /raw_rows/);
+  assert.doesNotMatch(prompt, /feature_rules/);
+  assert.doesNotMatch(prompt, /factor_formula/);
+  assertNoFreshnessInternals(prompt);
+});
+
 test("LLM prompt receives public-safe sector divergence view", () => {
   const state: AskGrahamyState = {
     internalUserId: 1,
@@ -740,6 +803,8 @@ function assertNoFreshnessInternals(value: unknown): void {
   assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
   assert.doesNotMatch(json, /md_macro_daily_snapshot/);
   assert.doesNotMatch(json, /md_historical_benchmark_daily/);
+  assert.doesNotMatch(json, /md_forward_returns/);
+  assert.doesNotMatch(json, /sweep_universe/);
   assert.doesNotMatch(json, /pipeline_state/);
   assert.doesNotMatch(json, /run_id/);
   assert.doesNotMatch(json, /last_success_at/);

@@ -2,6 +2,8 @@ import type {
   Classification,
   ComparisonView,
   EvidenceState,
+  FactorBacktestCriterion,
+  FactorBacktestView,
   FeatureScreenCriterion,
   FeatureScreenView,
   PublicFreshnessView,
@@ -20,6 +22,7 @@ export type PgCapabilityIntent =
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
   | "feature_screen"
+  | "factor_conditioned_backtest"
   | "market_regime_historical_playbook"
   | "comparison";
 
@@ -29,6 +32,7 @@ export type PgCapabilityName =
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
   | "feature_screen"
+  | "factor_conditioned_backtest"
   | "market_regime_historical_playbook"
   | "stock_vs_sector_comparison"
   | "sector_vs_sector_comparison"
@@ -40,6 +44,7 @@ export type PgCapabilityQueryName =
   | "query_sector_delta"
   | "query_stock_idea_discovery"
   | "query_feature_screen"
+  | "query_factor_conditioned_backtest"
   | "query_regime_historical_playbook"
   | "query_stock_vs_sector_comparison"
   | "query_sector_vs_sector_comparison"
@@ -58,6 +63,7 @@ export type PgCapabilityViews = {
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
   featureScreenView?: FeatureScreenView;
+  factorBacktestView?: FactorBacktestView;
   comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
 };
@@ -87,6 +93,7 @@ export type PgCapabilityRegistryEntry = {
     | "pg_sector_weekly_history"
     | "pg_features_daily"
     | "pg_current_features"
+    | "pg_factor_history"
     | "pg_regime_history";
   freshnessSources: string[];
   fallback: "unavailable_empty_rows";
@@ -128,6 +135,7 @@ export type CachedCapabilityView = {
     | import("../types").SectorDeltaView
     | import("../types").StockIdeaView
     | import("../types").FeatureScreenView
+    | import("../types").FactorBacktestView
     | import("../types").ComparisonView
     | import("../types").RegimeHistoricalPlaybookView;
   generatedAt: string;
@@ -258,6 +266,20 @@ export type FeatureScreenRow = Record<string, unknown> & {
   peer_completed_at?: unknown;
   forward_overlay_available?: unknown;
   criteria?: FeatureScreenCriterion[];
+};
+
+export type FactorBacktestRow = Record<string, unknown> & {
+  as_of_date?: unknown;
+  horizon?: unknown;
+  sample_size?: unknown;
+  hit_rate_pct?: unknown;
+  median_return_pct?: unknown;
+  p25_return_pct?: unknown;
+  p75_return_pct?: unknown;
+  matched_row_count?: unknown;
+  source_row_count?: unknown;
+  capped_sample?: unknown;
+  criteria?: FactorBacktestCriterion[];
 };
 
 export type StockVsSectorComparisonRow = Record<string, unknown> & {

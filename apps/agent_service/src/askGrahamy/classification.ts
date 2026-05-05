@@ -6,6 +6,10 @@ import {
   INTENTS,
   type Classification,
   type ConversationContext,
+  type FactorBacktestClassification,
+  type FactorBacktestCriterion,
+  type FactorBacktestFactor,
+  type FactorBacktestHorizon,
   type FeatureScreenCriterion,
   type FeatureScreenFactor,
   type Intent,
@@ -41,6 +45,23 @@ const FEATURE_SCREEN_FACTORS = [
   "risk",
 ] as const;
 
+const FACTOR_BACKTEST_FACTORS = [
+  "valuation",
+  "quality",
+  "momentum",
+  "growth",
+  "leverage",
+  "sector",
+] as const;
+
+const FACTOR_BACKTEST_HORIZONS = [
+  "20-day",
+  "40-day",
+  "60-day",
+  "120-day",
+  "252-day",
+] as const;
+
 const CLASSIFIER_MODEL =
   process.env.ASK_GRAHAMY_CLASSIFIER_MODEL ?? "gpt-4o";
 
@@ -67,6 +88,23 @@ const classifierOutputSchema = z.object({
       }),
     )
     .max(7)
+    .nullable()
+    .optional(),
+  factorBacktest: z
+    .object({
+      criteria: z
+        .array(
+          z.object({
+            factor: z.enum(FACTOR_BACKTEST_FACTORS),
+            bucket: z.string(),
+          }),
+        )
+        .max(6),
+      horizon: z.enum(FACTOR_BACKTEST_HORIZONS).nullable().optional(),
+      unsupportedHorizon: z.string().nullable().optional(),
+      unsupportedCriteria: z.array(z.string()).max(5).nullable().optional(),
+      notes: z.array(z.string()).max(5).nullable().optional(),
+    })
     .nullable()
     .optional(),
   comparison: z
@@ -133,6 +171,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • an anchorless week-over-week sector change / sector delta request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
   • an anchorless bounded stock screen request with user-specified current feature buckets.
+  • an anchorless historical factor-combination backtest / forward-profile request.
   • an anchorless current-regime historical playbook request.
   • a stock-vs-sector, sector-vs-sector, or stock-vs-stock comparison request.
   • an anchored risk / path-risk / drawdown / probability-of-loss question.
@@ -170,7 +209,7 @@ Without prior context:
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
 stock_sector_regime, sector_conviction_leaderboard, sector_momentum_vs_conviction_divergence,
 week_over_week_sector_delta, stock_idea_discovery, market_regime_historical_playbook,
-feature_screen, comparison, follow_up, unknown.
+feature_screen, factor_conditioned_backtest, comparison, follow_up, unknown.
 
 Use intent = "sector_conviction_leaderboard" when the user asks for a sector-wide ranking without
 naming a specific sector. Examples:
@@ -235,6 +274,37 @@ Examples:
     → featureCriteria=[{factor:"quality", bucket:"STRONG"}, {factor:"sector", bucket:"Industrials"}]
   • "Show cheap stocks with strong momentum"
     → featureCriteria=[{factor:"valuation", bucket:"ATTRACTIVE"}, {factor:"momentum", bucket:"STRONG"}]
+For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+
+Use intent = "factor_conditioned_backtest" when the user asks what happened historically,
+whether factor combinations worked, or the historical forward profile of factor buckets.
+Put parsed criteria and horizon in factorBacktest. This intent is for aggregate historical
+base-rate evidence, not current stock screening.
+Supported factorBacktest criteria:
+  • valuation: ATTRACTIVE, FAIR, RICH
+  • quality: STRONG, CONSTRUCTIVE, WEAK
+  • momentum: STRONG, CONSTRUCTIVE, WEAK
+  • growth: STRONG, WEAK
+  • leverage: STRONG, STRESSED
+  • sector: exact canonical sector label
+Supported horizons: 20-day, 40-day, 60-day, 120-day, 252-day. Default horizon is 60-day.
+Map "RSI is low" / "low RSI" to momentum WEAK for V1.
+If a historical factor question names an unsupported factor such as insider buying,
+still use intent="factor_conditioned_backtest" with criteria=[] and unsupportedCriteria
+listing the unsupported public factor. Do not invent a supported proxy.
+Examples:
+  • "What happens historically when RSI is low and valuation is attractive?"
+    → intent="factor_conditioned_backtest", factorBacktest={horizon:"60-day", criteria:[{factor:"momentum", bucket:"WEAK"}, {factor:"valuation", bucket:"ATTRACTIVE"}]}
+  • "Do cheap high-quality stocks work historically?"
+    → criteria=[{factor:"valuation", bucket:"ATTRACTIVE"}, {factor:"quality", bucket:"STRONG"}], horizon:"60-day"
+  • "What is the 60-day forward profile for low momentum and strong quality?"
+    → criteria=[{factor:"momentum", bucket:"WEAK"}, {factor:"quality", bucket:"STRONG"}], horizon:"60-day"
+  • "How did this factor setup behave over 60 days?"
+    → intent="factor_conditioned_backtest"; if no criteria are named, criteria=[]
+  • "What historically happens when quality is strong but momentum is weak?"
+    → criteria=[{factor:"quality", bucket:"STRONG"}, {factor:"momentum", bucket:"WEAK"}], horizon:"60-day"
+  • "What happens historically when insider buying is high?"
+    → intent="factor_conditioned_backtest", factorBacktest={horizon:"60-day", criteria:[], unsupportedCriteria:["insider buying"]}
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
 Use intent = "market_regime_historical_playbook" when the user asks what historically works,
@@ -435,6 +505,9 @@ export async function classifyMessage(
     message,
     previousContext,
   );
+  const factorBacktest =
+    normalizeFactorBacktest(raw.factorBacktest) ??
+    inferFactorBacktestFromMessage(message);
   const featureCriteria = normalizeFeatureCriteria(raw.featureCriteria) ??
     inferFeatureScreenCriteriaFromMessage(message);
 
@@ -451,7 +524,9 @@ export async function classifyMessage(
   // resolved (symbols, sectors, regime) tuple so requiresTools and intent
   // stay consistent even if the model returned a mismatched label.
   const intent: Intent =
-    featureCriteria.length && !comparison
+    factorBacktest && !comparison
+      ? "factor_conditioned_backtest"
+      : featureCriteria.length && !comparison
       ? "feature_screen"
       : inferredAnchorlessCapability && !comparison
       ? inferredAnchorlessCapability
@@ -484,6 +559,9 @@ export async function classifyMessage(
     isFollowUp: raw.isFollowUp,
     ...(includeFocus ? { focus } : {}),
     ...(intent === "feature_screen" ? { featureCriteria } : {}),
+    ...(intent === "factor_conditioned_backtest" && factorBacktest
+      ? { factorBacktest }
+      : {}),
     ...(intent === "comparison" && comparison ? { comparison } : {}),
     requiresTools: toolsForIntent(intent),
     confidence: raw.confidence,
@@ -533,6 +611,7 @@ export function toolsForIntent(intent: Intent): ToolName[] {
     case "week_over_week_sector_delta":
     case "stock_idea_discovery":
     case "feature_screen":
+    case "factor_conditioned_backtest":
     case "market_regime_historical_playbook":
     case "comparison":
       return ["get_market_context"];
@@ -556,6 +635,7 @@ function isAnchorlessCapabilityIntent(intent: Intent): boolean {
     intent === "week_over_week_sector_delta" ||
     intent === "stock_idea_discovery" ||
     intent === "feature_screen" ||
+    intent === "factor_conditioned_backtest" ||
     intent === "market_regime_historical_playbook"
   );
 }
@@ -584,6 +664,144 @@ function inferAnchorlessCapabilityFromMessage(
   ) {
     return "market_regime_historical_playbook";
   }
+  return undefined;
+}
+
+function normalizeFactorBacktest(
+  input: ClassifierOutput["factorBacktest"],
+): FactorBacktestClassification | undefined {
+  if (!input) return undefined;
+  const criteria = uniqueFactorBacktestCriteria(
+    input.criteria
+      .map((item) => normalizeFactorBacktestCriterion(item.factor, item.bucket))
+      .filter((item): item is FactorBacktestCriterion => !!item),
+  );
+  const horizon = normalizeFactorBacktestHorizon(input.horizon ?? undefined);
+  const unsupportedHorizon = input.unsupportedHorizon?.trim() || undefined;
+  const unsupportedCriteria = (input.unsupportedCriteria ?? [])
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  const notes = (input.notes ?? [])
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  if (!criteria.length && !horizon && !unsupportedHorizon && !unsupportedCriteria.length) {
+    return undefined;
+  }
+  return {
+    criteria,
+    horizon: horizon ?? "60-day",
+    ...(unsupportedHorizon && !horizon ? { unsupportedHorizon } : {}),
+    ...(unsupportedCriteria.length ? { unsupportedCriteria } : {}),
+    ...(notes.length ? { notes } : {}),
+  };
+}
+
+function inferFactorBacktestFromMessage(
+  message: string,
+): FactorBacktestClassification | undefined {
+  if (!looksLikeFactorBacktestRequest(message)) return undefined;
+  const criteria: FactorBacktestCriterion[] = [];
+  const unsupportedCriteria: string[] = [];
+  const notes: string[] = [];
+
+  if (/\b(?:rsi\s+(?:is\s+)?low|low\s+rsi|oversold)\b/i.test(message)) {
+    criteria.push({ factor: "momentum", bucket: "WEAK" });
+    notes.push(
+      "In V1, low-RSI requests are represented by the public weak momentum bucket; no raw RSI threshold is exposed.",
+    );
+  }
+
+  if (/\b(cheap|value|undervalued|attractive\s+valuation|valuation\s+is\s+attractive|attractively\s+valued)\b/i.test(message)) {
+    criteria.push({ factor: "valuation", bucket: "ATTRACTIVE" });
+  } else if (/\bfair(?:ly)?\s+(?:valued|valuation)\b/i.test(message)) {
+    criteria.push({ factor: "valuation", bucket: "FAIR" });
+  } else if (/\b(expensive|rich|overvalued)\b/i.test(message)) {
+    criteria.push({ factor: "valuation", bucket: "RICH" });
+  }
+
+  if (/\b(strong|high)[-\s]?quality\b/i.test(message) || /\bquality\s+is\s+strong\b/i.test(message)) {
+    criteria.push({ factor: "quality", bucket: "STRONG" });
+  } else if (/\bconstructive\s+quality\b/i.test(message)) {
+    criteria.push({ factor: "quality", bucket: "CONSTRUCTIVE" });
+  } else if (/\bweak\s+quality\b/i.test(message)) {
+    criteria.push({ factor: "quality", bucket: "WEAK" });
+  }
+
+  if (/\bstrong\s+momentum\b/i.test(message)) {
+    criteria.push({ factor: "momentum", bucket: "STRONG" });
+  } else if (/\b(?:positive|constructive)\s+momentum\b/i.test(message)) {
+    criteria.push({ factor: "momentum", bucket: "CONSTRUCTIVE" });
+  } else if (/\b(?:low|weak)\s+momentum\b/i.test(message) || /\bmomentum\s+is\s+weak\b/i.test(message)) {
+    criteria.push({ factor: "momentum", bucket: "WEAK" });
+  }
+
+  if (/\bstrong\s+growth\b/i.test(message)) {
+    criteria.push({ factor: "growth", bucket: "STRONG" });
+  } else if (/\bweak\s+growth\b/i.test(message)) {
+    criteria.push({ factor: "growth", bucket: "WEAK" });
+  }
+
+  if (/\b(strong\s+(?:balance\s+sheet|leverage)|low\s+leverage)\b/i.test(message)) {
+    criteria.push({ factor: "leverage", bucket: "STRONG" });
+  } else if (/\b(stressed\s+leverage|high\s+leverage|debt\s+stressed|stressed\s+balance\s+sheet)\b/i.test(message)) {
+    criteria.push({ factor: "leverage", bucket: "STRESSED" });
+  }
+
+  if (/\binsider(?:\s+(?:buying|purchases?|activity|ownership))?\b/i.test(message)) {
+    unsupportedCriteria.push("insider buying");
+  }
+
+  for (const mention of findSectorMentions(message)) {
+    criteria.push({ factor: "sector", bucket: mention.label });
+    break;
+  }
+
+  const horizon = inferFactorBacktestHorizon(message);
+  return {
+    criteria: uniqueFactorBacktestCriteria(criteria),
+    horizon: horizon.horizon ?? "60-day",
+    ...(horizon.unsupportedHorizon ? { unsupportedHorizon: horizon.unsupportedHorizon } : {}),
+    ...(unsupportedCriteria.length ? { unsupportedCriteria } : {}),
+    ...(notes.length ? { notes: Array.from(new Set(notes)).slice(0, 5) } : {}),
+  };
+}
+
+function looksLikeFactorBacktestRequest(message: string): boolean {
+  if (/\bregime\b/i.test(message)) return false;
+  if (/\bsectors?\b/i.test(message) && !/\bstocks?\b/i.test(message)) return false;
+  const hasHistoricalAsk =
+    /\b(historical|historically|backtest|worked|work\s+historically|forward\s+profile|factor\s+setup|behav(?:e|ed)|base[-\s]?rate)\b/i.test(
+      message,
+    );
+  const hasFactorLanguage =
+    /\b(rsi|valuation|valued|cheap|value|quality|momentum|growth|leverage|insider(?:\s+(?:buying|purchases?|activity|ownership))?|factor\s+setup)\b/i.test(
+      message,
+    );
+  return hasHistoricalAsk && hasFactorLanguage;
+}
+
+function inferFactorBacktestHorizon(
+  message: string,
+): { horizon?: FactorBacktestHorizon; unsupportedHorizon?: string } {
+  const match = message.match(/\b(20|40|60|120|252|[1-9][0-9]{0,2})[-\s]?(?:day|days|d)\b/i);
+  const raw = match?.[1];
+  if (!raw) return { horizon: "60-day" };
+  const horizon = normalizeFactorBacktestHorizon(`${raw}-day`);
+  return horizon ? { horizon } : { unsupportedHorizon: `${raw}-day` };
+}
+
+function normalizeFactorBacktestHorizon(
+  value: string | null | undefined,
+): FactorBacktestHorizon | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "-");
+  if (normalized === "20-day" || normalized === "20-days") return "20-day";
+  if (normalized === "40-day" || normalized === "40-days") return "40-day";
+  if (normalized === "60-day" || normalized === "60-days") return "60-day";
+  if (normalized === "120-day" || normalized === "120-days") return "120-day";
+  if (normalized === "252-day" || normalized === "252-days") return "252-day";
   return undefined;
 }
 
@@ -721,6 +939,56 @@ function normalizeFeatureCriterion(
   }
 }
 
+function normalizeFactorBacktestCriterion(
+  factor: FactorBacktestFactor,
+  bucket: string,
+): FactorBacktestCriterion | undefined {
+  const normalizedBucket = bucket.trim();
+  if (!normalizedBucket) return undefined;
+  const upper = normalizedBucket.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+  switch (factor) {
+    case "valuation":
+      if (["CHEAP", "ATTRACTIVE", "UNDERVALUED", "VALUE"].includes(upper)) {
+        return { factor, bucket: "ATTRACTIVE" };
+      }
+      if (["FAIR", "FAIR_VALUE", "FAIRLY_VALUED"].includes(upper)) {
+        return { factor, bucket: "FAIR" };
+      }
+      if (["EXPENSIVE", "RICH", "OVERVALUED"].includes(upper)) {
+        return { factor, bucket: "RICH" };
+      }
+      return undefined;
+    case "quality":
+      if (["STRONG", "HIGH", "HIGH_QUALITY"].includes(upper)) return { factor, bucket: "STRONG" };
+      if (["CONSTRUCTIVE", "MODERATE"].includes(upper)) return { factor, bucket: "CONSTRUCTIVE" };
+      if (["WEAK", "LOW"].includes(upper)) return { factor, bucket: "WEAK" };
+      return undefined;
+    case "momentum":
+      if (["STRONG", "HIGH"].includes(upper)) return { factor, bucket: "STRONG" };
+      if (["POSITIVE", "CONSTRUCTIVE"].includes(upper)) return { factor, bucket: "CONSTRUCTIVE" };
+      if (["WEAK", "LOW", "NEGATIVE", "LOW_RSI", "OVERSOLD"].includes(upper)) {
+        return { factor, bucket: "WEAK" };
+      }
+      return undefined;
+    case "growth":
+      if (["STRONG", "HIGH"].includes(upper)) return { factor, bucket: "STRONG" };
+      if (["WEAK", "LOW", "NEGATIVE"].includes(upper)) return { factor, bucket: "WEAK" };
+      return undefined;
+    case "leverage":
+      if (["STRONG", "LOW", "LOW_LEVERAGE", "HEALTHY"].includes(upper)) {
+        return { factor, bucket: "STRONG" };
+      }
+      if (["STRESSED", "HIGH", "HIGH_LEVERAGE", "WEAK"].includes(upper)) {
+        return { factor, bucket: "STRESSED" };
+      }
+      return undefined;
+    case "sector": {
+      const sector = canonicalSectorLabel(normalizedBucket);
+      return sector ? { factor, bucket: sector } : undefined;
+    }
+  }
+}
+
 function uniqueCriteria(criteria: FeatureScreenCriterion[]): FeatureScreenCriterion[] {
   const seen = new Set<string>();
   const out: FeatureScreenCriterion[] = [];
@@ -731,6 +999,20 @@ function uniqueCriteria(criteria: FeatureScreenCriterion[]): FeatureScreenCriter
     out.push(item);
   }
   return out.slice(0, 7);
+}
+
+function uniqueFactorBacktestCriteria(
+  criteria: FactorBacktestCriterion[],
+): FactorBacktestCriterion[] {
+  const seen = new Set<string>();
+  const out: FactorBacktestCriterion[] = [];
+  for (const item of criteria) {
+    const key = `${item.factor}:${item.bucket}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out.slice(0, 6);
 }
 
 function normalizeComparison(

@@ -348,6 +348,12 @@ function buildMeta(
   if (pgCapabilityViews?.featureScreenView) {
     capabilitySources.push({ type: "research", name: "feature_screen" });
   }
+  if (pgCapabilityViews?.factorBacktestView) {
+    capabilitySources.push({
+      type: "research",
+      name: "factor_conditioned_backtest",
+    });
+  }
   if (pgCapabilityViews?.comparisonView) {
     const comparisonType = pgCapabilityViews.comparisonView.comparisonType;
     capabilitySources.push({
@@ -400,6 +406,7 @@ function inferAnswerType(classification: Classification): AskGrahamyResponse["an
   if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
   if (classification.intent === "feature_screen") return "stock";
+  if (classification.intent === "factor_conditioned_backtest") return "stock";
   if (classification.intent === "comparison") return "mixed";
   if (classification.intent === "market_regime_historical_playbook") return "regime";
   const stock = classification.symbols.length > 0;

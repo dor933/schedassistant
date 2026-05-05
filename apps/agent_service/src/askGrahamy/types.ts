@@ -8,6 +8,7 @@ export const INTENTS = [
   "week_over_week_sector_delta",
   "stock_idea_discovery",
   "feature_screen",
+  "factor_conditioned_backtest",
   "comparison",
   "market_regime_historical_playbook",
   "regime",
@@ -119,6 +120,34 @@ export type FeatureScreenCriterion = {
   bucket: string;
 };
 
+export type FactorBacktestFactor =
+  | "valuation"
+  | "quality"
+  | "momentum"
+  | "growth"
+  | "leverage"
+  | "sector";
+
+export type FactorBacktestHorizon =
+  | "20-day"
+  | "40-day"
+  | "60-day"
+  | "120-day"
+  | "252-day";
+
+export type FactorBacktestCriterion = {
+  factor: FactorBacktestFactor;
+  bucket: string;
+};
+
+export type FactorBacktestClassification = {
+  criteria: FactorBacktestCriterion[];
+  horizon?: FactorBacktestHorizon;
+  unsupportedHorizon?: string;
+  unsupportedCriteria?: string[];
+  notes?: string[];
+};
+
 export type Classification = {
   intent: Intent;
   symbols: string[];
@@ -127,6 +156,7 @@ export type Classification = {
   isFollowUp: boolean;
   focus?: ClassificationFocus;
   featureCriteria?: FeatureScreenCriterion[];
+  factorBacktest?: FactorBacktestClassification;
   comparison?: ComparisonClassification;
   requiresTools: ToolName[];
   confidence: Confidence;
@@ -502,6 +532,22 @@ export type FeatureScreenView = {
   warnings: string[];
 };
 
+export type FactorBacktestView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_factor_history";
+  horizon: FactorBacktestHorizon;
+  criteria: FactorBacktestCriterion[];
+  sampleSize?: number;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  p25ReturnPct?: number;
+  p75ReturnPct?: number;
+  sampleAdequacy?: "ROBUST" | "ADEQUATE" | "THIN" | "UNKNOWN";
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
 export type ComparisonSideMetrics = {
   convictionScorePct?: number;
   convictionBucket?: string;
@@ -593,6 +639,7 @@ export type PgCapabilityViews = {
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
   featureScreenView?: FeatureScreenView;
+  factorBacktestView?: FactorBacktestView;
   comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
 };
@@ -657,6 +704,7 @@ export type PublicResearchView = {
   sectorDeltaView?: SectorDeltaView;
   stockIdeaView?: StockIdeaView;
   featureScreenView?: FeatureScreenView;
+  factorBacktestView?: FactorBacktestView;
   comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
   evidence: Record<string, unknown>;

@@ -279,6 +279,115 @@ test("classifies bounded feature screen phrasings with public criteria", async (
   }
 });
 
+test("classifies factor-conditioned backtest phrasings with criteria and horizon", async () => {
+  const examples = [
+    {
+      message: "What happens historically when RSI is low and valuation is attractive?",
+      expected: [
+        { factor: "momentum", bucket: "WEAK" },
+        { factor: "valuation", bucket: "ATTRACTIVE" },
+      ],
+      horizon: "60-day",
+    },
+    {
+      message: "Do cheap high-quality stocks work historically?",
+      expected: [
+        { factor: "valuation", bucket: "ATTRACTIVE" },
+        { factor: "quality", bucket: "STRONG" },
+      ],
+      horizon: "60-day",
+    },
+    {
+      message: "What is the 60-day forward profile for low momentum and strong quality?",
+      expected: [
+        { factor: "momentum", bucket: "WEAK" },
+        { factor: "quality", bucket: "STRONG" },
+      ],
+      horizon: "60-day",
+    },
+    {
+      message: "What historically happens when quality is strong but momentum is weak?",
+      expected: [
+        { factor: "quality", bucket: "STRONG" },
+        { factor: "momentum", bucket: "WEAK" },
+      ],
+      horizon: "60-day",
+    },
+  ];
+
+  for (const example of examples) {
+    const result = await classifyMessage(example.message, undefined, {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "medium",
+      }),
+    });
+    assert.equal(result.intent, "factor_conditioned_backtest", example.message);
+    assert.deepEqual(result.symbols, [], example.message);
+    assert.deepEqual(result.sectors, [], example.message);
+    assert.deepEqual(
+      sortCriteria(result.factorBacktest?.criteria ?? []),
+      sortCriteria(example.expected),
+      example.message,
+    );
+    assert.equal(result.factorBacktest?.horizon, example.horizon, example.message);
+    assert.deepEqual(result.requiresTools, ["get_market_context"]);
+  }
+});
+
+test("factor-conditioned backtest captures unsupported public factors without inventing proxies", async () => {
+  const result = await classifyMessage(
+    "What happens historically when insider buying is high?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "medium",
+      }),
+    },
+  );
+
+  assert.equal(result.intent, "factor_conditioned_backtest");
+  assert.deepEqual(result.factorBacktest?.criteria, []);
+  assert.deepEqual(result.factorBacktest?.unsupportedCriteria, ["insider buying"]);
+  assert.equal(result.factorBacktest?.horizon, "60-day");
+});
+
+function sortCriteria<T extends { factor: string; bucket: string }>(criteria: T[]): T[] {
+  return [...criteria].sort((a, b) => `${a.factor}:${a.bucket}`.localeCompare(`${b.factor}:${b.bucket}`));
+}
+
+test("factor-conditioned backtest captures unsupported horizons without substituting", async () => {
+  const result = await classifyMessage(
+    "What is the 90-day forward profile for strong quality?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "medium",
+      }),
+    },
+  );
+
+  assert.equal(result.intent, "factor_conditioned_backtest");
+  assert.deepEqual(result.factorBacktest?.criteria, [
+    { factor: "quality", bucket: "STRONG" },
+  ]);
+  assert.equal(result.factorBacktest?.unsupportedHorizon, "90-day");
+});
+
 test("classifies sector conviction/momentum divergence phrasings", async () => {
   const divergence = await classifyMessage(
     "Which sectors have conviction but weak price action?",

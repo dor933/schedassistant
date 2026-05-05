@@ -1,5 +1,9 @@
 import type { Classification, Intent } from "../types";
 import {
+  buildFactorConditionedBacktestView,
+  factorConditionedBacktestCacheKeyParams,
+} from "./factorConditionedBacktest";
+import {
   buildFeatureScreenView,
   featureScreenCacheKeyParams,
 } from "./featureScreen";
@@ -127,6 +131,19 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     run: buildFeatureScreenView,
     viewSlot: "featureScreenView",
     cacheKeyParams: featureScreenCacheKeyParams,
+  },
+  {
+    name: "factor_conditioned_backtest",
+    intent: "factor_conditioned_backtest",
+    requiredParams: ["factorBacktest.criteria"],
+    queryName: "query_factor_conditioned_backtest",
+    source: "pg_factor_history",
+    freshnessSources: ["sweep_universe"],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildFactorConditionedBacktestView,
+    viewSlot: "factorBacktestView",
+    cacheKeyParams: factorConditionedBacktestCacheKeyParams,
   },
   {
     name: "market_regime_historical_playbook",

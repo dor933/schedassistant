@@ -313,6 +313,16 @@ function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): st
       `## FEATURE SCREEN — PG current-feature screen\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
     );
   }
+  if (views?.factorBacktestView) {
+    const humanized = humanizeJsonValue({
+      factorBacktestView: views.factorBacktestView,
+      freshness: views.factorBacktestView.freshness,
+      warnings: views.factorBacktestView.warnings,
+    });
+    blocks.push(
+      `## FACTOR-CONDITIONED BACKTEST — PG historical base-rate evidence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
+    );
+  }
   if (views?.comparisonView) {
     const humanized = humanizeJsonValue({
       comparisonView: views.comparisonView,
@@ -413,6 +423,12 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Explain each screen result only with \`reasonBullets\` and explicit public bucket fields in the row. Do not expose thresholds, formulas, SQL, raw rows, table names, feature rules, IDs, gates, or scoring internals.
 - Treat \`featureScreenView\` as PG current-feature screening evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
 - If \`featureScreenView.state = complete\` and \`rows\` is empty, say no matching candidates were found. If unavailable, say the feature screen is unavailable.
+- For historical factor-combination questions, use only \`factorBacktestView\`. Mention \`horizon\`, \`sampleSize\`, and \`sampleAdequacy\`.
+- Treat \`factorBacktestView\` as historical/base-rate evidence, not a prediction, recommendation, validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
+- Do not describe \`factorBacktestView\` as current, latest market data, or today's data. Use \`freshness.dataThrough\` only as the historical sample-through date for the selected horizon.
+- Do not overstate thin samples. If \`factorBacktestView.state = partial\`, explain the public sample limitation from \`warnings\`.
+- Do not expose thresholds, formulas, SQL, raw rows, table names, internal factor definitions, feature rules, IDs, gates, scoring internals, or operational source details for \`factorBacktestView\`.
+- If \`factorBacktestView.state = complete\` and \`sampleSize = 0\`, say no matching historical observations were found. If unavailable, say factor backtest data is unavailable.
 - For stock-vs-sector, sector-vs-sector, and symbol-vs-symbol comparison questions, use only \`comparisonView\`. Do not use raw Research Objects, memory, table names, formulas, or inferred metrics to compare.
 - For \`comparisonView\`, prefer dimensional language like "the left side is stronger on X and weaker on Y." Do not say "better" unless multiple public \`deltas\` and \`summaryBullets\` clearly support it.
 - Mention \`comparisonView.asOfDate\` or \`comparisonView.freshness.dataThrough\`. Treat \`comparisonView\` as PG current/base-rate comparison evidence, not validated live edge evidence.

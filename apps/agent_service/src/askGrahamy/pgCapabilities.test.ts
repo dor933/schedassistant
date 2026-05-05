@@ -16,6 +16,7 @@ import {
 } from "./pgCapabilities/registry";
 import type { CachedCapabilityView } from "./pgCapabilities/types";
 import { assessCapabilityFreshness } from "./pgCapabilities/freshnessGuard";
+import { buildFactorConditionedBacktestView } from "./pgCapabilities/factorConditionedBacktest";
 import { buildFeatureScreenView } from "./pgCapabilities/featureScreen";
 import { compilePublicResearchView } from "./publicResearch";
 import type { Classification } from "./types";
@@ -52,6 +53,24 @@ const featureScreenClassification: Classification = {
     { factor: "valuation", bucket: "ATTRACTIVE" },
     { factor: "quality", bucket: "STRONG" },
   ],
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const factorBacktestClassification: Classification = {
+  intent: "factor_conditioned_backtest",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  factorBacktest: {
+    horizon: "60-day",
+    criteria: [
+      { factor: "valuation", bucket: "ATTRACTIVE" },
+      { factor: "quality", bucket: "STRONG" },
+    ],
+  },
   requiresTools: ["get_market_context"],
   confidence: "high",
   warnings: [],
@@ -301,6 +320,15 @@ test("PG capability registry routes feature screen intent", () => {
   assert.equal(entry.queryName, "query_feature_screen");
   assert.equal(entry.source, "pg_current_features");
   assert.deepEqual(entry.requiredParams, ["featureCriteria"]);
+});
+
+test("PG capability registry routes factor-conditioned backtest intent", () => {
+  const entry = capabilityForIntent("factor_conditioned_backtest");
+  assert.ok(entry);
+  assert.equal(entry.name, "factor_conditioned_backtest");
+  assert.equal(entry.queryName, "query_factor_conditioned_backtest");
+  assert.equal(entry.source, "pg_factor_history");
+  assert.deepEqual(entry.requiredParams, ["factorBacktest.criteria"]);
 });
 
 test("PG capability registry routes sector divergence intent", () => {
@@ -1592,6 +1620,208 @@ test("publicResearchView carries featureScreenView without Research Objects", as
   assertNoForbiddenPublicKeys(publicView);
 });
 
+test("factor-conditioned backtest returns complete aggregate public view", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildFactorConditionedBacktestView(
+    {
+      classification: factorBacktestClassification,
+      message: "Do cheap high-quality stocks work historically?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            as_of_date: "2026-02-02",
+            horizon: "60-day",
+            sample_size: 125,
+            hit_rate_pct: 57.45,
+            median_return_pct: 2.345,
+            p25_return_pct: -6.789,
+            p75_return_pct: 11.234,
+            matched_row_count: 125,
+            source_row_count: 50000,
+            capped_sample: false,
+            raw_rows: [{ symbol: "GSL" }],
+            raw_sql: "must-not-leak",
+            factor_formula: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.HORIZON, "60-day");
+  assert.equal(replacements.VALUATION_BUCKET, "ATTRACTIVE");
+  assert.equal(replacements.QUALITY_BUCKET, "STRONG");
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_factor_history");
+  assert.equal(view.horizon, "60-day");
+  assert.deepEqual(view.criteria, factorBacktestClassification.factorBacktest?.criteria);
+  assert.equal(view.sampleSize, 125);
+  assert.equal(view.hitRatePct, 57.5);
+  assert.equal(view.medianReturnPct, 2.35);
+  assert.equal(view.p25ReturnPct, -6.79);
+  assert.equal(view.p75ReturnPct, 11.23);
+  assert.equal(view.sampleAdequacy, "ROBUST");
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-02-02",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("factor-conditioned backtest returns partial view for thin samples", async () => {
+  const result = await buildFactorConditionedBacktestView(
+    {
+      classification: factorBacktestClassification,
+      message: "What historically happens when quality is strong but momentum is weak?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async () => [
+        {
+          as_of_date: "2026-02-02",
+          sample_size: 12,
+          hit_rate_pct: 50,
+          median_return_pct: 1,
+          p25_return_pct: -8,
+          p75_return_pct: 9,
+          matched_row_count: 12,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.sampleAdequacy, "THIN");
+  assert.match(view.warnings.join(" "), /thin/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("factor-conditioned backtest returns unavailable for unsupported horizon", async () => {
+  const result = await buildFactorConditionedBacktestView({
+    classification: {
+      ...factorBacktestClassification,
+      factorBacktest: {
+        criteria: [{ factor: "quality", bucket: "STRONG" }],
+        horizon: "60-day",
+        unsupportedHorizon: "90-day",
+      },
+    },
+    message: "What is the 90-day forward profile for strong quality?",
+    snapshots: {},
+    toolOutputs: {},
+  });
+
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.match(view.warnings.join(" "), /Unsupported backtest horizon/i);
+});
+
+test("factor-conditioned backtest returns unavailable for unsupported public factors", async () => {
+  const result = await buildFactorConditionedBacktestView({
+    classification: {
+      ...factorBacktestClassification,
+      factorBacktest: {
+        criteria: [],
+        horizon: "60-day",
+        unsupportedCriteria: ["insider buying"],
+      },
+    },
+    message: "What happens historically when insider buying is high?",
+    snapshots: {},
+    toolOutputs: {},
+  });
+
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.criteria, []);
+  assert.match(view.warnings.join(" "), /Unsupported public factor criteria/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("factor-conditioned backtest returns complete zero-sample view when no matches exist", async () => {
+  const result = await buildFactorConditionedBacktestView(
+    {
+      classification: factorBacktestClassification,
+      message: "Do cheap high-quality stocks work historically?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async () => [
+        {
+          as_of_date: "2026-02-02",
+          sample_size: 0,
+          matched_row_count: 0,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.sampleSize, 0);
+  assert.equal(view.sampleAdequacy, "THIN");
+  assert.match(view.warnings.join(" "), /No historical observations/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("publicResearchView carries factorBacktestView without Research Objects", async () => {
+  const result = await buildFactorConditionedBacktestView(
+    {
+      classification: factorBacktestClassification,
+      message: "Do cheap high-quality stocks work historically?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async () => [
+        {
+          as_of_date: "2026-02-02",
+          sample_size: 125,
+          hit_rate_pct: 57,
+          median_return_pct: 2,
+          p25_return_pct: -6,
+          p75_return_pct: 11,
+          matched_row_count: 125,
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: factorBacktestClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "stock");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.factorBacktestView?.sampleSize, 125);
+  assert.equal(publicView.evidence.factorBacktestSampleSize, 125);
+  assertNoForbiddenPublicKeys(publicView);
+});
+
 test("stock-vs-sector comparison returns partial public view with safe deltas", async () => {
   let replacements: Record<string, unknown> = {};
   const result = await buildStockVsSectorComparisonView(
@@ -2443,6 +2673,8 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /scoring_formula/);
   assert.doesNotMatch(json, /divergence_formula/);
   assert.doesNotMatch(json, /feature_rules/);
+  assert.doesNotMatch(json, /factor_formula/);
+  assert.doesNotMatch(json, /internal_factor_definitions/);
   assertNoFreshnessInternals(value);
 }
 
@@ -2457,6 +2689,8 @@ function assertNoFreshnessInternals(value: unknown): void {
   assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
   assert.doesNotMatch(json, /md_macro_daily_snapshot/);
   assert.doesNotMatch(json, /md_historical_benchmark_daily/);
+  assert.doesNotMatch(json, /md_forward_returns/);
+  assert.doesNotMatch(json, /sweep_universe/);
   assert.doesNotMatch(json, /pipeline_state/);
   assert.doesNotMatch(json, /run_id/);
   assert.doesNotMatch(json, /stage/);
