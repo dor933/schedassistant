@@ -5,9 +5,11 @@ import {
   executeMockResearchPlan,
   parseResearchPlan,
   researchPlanSchema,
+  shouldRunResearchPlanner,
   validateResearchPlan,
   type ResearchPlan,
 } from "../researchPlanner";
+import type { Classification } from "../types";
 
 const compoundHebrewQuestion =
   "איזה סקטור נוטה להיות חזק במצב השוק הנוכחי ואיזה מניות היסטורית חזקות אני רוצה שתמצא לי משהו נוכחי שעונה על הצלחות חוזרות היסטוריות";
@@ -63,6 +65,93 @@ const validCompoundPlan: ResearchPlan = {
     "Pipeline evidence is optional",
   ],
 };
+
+const neutralClassification: Classification = {
+  intent: "market_regime_historical_playbook",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+function classificationWith(
+  patch: Partial<Classification>,
+): Classification {
+  return {
+    intent: "unknown",
+    symbols: [],
+    sectors: [],
+    regimeRequested: false,
+    isFollowUp: false,
+    requiresTools: [],
+    confidence: "high",
+    warnings: [],
+    ...patch,
+  };
+}
+
+test("activation gate only selects clear compound regime-to-stock research questions", () => {
+  assert.equal(
+    shouldRunResearchPlanner(compoundHebrewQuestion, neutralClassification),
+    true,
+  );
+
+  assert.equal(
+    shouldRunResearchPlanner(
+      "Tell me about GSL",
+      classificationWith({ intent: "stock", symbols: ["GSL"] }),
+    ),
+    false,
+  );
+  assert.equal(
+    shouldRunResearchPlanner(
+      "Compare GSL vs DAC",
+      classificationWith({ intent: "comparison" }),
+    ),
+    false,
+  );
+  assert.equal(
+    shouldRunResearchPlanner(
+      "How risky is GSL?",
+      classificationWith({ intent: "stock", symbols: ["GSL"], focus: "risk" }),
+    ),
+    false,
+  );
+  assert.equal(
+    shouldRunResearchPlanner(
+      "Is GSL evidence-backed?",
+      classificationWith({
+        intent: "stock",
+        symbols: ["GSL"],
+        focus: "validated_evidence",
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    shouldRunResearchPlanner(
+      "Find me cheap quality stocks",
+      classificationWith({
+        intent: "feature_screen",
+        featureCriteria: [
+          { factor: "valuation", bucket: "ATTRACTIVE" },
+          { factor: "quality", bucket: "STRONG" },
+        ],
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    shouldRunResearchPlanner(
+      "What happens historically when RSI is low and valuation is attractive?",
+      classificationWith({ intent: "factor_conditioned_backtest" }),
+    ),
+    false,
+  );
+});
 
 test("planner prompt teaches Sonnet to produce a bounded multi-step plan for the Hebrew compound question", () => {
   const prompt = buildPlannerPrompt(compoundHebrewQuestion);

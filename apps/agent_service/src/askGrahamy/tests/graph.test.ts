@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runAskGrahamyGraph } from "../graph";
+import type { ResearchPlan } from "../researchPlanner";
 import type { Classification, PublicResearchView } from "../types";
 
 const leaderboardClassification: Classification = {
@@ -137,6 +138,68 @@ const regimePlaybookClassification: Classification = {
   requiresTools: ["get_market_context"],
   confidence: "high",
   warnings: [],
+};
+
+const compoundHebrewQuestion =
+  "איזה סקטור נוטה להיות חזק במצב השוק הנוכחי ואיזה מניות היסטורית חזקות אני רוצה שתמצא לי משהו נוכחי שעונה על הצלחות חוזרות היסטוריות";
+
+const compoundClassification: Classification = {
+  intent: "market_regime_historical_playbook",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const validCompoundPlan: ResearchPlan = {
+  planType: "multi_step",
+  steps: [
+    {
+      id: "regime_context",
+      capability: "market_regime_historical_playbook",
+      purpose: "Identify historically leading sectors in the current regime.",
+      params: {},
+    },
+    {
+      id: "current_candidates",
+      capability: "feature_screen",
+      purpose: "Find current stock candidates inside leading sectors.",
+      params: {},
+      dependsOn: ["regime_context"],
+      paramsFromPreviousSteps: {
+        sectorConstraints: {
+          stepId: "regime_context",
+          sourcePath: "regimeHistoricalPlaybookView.rows[role=leader].sector",
+          transform: "top_3_unique_sectors",
+        },
+      },
+    },
+    {
+      id: "pipeline_check",
+      capability: "validated_edge_evidence",
+      purpose: "Qualify top public candidates with Pipeline evidence if available.",
+      params: { topN: 3 },
+      dependsOn: ["current_candidates"],
+      paramsFromPreviousSteps: {
+        symbols: {
+          stepId: "current_candidates",
+          sourcePath: "featureScreenView.rows.symbol",
+          transform: "top_3_symbols",
+        },
+      },
+      optional: true,
+    },
+  ],
+  finalAnswerGoal: "ranked_research_candidates",
+  expectedViews: [
+    "regimeHistoricalPlaybookView",
+    "featureScreenView",
+    "validatedEdgeEvidenceView",
+  ],
+  safetyNotes: ["Use public views only", "Do not invent stocks"],
 };
 
 const validatedEvidenceClassification: Classification = {
@@ -889,4 +952,290 @@ test("graph loads regimeHistoricalPlaybookView without changing Regime RO route"
   assert.equal(publicView.regimeHistoricalPlaybookView?.regime, "NEUTRAL");
   assert.equal(publicView.regimeHistoricalPlaybookView?.rows[0].sector, "Industrials");
   assert.equal(publicView.researchObjectViews.length, 0);
+});
+
+test("graph activates research planner for compound Hebrew research question and merges mocked public views", async () => {
+  let plannerCalled = false;
+  let executorCalled = false;
+
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-compound-planner",
+      message: compoundHebrewQuestion,
+      classification: compoundClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-04" },
+        }),
+      } as any,
+      researchPlanProposer: async (message) => {
+        plannerCalled = true;
+        assert.equal(message, compoundHebrewQuestion);
+        return validCompoundPlan;
+      },
+      researchPlanExecutor: async ({ plan }) => {
+        executorCalled = true;
+        assert.equal(plan.planType, "multi_step");
+        assert.deepEqual(
+          plan.steps.map((step) => step.capability),
+          [
+            "market_regime_historical_playbook",
+            "feature_screen",
+            "validated_edge_evidence",
+          ],
+        );
+        return {
+          pgCapabilityViews: {
+            regimeHistoricalPlaybookView: {
+              viewSchemaVersion: 1,
+              state: "complete",
+              source: "pg_regime_history",
+              regime: "NEUTRAL",
+              asOfDate: "2026-05-04",
+              rows: [
+                {
+                  sector: "Industrials",
+                  rank: 1,
+                  role: "leader",
+                  hitRatePct: 56.2,
+                  evidenceStrength: "ROBUST",
+                  interpretationBullets: [
+                    "Industrials has historically screened among stronger sectors in NEUTRAL regimes.",
+                  ],
+                },
+              ],
+              risks: [],
+              summaryBullets: [
+                "Industrials has historically led in the current regime.",
+              ],
+              freshness: { dataThrough: "2026-05-04", state: "fresh" },
+              warnings: [],
+            },
+            featureScreenView: {
+              viewSchemaVersion: 1,
+              state: "complete",
+              source: "pg_current_features",
+              asOfDate: "2026-05-04",
+              screenCriteria: [{ factor: "sector", bucket: "Industrials" }],
+              rows: [
+                {
+                  symbol: "GSL",
+                  sector: "Industrials",
+                  rank: 1,
+                  hitRatePct: 58.1,
+                  medianReturnPct: 3.2,
+                  reasonBullets: ["Sector filter matched Industrials."],
+                },
+              ],
+              freshness: { dataThrough: "2026-05-04", state: "fresh" },
+              warnings: ["These are screen results to review."],
+            },
+          },
+          pipelineOverlayViews: {
+            validatedEdgeEvidenceView: {
+              viewSchemaVersion: 1,
+              state: "complete",
+              source: "client_api_research_object",
+              anchor: { type: "stock", symbol: "GSL", label: "GSL" },
+              evidenceState: "edge_evidence_present",
+              edgeCountBucket: "present",
+              eventSampleBucket: "adequate",
+              interpretationBullets: [
+                "Validated pipeline evidence is present for GSL.",
+              ],
+              freshness: { dataThrough: "2026-05-04", state: "fresh" },
+              warnings: [],
+            },
+          },
+          warnings: [],
+        };
+      },
+      grahamyAgentRunner: async (state) => {
+        assert.equal(state.pgCapabilityViews?.featureScreenView?.rows[0].symbol, "GSL");
+        assert.equal(
+          state.pgCapabilityViews?.regimeHistoricalPlaybookView?.rows[0].sector,
+          "Industrials",
+        );
+        assert.equal(
+          state.pipelineOverlayViews?.validatedEdgeEvidenceView?.anchor.symbol,
+          "GSL",
+        );
+        assert.equal(Object.prototype.hasOwnProperty.call(state, "researchPlan"), false);
+        return {
+          answerText:
+            "השורה התחתונה: Industrials מוביל היסטורית, ו-GSL הגיע ממסך המניות הציבורי.",
+          suggestedFollowups: [],
+          warnings: [],
+        };
+      },
+    },
+  );
+
+  assert.equal(plannerCalled, true);
+  assert.equal(executorCalled, true);
+  assert.equal(response.meta.researchObjectKeys?.length, 0);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.regimeHistoricalPlaybookView?.rows[0].sector, "Industrials");
+  assert.equal(publicView.featureScreenView?.rows[0].symbol, "GSL");
+  assert.equal(publicView.validatedEdgeEvidenceView?.anchor.symbol, "GSL");
+  const serialized = JSON.stringify(response);
+  assert.equal(serialized.includes("planType"), false);
+  assert.equal(serialized.includes("paramsFromPreviousSteps"), false);
+  assert.equal(serialized.includes("regime_context"), false);
+});
+
+test("graph rejects invalid compound research plan and falls back to standard route", async () => {
+  let executorCalled = false;
+  const invalidPlan: ResearchPlan = {
+    ...validCompoundPlan,
+    steps: [
+      {
+        id: "bad_screen",
+        capability: "feature_screen",
+        purpose: "Run an unbounded current stock screen.",
+        params: {},
+      },
+    ],
+  };
+
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-invalid-planner",
+      message: compoundHebrewQuestion,
+      classification: compoundClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-04" },
+        }),
+      } as any,
+      researchPlanProposer: async () => invalidPlan,
+      researchPlanExecutor: async () => {
+        executorCalled = true;
+        return { warnings: [] };
+      },
+      pgCapabilityRunner: async () => ({
+        views: {
+          regimeHistoricalPlaybookView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_regime_history",
+            regime: "NEUTRAL",
+            asOfDate: "2026-05-04",
+            rows: [
+              {
+                sector: "Industrials",
+                rank: 1,
+                role: "leader",
+                interpretationBullets: ["Industrials is the fallback view."],
+              },
+            ],
+            risks: [],
+            summaryBullets: ["Fallback regime playbook loaded."],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async (state) => {
+        assert.equal(state.pgCapabilityViews?.regimeHistoricalPlaybookView?.rows[0].sector, "Industrials");
+        assert.equal(state.pgCapabilityViews?.featureScreenView, undefined);
+        return {
+          answerText: "Fallback regime playbook answer.",
+          suggestedFollowups: [],
+          warnings: [],
+        };
+      },
+    },
+  );
+
+  assert.equal(executorCalled, false);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.regimeHistoricalPlaybookView?.rows[0].sector, "Industrials");
+  assert.equal(publicView.featureScreenView, undefined);
+  assert.equal(
+    response.meta.warnings.some((warning) =>
+      warning.includes("could not be safely expanded into bounded checks"),
+    ),
+    true,
+  );
+  const serialized = JSON.stringify(response);
+  assert.equal(serialized.includes("Run an unbounded"), false);
+  assert.equal(serialized.includes("feature_screen must have"), false);
+});
+
+test("graph leaves simple feature-screen turns on the existing single-intent path", async () => {
+  let plannerCalled = false;
+  let executorCalled = false;
+
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-no-planner",
+      message: "Find me cheap quality stocks",
+      classification: featureScreenClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-04" },
+        }),
+      } as any,
+      researchPlanProposer: async () => {
+        plannerCalled = true;
+        return validCompoundPlan;
+      },
+      researchPlanExecutor: async () => {
+        executorCalled = true;
+        return { warnings: [] };
+      },
+      pgCapabilityRunner: async () => ({
+        views: {
+          featureScreenView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_current_features",
+            asOfDate: "2026-05-04",
+            screenCriteria: featureScreenClassification.featureCriteria ?? [],
+            rows: [
+              {
+                symbol: "GSL",
+                sector: "Industrials",
+                rank: 1,
+                reasonBullets: ["Valuation bucket matched ATTRACTIVE."],
+              },
+            ],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      }),
+      grahamyAgentRunner: async () => ({
+        answerText: "Existing feature screen path.",
+        suggestedFollowups: [],
+        warnings: [],
+      }),
+    },
+  );
+
+  assert.equal(plannerCalled, false);
+  assert.equal(executorCalled, false);
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.featureScreenView?.rows[0].symbol, "GSL");
 });

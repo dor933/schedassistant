@@ -4,6 +4,13 @@ import { z } from "zod";
 import { logger } from "../logger";
 import { anthropicBaseConfig } from "../chat/anthropic/anthropicContextManagement";
 import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
+import type {
+  Classification,
+  PgCapabilityViews,
+  PipelineOverlayViews,
+  SnapshotBundle,
+  ToolOutputs,
+} from "./types";
 
 export const PLANNABLE_CAPABILITIES = [
   "stock_research_object",
@@ -78,6 +85,24 @@ export type MockExecutionResult = {
     warnings: string[];
   };
 };
+
+export type ResearchPlanExecutionInput = {
+  plan: ResearchPlan;
+  message: string;
+  classification: Classification;
+  snapshots: SnapshotBundle;
+  toolOutputs: ToolOutputs;
+};
+
+export type ResearchPlanExecutionResult = {
+  pgCapabilityViews?: PgCapabilityViews;
+  pipelineOverlayViews?: PipelineOverlayViews;
+  warnings: string[];
+};
+
+export type ResearchPlanExecutor = (
+  input: ResearchPlanExecutionInput,
+) => Promise<ResearchPlanExecutionResult>;
 
 const ASK_GRAHAMY_ORG_ID =
   process.env.ASK_GRAHAMY_ORG_ID ?? "acf0cbab-3aed-42cf-872d-63cba24e61c3";
@@ -288,6 +313,62 @@ export function buildPlannerPrompt(message: string): Array<{ role: string; conte
     { role: "system", content: PLANNER_SYSTEM_PROMPT },
     { role: "user", content: `User question:\n${message}` },
   ];
+}
+
+export function shouldRunResearchPlanner(
+  message: string,
+  classification: Classification,
+): boolean {
+  if (classification.focus === "risk" || classification.focus === "validated_evidence") {
+    return false;
+  }
+  if (
+    [
+      "stock",
+      "sector",
+      "regime",
+      "comparison",
+      "feature_screen",
+      "factor_conditioned_backtest",
+      "stock_idea_discovery",
+    ].includes(classification.intent)
+  ) {
+    return false;
+  }
+
+  const text = normalizeForPlanning(message);
+  const asksAboutCurrentRegime =
+    /\b(current market|market condition|market regime|this regime|current regime)\b/.test(
+      text,
+    ) ||
+    /מצב\s+השוק|מצב\s+השוק\s+הנוכחי|מצב\s+הנוכחי|משטר\s+השוק|השוק\s+הנוכחי/.test(
+      text,
+    );
+  const asksAboutHistoricalSectorStrength =
+    /\b(historically strong sectors?|what works in this regime|sectors? historically (lead|work|strong))\b/.test(
+      text,
+    ) ||
+    /סקטור(?:ים)?[^.?!]{0,40}(חזק|חזקים|מוביל|מובילים)|נוטה\s+להיות\s+חזק|מה\s+עובד/.test(
+      text,
+    );
+  const asksForCurrentStocks =
+    /\b(current stocks?|stock candidates?|names?|candidates?|what should i look at now|find .*stocks?)\b/.test(
+      text,
+    ) ||
+    /מניות|מועמדים|שמות|משהו\s+נוכחי|מצא\s+לי|תמצא\s+לי|מה\s+לבחון\s+עכשיו/.test(
+      text,
+    );
+  const asksForRecurringHistoricalSuccess =
+    /\b(recurring historical success|historically strong|worked historically|repeated success|historical winners?)\b/.test(
+      text,
+    ) ||
+    /היסטורית|היסטורי|הצלחות\s+חוזרות|הצלחה\s+חוזרת|חזקות/.test(text);
+
+  return (
+    asksAboutCurrentRegime &&
+    asksForCurrentStocks &&
+    (asksAboutHistoricalSectorStrength || asksForRecurringHistoricalSuccess)
+  );
 }
 
 export async function proposeResearchPlan(message: string): Promise<ResearchPlan> {
@@ -577,6 +658,15 @@ function numberParam(value: unknown): number | undefined {
 
 function unique<T>(values: T[]): T[] {
   return values.filter((value, index) => values.indexOf(value) === index);
+}
+
+function normalizeForPlanning(message: string): string {
+  return message
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[־–—]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function stringGuard(value: unknown): value is string {

@@ -12,6 +12,13 @@ import {
   buildAnalystBriefContract,
   buildEvidencePack,
 } from "./analystOrchestration";
+import {
+  proposeResearchPlan,
+  shouldRunResearchPlanner,
+  validateResearchPlan,
+  type ResearchPlan,
+  type ResearchPlanExecutor,
+} from "./researchPlanner";
 import { executePgCapabilitiesWithCache } from "./pgCapabilities/registry";
 import { executePipelineOverlays } from "./pipelineOverlays/registry";
 import type {
@@ -55,6 +62,8 @@ export type RunAskGrahamyGraphOptions = {
   pipelineOverlayRunner?: (
     input: PipelineOverlayRunInput,
   ) => Promise<PipelineOverlayRunResult>;
+  researchPlanProposer?: (message: string) => Promise<ResearchPlan>;
+  researchPlanExecutor?: ResearchPlanExecutor;
   grahamyAgentRunner?: typeof runGrahamyDeepAgent;
 };
 
@@ -120,9 +129,12 @@ export async function runAskGrahamyGraph(
     await fetchBaseSnapshots(state, snapshotClient);
     selectTools(state);
     await executeTools(state);
-    await loadResearchObjects(state);
-    await loadPgCapabilities(state, options.pgCapabilityRunner);
-    await loadPipelineOverlays(state, options.pipelineOverlayRunner);
+    const plannerHandled = await maybeRunResearchPlanner(state, options);
+    if (!plannerHandled) {
+      await loadResearchObjects(state);
+      await loadPgCapabilities(state, options.pgCapabilityRunner);
+      await loadPipelineOverlays(state, options.pipelineOverlayRunner);
+    }
 
     // publicResearchView is built for response.research / UI consumption.
     // The deep agent reads its evidence from state.researchObjects directly,
@@ -231,6 +243,78 @@ async function executeTools(state: AskGrahamyState): Promise<void> {
     state.snapshots ?? {},
     state.classification ?? EMPTY_CLASSIFICATION,
   );
+}
+
+async function maybeRunResearchPlanner(
+  state: AskGrahamyState,
+  options: RunAskGrahamyGraphOptions,
+): Promise<boolean> {
+  const classification = state.classification ?? EMPTY_CLASSIFICATION;
+  if (!shouldRunResearchPlanner(state.message, classification)) {
+    return false;
+  }
+
+  // Patch 1 wires the runtime branch and test seam only. Without a deterministic
+  // executor, production keeps the existing single-intent path unchanged.
+  if (!options.researchPlanExecutor) {
+    logger.info("Ask Grahamy research planner skipped; no executor configured", {
+      conversationId: state.conversationId,
+      messageId: state.messageId,
+      intent: classification.intent,
+    });
+    return false;
+  }
+
+  try {
+    const plan = await (options.researchPlanProposer ?? proposeResearchPlan)(
+      state.message,
+    );
+    const validation = validateResearchPlan(plan);
+    if (!validation.ok) {
+      state.warnings.push(
+        "The compound research request could not be safely expanded into bounded checks; using the available standard analysis.",
+      );
+      logger.warn("Ask Grahamy research planner validation failed", {
+        conversationId: state.conversationId,
+        messageId: state.messageId,
+        errors: validation.errors,
+      });
+      return false;
+    }
+
+    const execution = await options.researchPlanExecutor({
+      plan: validation.plan,
+      message: state.message,
+      classification,
+      snapshots: state.snapshots ?? {},
+      toolOutputs: state.toolOutputs ?? {},
+    });
+    state.pgCapabilityViews = {
+      ...(state.pgCapabilityViews ?? {}),
+      ...(execution.pgCapabilityViews ?? {}),
+    };
+    state.pipelineOverlayViews = {
+      ...(state.pipelineOverlayViews ?? {}),
+      ...(execution.pipelineOverlayViews ?? {}),
+    };
+    state.researchObjects = [];
+    state.researchObjectsUpdated = [];
+    state.researchObjectCacheStats = { hits: 0, misses: 0, writes: 0 };
+    state.capabilityViewsUpdated = [];
+    state.capabilityViewCacheStats = { hits: 0, misses: 0, writes: 0 };
+    state.warnings.push(...execution.warnings);
+    return true;
+  } catch (err) {
+    state.warnings.push(
+      "The compound research request could not be expanded in this turn; using the available standard analysis.",
+    );
+    logger.warn("Ask Grahamy research planner failed", {
+      conversationId: state.conversationId,
+      messageId: state.messageId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
 }
 
 async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
