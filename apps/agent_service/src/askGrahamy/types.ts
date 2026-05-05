@@ -789,6 +789,14 @@ export type UiHints = {
   suggestedFollowups: string[];
 };
 
+export type CompoundResearchContext = {
+  planType: "regime_sector_to_stock_screen";
+  leadingSectors: string[];
+  featureScreenCriteria: FeatureScreenCriterion[];
+  candidatePipelineLabels: Record<string, string>;
+  warnings: string[];
+};
+
 export type ResponseMeta = {
   sourcesUsed: Array<{ type: "snapshot" | "research"; name: string }>;
   freshness: FreshnessMetadata;
@@ -867,6 +875,12 @@ export type AskGrahamyState = {
   priorCapabilityViews?: import("./pgCapabilities/types").CachedCapabilityView[];
   pgCapabilityViews?: PgCapabilityViews;
   pipelineOverlayViews?: PipelineOverlayViews;
+  /**
+   * Internal public-safe summary for compound research answer synthesis.
+   * It is not part of AskGrahamyResponse and must not be persisted as
+   * research_view. It contains no ResearchPlan, raw rows, SQL, or internals.
+   */
+  compoundResearchContext?: CompoundResearchContext;
   /**
    * Internal analyst orchestration layer. Built only from public-safe views
    * and used to guide answer synthesis; not exposed as a customer payload in

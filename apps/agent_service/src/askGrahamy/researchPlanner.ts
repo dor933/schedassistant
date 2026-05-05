@@ -6,11 +6,28 @@ import { anthropicBaseConfig } from "../chat/anthropic/anthropicContextManagemen
 import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import type {
   Classification,
+  FeatureScreenCriterion,
+  FeatureScreenRowView,
+  FeatureScreenView,
+  CompoundResearchContext,
   PgCapabilityViews,
   PipelineOverlayViews,
   SnapshotBundle,
   ToolOutputs,
+  ValidatedEdgeEvidenceView,
 } from "./types";
+import {
+  executePgCapabilitiesWithCache,
+} from "./pgCapabilities/registry";
+import { executePipelineOverlays } from "./pipelineOverlays/registry";
+import type {
+  PgCapabilityRunInput,
+  PgCapabilityRunResult,
+} from "./pgCapabilities/types";
+import type {
+  PipelineOverlayRunInput,
+  PipelineOverlayRunResult,
+} from "./pipelineOverlays/registry";
 
 export const PLANNABLE_CAPABILITIES = [
   "stock_research_object",
@@ -92,11 +109,19 @@ export type ResearchPlanExecutionInput = {
   classification: Classification;
   snapshots: SnapshotBundle;
   toolOutputs: ToolOutputs;
+  pgCapabilityRunner?: (
+    input: PgCapabilityRunInput,
+  ) => Promise<PgCapabilityRunResult>;
+  pipelineOverlayRunner?: (
+    input: PipelineOverlayRunInput,
+  ) => Promise<PipelineOverlayRunResult>;
 };
 
 export type ResearchPlanExecutionResult = {
+  handled?: boolean;
   pgCapabilityViews?: PgCapabilityViews;
   pipelineOverlayViews?: PipelineOverlayViews;
+  compoundResearchContext?: CompoundResearchContext;
   warnings: string[];
 };
 
@@ -648,12 +673,356 @@ function buildMockAnswer(
   };
 }
 
+export async function executeResearchPlan(
+  input: ResearchPlanExecutionInput,
+): Promise<ResearchPlanExecutionResult> {
+  const validation = validateResearchPlan(input.plan);
+  if (!validation.ok) {
+    return {
+      handled: false,
+      warnings: [
+        "The compound research request could not be safely expanded into bounded checks.",
+      ],
+    };
+  }
+  const planShape = supportedRegimeToStockScreenPlan(validation.plan);
+  if (!planShape) {
+    return {
+      handled: false,
+      warnings: [
+        "The requested multi-step research plan is outside the currently supported bounded execution path.",
+      ],
+    };
+  }
+
+  const warnings: string[] = [];
+  const regimeResult = await runPlannerPgCapability(input, {
+    ...baseClassification(input.classification),
+    intent: "market_regime_historical_playbook",
+    symbols: [],
+    sectors: [],
+    regimeRequested: false,
+    featureCriteria: undefined,
+    factorBacktest: undefined,
+    comparison: undefined,
+    focus: undefined,
+  });
+  warnings.push(...regimeResult.warnings);
+  const regimeView = regimeResult.views.regimeHistoricalPlaybookView;
+  if (!regimeView || regimeView.state === "unavailable") {
+    warnings.push(
+      "Historical sector leadership in the current regime is unavailable, so current stock screening was not run.",
+    );
+    return {
+      handled: true,
+      pgCapabilityViews: regimeResult.views,
+      warnings: unique(warnings),
+    };
+  }
+
+  const leadingSectors = extractLeaderSectors(regimeView);
+  if (!leadingSectors.length) {
+    warnings.push(
+      "No historically leading sectors were available in the current regime view, so current stock screening was not run.",
+    );
+    return {
+      handled: true,
+      pgCapabilityViews: { regimeHistoricalPlaybookView: regimeView },
+      compoundResearchContext: {
+        planType: "regime_sector_to_stock_screen",
+        leadingSectors: [],
+        featureScreenCriteria: [],
+        candidatePipelineLabels: {},
+        warnings: unique(warnings),
+      },
+      warnings: unique(warnings),
+    };
+  }
+
+  const screenResults = await runSectorFeatureScreens(input, leadingSectors);
+  warnings.push(...screenResults.warnings);
+  const pipelineLabels = planShape.pipelineStep
+    ? await runOptionalCandidatePipelineLabels(input, screenResults.view.rows)
+    : { labels: {}, warnings: [] };
+  warnings.push(...pipelineLabels.warnings);
+
+  return {
+    handled: true,
+    pgCapabilityViews: {
+      regimeHistoricalPlaybookView: regimeView,
+      featureScreenView: screenResults.view,
+    },
+    compoundResearchContext: {
+      planType: "regime_sector_to_stock_screen",
+      leadingSectors,
+      featureScreenCriteria: screenResults.view.screenCriteria,
+      candidatePipelineLabels: pipelineLabels.labels,
+      warnings: unique(warnings),
+    },
+    warnings: unique(warnings),
+  };
+}
+
+function supportedRegimeToStockScreenPlan(
+  plan: ResearchPlan,
+): { pipelineStep?: ResearchPlanStep } | undefined {
+  if (plan.planType !== "multi_step") return undefined;
+  if (plan.steps.length < 2 || plan.steps.length > 3) return undefined;
+  const [regimeStep, featureStep, pipelineStep] = plan.steps;
+  if (regimeStep.capability !== "market_regime_historical_playbook") {
+    return undefined;
+  }
+  if (featureStep.capability !== "feature_screen") return undefined;
+  const featureSources = Object.values(featureStep.paramsFromPreviousSteps ?? {});
+  const usesLeaderSectorSource = featureSources.some(
+    (source) =>
+      source.stepId === regimeStep.id &&
+      source.sourcePath ===
+        "regimeHistoricalPlaybookView.rows[role=leader].sector" &&
+      source.transform === "top_3_unique_sectors",
+  );
+  if (!usesLeaderSectorSource) return undefined;
+  if (!pipelineStep) return {};
+  if (
+    pipelineStep.capability !== "validated_edge_evidence" ||
+    pipelineStep.optional !== true
+  ) {
+    return undefined;
+  }
+  const pipelineSources = Object.values(pipelineStep.paramsFromPreviousSteps ?? {});
+  const usesTopSymbolsSource = pipelineSources.some(
+    (source) =>
+      source.stepId === featureStep.id &&
+      source.sourcePath === "featureScreenView.rows.symbol" &&
+      source.transform === "top_3_symbols",
+  );
+  return usesTopSymbolsSource ? { pipelineStep } : undefined;
+}
+
+async function runPlannerPgCapability(
+  input: ResearchPlanExecutionInput,
+  classification: Classification,
+): Promise<PgCapabilityRunResult> {
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification,
+      message: input.message,
+      snapshots: input.snapshots,
+      toolOutputs: input.toolOutputs,
+    },
+    [],
+    input.pgCapabilityRunner,
+  );
+  return { views: result.views, warnings: result.warnings };
+}
+
+function baseClassification(classification: Classification): Classification {
+  return {
+    intent: classification.intent,
+    symbols: [],
+    sectors: [],
+    regimeRequested: false,
+    isFollowUp: false,
+    requiresTools: classification.requiresTools ?? [],
+    confidence: classification.confidence,
+    warnings: [],
+  };
+}
+
+function extractLeaderSectors(
+  view: PgCapabilityViews["regimeHistoricalPlaybookView"],
+): string[] {
+  if (!view) return [];
+  return unique(
+    [...view.rows]
+      .filter((row) => row.role === "leader" && typeof row.sector === "string")
+      .sort((left, right) => numberSortValue(left.rank) - numberSortValue(right.rank))
+      .map((row) => row.sector),
+  ).slice(0, MAX_SECTOR_CONSTRAINTS);
+}
+
+async function runSectorFeatureScreens(
+  input: ResearchPlanExecutionInput,
+  sectors: string[],
+): Promise<{ view: FeatureScreenView; warnings: string[] }> {
+  const warnings: string[] = [];
+  const views: FeatureScreenView[] = [];
+  for (const sector of sectors.slice(0, MAX_SECTOR_CONSTRAINTS)) {
+    const criteria: FeatureScreenCriterion[] = [{ factor: "sector", bucket: sector }];
+    try {
+      const result = await runPlannerPgCapability(input, {
+        ...baseClassification(input.classification),
+        intent: "feature_screen",
+        featureCriteria: criteria,
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        factorBacktest: undefined,
+        comparison: undefined,
+        focus: undefined,
+      });
+      warnings.push(...result.warnings);
+      if (result.views.featureScreenView) {
+        views.push(result.views.featureScreenView);
+      } else {
+        warnings.push(`Current stock screening was unavailable for ${sector}.`);
+      }
+    } catch (err) {
+      logger.warn("Ask Grahamy compound feature screen step failed", {
+        sector,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      warnings.push(`Current stock screening was unavailable for ${sector}.`);
+    }
+  }
+  return { view: mergeFeatureScreenViews(sectors, views), warnings: unique(warnings) };
+}
+
+function mergeFeatureScreenViews(
+  sectors: string[],
+  views: FeatureScreenView[],
+): FeatureScreenView {
+  const criteria = sectors
+    .slice(0, MAX_SECTOR_CONSTRAINTS)
+    .map((sector): FeatureScreenCriterion => ({ factor: "sector", bucket: sector }));
+  const warnings = unique([
+    "These are screen results to review, not buy/sell recommendations.",
+    "The screen is constrained to historically leading sectors from the current regime playbook.",
+    ...views.flatMap((view) => view.warnings),
+  ]);
+  const rows = dedupeAndRankRows(views.flatMap((view) => view.rows)).slice(0, 10);
+  const sawAvailableView = views.some((view) => view.state !== "unavailable");
+  const hasPartialView = views.some((view) => view.state !== "complete");
+  const asOfDate = latestString(views.map((view) => view.asOfDate).filter(stringGuard));
+  const freshness =
+    views.find((view) => view.freshness?.state === "fresh")?.freshness ??
+    views.find((view) => view.freshness?.state === "stale")?.freshness ??
+    views.find((view) => view.freshness)?.freshness ??
+    { state: "unknown" as const };
+
+  return {
+    viewSchemaVersion: 1,
+    state: rows.length
+      ? hasPartialView
+        ? "partial"
+        : "complete"
+      : sawAvailableView
+        ? "complete"
+        : "unavailable",
+    source: "pg_current_features",
+    asOfDate,
+    screenCriteria: criteria,
+    rows,
+    freshness,
+    warnings: rows.length
+      ? warnings
+      : unique([...warnings, "No current stock candidates matched the sector-constrained screen."]),
+  };
+}
+
+function dedupeAndRankRows(rows: FeatureScreenRowView[]): FeatureScreenRowView[] {
+  const bySymbol = new Map<string, FeatureScreenRowView>();
+  for (const row of rows) {
+    const symbol = row.symbol?.toUpperCase();
+    if (!symbol) continue;
+    const existing = bySymbol.get(symbol);
+    if (!existing || compareFeatureRows(row, existing) < 0) {
+      bySymbol.set(symbol, { ...row, symbol });
+    }
+  }
+  return [...bySymbol.values()]
+    .sort(compareFeatureRows)
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+}
+
+function compareFeatureRows(
+  left: FeatureScreenRowView,
+  right: FeatureScreenRowView,
+): number {
+  return (
+    numberSortValue(left.rank) - numberSortValue(right.rank) ||
+    numberSortValue(right.hitRatePct, -Infinity) -
+      numberSortValue(left.hitRatePct, -Infinity) ||
+    numberSortValue(right.medianReturnPct, -Infinity) -
+      numberSortValue(left.medianReturnPct, -Infinity) ||
+    left.symbol.localeCompare(right.symbol)
+  );
+}
+
+async function runOptionalCandidatePipelineLabels(
+  input: ResearchPlanExecutionInput,
+  rows: FeatureScreenRowView[],
+): Promise<{ labels: Record<string, string>; warnings: string[] }> {
+  const warnings: string[] = [];
+  const labels: Record<string, string> = {};
+  const symbols = unique(
+    rows
+      .map((row) => row.symbol)
+      .filter(stringGuard)
+      .map((symbol) => symbol.toUpperCase()),
+  ).slice(0, MAX_PIPELINE_SYMBOLS);
+
+  for (const symbol of symbols) {
+    try {
+      const result = await (input.pipelineOverlayRunner ?? executePipelineOverlays)({
+        classification: {
+          ...baseClassification(input.classification),
+          intent: "stock",
+          symbols: [symbol],
+          sectors: [],
+          regimeRequested: false,
+          focus: "validated_evidence",
+          featureCriteria: undefined,
+          factorBacktest: undefined,
+          comparison: undefined,
+        },
+        message: input.message,
+      });
+      warnings.push(...result.warnings);
+      labels[symbol] = publicPipelineLabel(
+        result.views.validatedEdgeEvidenceView,
+      );
+    } catch (err) {
+      logger.warn("Ask Grahamy optional Pipeline validation step failed", {
+        symbol,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      labels[symbol] = "לא זמין בתור הזה";
+      warnings.push(`Pipeline validation was unavailable for ${symbol}.`);
+    }
+  }
+  return { labels, warnings: unique(warnings) };
+}
+
+function publicPipelineLabel(view: ValidatedEdgeEvidenceView | undefined): string {
+  switch (view?.evidenceState) {
+    case "edge_evidence_strong":
+      return "ראיה מאומתת חזקה";
+    case "edge_evidence_present":
+      return "ראיה מאומתת קיימת";
+    case "mixed":
+      return "ראיה מעורבת";
+    case "insufficient_data":
+      return "אין מספיק ראיה";
+    default:
+      return "לא זמין בתור הזה";
+  }
+}
+
 function arrayParam(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
 function numberParam(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function numberSortValue(value: unknown, fallback = Infinity): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function latestString(values: string[]): string | undefined {
+  return values.sort().at(-1);
 }
 
 function unique<T>(values: T[]): T[] {

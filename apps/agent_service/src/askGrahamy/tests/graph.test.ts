@@ -1090,6 +1090,123 @@ test("graph activates research planner for compound Hebrew research question and
   assert.equal(serialized.includes("regime_context"), false);
 });
 
+test("graph uses real focused executor for compound plan with mocked capability runners", async () => {
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-compound-real-executor",
+      message: compoundHebrewQuestion,
+      classification: compoundClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-04" },
+        }),
+      } as any,
+      researchPlanProposer: async () => validCompoundPlan,
+      pgCapabilityRunner: async (input) => {
+        if (input.classification.intent === "market_regime_historical_playbook") {
+          return {
+            views: {
+              regimeHistoricalPlaybookView: {
+                viewSchemaVersion: 1,
+                state: "complete",
+                source: "pg_regime_history",
+                regime: "NEUTRAL",
+                asOfDate: "2026-05-04",
+                rows: [
+                  { sector: "Industrials", rank: 1, role: "leader", interpretationBullets: [] },
+                  { sector: "Utilities", rank: 2, role: "laggard", interpretationBullets: [] },
+                ],
+                risks: [],
+                summaryBullets: [],
+                freshness: { dataThrough: "2026-05-04", state: "fresh" },
+                warnings: [],
+              },
+            },
+            warnings: [],
+          };
+        }
+        assert.equal(input.classification.intent, "feature_screen");
+        assert.deepEqual(input.classification.featureCriteria, [
+          { factor: "sector", bucket: "Industrials" },
+        ]);
+        return {
+          views: {
+            featureScreenView: {
+              viewSchemaVersion: 1,
+              state: "complete",
+              source: "pg_current_features",
+              asOfDate: "2026-05-04",
+              screenCriteria: input.classification.featureCriteria ?? [],
+              rows: [
+                {
+                  symbol: "GSL",
+                  sector: "Industrials",
+                  rank: 1,
+                  hitRatePct: 58.1,
+                  medianReturnPct: 3.2,
+                  reasonBullets: ["Sector filter matched Industrials."],
+                },
+              ],
+              freshness: { dataThrough: "2026-05-04", state: "fresh" },
+              warnings: [],
+            },
+          },
+          warnings: [],
+        };
+      },
+      pipelineOverlayRunner: async (input) => {
+        assert.deepEqual(input.classification.symbols, ["GSL"]);
+        return {
+          views: {
+            validatedEdgeEvidenceView: {
+              viewSchemaVersion: 1,
+              state: "complete",
+              source: "client_api_research_object",
+              anchor: { type: "stock", symbol: "GSL", label: "GSL" },
+              evidenceState: "edge_evidence_present",
+              interpretationBullets: [],
+              freshness: { dataThrough: "2026-05-04", state: "fresh" },
+              warnings: [],
+            },
+          },
+          warnings: [],
+        };
+      },
+      grahamyAgentRunner: async (state) => {
+        assert.deepEqual(state.compoundResearchContext?.leadingSectors, [
+          "Industrials",
+        ]);
+        assert.equal(
+          state.compoundResearchContext?.candidatePipelineLabels.GSL,
+          "ראיה מאומתת קיימת",
+        );
+        return {
+          answerText:
+            "השורה התחתונה: Industrials היה הסקטור המוביל, ו-GSL עלה כמועמד מחקר נוכחי.",
+          suggestedFollowups: [],
+          warnings: [],
+        };
+      },
+    },
+  );
+
+  const publicView = response.research.publicResearchView as PublicResearchView;
+  assert.equal(publicView.regimeHistoricalPlaybookView?.rows[0].sector, "Industrials");
+  assert.equal(publicView.featureScreenView?.rows[0].symbol, "GSL");
+  const serialized = JSON.stringify(response);
+  assert.equal(serialized.includes("compoundResearchContext"), false);
+  assert.equal(serialized.includes("planType"), false);
+  assert.equal(serialized.includes("paramsFromPreviousSteps"), false);
+  assert.equal(serialized.includes("Utilities"), true);
+  assert.equal(serialized.includes("ראיה מאומתת קיימת"), false);
+});
+
 test("graph rejects invalid compound research plan and falls back to standard route", async () => {
   let executorCalled = false;
   const invalidPlan: ResearchPlan = {

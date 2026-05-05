@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildPlannerPrompt,
   executeMockResearchPlan,
+  executeResearchPlan,
   parseResearchPlan,
   researchPlanSchema,
   shouldRunResearchPlanner,
@@ -361,6 +362,292 @@ test("mock execution result has no raw/internal fields and no recommendation lan
     JSON.stringify(result).toLowerCase().includes("sell"),
     false,
   );
+});
+
+test("real executor runs supported compound plan, merges sector screens, dedupes rows, and labels Pipeline evidence", async () => {
+  const pgCalls: Array<{ intent: string; sector?: string }> = [];
+  const pipelineSymbols: string[] = [];
+  const result = await executeResearchPlan({
+    plan: validCompoundPlan,
+    message: compoundHebrewQuestion,
+    classification: neutralClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-04" } },
+    toolOutputs: {},
+    pgCapabilityRunner: async (input) => {
+      if (input.classification.intent === "market_regime_historical_playbook") {
+        pgCalls.push({ intent: input.classification.intent });
+        return {
+          views: {
+            regimeHistoricalPlaybookView: {
+              viewSchemaVersion: 1,
+              state: "complete",
+              source: "pg_regime_history",
+              regime: "NEUTRAL",
+              asOfDate: "2026-05-04",
+              rows: [
+                { sector: "Technology", rank: 2, role: "leader", interpretationBullets: [] },
+                { sector: "Industrials", rank: 1, role: "leader", interpretationBullets: [] },
+                { sector: "Utilities", rank: 3, role: "laggard", interpretationBullets: [] },
+              ],
+              risks: [],
+              summaryBullets: [],
+              freshness: { dataThrough: "2026-05-04", state: "fresh" },
+              warnings: [],
+            },
+          },
+          warnings: [],
+        };
+      }
+      if (input.classification.intent === "feature_screen") {
+        const sector = input.classification.featureCriteria?.[0]?.bucket;
+        pgCalls.push({ intent: input.classification.intent, sector });
+        const rows =
+          sector === "Industrials"
+            ? [
+                {
+                  symbol: "GSL",
+                  sector: "Industrials",
+                  rank: 1,
+                  hitRatePct: 58.1,
+                  medianReturnPct: 3.2,
+                  reasonBullets: ["Sector filter matched Industrials."],
+                },
+                {
+                  symbol: "MLI",
+                  sector: "Industrials",
+                  rank: 2,
+                  hitRatePct: 54,
+                  medianReturnPct: 2.1,
+                  reasonBullets: ["Sector filter matched Industrials."],
+                },
+              ]
+            : [
+                {
+                  symbol: "AMZN",
+                  sector: "Technology",
+                  rank: 1,
+                  hitRatePct: 52.2,
+                  medianReturnPct: 1.4,
+                  reasonBullets: ["Sector filter matched Technology."],
+                },
+                {
+                  symbol: "GSL",
+                  sector: "Industrials",
+                  rank: 9,
+                  hitRatePct: 40,
+                  medianReturnPct: -1,
+                  reasonBullets: ["Duplicate weaker row."],
+                },
+              ];
+        return {
+          views: {
+            featureScreenView: {
+              viewSchemaVersion: 1,
+              state: "complete",
+              source: "pg_current_features",
+              asOfDate: "2026-05-04",
+              screenCriteria: input.classification.featureCriteria ?? [],
+              rows,
+              freshness: { dataThrough: "2026-05-04", state: "fresh" },
+              warnings: [],
+            },
+          },
+          warnings: [],
+        };
+      }
+      return { views: {}, warnings: [] };
+    },
+    pipelineOverlayRunner: async (input) => {
+      const symbol = input.classification.symbols[0];
+      pipelineSymbols.push(symbol);
+      return {
+        views: {
+          validatedEdgeEvidenceView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "client_api_research_object",
+            anchor: { type: "stock", symbol, label: symbol },
+            evidenceState:
+              symbol === "GSL" ? "edge_evidence_present" : "insufficient_data",
+            interpretationBullets: [],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      };
+    },
+  });
+
+  assert.equal(result.handled, true);
+  assert.deepEqual(pgCalls, [
+    { intent: "market_regime_historical_playbook" },
+    { intent: "feature_screen", sector: "Industrials" },
+    { intent: "feature_screen", sector: "Technology" },
+  ]);
+  assert.deepEqual(
+    result.pgCapabilityViews?.featureScreenView?.screenCriteria.map((item) => item.bucket),
+    ["Industrials", "Technology"],
+  );
+  assert.deepEqual(
+    result.pgCapabilityViews?.featureScreenView?.rows.map((row) => row.symbol),
+    ["GSL", "AMZN", "MLI"],
+  );
+  assert.deepEqual(pipelineSymbols, ["GSL", "AMZN", "MLI"]);
+  assert.equal(
+    result.compoundResearchContext?.candidatePipelineLabels.GSL,
+    "ראיה מאומתת קיימת",
+  );
+  assert.equal(
+    result.compoundResearchContext?.candidatePipelineLabels.AMZN,
+    "אין מספיק ראיה",
+  );
+  assertNoForbidden(result);
+});
+
+test("real executor keeps PG candidates when optional Pipeline validation fails", async () => {
+  const result = await executeResearchPlan({
+    plan: validCompoundPlan,
+    message: compoundHebrewQuestion,
+    classification: neutralClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-04" } },
+    toolOutputs: {},
+    pgCapabilityRunner: async (input) => {
+      if (input.classification.intent === "market_regime_historical_playbook") {
+        return {
+          views: {
+            regimeHistoricalPlaybookView: {
+              viewSchemaVersion: 1,
+              state: "complete",
+              source: "pg_regime_history",
+              regime: "NEUTRAL",
+              asOfDate: "2026-05-04",
+              rows: [{ sector: "Industrials", rank: 1, role: "leader", interpretationBullets: [] }],
+              risks: [],
+              summaryBullets: [],
+              freshness: { dataThrough: "2026-05-04", state: "fresh" },
+              warnings: [],
+            },
+          },
+          warnings: [],
+        };
+      }
+      return {
+        views: {
+          featureScreenView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_current_features",
+            asOfDate: "2026-05-04",
+            screenCriteria: input.classification.featureCriteria ?? [],
+            rows: [
+              {
+                symbol: "GSL",
+                sector: "Industrials",
+                rank: 1,
+                reasonBullets: ["Sector filter matched Industrials."],
+              },
+            ],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      };
+    },
+    pipelineOverlayRunner: async () => {
+      throw new Error("timeout");
+    },
+  });
+
+  assert.equal(result.handled, true);
+  assert.equal(result.pgCapabilityViews?.featureScreenView?.rows[0].symbol, "GSL");
+  assert.equal(
+    result.compoundResearchContext?.candidatePipelineLabels.GSL,
+    "לא זמין בתור הזה",
+  );
+});
+
+test("real executor returns sector context without hallucinated stocks when screens have no rows", async () => {
+  const result = await executeResearchPlan({
+    plan: validCompoundPlan,
+    message: compoundHebrewQuestion,
+    classification: neutralClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-04" } },
+    toolOutputs: {},
+    pgCapabilityRunner: async (input) => {
+      if (input.classification.intent === "market_regime_historical_playbook") {
+        return {
+          views: {
+            regimeHistoricalPlaybookView: {
+              viewSchemaVersion: 1,
+              state: "complete",
+              source: "pg_regime_history",
+              regime: "NEUTRAL",
+              asOfDate: "2026-05-04",
+              rows: [{ sector: "Industrials", rank: 1, role: "leader", interpretationBullets: [] }],
+              risks: [],
+              summaryBullets: [],
+              freshness: { dataThrough: "2026-05-04", state: "fresh" },
+              warnings: [],
+            },
+          },
+          warnings: [],
+        };
+      }
+      return {
+        views: {
+          featureScreenView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_current_features",
+            asOfDate: "2026-05-04",
+            screenCriteria: input.classification.featureCriteria ?? [],
+            rows: [],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" },
+            warnings: ["No stocks matched the supplied public screen criteria."],
+          },
+        },
+        warnings: [],
+      };
+    },
+    pipelineOverlayRunner: async () => {
+      throw new Error("Pipeline should not run without symbols.");
+    },
+  });
+
+  assert.equal(result.handled, true);
+  assert.deepEqual(result.pgCapabilityViews?.featureScreenView?.rows, []);
+  assert.equal(
+    result.pgCapabilityViews?.featureScreenView?.warnings.some((warning) =>
+      warning.includes("No current stock candidates matched"),
+    ),
+    true,
+  );
+  assert.deepEqual(result.compoundResearchContext?.candidatePipelineLabels, {});
+  assertNoForbidden(result);
+});
+
+test("real executor declines unsupported plan shapes for standard fallback", async () => {
+  const result = await executeResearchPlan({
+    plan: {
+      ...validCompoundPlan,
+      steps: [
+        {
+          id: "ideas",
+          capability: "stock_idea_discovery",
+          purpose: "Find broad stock ideas.",
+          params: {},
+        },
+      ],
+    },
+    message: compoundHebrewQuestion,
+    classification: neutralClassification,
+    snapshots: {},
+    toolOutputs: {},
+  });
+
+  assert.equal(result.handled, false);
 });
 
 function assertNoForbidden(value: unknown): void {

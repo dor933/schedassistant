@@ -13,6 +13,7 @@ import {
   buildEvidencePack,
 } from "./analystOrchestration";
 import {
+  executeResearchPlan,
   proposeResearchPlan,
   shouldRunResearchPlanner,
   validateResearchPlan,
@@ -254,17 +255,6 @@ async function maybeRunResearchPlanner(
     return false;
   }
 
-  // Patch 1 wires the runtime branch and test seam only. Without a deterministic
-  // executor, production keeps the existing single-intent path unchanged.
-  if (!options.researchPlanExecutor) {
-    logger.info("Ask Grahamy research planner skipped; no executor configured", {
-      conversationId: state.conversationId,
-      messageId: state.messageId,
-      intent: classification.intent,
-    });
-    return false;
-  }
-
   try {
     const plan = await (options.researchPlanProposer ?? proposeResearchPlan)(
       state.message,
@@ -282,13 +272,20 @@ async function maybeRunResearchPlanner(
       return false;
     }
 
-    const execution = await options.researchPlanExecutor({
+    const executor = options.researchPlanExecutor ?? executeResearchPlan;
+    const execution = await executor({
       plan: validation.plan,
       message: state.message,
       classification,
       snapshots: state.snapshots ?? {},
       toolOutputs: state.toolOutputs ?? {},
+      pgCapabilityRunner: options.pgCapabilityRunner,
+      pipelineOverlayRunner: options.pipelineOverlayRunner,
     });
+    if (execution.handled === false) {
+      state.warnings.push(...execution.warnings);
+      return false;
+    }
     state.pgCapabilityViews = {
       ...(state.pgCapabilityViews ?? {}),
       ...(execution.pgCapabilityViews ?? {}),
@@ -302,6 +299,7 @@ async function maybeRunResearchPlanner(
     state.researchObjectCacheStats = { hits: 0, misses: 0, writes: 0 };
     state.capabilityViewsUpdated = [];
     state.capabilityViewCacheStats = { hits: 0, misses: 0, writes: 0 };
+    state.compoundResearchContext = execution.compoundResearchContext;
     state.warnings.push(...execution.warnings);
     return true;
   } catch (err) {

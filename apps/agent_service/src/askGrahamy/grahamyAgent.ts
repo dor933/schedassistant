@@ -386,6 +386,16 @@ function formatPipelineOverlaysForPrompt(
   return blocks;
 }
 
+function formatCompoundResearchContextForPrompt(
+  state: AskGrahamyState,
+): string[] {
+  if (!state.compoundResearchContext) return [];
+  const context = humanizeJsonValue(state.compoundResearchContext);
+  return [
+    `## COMPOUND RESEARCH CONTEXT — public-safe execution summary\n\`\`\`json\n${JSON.stringify(context, null, 2)}\n\`\`\``,
+  ];
+}
+
 export function buildSystemPrompt(state: AskGrahamyState): string {
   const ros = state.researchObjects ?? [];
   const classification = state.classification;
@@ -404,6 +414,7 @@ export function buildSystemPrompt(state: AskGrahamyState): string {
           ...ros.map((ro) => formatResearchObjectForPrompt(ro, classification?.focus)),
           ...formatPgCapabilitiesForPrompt(state.pgCapabilityViews),
           ...formatPipelineOverlaysForPrompt(state.pipelineOverlayViews),
+          ...formatCompoundResearchContextForPrompt(state),
         ];
   const evidence = evidenceBlocks.length === 0
     ? "(No specific Research Objects or PG capability views were loaded for this turn — answer from your conversational memory and acknowledge the limitation.)"
@@ -511,6 +522,9 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - For symbol-vs-symbol comparisons, mention when sectors differ and keep the answer dimensional ("stronger on X, weaker on Y") rather than treating it as an investment recommendation.
 - For current-regime historical playbook questions, use only \`regimeHistoricalPlaybookView\`. Mention the \`regime\` and \`asOfDate\` or \`freshness.dataThrough\`.
 - Treat \`regimeHistoricalPlaybookView\` as PG historical evidence, not a live edge validation, prediction, Sentinel signal, Coroner result, trade card, accepted hypothesis, or recommendation.
+- For compound regime-to-stock screen answers, use \`regimeHistoricalPlaybookView\` for historically strong sectors and \`featureScreenView.rows\` for current stock candidates. Mention candidates only from \`featureScreenView.rows\`.
+- If \`compoundResearchContext.candidatePipelineLabels\` is present, use only those public labels in a Pipeline column. If a label is missing, write "לא זמין בתור הזה" in Hebrew answers or "not available in this turn" in English answers.
+- For Hebrew compound answers, include: "השורה התחתונה", "סקטורים חזקים היסטורית", "מועמדי מחקר נוכחיים", "מה חסר / מה לבדוק עכשיו", and "מגבלות הנתונים" when the evidence supports those sections.
 - Do not expose query safety caps, candidate caps, sample caps, operational safeguards, endpoint names, or implementation details. If a view is bounded, describe only the public sample size and public warnings.
 - Leaders and laggards must come only from \`regimeHistoricalPlaybookView.rows\`. Risks must come only from \`regimeHistoricalPlaybookView.risks\`.
 - Do not invent sector leadership, underperformance, risk buckets, hit rates, or return metrics for \`regimeHistoricalPlaybookView\`.
