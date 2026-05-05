@@ -4,7 +4,12 @@ import { ChatOpenAI } from "@langchain/openai";
 import { logger } from "../logger";
 import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import { getLangfuseCallbackHandler, flushLangfuse } from "../langfuse";
-import type { AskGrahamyState, CachedResearchObject, PgCapabilityViews } from "./types";
+import type {
+  AskGrahamyState,
+  CachedResearchObject,
+  ClassificationFocus,
+  PgCapabilityViews,
+} from "./types";
 
 /**
  * Grahamy deep-agent runner.
@@ -216,10 +221,26 @@ function humanizeJsonValue(value: unknown, key?: string): unknown {
   return value;
 }
 
-function formatResearchObjectForPrompt(ro: CachedResearchObject): string {
+function formatResearchObjectForPrompt(
+  ro: CachedResearchObject,
+  focus?: ClassificationFocus,
+): string {
   const header = `## ${ro.objectType.toUpperCase()} — ${ro.anchor} (as of ${ro.asOfDate})`;
   const publicResearchObjectView = ro.view
-    ? { ...ro.view, publicSummary: undefined }
+    ? focus === "risk"
+      ? {
+          viewSchemaVersion: ro.view.viewSchemaVersion,
+          cacheKey: ro.view.cacheKey,
+          objectType: ro.view.objectType,
+          anchor: ro.view.anchor,
+          asOfDate: ro.view.asOfDate,
+          title: ro.view.title,
+          probabilisticEvidence: ro.view.probabilisticEvidence,
+          pathRisk: ro.view.pathRisk,
+          freshness: ro.view.freshness,
+          warnings: ro.view.warnings,
+        }
+      : { ...ro.view, publicSummary: undefined }
     : undefined;
   // Humanize all enum-shaped string values before serializing so the agent
   // receives "rich" / "high quintile" / "strongly underperforming" instead of
@@ -296,7 +317,7 @@ export function buildSystemPrompt(state: AskGrahamyState): string {
   const freshness = state.snapshots?.freshness;
 
   const evidenceBlocks = [
-    ...ros.map(formatResearchObjectForPrompt),
+    ...ros.map((ro) => formatResearchObjectForPrompt(ro, classification?.focus)),
     ...formatPgCapabilitiesForPrompt(state.pgCapabilityViews),
   ];
   const evidence = evidenceBlocks.length === 0
@@ -304,7 +325,7 @@ export function buildSystemPrompt(state: AskGrahamyState): string {
     : evidenceBlocks.join("\n\n");
 
   const classifiedLine = classification
-    ? `Symbols: [${classification.symbols.join(", ") || "none"}], Sectors: [${classification.sectors.join(", ") || "none"}], Regime requested: ${classification.regimeRequested ? "yes" : "no"}`
+    ? `Symbols: [${classification.symbols.join(", ") || "none"}], Sectors: [${classification.sectors.join(", ") || "none"}], Regime requested: ${classification.regimeRequested ? "yes" : "no"}, Focus: ${classification.focus ?? "none"}`
     : "(no classification)";
 
   return `You are **Grahamy** — StocksScanner's AI stock-research assistant.
@@ -337,6 +358,10 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Use ONLY the bucket labels, percentile bands, direction descriptors, and explicit numeric public evidence fields from the EVIDENCE below. Acceptable: "in the high quintile of its sector", "FCF/NI poor conversion", "ROE above its 5-year history", "regime-challenged", or "the public view shows a 61% 60-day hit rate" when that exact field exists.
 - DO NOT invent or infer numbers. Raw PE multiples, revenue figures, prices, hit-rate percentages, drawdown percentages, and probability thresholds are allowed only when the exact number appears in \`publicResearchObjectView.probabilisticEvidence\` or \`publicResearchObjectView.pathRisk\`.
 - For temporary drawdown/path-risk claims, use only \`pathRisk.source = pg_daily_price_path\` with explicit numeric drawdown fields. If \`pathRisk.state\` is partial/unavailable or the numeric drawdown fields are absent, say path risk is partial/bucketed and do not write a sentence like "10% of cases fell more than 14%".
+- If classification focus is \`risk\`, answer only from \`publicResearchObjectView.pathRisk\`, \`publicResearchObjectView.probabilisticEvidence\`, freshness, and warnings. Do not use the five-question thesis, edgeEvidence, or memory to make risk claims.
+- For a question asking the probability of losing more than 10%, use only \`pathRisk.probDrawdownGt10Pct\` when \`pathRisk.state = complete\`, \`pathRisk.source = pg_daily_price_path\`, and the field is explicitly present. If absent, say that numeric threshold probability is unavailable.
+- Never substitute \`p25ReturnPct\`, \`medianReturnPct\`, \`hitRatePct\`, h60/final forward returns, or any horizon return for drawdown or temporary path-risk probability.
+- Do not give stop-loss, position sizing, buy/sell, or trade recommendation language in risk-focused answers.
 - For sector leaderboard questions, use only \`sectorLeaderboardView.rows\`. Rank sectors only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent sectors, scores, or ranks.
 - Treat \`sectorLeaderboardView\` as PG base-rate/current composite evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
 - If \`sectorLeaderboardView.rows\` is empty or the view state is unavailable, say the sector leaderboard is unavailable instead of naming sectors.

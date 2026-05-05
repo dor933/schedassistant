@@ -102,6 +102,7 @@ export type Intent = (typeof INTENTS)[number];
 export type AnswerType = (typeof ANSWER_TYPES)[number];
 export type Confidence = "high" | "medium" | "low";
 export type ToolName = (typeof TOOL_NAMES)[number];
+export type ClassificationFocus = "risk";
 
 export type Classification = {
   intent: Intent;
@@ -109,6 +110,7 @@ export type Classification = {
   sectors: string[];
   regimeRequested: boolean;
   isFollowUp: boolean;
+  focus?: ClassificationFocus;
   comparison?: ComparisonClassification;
   requiresTools: ToolName[];
   confidence: Confidence;

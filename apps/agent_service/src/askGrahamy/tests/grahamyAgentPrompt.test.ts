@@ -392,6 +392,200 @@ test("LLM prompt receives public-safe comparison view", () => {
   assertNoFreshnessInternals(prompt);
 });
 
+test("LLM prompt restricts risk-focused answers to public path risk evidence", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "What is the probability of losing more than 10% for GSL?",
+    warnings: [],
+    classification: {
+      intent: "stock",
+      symbols: ["GSL"],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      focus: "risk",
+      requiresTools: ["get_stock_snapshot_context", "get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-04" } },
+    toolOutputs: {},
+    researchObjects: [
+      {
+        cacheKey: "STOCK:GSL:2026-05-04",
+        objectType: "stock",
+        anchor: "GSL",
+        asOfDate: "2026-05-04",
+        generatedAt: "2026-05-05T00:00:00Z",
+        source: "database",
+        publicSummary: {},
+        parts: {
+          h60_return_pct: -12,
+          raw_sql: "must-not-leak",
+        },
+        view: {
+          viewSchemaVersion: 1,
+          cacheKey: "STOCK:GSL:2026-05-04",
+          objectType: "stock",
+          anchor: "GSL",
+          asOfDate: "2026-05-04",
+          title: "GSL Research Object",
+          fiveQuestion: {
+            whatMattersNow: ["Full thesis content should not be included for risk focus."],
+            historicalAnalogs: [],
+            underWhichConditions: [],
+            invalidation: [],
+          },
+          edgeEvidence: {
+            state: "complete",
+            source: "snapshot_proxy",
+            claims: [{ text: "Edge evidence should not be included for risk focus." }],
+            warnings: [],
+          },
+          probabilisticEvidence: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            horizon: "60-day",
+            referenceSet: "self_analogs",
+            sampleSize: 30,
+            hitRatePct: 61,
+            medianReturnPct: 3.2,
+            p25ReturnPct: -1.4,
+            p75ReturnPct: 8.1,
+            sampleAdequacy: "ADEQUATE",
+            notes: [],
+          },
+          pathRisk: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            horizon: "60-day",
+            source: "pg_daily_price_path",
+            sampleSize: 30,
+            p10MaxDrawdownPct: -14,
+            worstMaxDrawdownPct: -31,
+            probDrawdownGt5Pct: 32,
+            probDrawdownGt10Pct: 18,
+            probDrawdownGt15Pct: 8,
+            probDrawdownGt20Pct: 3,
+            recoveredByHorizonRatePct: 72,
+            notes: [],
+          },
+          freshness: { dataThrough: "2026-05-04" },
+          warnings: [],
+        },
+        freshness: { dataThrough: "2026-05-04" },
+        warnings: [],
+      },
+    ],
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /Focus: risk/);
+  assert.match(prompt, /probDrawdownGt10Pct/);
+  assert.match(prompt, /18/);
+  assert.match(prompt, /answer only from `publicResearchObjectView\.pathRisk`/);
+  assert.match(prompt, /Never substitute `p25ReturnPct`/);
+  assert.match(prompt, /h60\/final forward returns/);
+  assert.match(prompt, /stop-loss, position sizing, buy\/sell/);
+  assert.doesNotMatch(prompt, /whatMattersNow/);
+  assert.doesNotMatch(prompt, /"edgeEvidence"\s*:/);
+  assert.doesNotMatch(prompt, /h60_return_pct/);
+  assert.doesNotMatch(prompt, /raw_sql/);
+  assertNoFreshnessInternals(prompt);
+});
+
+test("LLM prompt does not provide numeric drawdown fields for partial path risk", () => {
+  const state: AskGrahamyState = {
+    internalUserId: 1,
+    conversationId: "conversation-1",
+    message: "How bad can GSL fall along the way?",
+    warnings: [],
+    classification: {
+      intent: "stock",
+      symbols: ["GSL"],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      focus: "risk",
+      requiresTools: ["get_stock_snapshot_context", "get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-04" } },
+    toolOutputs: {},
+    researchObjects: [
+      {
+        cacheKey: "STOCK:GSL:2026-05-04",
+        objectType: "stock",
+        anchor: "GSL",
+        asOfDate: "2026-05-04",
+        generatedAt: "2026-05-05T00:00:00Z",
+        source: "database",
+        publicSummary: {},
+        parts: {},
+        view: {
+          viewSchemaVersion: 1,
+          cacheKey: "STOCK:GSL:2026-05-04",
+          objectType: "stock",
+          anchor: "GSL",
+          asOfDate: "2026-05-04",
+          fiveQuestion: {
+            whatMattersNow: ["Full thesis content should not be included for risk focus."],
+            historicalAnalogs: [],
+            underWhichConditions: [],
+            invalidation: [],
+          },
+          edgeEvidence: {
+            state: "unavailable",
+            source: "unavailable",
+            claims: [],
+            warnings: [],
+          },
+          probabilisticEvidence: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            horizon: "60-day",
+            referenceSet: "self_analogs",
+            sampleSize: 30,
+            hitRatePct: 61,
+            medianReturnPct: 3.2,
+            p25ReturnPct: -1.4,
+            p75ReturnPct: 8.1,
+            sampleAdequacy: "ADEQUATE",
+            notes: [],
+          },
+          pathRisk: {
+            viewSchemaVersion: 1,
+            state: "partial",
+            horizon: "60-day",
+            source: "analog_return_distribution",
+            sampleSize: 30,
+            maxDrawdownBucket: "ELEVATED_DOWNSIDE",
+            warnings: ["Numeric drawdown distribution is unavailable."],
+            notes: [],
+          },
+          freshness: { dataThrough: "2026-05-04" },
+          warnings: [],
+        },
+        freshness: { dataThrough: "2026-05-04" },
+        warnings: [],
+      },
+    ],
+  };
+
+  const prompt = buildSystemPrompt(state);
+  assert.match(prompt, /Focus: risk/);
+  assert.match(prompt, /Numeric drawdown distribution is unavailable/);
+  assert.match(prompt, /say that numeric threshold probability is unavailable/i);
+  assert.doesNotMatch(prompt, /probDrawdownGt10Pct"\s*:/);
+  assert.doesNotMatch(prompt, /p10MaxDrawdownPct"\s*:/);
+  assert.doesNotMatch(prompt, /worstMaxDrawdownPct"\s*:/);
+  assert.doesNotMatch(prompt, /whatMattersNow/);
+  assert.doesNotMatch(prompt, /"edgeEvidence"\s*:/);
+  assertNoFreshnessInternals(prompt);
+});
+
 function assertNoFreshnessInternals(value: unknown): void {
   const json = JSON.stringify(value);
   assert.doesNotMatch(json, /md_research_refresh_latest/);

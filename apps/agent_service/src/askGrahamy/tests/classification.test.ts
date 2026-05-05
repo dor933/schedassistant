@@ -26,6 +26,108 @@ test("classifies a stock question", async () => {
   ]);
 });
 
+test("classifies anchored risk-only stock questions with risk focus", async () => {
+  const examples = [
+    "How risky is GSL?",
+    "How bad can GSL fall along the way?",
+    "What is the drawdown risk for GSL?",
+    "What is the probability of losing more than 10% for GSL?",
+    "What does path risk look like for GSL?",
+    "Is the downside risk elevated for GSL?",
+  ];
+
+  for (const message of examples) {
+    const result = await classifyMessage(message, undefined, {
+      classifier: stub({
+        intent: "stock",
+        symbols: ["GSL"],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: false,
+        confidence: "high",
+      }),
+    });
+    assert.equal(result.intent, "stock", message);
+    assert.deepEqual(result.symbols, ["GSL"], message);
+    assert.equal(result.focus, "risk", message);
+    assert.deepEqual(result.requiresTools, [
+      "get_stock_snapshot_context",
+      "get_market_context",
+    ]);
+  }
+});
+
+test("risk-only follow-up inherits prior anchor when context is available", async () => {
+  const result = await classifyMessage(
+    "What is the probability of losing more than 10%?",
+    {
+      conversationId: "c1",
+      userId: 1,
+      lastSymbols: ["GSL"],
+      lastSectors: [],
+      lastIntent: "stock",
+      lastSuggestedFollowups: [],
+      updatedAt: new Date().toISOString(),
+    },
+    {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: true,
+        focus: "risk",
+        confidence: "medium",
+      }),
+    },
+  );
+
+  assert.equal(result.intent, "stock");
+  assert.deepEqual(result.symbols, ["GSL"]);
+  assert.equal(result.focus, "risk");
+  assert.equal(result.isFollowUp, true);
+});
+
+test("risk-only follow-up without prior anchor returns unknown", async () => {
+  const result = await classifyMessage(
+    "What is the probability of losing more than 10%?",
+    undefined,
+    {
+      classifier: stub({
+        intent: "unknown",
+        symbols: [],
+        sectors: [],
+        regimeRequested: false,
+        isFollowUp: true,
+        focus: "risk",
+        confidence: "low",
+      }),
+    },
+  );
+
+  assert.equal(result.intent, "unknown");
+  assert.deepEqual(result.symbols, []);
+  assert.equal(result.focus, undefined);
+  assert.match(result.warnings[0], /could not classify/i);
+});
+
+test("ordinary stock analysis does not set risk focus", async () => {
+  const result = await classifyMessage("Tell me about GSL", undefined, {
+    classifier: stub({
+      intent: "stock",
+      symbols: ["GSL"],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      confidence: "high",
+    }),
+  });
+
+  assert.equal(result.intent, "stock");
+  assert.deepEqual(result.symbols, ["GSL"]);
+  assert.equal(result.focus, undefined);
+});
+
 test("resolves company name to ticker via the LLM", async () => {
   const result = await classifyMessage("what about nvidia?", undefined, {
     classifier: stub({

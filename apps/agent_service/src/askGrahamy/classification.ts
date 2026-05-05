@@ -46,6 +46,7 @@ const classifierOutputSchema = z.object({
   sectors: z.array(z.enum(CANONICAL_SECTORS)).max(5),
   regimeRequested: z.boolean(),
   isFollowUp: z.boolean(),
+  focus: z.enum(["risk"]).nullable().optional(),
   comparison: z
     .discriminatedUnion("comparisonType", [
       z.object({
@@ -110,6 +111,7 @@ The downstream system can answer when the message is anchored to one or more of:
   • an anchorless week-over-week sector change / sector delta request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
   • a stock-vs-sector, sector-vs-sector, or stock-vs-stock comparison request.
+  • an anchored risk / path-risk / drawdown / probability-of-loss question.
 
 Set isFollowUp = true when the message references a previous turn — short questions with
 no own anchor like "what about ...?", "why?", "and the risks?", "compare to peers", "compare it",
@@ -139,6 +141,7 @@ Examples (with prior context lastSymbols=["NVDA"]):
 Without prior context:
   • "what about jp morgan?"            → symbols=["JPM"], sectors=[], regimeRequested=false
   • "and the risks?"                   → intent="unknown" (no anchor anywhere)
+  • "what is the probability of losing more than 10%?" → intent="unknown" (no anchor anywhere)
 
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
 stock_sector_regime, sector_conviction_leaderboard, sector_momentum_vs_conviction_divergence,
@@ -219,6 +222,22 @@ Use ticker symbols only when you can resolve them confidently:
   comparison={ comparisonType:"symbol_vs_symbol", left:{type:"stock", symbol:"GSL"},
     right:{type:"stock", symbol:"DAC"} }
 For every non-comparison message, set comparison=null.
+
+Set focus="risk" only when the user is specifically asking about risk, downside risk, path
+risk, temporary drawdown, "how bad can it fall along the way", or probability of losing more
+than a threshold. Otherwise omit focus or set it to null.
+
+Risk-focus examples:
+  • "How risky is GSL?"                                    → intent="stock", symbols=["GSL"], focus="risk"
+  • "How bad can GSL fall along the way?"                  → intent="stock", symbols=["GSL"], focus="risk"
+  • "What is the drawdown risk for GSL?"                   → intent="stock", symbols=["GSL"], focus="risk"
+  • "What is the probability of losing more than 10% for GSL?" → intent="stock", symbols=["GSL"], focus="risk"
+  • "What does path risk look like for GSL?"               → intent="stock", symbols=["GSL"], focus="risk"
+  • "Is the downside risk elevated for GSL?"               → intent="stock", symbols=["GSL"], focus="risk"
+  • With prior context lastSymbols=["GSL"], "What is the probability of losing more than 10%?"
+    → intent="stock", symbols=["GSL"], isFollowUp=true, focus="risk"
+  • Without prior context, "What is the probability of losing more than 10%?"
+    → intent="unknown", symbols=[], sectors=[], focus="risk"
 
 Use intent = "unknown" only when the message is nonsensical, off-topic, or impossible to anchor
 to any stock / sector / regime EVEN AFTER inheritance from prior context.
@@ -324,8 +343,25 @@ export async function classifyMessage(
     };
   }
 
-  const symbols = uniqueUpper(raw.symbols).slice(0, 5);
-  const sectors = unique(raw.sectors).slice(0, 5);
+  const focus = normalizeFocus(raw.focus) ?? inferFocusFromMessage(message);
+  let symbols = uniqueUpper(raw.symbols).slice(0, 5);
+  let sectors: string[] = unique(raw.sectors).slice(0, 5);
+  let regimeRequested = raw.regimeRequested;
+  if (
+    focus === "risk" &&
+    !symbols.length &&
+    !sectors.length &&
+    !regimeRequested &&
+    shouldInheritRiskAnchor(raw, previousContext)
+  ) {
+    symbols = uniqueUpper(previousContext?.lastSymbols ?? []).slice(0, 5);
+    sectors = unique(previousContext?.lastSectors ?? []).slice(0, 5);
+    regimeRequested =
+      !symbols.length &&
+      !sectors.length &&
+      typeof previousContext?.lastIntent === "string" &&
+      previousContext.lastIntent.includes("regime");
+  }
   const comparison =
     normalizeComparison(raw.comparison) ??
     // Sector inference runs first because "Compare FAKE123 to its sector"
@@ -343,29 +379,35 @@ export async function classifyMessage(
   // the user explicitly named THIS turn. Pure follow-ups like "why?" with
   // no anchors flow through with empty arrays — the downstream agent
   // resolves them via thread memory.
-  const inferred = inferIntent(symbols, sectors, raw.regimeRequested, raw.isFollowUp);
+  const inferred = inferIntent(symbols, sectors, regimeRequested, raw.isFollowUp);
+  const hasRiskAnchor = focus === "risk" && (symbols.length > 0 || sectors.length > 0 || regimeRequested);
   // Trust the LLM's "unknown" verdict; otherwise re-derive intent from the
   // resolved (symbols, sectors, regime) tuple so requiresTools and intent
   // stay consistent even if the model returned a mismatched label.
   const intent: Intent =
-    raw.intent === "unknown" && comparison
-      ? "comparison"
-      : raw.intent === "unknown"
-        ? "unknown"
-      : raw.intent === "comparison" && comparison
-        ? "comparison"
-        : raw.intent === "comparison"
-          ? "unknown"
-      : isAnchorlessCapabilityIntent(raw.intent)
-        ? raw.intent
-        : inferred;
+    focus === "risk" && !hasRiskAnchor && !comparison
+      ? "unknown"
+      : hasRiskAnchor && !comparison
+        ? inferred
+        : raw.intent === "unknown" && comparison
+          ? "comparison"
+          : raw.intent === "unknown"
+            ? "unknown"
+            : raw.intent === "comparison" && comparison
+              ? "comparison"
+              : raw.intent === "comparison"
+                ? "unknown"
+                : isAnchorlessCapabilityIntent(raw.intent)
+                  ? raw.intent
+                  : inferred;
 
   return {
     intent,
     symbols: intent === "comparison" ? [] : symbols,
     sectors: intent === "comparison" ? [] : sectors,
-    regimeRequested: intent === "comparison" ? false : raw.regimeRequested,
+    regimeRequested: intent === "comparison" ? false : regimeRequested,
     isFollowUp: raw.isFollowUp,
+    ...(focus === "risk" && intent !== "unknown" ? { focus } : {}),
     ...(intent === "comparison" && comparison ? { comparison } : {}),
     requiresTools: toolsForIntent(intent),
     confidence: raw.confidence,
@@ -374,6 +416,30 @@ export async function classifyMessage(
         ? ["Could not classify the message into stock, sector, or regime context."]
         : [],
   };
+}
+
+function normalizeFocus(focus: ClassifierOutput["focus"]): "risk" | undefined {
+  return focus === "risk" ? "risk" : undefined;
+}
+
+function inferFocusFromMessage(message: string): "risk" | undefined {
+  return /\b(risky|risk|drawdown|downside|fall|drop|lose|losing|loss|path\s+risk)\b/i.test(message)
+    ? "risk"
+    : undefined;
+}
+
+function shouldInheritRiskAnchor(
+  raw: ClassifierOutput,
+  previousContext?: ConversationContext,
+): boolean {
+  if (!previousContext) return false;
+  if (!raw.isFollowUp && raw.intent !== "follow_up" && raw.intent !== "unknown") return false;
+  return (
+    previousContext.lastSymbols.length > 0 ||
+    previousContext.lastSectors.length > 0 ||
+    (typeof previousContext.lastIntent === "string" &&
+      previousContext.lastIntent.includes("regime"))
+  );
 }
 
 export function toolsForIntent(intent: Intent): ToolName[] {
