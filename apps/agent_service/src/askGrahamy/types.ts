@@ -640,6 +640,19 @@ export type ValidatedEdgeEvidenceState =
   | "insufficient_data"
   | "unavailable";
 
+export type LiveConfirmationBucket =
+  | "confirmed"
+  | "mixed"
+  | "not_confirmed"
+  | "deteriorating"
+  | "insufficient_live_data";
+
+export type DecayRiskBucket =
+  | "no_recent_decay_warning"
+  | "watch"
+  | "decay_elevated"
+  | "insufficient_decay_data";
+
 export type ValidatedEdgeEvidenceAnchorView = {
   type: "stock" | "sector" | "regime" | "comparison";
   symbol?: string;
@@ -670,6 +683,8 @@ export type ValidatedEdgeEvidenceView = {
     medianReturnPct?: number;
   };
   pipelineRiskBand?: string;
+  liveConfirmationBucket?: LiveConfirmationBucket;
+  decayRiskBucket?: DecayRiskBucket;
   interpretationBullets: string[];
   freshness: PublicFreshnessView;
   warnings: string[];

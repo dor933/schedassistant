@@ -1,5 +1,7 @@
 import type {
   Classification,
+  DecayRiskBucket,
+  LiveConfirmationBucket,
   PublicFreshnessView,
   ValidatedEdgeEvidenceAnchorView,
   ValidatedEdgeEvidenceState,
@@ -96,6 +98,9 @@ export function mapValidatedEdgeEvidenceView(input: {
     {};
   const baseRate = recordAt(data, "base_rate") ?? recordAt(data, "baseRate");
   const pathRisk = recordAt(data, "path_risk") ?? recordAt(data, "pathRisk");
+  const activeEdges = recordAt(pipelineEvidence, "active_edges") ??
+    recordAt(pipelineEvidence, "activeEdges");
+  const aggregateEvidence = activeEdges ?? pipelineEvidence;
 
   const explicitEvidenceState = normalizeEvidenceState(
     stringAt(data, "evidence_state") ??
@@ -105,13 +110,14 @@ export function mapValidatedEdgeEvidenceView(input: {
   );
   const totalEdges = numberAt(pipelineEvidence, "total_edges") ??
     numberAt(pipelineEvidence, "totalEdges") ??
+    numberAt(activeEdges, "total") ??
+    numberAt(activeEdges, "count") ??
     numberAt(pipelineEvidence, "accepted_edges") ??
-    numberAt(pipelineEvidence, "active_edges") ??
     numberAt(data, "edge_count");
   const eventsTotal = numberAt(pipelineEvidence, "events_total") ??
     numberAt(pipelineEvidence, "eventsTotal") ??
     numberAt(pipelineEvidence, "event_count");
-  const horizonEvidence = buildHorizonEvidence(pipelineEvidence);
+  const horizonEvidence = buildHorizonEvidence(aggregateEvidence);
   const baseRateSummary = buildBaseRateSummary(baseRate);
   const pipelineRiskBand = publicString(
     stringAt(pathRisk, "band") ??
@@ -119,6 +125,8 @@ export function mapValidatedEdgeEvidenceView(input: {
       stringAt(pipelineEvidence, "risk_band") ??
       stringAt(data, "pipeline_risk_band"),
   );
+  const liveConfirmationBucket = buildLiveConfirmationBucket(pipelineEvidence);
+  const decayRiskBucket = buildDecayRiskBucket(pipelineEvidence);
 
   const hasPublicEvidence =
     explicitEvidenceState ||
@@ -126,7 +134,9 @@ export function mapValidatedEdgeEvidenceView(input: {
     eventsTotal !== undefined ||
     horizonEvidence.length > 0 ||
     baseRateSummary !== undefined ||
-    pipelineRiskBand !== undefined;
+    pipelineRiskBand !== undefined ||
+    liveConfirmationBucket !== undefined ||
+    decayRiskBucket !== undefined;
 
   if (!hasPublicEvidence) {
     const warning = "Pipeline evidence is unavailable for the requested input.";
@@ -142,6 +152,7 @@ export function mapValidatedEdgeEvidenceView(input: {
   const warnings = [
     ...freshnessWarnings(input.freshness),
     ...validatedEvidenceWarnings(evidenceState, explicitEvidenceState, baseRateSummary),
+    ...pipelineQualificationWarnings(liveConfirmationBucket, decayRiskBucket),
   ];
   const view: ValidatedEdgeEvidenceView = {
     viewSchemaVersion: VIEW_SCHEMA_VERSION,
@@ -154,6 +165,8 @@ export function mapValidatedEdgeEvidenceView(input: {
     ...(horizonEvidence.length ? { horizonEvidence } : {}),
     ...(baseRateSummary ? { baseRateSummary } : {}),
     ...(pipelineRiskBand ? { pipelineRiskBand } : {}),
+    ...(liveConfirmationBucket ? { liveConfirmationBucket } : {}),
+    ...(decayRiskBucket ? { decayRiskBucket } : {}),
     interpretationBullets: interpretationBullets({
       anchor: input.anchor,
       evidenceState,
@@ -161,6 +174,8 @@ export function mapValidatedEdgeEvidenceView(input: {
       eventSampleBucket: eventsTotal !== undefined ? eventSampleBucket(eventsTotal) : undefined,
       hasBaseRate: !!baseRateSummary,
       pipelineRiskBand,
+      liveConfirmationBucket,
+      decayRiskBucket,
     }),
     freshness: input.freshness,
     warnings,
@@ -427,6 +442,24 @@ function validatedEvidenceWarnings(
   return warnings;
 }
 
+function pipelineQualificationWarnings(
+  liveConfirmationBucket: LiveConfirmationBucket | undefined,
+  decayRiskBucket: DecayRiskBucket | undefined,
+): string[] {
+  const warnings: string[] = [];
+  if (liveConfirmationBucket === "deteriorating") {
+    warnings.push("Aggregate live tracking is deteriorating; interpret validated evidence with caution.");
+  } else if (liveConfirmationBucket === "mixed") {
+    warnings.push("Aggregate live tracking is mixed; this is not clean live confirmation.");
+  }
+  if (decayRiskBucket === "decay_elevated") {
+    warnings.push("Aggregate decay risk is elevated; validated evidence should be interpreted with caution.");
+  } else if (decayRiskBucket === "watch") {
+    warnings.push("Aggregate decay risk is on watch; validated evidence should be interpreted with caution.");
+  }
+  return warnings;
+}
+
 function freshnessWarnings(freshness: PublicFreshnessView): string[] {
   if (freshness.warning) return [freshness.warning];
   return [];
@@ -443,6 +476,8 @@ function interpretationBullets(input: {
   eventSampleBucket?: string;
   hasBaseRate: boolean;
   pipelineRiskBand?: string;
+  liveConfirmationBucket?: LiveConfirmationBucket;
+  decayRiskBucket?: DecayRiskBucket;
 }): string[] {
   const label = input.anchor.label ?? input.anchor.symbol ?? input.anchor.sector ??
     input.anchor.regime ?? "the requested anchor";
@@ -479,7 +514,101 @@ function interpretationBullets(input: {
       `Pipeline risk band: ${input.pipelineRiskBand}. This is not a daily drawdown probability.`,
     );
   }
+  if (input.liveConfirmationBucket) {
+    bullets.push(liveConfirmationBullet(input.liveConfirmationBucket));
+  }
+  if (input.decayRiskBucket) {
+    bullets.push(decayRiskBullet(input.decayRiskBucket));
+  }
   return bullets;
+}
+
+function liveConfirmationBullet(bucket: LiveConfirmationBucket): string {
+  switch (bucket) {
+    case "confirmed":
+      return "Aggregate live tracking is confirming the validated evidence context.";
+    case "mixed":
+      return "Aggregate live tracking is mixed, so this is not clean live confirmation.";
+    case "not_confirmed":
+      return "Aggregate live tracking is not currently confirming the validated evidence context.";
+    case "deteriorating":
+      return "Aggregate live tracking is deteriorating; this is a caution signal, not trade advice.";
+    case "insufficient_live_data":
+    default:
+      return "Aggregate live tracking data is insufficient.";
+  }
+}
+
+function decayRiskBullet(bucket: DecayRiskBucket): string {
+  switch (bucket) {
+    case "no_recent_decay_warning":
+      return "Aggregate decay checks show no recent decay warning.";
+    case "watch":
+      return "Aggregate decay checks are on watch; this is a caution signal, not proof the evidence is invalid.";
+    case "decay_elevated":
+      return "Aggregate decay risk is elevated; this is a caution signal, not proof the evidence is invalid.";
+    case "insufficient_decay_data":
+    default:
+      return "Aggregate decay data is insufficient.";
+  }
+}
+
+function buildLiveConfirmationBucket(
+  pipelineEvidence: Record<string, unknown>,
+): LiveConfirmationBucket | undefined {
+  const nestedSentinel = recordAt(pipelineEvidence, "sentinel");
+  const activePatterns = numberAt(nestedSentinel, "active_patterns") ??
+    numberAt(nestedSentinel, "activePatterns") ??
+    numberAt(pipelineEvidence, "sentinel_active_patterns") ??
+    numberAt(pipelineEvidence, "sentinelActivePatterns");
+  const lifecycleStates = recordAt(nestedSentinel, "lifecycle_states") ??
+    recordAt(nestedSentinel, "lifecycleStates") ??
+    recordAt(pipelineEvidence, "sentinel_lifecycle_states") ??
+    recordAt(pipelineEvidence, "sentinelLifecycleStates");
+
+  if (activePatterns === undefined && !lifecycleStates) return undefined;
+
+  const trackingCount = sumLifecycleStates(lifecycleStates, (key) => /tracking/i.test(key)) ||
+    Math.max(activePatterns ?? 0, 0);
+  const positiveCount = sumLifecycleStates(lifecycleStates, (key) => /completed.*win|win/i.test(key));
+  const adverseCount = sumLifecycleStates(
+    lifecycleStates,
+    (key) => !/tracking/i.test(key) && !(/completed.*win|win/i.test(key)),
+  );
+  const activeCount = Math.max(activePatterns ?? 0, trackingCount);
+
+  if (activePatterns === undefined && !trackingCount && !adverseCount && !positiveCount) {
+    return "insufficient_live_data";
+  }
+  if (activeCount <= 0 && adverseCount <= 0) return "not_confirmed";
+  if (activeCount <= 0 && adverseCount > 0) return "deteriorating";
+  if (adverseCount > 0) {
+    return adverseCount >= Math.max(3, trackingCount * 2) ? "deteriorating" : "mixed";
+  }
+  return "confirmed";
+}
+
+function buildDecayRiskBucket(
+  pipelineEvidence: Record<string, unknown>,
+): DecayRiskBucket | undefined {
+  const failures = numberAt(pipelineEvidence, "coroner_recent_failures_90d") ??
+    numberAt(pipelineEvidence, "coronerRecentFailures90d");
+  if (failures === undefined) return undefined;
+  if (failures <= 0) return "no_recent_decay_warning";
+  if (failures <= 2) return "watch";
+  return "decay_elevated";
+}
+
+function sumLifecycleStates(
+  states: Record<string, unknown> | undefined,
+  predicate: (key: string) => boolean,
+): number {
+  if (!states) return 0;
+  return Object.entries(states).reduce((sum, [key, value]) => {
+    if (!predicate(key)) return sum;
+    const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
 }
 
 function edgeCountBucket(value: number): string {

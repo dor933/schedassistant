@@ -366,6 +366,9 @@ test("validated edge evidence mapper whitelists public fields only", () => {
           events_total: 48,
           mean_hit_rate_by_horizon: { h60: 0.62 },
           mean_alpha_by_horizon: { h60: 0.018 },
+          sentinel_active_patterns: 0,
+          sentinel_lifecycle_states: {},
+          coroner_recent_failures_90d: 0,
           edge_id: "edge-1",
           hypothesis_id: "hyp-1",
           table: "md_hypotheses",
@@ -390,6 +393,8 @@ test("validated edge evidence mapper whitelists public fields only", () => {
   assert.equal(mapped.view.baseRateSummary?.hitRatePct, 61);
   assert.equal(mapped.view.baseRateSummary?.medianReturnPct, 3.2);
   assert.equal(mapped.view.pipelineRiskBand, "moderate");
+  assert.equal(mapped.view.liveConfirmationBucket, "not_confirmed");
+  assert.equal(mapped.view.decayRiskBucket, "no_recent_decay_warning");
 
   const json = JSON.stringify(mapped.view);
   for (const forbidden of [
@@ -403,6 +408,130 @@ test("validated edge evidence mapper whitelists public fields only", () => {
     "md_hypotheses",
     "md_event_returns",
     "prob_drawdown_gt_10_pct",
+    "sentinel_lifecycle_states",
+    "coroner_recent_failures_90d",
+  ]) {
+    assert.equal(json.includes(forbidden), false, forbidden);
+  }
+});
+
+test("validated edge evidence mapper maps aggregate Sentinel buckets without changing evidenceState", () => {
+  const ticker = mapValidatedEdgeEvidenceView({
+    anchor: { type: "stock", symbol: "GSL", label: "GSL" },
+    freshness: { dataThrough: "2026-05-01", state: "fresh" },
+    rawEnvelope: {
+      data: {
+        evidence_state: "edge_evidence_present",
+        pipeline_evidence: {
+          total_edges: 12,
+          events_total: 120,
+          sentinel_active_patterns: 0,
+          sentinel_lifecycle_states: {},
+        },
+      },
+    },
+  });
+  assert.equal(ticker.view.evidenceState, "edge_evidence_present");
+  assert.equal(ticker.view.liveConfirmationBucket, "not_confirmed");
+
+  const sector = mapValidatedEdgeEvidenceView({
+    anchor: { type: "sector", sector: "Energy", label: "Energy" },
+    freshness: { dataThrough: "2026-05-01", state: "fresh" },
+    rawEnvelope: {
+      data: {
+        evidence_state: "edge_evidence_strong",
+        pipeline_evidence: {
+          active_edges: {
+            total: 1751,
+            by_horizon: { h60: 546 },
+            mean_hit_rate_by_horizon: { h60: 0.532 },
+            mean_alpha_by_horizon: { h60: 0.0315 },
+          },
+          events_total: 140979,
+          sentinel: {
+            active_patterns: 5,
+            lifecycle_states: {
+              TRACKING: 5,
+              COMPLETED_LOSS: 1,
+              SUSPENDED_PARENT_INACTIVE: 5,
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.equal(sector.view.evidenceState, "edge_evidence_strong");
+  assert.equal(sector.view.edgeCountBucket, "strong");
+  assert.equal(sector.view.liveConfirmationBucket, "mixed");
+  assert.equal(sector.view.horizonEvidence?.[0].horizon, "60-day");
+
+  const regime = mapValidatedEdgeEvidenceView({
+    anchor: { type: "regime", regime: "current", label: "current regime" },
+    freshness: { dataThrough: "2026-05-01", state: "fresh" },
+    rawEnvelope: {
+      data: {
+        evidence_state: "edge_evidence_present",
+        pipeline_evidence: {
+          active_edges: { total: 4 },
+          sentinel: {
+            active_patterns: 0,
+            lifecycle_states: {
+              COMPLETED_LOSS: 3,
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.equal(regime.view.evidenceState, "edge_evidence_present");
+  assert.equal(regime.view.liveConfirmationBucket, "deteriorating");
+});
+
+test("validated edge evidence mapper maps aggregate Coroner bucket without changing evidenceState", () => {
+  const watch = mapValidatedEdgeEvidenceView({
+    anchor: { type: "stock", symbol: "GSL", label: "GSL" },
+    freshness: { dataThrough: "2026-05-01", state: "fresh" },
+    rawEnvelope: {
+      data: {
+        evidence_state: "edge_evidence_present",
+        pipeline_evidence: {
+          total_edges: 12,
+          coroner_recent_failures_90d: 2,
+          coroner_postmortems: [{ parent_refined_out: true }],
+        },
+      },
+    },
+  });
+  assert.equal(watch.view.evidenceState, "edge_evidence_present");
+  assert.equal(watch.view.decayRiskBucket, "watch");
+  assert.match(watch.view.warnings.join(" "), /decay risk is on watch/i);
+
+  const elevated = mapValidatedEdgeEvidenceView({
+    anchor: { type: "stock", symbol: "GSL", label: "GSL" },
+    freshness: { dataThrough: "2026-05-01", state: "fresh" },
+    rawEnvelope: {
+      data: {
+        evidence_state: "edge_evidence_strong",
+        pipeline_evidence: {
+          total_edges: 12,
+          coroner_recent_failures_90d: 3,
+        },
+      },
+    },
+  });
+  assert.equal(elevated.view.evidenceState, "edge_evidence_strong");
+  assert.equal(elevated.view.decayRiskBucket, "decay_elevated");
+  assert.match(elevated.view.warnings.join(" "), /decay risk is elevated/i);
+
+  const json = JSON.stringify(watch.view);
+  for (const forbidden of [
+    "coroner_recent_failures_90d",
+    "coroner_postmortems",
+    "parent_refined_out",
+    "parent refined out",
+    "COMPLETED_LOSS",
+    "SUSPENDED_PARENT_INACTIVE",
+    "TRACKING",
   ]) {
     assert.equal(json.includes(forbidden), false, forbidden);
   }

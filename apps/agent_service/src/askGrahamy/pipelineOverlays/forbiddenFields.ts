@@ -34,6 +34,12 @@ export const PIPELINE_OVERLAY_FORBIDDEN_KEYS = [
   "pit",
   "pipeline_evidence",
   "pipelineevidence",
+  "lifecycle_states",
+  "lifecyclestates",
+  "sentinel_rows",
+  "sentinelrows",
+  "coroner_postmortems",
+  "coronerpostmortems",
 ] as const;
 
 export const PIPELINE_OVERLAY_FORBIDDEN_TERMS = [
@@ -48,6 +54,13 @@ export const PIPELINE_OVERLAY_FORBIDDEN_TERMS = [
   "md_convergence_signals",
   "md_lifecycle_events",
   "md_run_manifest",
+  "completed_loss",
+  "completed_win",
+  "suspended_parent_inactive",
+  "expired_no_data",
+  "parent refined out",
+  "raw sentinel",
+  "raw coroner",
   "stop-loss",
   "sizing",
   "buy",

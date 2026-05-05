@@ -54,8 +54,12 @@ test("LLM prompt receives only validatedEdgeEvidenceView for validated evidence 
           { horizon: "60-day", hitRatePct: 62, alphaBucket: "positive" },
         ],
         pipelineRiskBand: "moderate",
+        liveConfirmationBucket: "mixed",
+        decayRiskBucket: "watch",
         interpretationBullets: [
           "Validated pipeline evidence is present for GSL.",
+          "Aggregate live tracking is mixed, so this is not clean live confirmation.",
+          "Aggregate decay checks are on watch; this is a caution signal, not proof the evidence is invalid.",
         ],
         freshness: { dataThrough: "2026-05-01", state: "fresh" },
         warnings: [],
@@ -68,7 +72,11 @@ test("LLM prompt receives only validatedEdgeEvidenceView for validated evidence 
   assert.match(prompt, /validatedEdgeEvidenceView/);
   assert.match(prompt, /edge_evidence_present/);
   assert.match(prompt, /pipelineRiskBand/);
+  assert.match(prompt, /liveConfirmationBucket/);
+  assert.match(prompt, /decayRiskBucket/);
   assert.match(prompt, /not daily drawdown/i);
+  assert.match(prompt, /aggregate live tracking confirmation context/i);
+  assert.match(prompt, /aggregate caution signal/i);
   assert.match(prompt, /focus is `validated_evidence`/i);
   assert.match(prompt, /pipeline-validated evidence/i);
   assert.match(prompt, /2026-05-01/);
@@ -79,6 +87,8 @@ test("LLM prompt receives only validatedEdgeEvidenceView for validated evidence 
   assert.doesNotMatch(evidenceSection, /raw_sql/);
   assert.doesNotMatch(evidenceSection, /edge_id/);
   assert.doesNotMatch(evidenceSection, /hypothesis_id/);
+  assert.doesNotMatch(evidenceSection, /COMPLETED_LOSS/);
+  assert.doesNotMatch(evidenceSection, /parent-refined-out/i);
   assertNoFreshnessInternals(prompt);
 });
 
