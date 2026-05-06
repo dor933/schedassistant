@@ -1,8 +1,10 @@
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatAnthropic } from "@langchain/anthropic";
 import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import { logger } from "../logger";
 import { anthropicBaseConfig } from "../chat/anthropic/anthropicContextManagement";
+import { runAnthropicOneShot } from "../chat/anthropic/anthropicOneShot";
 import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import type {
   CachedResearchObject,
@@ -179,7 +181,7 @@ const ASK_GRAHAMY_ORG_ID =
   process.env.ASK_GRAHAMY_ORG_ID ?? "acf0cbab-3aed-42cf-872d-63cba24e61c3";
 
 const PLANNER_MODEL =
-  process.env.ASK_GRAHAMY_RESEARCH_PLANNER_MODEL ?? "claude-sonnet-4-5";
+  process.env.ASK_GRAHAMY_RESEARCH_PLANNER_MODEL ?? "claude-sonnet-4-6";
 
 const MAX_STEPS = 5;
 const MAX_SECTOR_CONSTRAINTS = 3;
@@ -192,19 +194,31 @@ const planStepSchema = z.object({
   id: z.string().trim().min(1).max(60),
   capability: z.enum(PLANNABLE_CAPABILITIES),
   purpose: z.string().trim().min(1).max(300),
-  params: z.record(z.string(), z.unknown()).default({}),
-  dependsOn: z.array(z.string().trim().min(1).max(60)).max(4).optional(),
-  paramsFromPreviousSteps: z
-    .record(
-      z.string(),
-      z.object({
-        stepId: z.string().trim().min(1).max(60),
-        sourcePath: z.string().trim().min(1).max(160),
-        transform: z.string().trim().min(1).max(80),
-      }),
-    )
-    .optional(),
-  optional: z.boolean().optional(),
+  params: z.preprocess(
+    (value) => (value === null ? undefined : value),
+    z.record(z.string(), z.unknown()).default({}),
+  ),
+  dependsOn: z.preprocess(
+    (value) => (value === null ? undefined : value),
+    z.array(z.string().trim().min(1).max(60)).max(4).optional(),
+  ),
+  paramsFromPreviousSteps: z.preprocess(
+    (value) => (value === null ? undefined : value),
+    z
+      .record(
+        z.string(),
+        z.object({
+          stepId: z.string().trim().min(1).max(60),
+          sourcePath: z.string().trim().min(1).max(160),
+          transform: z.string().trim().min(1).max(80),
+        }),
+      )
+      .optional(),
+  ),
+  optional: z.preprocess(
+    (value) => (value === null ? undefined : value),
+    z.boolean().optional(),
+  ),
 });
 
 export const researchPlanSchema = z.object({
@@ -214,6 +228,11 @@ export const researchPlanSchema = z.object({
   expectedViews: z.array(z.string().trim().min(1).max(80)).max(8),
   safetyNotes: z.array(z.string().trim().min(1).max(180)).max(8),
 });
+
+const RESEARCH_PLAN_JSON_SCHEMA = zodToJsonSchema(
+  researchPlanSchema as never,
+  { target: "openAi", $refStrategy: "none" },
+);
 
 export const PLANNING_CAPABILITY_REGISTRY: Record<
   PlannedCapability,
@@ -539,6 +558,63 @@ export function buildPlannerPrompt(message: string): Array<{ role: string; conte
   ];
 }
 
+function stripCodeFences(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("```")) return trimmed;
+  const match = /^```(?:[a-zA-Z0-9_-]+)?\s*\n?([\s\S]*?)\n?```\s*$/.exec(trimmed);
+  return match ? match[1].trim() : trimmed;
+}
+
+function extractFirstJsonObject(raw: string): string | null {
+  const start = raw.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\\") {
+        escape = true;
+        continue;
+      }
+      if (ch === "\"") inString = false;
+      continue;
+    }
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return raw.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function parsePlannerJson(raw: string): unknown {
+  const stripped = stripCodeFences(raw);
+  try {
+    return JSON.parse(stripped);
+  } catch (firstErr) {
+    const extracted = extractFirstJsonObject(stripped);
+    if (extracted) {
+      try {
+        return JSON.parse(extracted);
+      } catch {
+        /* fall through to original parse error */
+      }
+    }
+    throw firstErr;
+  }
+}
+
 export function shouldRunResearchPlanner(
   message: string,
   classification: Classification,
@@ -637,6 +713,17 @@ export async function proposeResearchPlan(message: string): Promise<ResearchPlan
   if (!vendor || !vendor.apiKey) {
     throw new Error("Ask Grahamy research planner model is unavailable.");
   }
+  if (vendor.vendorSlug === "anthropic" && vendor.keyType === "oauth_token") {
+    const text = await runAnthropicOneShot({
+      credential: vendor.apiKey,
+      keyType: vendor.keyType,
+      model: PLANNER_MODEL,
+      systemPrompt: PLANNER_SYSTEM_PROMPT,
+      userPrompt: `User question:\n${message}`,
+      jsonSchemaHint: RESEARCH_PLAN_JSON_SCHEMA,
+    });
+    return parseResearchPlan(parsePlannerJson(text));
+  }
   if (!cachedPlanner || cachedPlanner.apiKey !== vendor.apiKey) {
     const llm =
       vendor.vendorSlug === "anthropic"
@@ -716,7 +803,6 @@ export function validateResearchPlan(plan: ResearchPlan): PlanValidationResult {
     {
       finalAnswerGoal: normalized.finalAnswerGoal,
       expectedViews: normalized.expectedViews,
-      safetyNotes: normalized.safetyNotes,
     },
     "plan",
     errors,
