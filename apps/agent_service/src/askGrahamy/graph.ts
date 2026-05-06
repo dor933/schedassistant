@@ -13,6 +13,14 @@ import {
   buildEvidencePack,
 } from "./analystOrchestration";
 import {
+  synthesizeAnalystBriefFromEvidencePack,
+  type AnalystBriefSynthesisInput,
+  type AnalystBriefSynthesisResult,
+} from "./analystBriefSynthesizer";
+import { renderAnalystBriefToAnswer } from "./analystBriefRenderer";
+import { buildEvidencePackFromWorkflowExecution } from "./workflowEvidencePack";
+import {
+  buildFallbackResearchPlan,
   executeResearchPlan,
   proposeResearchPlan,
   shouldRunResearchPlanner,
@@ -65,9 +73,16 @@ export type RunAskGrahamyGraphOptions = {
   ) => Promise<PipelineOverlayRunResult>;
   researchPlanProposer?: (message: string) => Promise<ResearchPlan>;
   researchPlanExecutor?: ResearchPlanExecutor;
+  analystBriefSynthesizer?: (
+    input: AnalystBriefSynthesisInput,
+  ) => Promise<AnalystBriefSynthesisResult>;
   researchObjectBuilder?: typeof buildResearchObjects;
   grahamyAgentRunner?: typeof runGrahamyDeepAgent;
 };
+
+const RESEARCH_PLANNER_TIMEOUT_MS = Number(
+  process.env.ASK_GRAHAMY_RESEARCH_PLANNER_TIMEOUT_MS ?? 10_000,
+);
 
 /**
  * askGrahamy graph — runs once per StocksScanner turn.
@@ -151,31 +166,47 @@ export async function runAskGrahamyGraph(
       pipelineOverlayViews: state.pipelineOverlayViews,
       warnings: state.warnings,
     });
-    state.evidencePack = buildEvidencePack(state);
+    state.evidencePack = state.workflowExecutionResult
+      ? buildEvidencePackFromWorkflowExecution(state.workflowExecutionResult)
+      : buildEvidencePack(state);
     state.analystBrief = buildAnalystBriefContract(state.evidencePack);
 
-    // Hand off to the deep agent. It composes the actual user-facing answer
-    // by reading state.researchObjects + state.message + its PostgresSaver
-    // thread history (prior turns in this conversation).
-    const grahamy = await (options.grahamyAgentRunner ?? runGrahamyDeepAgent)(state);
-    state.warnings.push(...grahamy.warnings);
+    if (state.workflowExecutionResult) {
+      const synthesis = await (
+        options.analystBriefSynthesizer ?? synthesizeAnalystBriefFromEvidencePack
+      )({
+        message: state.message,
+        evidencePack: state.evidencePack,
+      });
+      state.warnings.push(...synthesis.warnings);
+      state.analystBrief = synthesis.brief;
+      const rendered = renderAnalystBriefToAnswer(synthesis.brief);
+      state.answer = rendered.answer;
+      state.ui = rendered.ui;
+    } else {
+      // Hand off to the deep agent. It composes the actual user-facing answer
+      // by reading state.researchObjects + state.message + its PostgresSaver
+      // thread history (prior turns in this conversation).
+      const grahamy = await (options.grahamyAgentRunner ?? runGrahamyDeepAgent)(state);
+      state.warnings.push(...grahamy.warnings);
 
-    state.answer = {
-      headline: "",
-      summary: grahamy.answerText,
-      bullets: [],
-      watchpoints: [],
-      disclaimer: DEFAULT_DISCLAIMER,
-    };
-    state.ui = {
-      cards: [],
-      tables: [],
-      // Use the agent-generated, conversation-aware follow-ups. If the agent
-      // didn't emit any (parse miss / model skipped the section), leave the
-      // array empty rather than falling back to a generic hardcoded list —
-      // a generic list would defeat the point of context-aware suggestions.
-      suggestedFollowups: grahamy.suggestedFollowups,
-    };
+      state.answer = {
+        headline: "",
+        summary: grahamy.answerText,
+        bullets: [],
+        watchpoints: [],
+        disclaimer: DEFAULT_DISCLAIMER,
+      };
+      state.ui = {
+        cards: [],
+        tables: [],
+        // Use the agent-generated, conversation-aware follow-ups. If the agent
+        // didn't emit any (parse miss / model skipped the section), leave the
+        // array empty rather than falling back to a generic hardcoded list —
+        // a generic list would defeat the point of context-aware suggestions.
+        suggestedFollowups: grahamy.suggestedFollowups,
+      };
+    }
     state.meta = buildMeta(
       state.selectedTools ?? [],
       state.snapshots ?? {},
@@ -257,10 +288,39 @@ async function maybeRunResearchPlanner(
   }
 
   try {
-    const plan = await (options.researchPlanProposer ?? proposeResearchPlan)(
-      state.message,
-    );
-    const validation = validateResearchWorkflow(plan);
+    const usingDefaultProposer = !options.researchPlanProposer;
+    const proposer = options.researchPlanProposer ?? proposeResearchPlan;
+    let plan: ResearchPlan;
+    try {
+      plan = await withPlannerTimeout(
+        proposer(state.message),
+        RESEARCH_PLANNER_TIMEOUT_MS,
+      );
+    } catch (err) {
+      const fallbackPlan = buildFallbackResearchPlan(state.message);
+      if (!fallbackPlan) throw err;
+      logger.warn("Ask Grahamy research planner used approved workflow fallback", {
+        conversationId: state.conversationId,
+        messageId: state.messageId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      plan = fallbackPlan;
+    }
+    let validation = validateResearchWorkflow(plan);
+    if (!validation.ok && usingDefaultProposer) {
+      const fallbackPlan = buildFallbackResearchPlan(state.message);
+      if (fallbackPlan) {
+        const fallbackValidation = validateResearchWorkflow(fallbackPlan);
+        if (fallbackValidation.ok) {
+          logger.warn("Ask Grahamy research planner validation repaired with approved workflow fallback", {
+            conversationId: state.conversationId,
+            messageId: state.messageId,
+            errors: validation.errors,
+          });
+          validation = fallbackValidation;
+        }
+      }
+    }
     if (!validation.ok) {
       state.warnings.push(
         "The compound research request could not be safely expanded into bounded checks; using the available standard analysis.",
@@ -303,6 +363,7 @@ async function maybeRunResearchPlanner(
       execution.researchObjectCacheStats ?? { hits: 0, misses: 0, writes: 0 };
     state.capabilityViewsUpdated = [];
     state.capabilityViewCacheStats = { hits: 0, misses: 0, writes: 0 };
+    state.workflowExecutionResult = execution.workflowExecutionResult;
     state.compoundResearchContext = execution.compoundResearchContext;
     state.warnings.push(...execution.warnings);
     return true;
@@ -317,6 +378,25 @@ async function maybeRunResearchPlanner(
     });
     return false;
   }
+}
+
+function withPlannerTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Research planner timed out after ${Math.round(ms / 1000)} seconds`)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
 }
 
 async function loadResearchObjects(state: AskGrahamyState): Promise<void> {

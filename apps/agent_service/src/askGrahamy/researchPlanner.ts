@@ -30,6 +30,8 @@ import {
   executePgCapabilitiesWithCache,
 } from "./pgCapabilities/registry";
 import { executePipelineOverlays } from "./pipelineOverlays/registry";
+import { buildWorkflowExecutionResult } from "./workflowExecution";
+import type { WorkflowExecutionResult } from "./analystTypes";
 import type {
   PgCapabilityRunInput,
   PgCapabilityRunResult,
@@ -169,6 +171,7 @@ export type ResearchPlanExecutionResult = {
   researchObjectCacheStats?: { hits: number; misses: number; writes: number };
   pgCapabilityViews?: PgCapabilityViews;
   pipelineOverlayViews?: PipelineOverlayViews;
+  workflowExecutionResult?: WorkflowExecutionResult;
   compoundResearchContext?: CompoundResearchContext;
   warnings: string[];
 };
@@ -499,6 +502,235 @@ export const RESEARCH_WORKFLOW_REGISTRY: ResearchWorkflowSpec[] = [
   },
 ];
 
+export function buildFallbackResearchPlan(message: string): ResearchPlan | null {
+  const workflowName = detectResearchWorkflowIntent(message);
+  if (!workflowName) return null;
+  switch (workflowName) {
+    case "regime_to_stock_screen":
+      return workflowPlan({
+        workflowName,
+        steps: [
+          { id: "regime_context", capability: "market_regime_historical_playbook", purpose: "Identify historically leading sectors in the current regime.", params: {} },
+          sectorConstrainedScreenStep("regime_context", "regimeHistoricalPlaybookView.rows[role=leader].sector"),
+          pipelineCheckStep("current_candidates"),
+        ],
+        expectedViews: ["regimeHistoricalPlaybookView", "featureScreenView", "validatedEdgeEvidenceView"],
+      });
+    case "sector_delta_to_stock_screen":
+      return workflowPlan({
+        workflowName,
+        steps: [
+          { id: "sector_delta", capability: "week_over_week_sector_delta", purpose: "Identify sectors that improved this week.", params: {} },
+          sectorConstrainedScreenStep(
+            "sector_delta",
+            "sectorDeltaView.rows[direction=improved].sector",
+            "top_3_improved_sectors",
+          ),
+          pipelineCheckStep("current_candidates"),
+        ],
+        expectedViews: ["sectorDeltaView", "featureScreenView", "validatedEdgeEvidenceView"],
+      });
+    case "sector_divergence_to_stock_screen":
+      return workflowPlan({
+        workflowName,
+        steps: [
+          { id: "sector_divergence", capability: "sector_momentum_vs_conviction_divergence", purpose: "Identify public conviction-versus-price divergence sectors.", params: {} },
+          sectorConstrainedScreenStep(
+            "sector_divergence",
+            "sectorDivergenceView.rows.sector",
+            "top_3_divergence_sectors",
+          ),
+          pipelineCheckStep("current_candidates"),
+        ],
+        expectedViews: ["sectorDivergenceView", "featureScreenView", "validatedEdgeEvidenceView"],
+      });
+    case "feature_screen_plus_backtest":
+      return workflowPlan({
+        workflowName,
+        steps: [
+          {
+            id: "current_screen",
+            capability: "feature_screen",
+            purpose: "Find current stocks matching the public criteria.",
+            params: {
+              criteria: [
+                { factor: "valuation", bucket: "ATTRACTIVE" },
+                { factor: "quality", bucket: "STRONG" },
+              ],
+            },
+          },
+          {
+            id: "aggregate_backtest",
+            capability: "factor_conditioned_backtest",
+            purpose: "Check aggregate historical evidence for the same public criteria.",
+            params: { horizon: "60-day" },
+            dependsOn: ["current_screen"],
+            paramsFromPreviousSteps: {
+              criteria: {
+                stepId: "current_screen",
+                sourcePath: "featureScreenView.screenCriteria",
+                transform: "public_criteria_only",
+              },
+            },
+          },
+        ],
+        expectedViews: ["featureScreenView", "factorBacktestView"],
+      });
+    case "stock_deep_dive_stack": {
+      const symbol = extractSymbol(message);
+      return workflowPlan({
+        workflowName,
+        steps: [
+          { id: "stock_context", capability: "stock_research_object", purpose: "Load public stock Research Object.", params: symbol ? { symbol } : {} },
+          { id: "risk_context", capability: "risk_path", purpose: "Add public risk evidence for the stock.", params: {}, dependsOn: ["stock_context"] },
+          { id: "sector_comparison", capability: "comparison", purpose: "Compare the stock to its sector.", params: { comparisonType: "stock_vs_sector" }, dependsOn: ["stock_context"] },
+          pipelineCheckStep("stock_context", true),
+        ],
+        expectedViews: ["researchObjectViews", "comparisonView", "validatedEdgeEvidenceView"],
+      });
+    }
+    case "idea_to_compare_and_risk":
+      return workflowPlan({
+        workflowName,
+        steps: [
+          { id: "idea", capability: "stock_idea_discovery", purpose: "Find a public research candidate.", params: {} },
+          {
+            id: "sector_comparison",
+            capability: "comparison",
+            purpose: "Compare the top research candidate to its sector.",
+            params: { comparisonType: "stock_vs_sector" },
+            dependsOn: ["idea"],
+            paramsFromPreviousSteps: {
+              symbol: {
+                stepId: "idea",
+                sourcePath: "stockIdeaView.rows[0].symbol",
+                transform: "top_candidate_symbol",
+              },
+            },
+          },
+          { id: "risk_context", capability: "risk_path", purpose: "Add public risk evidence for the top candidate.", params: {}, dependsOn: ["idea"] },
+          pipelineCheckStep("idea", true),
+        ],
+        expectedViews: ["stockIdeaView", "comparisonView", "validatedEdgeEvidenceView"],
+      });
+  }
+}
+
+function workflowPlan(input: {
+  workflowName: ResearchWorkflowName;
+  steps: ResearchPlanStep[];
+  expectedViews: string[];
+}): ResearchPlan {
+  return {
+    planType: "multi_step",
+    steps: input.steps,
+    finalAnswerGoal:
+      input.workflowName.endsWith("_to_stock_screen")
+        ? "ranked_research_candidates"
+        : input.workflowName,
+    expectedViews: input.expectedViews,
+    safetyNotes: ["Use public views only", "Do not invent assets", "Do not give action instructions"],
+  };
+}
+
+function sectorConstrainedScreenStep(
+  dependsOn: string,
+  sourcePath: string,
+  transform = "top_3_unique_sectors",
+): ResearchPlanStep {
+  return {
+    id: "current_candidates",
+    capability: "feature_screen",
+    purpose: "Find current stock candidates constrained by public sector evidence.",
+    params: {},
+    dependsOn: [dependsOn],
+    paramsFromPreviousSteps: {
+      sectorConstraints: {
+        stepId: dependsOn,
+        sourcePath,
+        transform,
+      },
+    },
+  };
+}
+
+function pipelineCheckStep(dependsOn: string, anchorOnly = false): ResearchPlanStep {
+  return {
+    id: "pipeline_check",
+    capability: "validated_edge_evidence",
+    purpose: "Qualify public candidates with Pipeline evidence when available.",
+    params: { topN: anchorOnly ? 1 : 3 },
+    dependsOn: [dependsOn],
+    paramsFromPreviousSteps: {
+      symbols: {
+        stepId: dependsOn,
+        sourcePath: anchorOnly
+          ? dependsOn === "idea"
+            ? "stockIdeaView.rows[0].symbol"
+            : "stock_research_object anchor"
+          : "featureScreenView.rows.symbol",
+        transform: anchorOnly ? "top_candidate_symbol" : "top_3_symbols",
+      },
+    },
+    optional: true,
+  };
+}
+
+function detectResearchWorkflowIntent(message: string): ResearchWorkflowName | null {
+  const text = message.toLowerCase();
+  const regimeToStockScreen =
+    (/current\s+(regime|market condition|market backdrop)|what should i look at based on.*regime/.test(text) ||
+      /מצב\s+השוק|משטר\s+השוק/.test(text)) &&
+    (/historically strong sectors|what works in this regime|sectors.*strong|sectors.*work/.test(text) ||
+      /סקטור.*חזק|סקטורים.*חזקים|מה.*עובד/.test(text)) &&
+    (/\b(stocks|names|candidates|look at now)\b/.test(text) ||
+      /מניות|מועמדים|משהו\s+נוכחי/.test(text));
+
+  const sectorDeltaToStockScreen =
+    (/sectors? improved|improved this week|strengthened this week/.test(text) ||
+      /סקטורים?\s+התחזק|התחזקו\s+השבוע/.test(text)) &&
+    (/\b(stocks|names|candidates|interesting)\b/.test(text) ||
+      /מניות|מועמדים|מעניינות/.test(text));
+
+  const divergenceToStockScreen =
+    (/conviction.*weak price|evidence.*price|divergence/.test(text) ||
+      /פער\s+בין\s+ראיות\s+למחיר|פער.*מחיר|ראיות.*מחיר/.test(text)) &&
+    (/\b(stocks|names|candidates|interesting)\b/.test(text) ||
+      /מניות|מועמדים|מעניינות/.test(text));
+
+  const featureScreenPlusBacktest =
+    (/\b(find|show|screen)\b.*\b(cheap|attractive|quality)\b/.test(text) ||
+      /מצא.*מניות|מניות.*זולות|איכותיות/.test(text)) &&
+    (/worked historically|historical|backtest|worked in the past/.test(text) ||
+      /עבד\s+בעבר|היסטורית|שילוב.*עבר/.test(text));
+
+  const stockDeepDiveStack =
+    (/\b(what do you think|deep dive|full analysis|analysis)\b/.test(text) ||
+      /ניתוח\s+מלא|מה\s+דעתך|כולל/.test(text)) &&
+    (/\b(risk|downside)\b/.test(text) || /סיכון|ירידה/.test(text)) &&
+    (/\b(sector comparison|compare .* sector|vs .* sector|sector)\b/.test(text) ||
+      /השוואה\s+לסקטור|מול\s+הסקטור|לסקטור/.test(text));
+
+  const ideaToCompareAndRisk =
+    (/\b(interesting stock|stock idea|idea for a stock|give me an idea)\b/.test(text) ||
+      /רעיון\s+למניה|מניה\s+מעניינת|תן\s+לי\s+רעיון/.test(text)) &&
+    (/\b(compare|sector)\b/.test(text) || /סקטור|השוואה|מול/.test(text)) &&
+    (/\b(risk|downside)\b/.test(text) || /סיכון|ירידה/.test(text));
+
+  if (regimeToStockScreen) return "regime_to_stock_screen";
+  if (sectorDeltaToStockScreen) return "sector_delta_to_stock_screen";
+  if (divergenceToStockScreen) return "sector_divergence_to_stock_screen";
+  if (featureScreenPlusBacktest) return "feature_screen_plus_backtest";
+  if (stockDeepDiveStack) return "stock_deep_dive_stack";
+  if (ideaToCompareAndRisk) return "idea_to_compare_and_risk";
+  return null;
+}
+
+function extractSymbol(message: string): string | undefined {
+  const match = message.match(/\b[A-Z]{1,5}\b/);
+  return match?.[0]?.toUpperCase();
+}
+
 const PLANNER_SYSTEM_PROMPT = `You are Ask Grahamy's internal research planner.
 Return a structured ResearchPlan only. Do not answer the user.
 
@@ -619,93 +851,15 @@ export function shouldRunResearchPlanner(
   message: string,
   classification: Classification,
 ): boolean {
-  if (classification.focus === "risk" || classification.focus === "validated_evidence") {
+  const workflow = detectResearchWorkflowIntent(message);
+  if (!workflow) return false;
+  if (classification.focus === "validated_evidence") {
     return false;
   }
-
-  const text = normalizeForPlanning(message);
-  const asksForCurrentStocks =
-    /\b(current stocks?|stock candidates?|names?|candidates?|what should i look at now|find .*stocks?|interesting stocks?|stocks?.*interesting)\b/.test(
-      text,
-    ) ||
-    /מניות|מועמדים|שמות|משהו\s+נוכחי|מצא\s+לי|תמצא\s+לי|מה\s+לבחון\s+עכשיו|מעניינות/.test(
-      text,
-    );
-
-  const asksAboutCurrentRegime =
-    /\b(current market|market condition|market regime|this regime|current regime)\b/.test(
-      text,
-    ) ||
-    /מצב\s+השוק|מצב\s+השוק\s+הנוכחי|מצב\s+הנוכחי|משטר\s+השוק|השוק\s+הנוכחי/.test(
-      text,
-    );
-  const asksAboutHistoricalSectorStrength =
-    /\b(historically strong sectors?|what works in this regime|sectors? historically (lead|work|strong))\b/.test(
-      text,
-    ) ||
-    /סקטור(?:ים)?[^.?!]{0,40}(חזק|חזקים|מוביל|מובילים)|נוטה\s+להיות\s+חזק|מה\s+עובד/.test(
-      text,
-    );
-  const asksForRecurringHistoricalSuccess =
-    /\b(recurring historical success|historically strong|worked historically|repeated success|historical winners?)\b/.test(
-      text,
-    ) ||
-    /היסטורית|היסטורי|הצלחות\s+חוזרות|הצלחה\s+חוזרת|חזקות/.test(text);
-
-  const regimeToStockScreen =
-    asksAboutCurrentRegime &&
-    asksForCurrentStocks &&
-    (asksAboutHistoricalSectorStrength || asksForRecurringHistoricalSuccess);
-
-  const sectorDeltaToStockScreen =
-    asksForCurrentStocks &&
-    (/\b(sectors?.*(improved|strengthened|got stronger)|improved .*sectors?|stronger this week)\b/.test(
-      text,
-    ) ||
-      /סקטורים?.*(התחזקו|השתפרו)|התחזקו\s+השבוע|השתפרו\s+השבוע/.test(text));
-
-  const divergenceToStockScreen =
-    asksForCurrentStocks &&
-    (/\b(conviction .* weak price action|evidence .* price|price action .* evidence|divergence)\b/.test(
-      text,
-    ) ||
-      /פער\s+בין\s+ראיות\s+למחיר|ראיות\s+למחיר|מחיר\s+וראיות|פער.*מחיר/.test(
-        text,
-      ));
-
-  const featureScreenPlusBacktest =
-    asksForCurrentStocks &&
-    (/\b(cheap|quality|momentum|valuation|growth|leverage|screen)\b/.test(text) ||
-      /זולות|איכותיות|מומנטום|תמחור|צמיחה|מינוף/.test(text)) &&
-    (/\b(worked historically|historical|backtest|in the past|setup worked)\b/.test(
-      text,
-    ) ||
-      /עבד\s+בעבר|עבדה\s+בעבר|היסטורית|בדוק\s+אם.*עבר/.test(text));
-
-  const stockDeepDiveStack =
-    classification.symbols.length === 1 &&
-    (/\b(deep dive|full analysis|include|with)\b/.test(text) ||
-      /ניתוח\s+מלא|כולל/.test(text)) &&
-    (/\b(risk|downside)\b/.test(text) || /סיכון|ירידה/.test(text)) &&
-    (/\b(sector comparison|compare .* sector|vs .* sector)\b/.test(text) ||
-      /השוואה\s+לסקטור|מול\s+הסקטור|לסקטור/.test(text));
-
-  const ideaToCompareAndRisk =
-    (/\b(interesting stock|stock idea|idea for a stock|give me an idea)\b/.test(
-      text,
-    ) ||
-      /רעיון\s+למניה|מניה\s+מעניינת|תן\s+לי\s+רעיון/.test(text)) &&
-    (/\b(compare|sector)\b/.test(text) || /סקטור|השוואה|מול/.test(text)) &&
-    (/\b(risk|downside)\b/.test(text) || /סיכון|ירידה/.test(text));
-
-  return (
-    regimeToStockScreen ||
-    sectorDeltaToStockScreen ||
-    divergenceToStockScreen ||
-    featureScreenPlusBacktest ||
-    stockDeepDiveStack ||
-    ideaToCompareAndRisk
-  );
+  if (workflow === "stock_deep_dive_stack") {
+    return classification.symbols.length === 1 || Boolean(extractSymbol(message));
+  }
+  return true;
 }
 
 export async function proposeResearchPlan(message: string): Promise<ResearchPlan> {
@@ -1421,6 +1575,19 @@ async function executeFeatureScreenPlusBacktest(
       ...(featureScreenView ? { featureScreenView } : {}),
       ...backtestResult.views,
     },
+    workflowExecutionResult: buildWorkflowExecutionResult({
+      workflowName: workflow.workflowName,
+      publicViews: {
+        pgCapabilityViews: {
+          ...(featureScreenView ? { featureScreenView } : {}),
+          ...backtestResult.views,
+        },
+      },
+      warnings: unique([
+        ...warnings,
+        "The factor backtest is aggregate historical context for the screen criteria, not stock-specific proof.",
+      ]),
+    }),
     compoundResearchContext: {
       workflowName: workflow.workflowName,
       planType: "approved_multi_step_workflow",
@@ -1472,6 +1639,17 @@ async function executeStockDeepDiveStack(
       candidatePipelineLabels: pipelineLabels.labels,
       warnings: unique(warnings),
     },
+    workflowExecutionResult: buildWorkflowExecutionResult({
+      workflowName: workflow.workflowName,
+      publicViews: {
+        researchObjectViews: researchObjects.objects
+          .map((item) => item.view)
+          .filter((view): view is NonNullable<typeof view> => Boolean(view)),
+        pgCapabilityViews: comparisonResult.views,
+      },
+      pipelineLabels: pipelineLabels.labels,
+      warnings: unique(warnings),
+    }),
     warnings: unique(warnings),
   };
 }
@@ -1493,6 +1671,13 @@ async function executeIdeaToCompareAndRisk(
     return {
       handled: true,
       pgCapabilityViews: ideaResult.views,
+      workflowExecutionResult: buildWorkflowExecutionResult({
+        workflowName: workflow.workflowName,
+        publicViews: {
+          pgCapabilityViews: ideaResult.views,
+        },
+        warnings: unique(warnings),
+      }),
       compoundResearchContext: {
         workflowName: workflow.workflowName,
         planType: "approved_multi_step_workflow",
@@ -1527,6 +1712,23 @@ async function executeIdeaToCompareAndRisk(
       stockIdeaView: ideaView,
       ...comparisonResult.views,
     },
+    workflowExecutionResult: buildWorkflowExecutionResult({
+      workflowName: workflow.workflowName,
+      publicViews: {
+        researchObjectViews: researchObjects.objects
+          .map((item) => item.view)
+          .filter((view): view is NonNullable<typeof view> => Boolean(view)),
+        pgCapabilityViews: {
+          stockIdeaView: ideaView,
+          ...comparisonResult.views,
+        },
+      },
+      pipelineLabels: pipelineLabels.labels,
+      warnings: unique([
+        ...warnings,
+        "The stock idea is a research candidate, not an action instruction.",
+      ]),
+    }),
     compoundResearchContext: {
       workflowName: workflow.workflowName,
       planType: "approved_multi_step_workflow",
@@ -1534,7 +1736,7 @@ async function executeIdeaToCompareAndRisk(
       candidatePipelineLabels: pipelineLabels.labels,
       warnings: unique([
         ...warnings,
-        "The stock idea is a research candidate, not an investment recommendation.",
+        "The stock idea is a research candidate, not an action instruction.",
       ]),
     },
     warnings: unique(warnings),
@@ -1611,6 +1813,12 @@ function sectorScreenResult(input: {
   return {
     handled: true,
     pgCapabilityViews: input.pgCapabilityViews,
+    workflowExecutionResult: buildWorkflowExecutionResult({
+      workflowName: input.workflowName,
+      publicViews: { pgCapabilityViews: input.pgCapabilityViews },
+      pipelineLabels: input.pipelineLabels,
+      warnings: unique(input.warnings),
+    }),
     compoundResearchContext: {
       workflowName: input.workflowName,
       planType:
@@ -1716,7 +1924,7 @@ function mergeFeatureScreenViews(
     .slice(0, MAX_SECTOR_CONSTRAINTS)
     .map((sector): FeatureScreenCriterion => ({ factor: "sector", bucket: sector }));
   const warnings = unique([
-    "These are screen results to review, not buy/sell recommendations.",
+    "These are screen results for research review, not action instructions.",
     constraintWarning,
     ...views.flatMap((view) => view.warnings),
   ]);

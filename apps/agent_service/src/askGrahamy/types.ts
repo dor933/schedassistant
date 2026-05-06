@@ -1,5 +1,9 @@
 import { z } from "zod";
-import type { AnalystBrief, EvidencePack } from "./analystTypes";
+import type {
+  AnalystBrief,
+  EvidencePack,
+  WorkflowExecutionResult,
+} from "./analystTypes";
 
 export const INTENTS = [
   "stock",
@@ -896,6 +900,11 @@ export type AskGrahamyState = {
    * research_view. It contains no ResearchPlan, raw rows, SQL, or internals.
    */
   compoundResearchContext?: CompoundResearchContext;
+  /**
+   * Internal normalized result from approved multi-step workflow execution.
+   * Built only from public-safe views and never serialized to browser/history.
+   */
+  workflowExecutionResult?: WorkflowExecutionResult;
   /**
    * Internal analyst orchestration layer. Built only from public-safe views
    * and used to guide answer synthesis; not exposed as a customer payload in

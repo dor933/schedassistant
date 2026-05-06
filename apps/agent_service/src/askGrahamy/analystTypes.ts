@@ -1,4 +1,10 @@
-import type { EvidenceState, PublicFreshnessView } from "./types";
+import type {
+  EvidenceState,
+  PgCapabilityViews,
+  PipelineOverlayViews,
+  PublicFreshnessView,
+  PublicResearchObjectView,
+} from "./types";
 
 export type AnalystQuestionType =
   | "stock_opinion"
@@ -12,6 +18,7 @@ export type AnalystQuestionType =
   | "factor_backtest"
   | "validated_pipeline_evidence"
   | "regime_playbook"
+  | "compound_research"
   | "unknown";
 
 export type EvidenceLayerStrength =
@@ -48,8 +55,71 @@ export type AnalystConfidence = {
   explanation: string;
 };
 
+export type AnalystWorkflowName =
+  | "regime_to_stock_screen"
+  | "sector_delta_to_stock_screen"
+  | "sector_divergence_to_stock_screen"
+  | "feature_screen_plus_backtest"
+  | "stock_deep_dive_stack"
+  | "idea_to_compare_and_risk";
+
+export type WorkflowExecutedStep = {
+  id: string;
+  capability: string;
+  state: EvidenceState | "skipped";
+  elapsedMs?: number;
+  warnings: string[];
+};
+
+export type WorkflowCandidateRow = {
+  symbol: string;
+  companyName?: string;
+  sector?: string;
+  rank: number;
+  valuationBucket?: string;
+  qualityBucket?: string;
+  momentumBucket?: string;
+  growthBucket?: string;
+  leverageBucket?: string;
+  convictionBucket?: string;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  pathRiskBucket?: string;
+  pipelineLabel?: string;
+  reasonBullets: string[];
+  sourceView: "featureScreenView" | "stockIdeaView";
+};
+
+export type WorkflowComparisonRow = {
+  metric: string;
+  leftValue?: number | string;
+  rightValue?: number | string;
+  interpretation: string;
+  explanation?: string;
+};
+
+export type WorkflowPublicViews = {
+  researchObjectViews?: PublicResearchObjectView[];
+  pgCapabilityViews?: PgCapabilityViews;
+  pipelineOverlayViews?: PipelineOverlayViews;
+};
+
+export type WorkflowExecutionResult = {
+  workflowName: AnalystWorkflowName;
+  executedSteps: WorkflowExecutedStep[];
+  publicViews: WorkflowPublicViews;
+  candidateRows?: WorkflowCandidateRow[];
+  comparisonRows?: WorkflowComparisonRow[];
+  pipelineLabels?: Record<string, string>;
+  missingEvidence: string[];
+  contradictions: string[];
+  freshness?: PublicFreshnessView;
+  warnings: string[];
+};
+
 export type EvidencePack = {
   questionType: AnalystQuestionType;
+  workflowName?: AnalystWorkflowName;
   anchor?: AnalystAnchor;
   timeHorizon?: string;
   currentSetup?: EvidenceLayer;
@@ -57,6 +127,8 @@ export type EvidencePack = {
   pathRisk?: EvidenceLayer;
   relativeComparison?: EvidenceLayer;
   pipelineEvidence?: EvidenceLayer;
+  candidateTable?: WorkflowCandidateRow[];
+  comparisonTable?: WorkflowComparisonRow[];
   freshness?: PublicFreshnessView;
   contradictions: string[];
   missingEvidence: string[];
@@ -66,6 +138,7 @@ export type EvidencePack = {
 };
 
 export type AnalystBriefSectionId =
+  | "what_was_checked"
   | "why_it_matters"
   | "supports"
   | "concerns"
@@ -77,6 +150,7 @@ export type AnalystBriefSectionId =
 export type AnalystBriefTableType =
   | "evidence"
   | "risk"
+  | "candidate"
   | "comparison"
   | "backtest"
   | "pipeline_evidence";

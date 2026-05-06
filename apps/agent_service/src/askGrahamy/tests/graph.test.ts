@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { runAskGrahamyGraph } from "../graph";
 import type { ResearchPlan } from "../researchPlanner";
 import type { Classification, PublicResearchView } from "../types";
+import { buildWorkflowExecutionResult } from "../workflowExecution";
+import type { AnalystBrief } from "../analystTypes";
 
 const leaderboardClassification: Classification = {
   intent: "sector_conviction_leaderboard",
@@ -209,6 +211,17 @@ const validatedEvidenceClassification: Classification = {
   regimeRequested: false,
   isFollowUp: false,
   focus: "validated_evidence",
+  requiresTools: ["get_stock_snapshot_context", "get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const plainStockClassification: Classification = {
+  intent: "stock",
+  symbols: ["GSL"],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
   requiresTools: ["get_stock_snapshot_context", "get_market_context"],
   confidence: "high",
   warnings: [],
@@ -990,89 +1003,92 @@ test("graph activates research planner for compound Hebrew research question and
             "validated_edge_evidence",
           ],
         );
+        const pgCapabilityViews = {
+          regimeHistoricalPlaybookView: {
+            viewSchemaVersion: 1,
+            state: "complete" as const,
+            source: "pg_regime_history" as const,
+            regime: "NEUTRAL",
+            asOfDate: "2026-05-04",
+            rows: [
+              {
+                sector: "Industrials",
+                rank: 1,
+                role: "leader" as const,
+                hitRatePct: 56.2,
+                evidenceStrength: "ROBUST",
+                interpretationBullets: [
+                  "Industrials has historically screened among stronger sectors in NEUTRAL regimes.",
+                ],
+              },
+            ],
+            risks: [],
+            summaryBullets: [
+              "Industrials has historically led in the current regime.",
+            ],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" as const },
+            warnings: [],
+          },
+          featureScreenView: {
+            viewSchemaVersion: 1,
+            state: "complete" as const,
+            source: "pg_current_features" as const,
+            asOfDate: "2026-05-04",
+            screenCriteria: [{ factor: "sector" as const, bucket: "Industrials" }],
+            rows: [
+              {
+                symbol: "GSL",
+                sector: "Industrials",
+                rank: 1,
+                hitRatePct: 58.1,
+                medianReturnPct: 3.2,
+                reasonBullets: ["Sector filter matched Industrials."],
+              },
+            ],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" as const },
+            warnings: ["These are screen results to review."],
+          },
+        };
+        const pipelineOverlayViews = {
+          validatedEdgeEvidenceView: {
+            viewSchemaVersion: 1,
+            state: "complete" as const,
+            source: "client_api_research_object" as const,
+            anchor: { type: "stock" as const, symbol: "GSL", label: "GSL" },
+            evidenceState: "edge_evidence_present" as const,
+            edgeCountBucket: "present",
+            eventSampleBucket: "adequate",
+            interpretationBullets: [
+              "Validated pipeline evidence is present for GSL.",
+            ],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" as const },
+            warnings: [],
+          },
+        };
         return {
-          pgCapabilityViews: {
-            regimeHistoricalPlaybookView: {
-              viewSchemaVersion: 1,
-              state: "complete",
-              source: "pg_regime_history",
-              regime: "NEUTRAL",
-              asOfDate: "2026-05-04",
-              rows: [
-                {
-                  sector: "Industrials",
-                  rank: 1,
-                  role: "leader",
-                  hitRatePct: 56.2,
-                  evidenceStrength: "ROBUST",
-                  interpretationBullets: [
-                    "Industrials has historically screened among stronger sectors in NEUTRAL regimes.",
-                  ],
-                },
-              ],
-              risks: [],
-              summaryBullets: [
-                "Industrials has historically led in the current regime.",
-              ],
-              freshness: { dataThrough: "2026-05-04", state: "fresh" },
-              warnings: [],
-            },
-            featureScreenView: {
-              viewSchemaVersion: 1,
-              state: "complete",
-              source: "pg_current_features",
-              asOfDate: "2026-05-04",
-              screenCriteria: [{ factor: "sector", bucket: "Industrials" }],
-              rows: [
-                {
-                  symbol: "GSL",
-                  sector: "Industrials",
-                  rank: 1,
-                  hitRatePct: 58.1,
-                  medianReturnPct: 3.2,
-                  reasonBullets: ["Sector filter matched Industrials."],
-                },
-              ],
-              freshness: { dataThrough: "2026-05-04", state: "fresh" },
-              warnings: ["These are screen results to review."],
-            },
-          },
-          pipelineOverlayViews: {
-            validatedEdgeEvidenceView: {
-              viewSchemaVersion: 1,
-              state: "complete",
-              source: "client_api_research_object",
-              anchor: { type: "stock", symbol: "GSL", label: "GSL" },
-              evidenceState: "edge_evidence_present",
-              edgeCountBucket: "present",
-              eventSampleBucket: "adequate",
-              interpretationBullets: [
-                "Validated pipeline evidence is present for GSL.",
-              ],
-              freshness: { dataThrough: "2026-05-04", state: "fresh" },
-              warnings: [],
-            },
-          },
+          pgCapabilityViews,
+          pipelineOverlayViews,
+          workflowExecutionResult: buildWorkflowExecutionResult({
+            workflowName: "regime_to_stock_screen",
+            publicViews: { pgCapabilityViews, pipelineOverlayViews },
+            pipelineLabels: { GSL: "ראיה מאומתת קיימת" },
+          }),
           warnings: [],
         };
       },
-      grahamyAgentRunner: async (state) => {
-        assert.equal(state.pgCapabilityViews?.featureScreenView?.rows[0].symbol, "GSL");
-        assert.equal(
-          state.pgCapabilityViews?.regimeHistoricalPlaybookView?.rows[0].sector,
-          "Industrials",
-        );
-        assert.equal(
-          state.pipelineOverlayViews?.validatedEdgeEvidenceView?.anchor.symbol,
-          "GSL",
-        );
-        assert.equal(Object.prototype.hasOwnProperty.call(state, "researchPlan"), false);
+      analystBriefSynthesizer: async ({ evidencePack }) => {
+        assert.equal(evidencePack.workflowName, "regime_to_stock_screen");
+        assert.equal(evidencePack.candidateTable?.[0].symbol, "GSL");
         return {
-          answerText:
-            "השורה התחתונה: Industrials מוביל היסטורית, ו-GSL הגיע ממסך המניות הציבורי.",
-          suggestedFollowups: [],
+          brief: mockAnalystBrief(
+            "Industrials מוביל היסטורית, ו-GSL הגיע ממסך המניות הציבורי.",
+          ),
           warnings: [],
+          usedFallback: false,
         };
+      },
+      grahamyAgentRunner: async () => {
+        throw new Error("compound workflow should use AnalystBrief synthesis");
       },
     },
   );
@@ -1091,6 +1107,9 @@ test("graph activates research planner for compound Hebrew research question and
 });
 
 test("graph uses real focused executor for compound plan with mocked capability runners", async () => {
+  let grahamyCalled = false;
+  let synthesizerCalled = false;
+  const pipelineSymbols: string[] = [];
   const response = await runAskGrahamyGraph(
     {
       userId: "external-user-1",
@@ -1148,8 +1167,56 @@ test("graph uses real focused executor for compound plan with mocked capability 
                   symbol: "GSL",
                   sector: "Industrials",
                   rank: 1,
+                  qualityBucket: "STRONG",
+                  momentumBucket: "STRONG",
                   hitRatePct: 58.1,
                   medianReturnPct: 3.2,
+                  reasonBullets: ["Sector filter matched Industrials."],
+                },
+                {
+                  symbol: "AAA",
+                  sector: "Industrials",
+                  rank: 2,
+                  valuationBucket: "ATTRACTIVE",
+                  qualityBucket: "STRONG",
+                  hitRatePct: 57.2,
+                  medianReturnPct: 2.9,
+                  reasonBullets: ["Sector filter matched Industrials."],
+                },
+                {
+                  symbol: "BBB",
+                  sector: "Industrials",
+                  rank: 3,
+                  qualityBucket: "STRONG",
+                  momentumBucket: "POSITIVE",
+                  hitRatePct: 55.3,
+                  medianReturnPct: 2.2,
+                  reasonBullets: ["Sector filter matched Industrials."],
+                },
+                {
+                  symbol: "CCC",
+                  sector: "Industrials",
+                  rank: 4,
+                  growthBucket: "STRONG",
+                  leverageBucket: "STRONG",
+                  hitRatePct: 53.4,
+                  medianReturnPct: 1.8,
+                  reasonBullets: ["Sector filter matched Industrials."],
+                },
+                {
+                  symbol: "DDD",
+                  sector: "Industrials",
+                  rank: 5,
+                  hitRatePct: 51.5,
+                  medianReturnPct: 1.1,
+                  reasonBullets: ["Sector filter matched Industrials."],
+                },
+                {
+                  symbol: "EEE",
+                  sector: "Industrials",
+                  rank: 6,
+                  hitRatePct: 49.6,
+                  medianReturnPct: 0.8,
                   reasonBullets: ["Sector filter matched Industrials."],
                 },
               ],
@@ -1161,15 +1228,21 @@ test("graph uses real focused executor for compound plan with mocked capability 
         };
       },
       pipelineOverlayRunner: async (input) => {
-        assert.deepEqual(input.classification.symbols, ["GSL"]);
+        const symbol = input.classification.symbols[0];
+        pipelineSymbols.push(symbol);
         return {
           views: {
             validatedEdgeEvidenceView: {
               viewSchemaVersion: 1,
               state: "complete",
               source: "client_api_research_object",
-              anchor: { type: "stock", symbol: "GSL", label: "GSL" },
-              evidenceState: "edge_evidence_present",
+              anchor: { type: "stock", symbol, label: symbol },
+              evidenceState:
+                symbol === "AAA"
+                  ? "edge_evidence_strong"
+                  : symbol === "BBB"
+                    ? "mixed"
+                    : "edge_evidence_present",
               interpretationBullets: [],
               freshness: { dataThrough: "2026-05-04", state: "fresh" },
               warnings: [],
@@ -1178,33 +1251,51 @@ test("graph uses real focused executor for compound plan with mocked capability 
           warnings: [],
         };
       },
-      grahamyAgentRunner: async (state) => {
-        assert.deepEqual(state.compoundResearchContext?.leadingSectors, [
-          "Industrials",
-        ]);
-        assert.equal(
-          state.compoundResearchContext?.candidatePipelineLabels?.GSL,
-          "ראיה מאומתת קיימת",
-        );
+      analystBriefSynthesizer: async ({ evidencePack }) => {
+        synthesizerCalled = true;
+        assert.equal(evidencePack.workflowName, "regime_to_stock_screen");
+        assert.equal(evidencePack.candidateTable?.length, 6);
+        assert.equal(evidencePack.candidateTable?.[0].symbol, "GSL");
+        assert.equal(JSON.stringify(evidencePack).includes("ResearchPlan"), false);
+        assert.equal(JSON.stringify(evidencePack).includes("compoundResearchContext"), false);
         return {
-          answerText:
-            "השורה התחתונה: Industrials היה הסקטור המוביל, ו-GSL עלה כמועמד מחקר נוכחי.",
-          suggestedFollowups: [],
+          brief: mockAnalystBrief(
+            "Industrials היה הסקטור המוביל, והמועמדים הגיעו ממסך ציבורי מוגבל.",
+          ),
           warnings: [],
+          usedFallback: false,
         };
+      },
+      grahamyAgentRunner: async () => {
+        grahamyCalled = true;
+        throw new Error("compound workflow should skip the deep agent");
       },
     },
   );
 
+  assert.equal(grahamyCalled, false);
+  assert.equal(synthesizerCalled, true);
+  assert.deepEqual(pipelineSymbols, ["GSL", "AAA", "BBB"]);
   const publicView = response.research.publicResearchView as PublicResearchView;
   assert.equal(publicView.regimeHistoricalPlaybookView?.rows[0].sector, "Industrials");
   assert.equal(publicView.featureScreenView?.rows[0].symbol, "GSL");
+  assert.equal(publicView.featureScreenView?.rows.length, 6);
+  assert.match(response.answer.summary, /### השורה התחתונה/);
+  assert.match(response.answer.summary, /מה נבדק/);
+  assert.match(response.answer.summary, /\| מניה \| סקטור \| ראיה \|/);
+  assert.match(response.answer.summary, /\| GSL \|/);
+  assert.match(response.answer.summary, /ראיה מאומתת קיימת/);
   const serialized = JSON.stringify(response);
   assert.equal(serialized.includes("compoundResearchContext"), false);
+  assert.equal(serialized.includes("ResearchPlan"), false);
   assert.equal(serialized.includes("planType"), false);
   assert.equal(serialized.includes("paramsFromPreviousSteps"), false);
   assert.equal(serialized.includes("Utilities"), true);
-  assert.equal(serialized.includes("ראיה מאומתת קיימת"), false);
+  assert.equal(serialized.includes("raw_sql"), false);
+  assert.equal(serialized.includes("edge_id"), false);
+  assert.equal(serialized.includes("hypothesis_id"), false);
+  assert.equal(serialized.includes("feature_rules"), false);
+  assert.equal(/\b(buy|sell|sizing|stop-loss)\b/i.test(serialized), false);
 });
 
 test("graph rejects invalid compound research plan and falls back to standard route", async () => {
@@ -1356,3 +1447,165 @@ test("graph leaves simple feature-screen turns on the existing single-intent pat
   const publicView = response.research.publicResearchView as PublicResearchView;
   assert.equal(publicView.featureScreenView?.rows[0].symbol, "GSL");
 });
+
+test("graph leaves simple stock turns on the existing deep-agent path", async () => {
+  let plannerCalled = false;
+  let grahamyCalled = false;
+
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-simple-stock-no-planner",
+      message: "Tell me about GSL",
+      classification: plainStockClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-04" },
+        }),
+      } as any,
+      researchPlanProposer: async () => {
+        plannerCalled = true;
+        return validCompoundPlan;
+      },
+      researchObjectBuilder: async () => ({
+        objects: [],
+        objectsUpdated: [],
+        stats: { hits: 0, misses: 0, writes: 0 },
+        warnings: [],
+      }),
+      pgCapabilityRunner: async () => ({ views: {}, warnings: [] }),
+      pipelineOverlayRunner: async () => ({ views: {}, warnings: [] }),
+      grahamyAgentRunner: async () => {
+        grahamyCalled = true;
+        return {
+          answerText: "Normal stock path.",
+          suggestedFollowups: [],
+          warnings: [],
+        };
+      },
+    },
+  );
+
+  assert.equal(plannerCalled, false);
+  assert.equal(grahamyCalled, true);
+  assert.equal(response.answer.summary, "Normal stock path.");
+});
+
+test("graph leaves simple comparison turns on the existing deep-agent path", async () => {
+  let plannerCalled = false;
+  let grahamyCalled = false;
+
+  const response = await runAskGrahamyGraph(
+    {
+      userId: "external-user-1",
+      conversationId: "conversation-simple-comparison-no-planner",
+      message: "Compare GSL vs DAC",
+      classification: symbolComparisonClassification,
+      priorResearchObjects: [],
+    },
+    1,
+    {
+      snapshotClient: {
+        fetchPublishedSnapshots: async () => ({
+          daily_brief: { regime: "NEUTRAL" },
+          freshness: { dataThrough: "2026-05-04" },
+        }),
+      } as any,
+      researchPlanProposer: async () => {
+        plannerCalled = true;
+        return validCompoundPlan;
+      },
+      researchObjectBuilder: async () => ({
+        objects: [],
+        objectsUpdated: [],
+        stats: { hits: 0, misses: 0, writes: 0 },
+        warnings: [],
+      }),
+      pgCapabilityRunner: async () => ({
+        views: {
+          comparisonView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            comparisonType: "symbol_vs_symbol",
+            source: "pg_current_features",
+            asOfDate: "2026-05-04",
+            left: {
+              type: "stock",
+              symbol: "GSL",
+              label: "GSL",
+              metrics: { convictionBucket: "HIGH" },
+            },
+            right: {
+              type: "stock",
+              symbol: "DAC",
+              label: "DAC",
+              metrics: { convictionBucket: "MIXED" },
+            },
+            deltas: [],
+            summaryBullets: [],
+            freshness: { dataThrough: "2026-05-04", state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      }),
+      pipelineOverlayRunner: async () => ({ views: {}, warnings: [] }),
+      grahamyAgentRunner: async () => {
+        grahamyCalled = true;
+        return {
+          answerText: "Normal comparison path.",
+          suggestedFollowups: [],
+          warnings: [],
+        };
+      },
+    },
+  );
+
+  assert.equal(plannerCalled, false);
+  assert.equal(grahamyCalled, true);
+  assert.equal(response.answer.summary, "Normal comparison path.");
+});
+
+function mockAnalystBrief(bottomLine: string): AnalystBrief {
+  return {
+    bottomLine,
+    sections: [
+      {
+        id: "what_was_checked",
+        heading: "מה נבדק",
+        bullets: ["נבדקו שכבות ראיה ציבוריות בלבד."],
+      },
+      {
+        id: "supports",
+        heading: "מה תומך בזה",
+        bullets: ["המועמדים הגיעו ממסך מוגבל."],
+      },
+      {
+        id: "data_limitations",
+        heading: "מגבלות הנתונים",
+        bullets: ["יש להשתמש בזה כמסך מחקר."],
+      },
+    ],
+    tables: [
+      {
+        type: "candidate",
+        columns: ["מניה", "סקטור", "ראיה"],
+        rows: [["GSL", "Industrials", "ראיה מאומתת קיימת"]],
+      },
+    ],
+    caveats: ["הנתונים זמינים עד 2026-05-04."],
+    confidence: {
+      level: "moderate",
+      explanation: "יש ראיה ציבורית, עם מגבלות רגילות של מסך מחקר.",
+    },
+    sources: [
+      { label: "featureScreenView", type: "pg_current" },
+    ],
+    followUps: ["בדוק את הסיכון ב-GSL."],
+  };
+}
