@@ -789,11 +789,26 @@ export type UiHints = {
   suggestedFollowups: string[];
 };
 
+export type CompoundResearchWorkflowName =
+  | "regime_to_stock_screen"
+  | "sector_delta_to_stock_screen"
+  | "sector_divergence_to_stock_screen"
+  | "feature_screen_plus_backtest"
+  | "stock_deep_dive_stack"
+  | "idea_to_compare_and_risk";
+
 export type CompoundResearchContext = {
-  planType: "regime_sector_to_stock_screen";
-  leadingSectors: string[];
-  featureScreenCriteria: FeatureScreenCriterion[];
-  candidatePipelineLabels: Record<string, string>;
+  workflowName: CompoundResearchWorkflowName;
+  /**
+   * Backward-compatible marker for the first shipped compound path. Internal
+   * only; never serialized into public research_view/history.
+   */
+  planType?: "regime_sector_to_stock_screen" | "approved_multi_step_workflow";
+  leadingSectors?: string[];
+  selectedSectors?: string[];
+  selectedSymbol?: string;
+  featureScreenCriteria?: FeatureScreenCriterion[];
+  candidatePipelineLabels?: Record<string, string>;
   warnings: string[];
 };
 

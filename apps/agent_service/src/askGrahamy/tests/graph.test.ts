@@ -1183,7 +1183,7 @@ test("graph uses real focused executor for compound plan with mocked capability 
           "Industrials",
         ]);
         assert.equal(
-          state.compoundResearchContext?.candidatePipelineLabels.GSL,
+          state.compoundResearchContext?.candidatePipelineLabels?.GSL,
           "ראיה מאומתת קיימת",
         );
         return {

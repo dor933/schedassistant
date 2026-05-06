@@ -16,7 +16,7 @@ import {
   executeResearchPlan,
   proposeResearchPlan,
   shouldRunResearchPlanner,
-  validateResearchPlan,
+  validateResearchWorkflow,
   type ResearchPlan,
   type ResearchPlanExecutor,
 } from "./researchPlanner";
@@ -65,6 +65,7 @@ export type RunAskGrahamyGraphOptions = {
   ) => Promise<PipelineOverlayRunResult>;
   researchPlanProposer?: (message: string) => Promise<ResearchPlan>;
   researchPlanExecutor?: ResearchPlanExecutor;
+  researchObjectBuilder?: typeof buildResearchObjects;
   grahamyAgentRunner?: typeof runGrahamyDeepAgent;
 };
 
@@ -259,7 +260,7 @@ async function maybeRunResearchPlanner(
     const plan = await (options.researchPlanProposer ?? proposeResearchPlan)(
       state.message,
     );
-    const validation = validateResearchPlan(plan);
+    const validation = validateResearchWorkflow(plan);
     if (!validation.ok) {
       state.warnings.push(
         "The compound research request could not be safely expanded into bounded checks; using the available standard analysis.",
@@ -279,6 +280,8 @@ async function maybeRunResearchPlanner(
       classification,
       snapshots: state.snapshots ?? {},
       toolOutputs: state.toolOutputs ?? {},
+      priorResearchObjects: state.priorResearchObjects ?? [],
+      researchObjectBuilder: options.researchObjectBuilder,
       pgCapabilityRunner: options.pgCapabilityRunner,
       pipelineOverlayRunner: options.pipelineOverlayRunner,
     });
@@ -294,9 +297,10 @@ async function maybeRunResearchPlanner(
       ...(state.pipelineOverlayViews ?? {}),
       ...(execution.pipelineOverlayViews ?? {}),
     };
-    state.researchObjects = [];
-    state.researchObjectsUpdated = [];
-    state.researchObjectCacheStats = { hits: 0, misses: 0, writes: 0 };
+    state.researchObjects = execution.researchObjects ?? [];
+    state.researchObjectsUpdated = execution.researchObjectsUpdated ?? [];
+    state.researchObjectCacheStats =
+      execution.researchObjectCacheStats ?? { hits: 0, misses: 0, writes: 0 };
     state.capabilityViewsUpdated = [];
     state.capabilityViewCacheStats = { hits: 0, misses: 0, writes: 0 };
     state.compoundResearchContext = execution.compoundResearchContext;
