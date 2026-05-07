@@ -5,6 +5,10 @@ import type {
   SectorDeltaRowView,
   SectorDeltaView,
 } from "../types";
+import {
+  buildResearchObjectCacheKey,
+  buildResearchObjectsForAnchors,
+} from "../researchObjectBuilder";
 import { assessCapabilityFreshness } from "./freshnessGuard";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
@@ -14,7 +18,7 @@ import type {
   SectorDeltaRow,
 } from "./types";
 
-const VIEW_SCHEMA_VERSION = 1;
+const VIEW_SCHEMA_VERSION = 2;
 const DEFAULT_MAX_ROWS = 10;
 const MAX_ROWS_CAP = 20;
 const NO_MEANINGFUL_DELTA_WARNING =
@@ -75,8 +79,24 @@ export async function buildSectorDeltaView(
       RANK_BY: rankingBasis,
       DIRECTION_FILTER: directionFilter,
     });
-    const view = rowsToView(rows, rankingBasis, options.now);
-    return { views: { sectorDeltaView: view }, warnings: [] };
+    const draft = rowsToView(rows, rankingBasis, options.now);
+    if (draft.state === "unavailable" || !draft.rows.length) {
+      return { views: { sectorDeltaView: draft }, warnings: [] };
+    }
+    const fanout = await fanOutSectorResearchObjects(input, draft);
+    return {
+      views: { sectorDeltaView: fanout.view },
+      warnings: fanout.warnings,
+      ...(fanout.researchObjects.length
+        ? { researchObjects: fanout.researchObjects }
+        : {}),
+      ...(fanout.researchObjectsUpdated.length
+        ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
+        : {}),
+      ...(fanout.stats
+        ? { researchObjectCacheStats: fanout.stats }
+        : {}),
+    };
   } catch (err) {
     const message = "Sector week-over-week delta query failed.";
     logger.warn("Ask Grahamy PG capability failed", {
@@ -123,7 +143,7 @@ function rowsToView(
 
   const publicRows = rows
     .filter((row) => boolValue(row.include_in_public))
-    .map(rowToPublicRow)
+    .map((row) => rowToPublicRow(row, currentAsOfDate))
     .filter((row): row is SectorDeltaRowView => !!row);
 
   const freshnessAssessment = buildFreshness(first, currentAsOfDate, now);
@@ -150,6 +170,9 @@ function rowsToView(
   } else if (freshness.state === "unknown" && freshness.warning) {
     warnings.push(freshness.warning);
   }
+  const researchObjectKeys = Array.from(
+    new Set(publicRows.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
 
   return {
     viewSchemaVersion: VIEW_SCHEMA_VERSION,
@@ -160,12 +183,57 @@ function rowsToView(
     priorAsOfDate,
     rankingBasis,
     rows: publicRows,
+    researchObjectKeys,
     freshness,
     warnings,
   };
 }
 
-function rowToPublicRow(row: SectorDeltaRow): SectorDeltaRowView | null {
+async function fanOutSectorResearchObjects(
+  input: PgCapabilityRunInput,
+  draft: SectorDeltaView,
+): Promise<{
+  view: SectorDeltaView;
+  researchObjects: import("../types").CachedResearchObject[];
+  researchObjectsUpdated: import("../types").CachedResearchObject[];
+  stats: { hits: number; misses: number; writes: number } | undefined;
+  warnings: string[];
+}> {
+  const sectors = draft.rows.map((row) => row.sector);
+  const builder = input.researchObjectBuilder ?? buildResearchObjectsForAnchors;
+  const result = await builder({
+    sectors,
+    snapshots: input.snapshots,
+    toolOutputs: input.toolOutputs,
+    priorResearchObjects: input.priorResearchObjects,
+  });
+  const keyBySector = new Map<string, string>();
+  for (const obj of result.objects) {
+    if (obj.objectType === "sector") {
+      keyBySector.set(obj.anchor.toUpperCase(), obj.cacheKey);
+    }
+  }
+  const rowsWithKeys = draft.rows.map((row) => ({
+    ...row,
+    researchObjectKey:
+      keyBySector.get(row.sector.toUpperCase()) ?? row.researchObjectKey,
+  }));
+  const researchObjectKeys = Array.from(
+    new Set(rowsWithKeys.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+  return {
+    view: { ...draft, rows: rowsWithKeys, researchObjectKeys },
+    researchObjects: result.objects,
+    researchObjectsUpdated: result.objectsUpdated,
+    stats: result.stats,
+    warnings: result.warnings,
+  };
+}
+
+function rowToPublicRow(
+  row: SectorDeltaRow,
+  asOfDate: string | undefined,
+): SectorDeltaRowView | null {
   const sector = stringValue(row.sector);
   const rank = integerValue(row.rank);
   const direction = directionValue(row.direction);
@@ -188,11 +256,16 @@ function rowToPublicRow(row: SectorDeltaRow): SectorDeltaRowView | null {
   return {
     ...publicRow,
     interpretationBullets: buildInterpretationBullets(publicRow),
+    researchObjectKey: buildResearchObjectCacheKey(
+      "SECTOR",
+      sector,
+      asOfDate ?? new Date().toISOString().slice(0, 10),
+    ),
   };
 }
 
 function buildInterpretationBullets(
-  row: Omit<SectorDeltaRowView, "interpretationBullets">,
+  row: Omit<SectorDeltaRowView, "interpretationBullets" | "researchObjectKey">,
 ): string[] {
   const bullets: string[] = [];
   if (row.convictionDeltaPct != null) {
@@ -262,6 +335,7 @@ function unavailableView(
     priorAsOfDate,
     rankingBasis,
     rows: [],
+    researchObjectKeys: [],
     freshness,
     warnings,
   };

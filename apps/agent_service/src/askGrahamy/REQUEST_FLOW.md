@@ -10,7 +10,8 @@ jump straight to the source.
 ## 0. Network → Express router
 
 Inbound request: `POST /api/ask-grahamy` with header
-`x-application-agent-token` and body `{ userId, conversationId?, message }`.
+`x-application-agent-token` and body
+`{ userId, conversationId?, message, classification }`.
 
 1. `server.ts` mounts the router at `/api/ask-grahamy`.
 2. `routes/askGrahamy.routes.ts` applies `requireApplicationToken`
@@ -28,7 +29,7 @@ Inbound request: `POST /api/ask-grahamy` with header
 ### 0b. `AskGrahamyController.ask` (controllers/askGrahamy.controller.ts)
 
 - `askGrahamyRequestSchema.safeParse(req.body)` (Zod). Missing/empty
-  `userId` or `message` → `400` with a *safe error envelope*
+  `userId`, `message`, or `classification` -> `400` with a *safe error envelope*
   (`buildSafeErrorEnvelope`). The envelope is an `AskGrahamyResponse`
   with `answerType: "error"` and a generic safe answer — the upstream
   caller never has to special-case error responses.
@@ -72,13 +73,13 @@ This is the service-level adapter between "external client app user" and
 This is the LangGraph orchestrator entry point.
 
 1. **Accept supplied classification / prior objects** (StocksScanner
-   pre-flight optimization). Three optional fields on `request`:
-   - `classification` — skip the LLM classify call when present.
+   pre-flight contract). `classification` is required on `request`:
+   - `classification` — produced by `/api/ask-grahamy/classify`.
    - `priorResearchObjects` — treat as cache hits, avoid rebuild.
    - `priorCapabilityViews` — treat as cache hits for pg capabilities.
 2. **Build initial `AskGrahamyState`** (typed in `types.ts`):
    ```
-   { internalUserId, conversationId, message, warnings: [], classification?,
+   { internalUserId, conversationId, message, warnings: [], classification,
      priorResearchObjects?, priorCapabilityViews? }
    ```
 3. **Stamp identifiers**:
@@ -126,7 +127,7 @@ The full edge map (graph.ts):
 
 ```
 START
-  → classifyIntent
+  → requireClassification
   → fetchBaseSnapshots
   → selectTools
   → executeTools
@@ -144,23 +145,19 @@ START
 (any node error) → safeErrorResponse → END
 ```
 
-### 3.1 `classifyIntentNode` (nodes/classifyIntent.ts)
+### 3.1 `requireClassificationNode` (nodes/requireClassification.ts)
 
-**Skip-when-supplied**: if `state.classification` is already populated
-(StocksScanner pre-classified via `/api/ask-grahamy/classify`), this node
-is a pass-through.
+Requires `state.classification` to already be populated by
+`/api/ask-grahamy/classify`. If it is missing, the node returns an error and
+the graph routes to `safeErrorResponse`; the graph does not call
+`classifyMessage`.
 
-Otherwise, calls `classifyMessage(state.message, undefined, { classifier })`
-(classification.ts). Wrapped in `observeToolCall("classify_message", ...)`.
-
-The classifier returns:
+The supplied classification contains:
 - `intent` — one of the 30+ enum values (sector_conviction_leaderboard,
   stock_idea_discovery, factor_conditioned_backtest, comparison, etc.).
 - `symbols`, `sectors`, `regimeRequested`, `isFollowUp`, `focus?`,
-  `featureCriteria?`, `factorBacktest?`, `comparison?`, `requiresTools`,
+  `featureCriteria?`, `factorBacktest?`, `requiresTools`,
   `confidence`, `warnings`.
-
-Classifier warnings are appended to `state.warnings`.
 
 ### 3.2 `fetchBaseSnapshotsNode` (nodes/fetchBaseSnapshots.ts)
 
@@ -473,7 +470,7 @@ The response shape returned to the client is always a full
   node + nested LLM call gets a child generation/chain span
   automatically.
 - Per-operation `observeToolCall` spans:
-  `classify_message`, `fetch_published_snapshots`, the four snapshot
+  `fetch_published_snapshots`, the four snapshot
   tools, `propose_research_plan`, `execute_research_plan`,
   `build_research_objects`, `execute_pg_capabilities`,
   `execute_pipeline_overlays`, `synthesize_analyst_brief`,

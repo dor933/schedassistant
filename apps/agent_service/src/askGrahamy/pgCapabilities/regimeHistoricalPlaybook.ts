@@ -6,6 +6,10 @@ import type {
   RegimeHistoricalPlaybookRowView,
   RegimeHistoricalPlaybookView,
 } from "../types";
+import {
+  buildResearchObjectCacheKey,
+  buildResearchObjectsForAnchors,
+} from "../researchObjectBuilder";
 import { assessCapabilityFreshness } from "./freshnessGuard";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
@@ -15,7 +19,7 @@ import type {
   RegimeHistoricalPlaybookRow,
 } from "./types";
 
-const VIEW_SCHEMA_VERSION = 1;
+const VIEW_SCHEMA_VERSION = 2;
 const DEFAULT_MAX_ROWS = 10;
 const MAX_ROWS_CAP = 20;
 const NO_MEANINGFUL_ROWS_WARNING =
@@ -60,8 +64,24 @@ export async function buildRegimeHistoricalPlaybookView(
       MAX_ROWS: maxRows,
       ROLE_FILTER: emphasis,
     });
-    const view = rowsToView(rows, options.now);
-    return { views: { regimeHistoricalPlaybookView: view }, warnings: [] };
+    const draft = rowsToView(rows, options.now);
+    if (draft.state === "unavailable") {
+      return { views: { regimeHistoricalPlaybookView: draft }, warnings: [] };
+    }
+    const fanout = await fanOutRegimeResearchObjects(input, draft);
+    return {
+      views: { regimeHistoricalPlaybookView: fanout.view },
+      warnings: fanout.warnings,
+      ...(fanout.researchObjects.length
+        ? { researchObjects: fanout.researchObjects }
+        : {}),
+      ...(fanout.researchObjectsUpdated.length
+        ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
+        : {}),
+      ...(fanout.stats
+        ? { researchObjectCacheStats: fanout.stats }
+        : {}),
+    };
   } catch (err) {
     const message = "Regime historical playbook query failed.";
     logger.warn("Ask Grahamy PG capability failed", {
@@ -107,7 +127,7 @@ function rowsToView(
 
   const publicRows = rows
     .filter((row) => boolValue(row.include_in_public))
-    .map((row) => rowToPublicRow(row, regime))
+    .map((row) => rowToPublicRow(row, regime, asOfDate))
     .filter((row): row is RegimeHistoricalPlaybookRowView => !!row)
     .map((row, index) => ({ ...row, rank: index + 1 }));
   const risks = buildRisks(first);
@@ -139,6 +159,14 @@ function rowsToView(
   } else if (freshness.state === "unknown" && freshness.warning) {
     warnings.push(freshness.warning);
   }
+  const researchObjectKeys = Array.from(
+    new Set(publicRows.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+  const regimeResearchObjectKey = buildResearchObjectCacheKey(
+    "REGIME",
+    "MARKET",
+    asOfDate,
+  );
 
   return {
     viewSchemaVersion: VIEW_SCHEMA_VERSION,
@@ -149,6 +177,8 @@ function rowsToView(
     rows: publicRows,
     risks,
     summaryBullets: buildSummaryBullets(regime, publicRows, risks),
+    researchObjectKeys,
+    regimeResearchObjectKey,
     freshness,
     warnings,
   };
@@ -157,6 +187,7 @@ function rowsToView(
 function rowToPublicRow(
   row: RegimeHistoricalPlaybookRow,
   regime: string,
+  asOfDate: string,
 ): RegimeHistoricalPlaybookRowView | null {
   const sector = stringValue(row.sector);
   const rank = integerValue(row.rank);
@@ -175,11 +206,15 @@ function rowToPublicRow(
   return {
     ...publicRow,
     interpretationBullets: buildInterpretationBullets(publicRow, regime),
+    researchObjectKey: buildResearchObjectCacheKey("SECTOR", sector, asOfDate),
   };
 }
 
 function buildInterpretationBullets(
-  row: Omit<RegimeHistoricalPlaybookRowView, "interpretationBullets">,
+  row: Omit<
+    RegimeHistoricalPlaybookRowView,
+    "interpretationBullets" | "researchObjectKey"
+  >,
   regime: string,
 ): string[] {
   const bullets: string[] = [];
@@ -206,6 +241,56 @@ function buildInterpretationBullets(
     bullets.push(`Sample adequacy is ${row.evidenceStrength}.`);
   }
   return bullets.slice(0, 4);
+}
+
+async function fanOutRegimeResearchObjects(
+  input: PgCapabilityRunInput,
+  draft: RegimeHistoricalPlaybookView,
+): Promise<{
+  view: RegimeHistoricalPlaybookView;
+  researchObjects: import("../types").CachedResearchObject[];
+  researchObjectsUpdated: import("../types").CachedResearchObject[];
+  stats: { hits: number; misses: number; writes: number } | undefined;
+  warnings: string[];
+}> {
+  const sectors = draft.rows.map((row) => row.sector);
+  const builder = input.researchObjectBuilder ?? buildResearchObjectsForAnchors;
+  const result = await builder({
+    sectors,
+    regimeRequested: true,
+    snapshots: input.snapshots,
+    toolOutputs: input.toolOutputs,
+    priorResearchObjects: input.priorResearchObjects,
+  });
+  const keyBySector = new Map<string, string>();
+  let regimeResearchObjectKey = draft.regimeResearchObjectKey;
+  for (const obj of result.objects) {
+    if (obj.objectType === "sector") {
+      keyBySector.set(obj.anchor.toUpperCase(), obj.cacheKey);
+    } else if (obj.objectType === "regime") {
+      regimeResearchObjectKey = obj.cacheKey;
+    }
+  }
+  const rowsWithKeys = draft.rows.map((row) => ({
+    ...row,
+    researchObjectKey:
+      keyBySector.get(row.sector.toUpperCase()) ?? row.researchObjectKey,
+  }));
+  const researchObjectKeys = Array.from(
+    new Set(rowsWithKeys.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+  return {
+    view: {
+      ...draft,
+      rows: rowsWithKeys,
+      researchObjectKeys,
+      ...(regimeResearchObjectKey ? { regimeResearchObjectKey } : {}),
+    },
+    researchObjects: result.objects,
+    researchObjectsUpdated: result.objectsUpdated,
+    stats: result.stats,
+    warnings: result.warnings,
+  };
 }
 
 function buildRisks(
@@ -353,6 +438,10 @@ function unavailableView(
     rows: [],
     risks: [],
     summaryBullets: [],
+    researchObjectKeys: [],
+    ...(asOfDate
+      ? { regimeResearchObjectKey: buildResearchObjectCacheKey("REGIME", "MARKET", asOfDate) }
+      : {}),
     freshness,
     warnings,
   };

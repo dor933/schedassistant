@@ -1,6 +1,6 @@
 import type {
+  CachedResearchObject,
   Classification,
-  ComparisonView,
   EvidenceState,
   FactorBacktestCriterion,
   FactorBacktestView,
@@ -15,6 +15,7 @@ import type {
   StockIdeaView,
   ToolOutputs,
 } from "../types";
+import type { ResearchObjectBuildResult } from "../researchObjectBuilder";
 
 export type PgCapabilityIntent =
   | "sector_conviction_leaderboard"
@@ -23,8 +24,7 @@ export type PgCapabilityIntent =
   | "stock_idea_discovery"
   | "feature_screen"
   | "factor_conditioned_backtest"
-  | "market_regime_historical_playbook"
-  | "comparison";
+  | "market_regime_historical_playbook";
 
 export type PgCapabilityName =
   | "sector_conviction_leaderboard"
@@ -33,10 +33,7 @@ export type PgCapabilityName =
   | "stock_idea_discovery"
   | "feature_screen"
   | "factor_conditioned_backtest"
-  | "market_regime_historical_playbook"
-  | "stock_vs_sector_comparison"
-  | "sector_vs_sector_comparison"
-  | "symbol_vs_symbol_comparison";
+  | "market_regime_historical_playbook";
 
 export type PgCapabilityQueryName =
   | "query_sector_conviction_leaderboard"
@@ -45,16 +42,34 @@ export type PgCapabilityQueryName =
   | "query_stock_idea_discovery"
   | "query_feature_screen"
   | "query_factor_conditioned_backtest"
-  | "query_regime_historical_playbook"
-  | "query_stock_vs_sector_comparison"
-  | "query_sector_vs_sector_comparison"
-  | "query_symbol_vs_symbol_comparison";
+  | "query_regime_historical_playbook";
 
 export type PgCapabilityRunInput = {
   classification: Classification;
   message: string;
   snapshots: SnapshotBundle;
   toolOutputs: ToolOutputs;
+  /**
+   * Research objects the upstream caller already had cached for this
+   * `as_of_date`. Capabilities forward these to the research-object builder
+   * so the deep payload they attach to each row reuses the SAME shared cache
+   * the anchored research-object flow uses (single source of truth across
+   * discovery and anchored answers).
+   */
+  priorResearchObjects?: CachedResearchObject[];
+  /**
+   * Test seam — overrides the default research-object builder. Capabilities
+   * fall back to `buildResearchObjectsForAnchors` from `researchObjectBuilder`
+   * when this is omitted.
+   */
+  researchObjectBuilder?: (input: {
+    symbols?: string[];
+    sectors?: string[];
+    regimeRequested?: boolean;
+    snapshots: SnapshotBundle;
+    toolOutputs?: ToolOutputs;
+    priorResearchObjects?: CachedResearchObject[];
+  }) => Promise<ResearchObjectBuildResult>;
 };
 
 export type PgCapabilityViews = {
@@ -64,12 +79,20 @@ export type PgCapabilityViews = {
   stockIdeaView?: StockIdeaView;
   featureScreenView?: FeatureScreenView;
   factorBacktestView?: FactorBacktestView;
-  comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
 };
 
 export type PgCapabilityRunResult = {
   views: PgCapabilityViews;
+  /** All research objects this capability resolved (from cache or freshly
+   * built) for the discovered anchors. Includes both hits and misses. */
+  researchObjects?: CachedResearchObject[];
+  /** Subset of `researchObjects` that need persistence by the upstream caller —
+   * cache misses only. Empty when every anchor was a cache hit. */
+  researchObjectsUpdated?: CachedResearchObject[];
+  /** Cache stats for the research-object fan-out (mirrors the standard-path
+   * researchObjectCacheStats shape on AskGrahamyState). */
+  researchObjectCacheStats?: { hits: number; misses: number; writes: number };
   warnings: string[];
 };
 
@@ -125,9 +148,9 @@ export type CachedCapabilityView = {
   asOfDate: string;
   /** sector_delta only — the SQL's `prior_as_of_date` for the same row. */
   priorAsOfDate?: string;
-  /** stock_vs_sector_comparison only — the left-side symbol. */
+  /** Reserved for capabilities anchored to a single symbol; currently unused. */
   anchorSymbol?: string;
-  /** stock_vs_sector_comparison only — the resolved canonical sector. */
+  /** Reserved for capabilities anchored to a single sector; currently unused. */
   anchorSector?: string;
   view:
     | import("../types").SectorLeaderboardView
@@ -136,7 +159,6 @@ export type CachedCapabilityView = {
     | import("../types").StockIdeaView
     | import("../types").FeatureScreenView
     | import("../types").FactorBacktestView
-    | import("../types").ComparisonView
     | import("../types").RegimeHistoricalPlaybookView;
   generatedAt: string;
 };
@@ -152,6 +174,12 @@ export type PgCapabilityExecuteResult = {
   warnings: string[];
   viewsUpdated: CachedCapabilityView[];
   cacheStats: { hits: number; misses: number; writes: number };
+  /** Research objects discovery resolved/built while running the capability —
+   * forwarded so the graph node can merge them into `state.researchObjects`
+   * and the agent prompt renders them via the existing per-RO loop. */
+  researchObjects?: CachedResearchObject[];
+  researchObjectsUpdated?: CachedResearchObject[];
+  researchObjectCacheStats?: { hits: number; misses: number; writes: number };
 };
 
 export type CapabilityFreshness = PublicFreshnessView;
@@ -279,110 +307,8 @@ export type FactorBacktestRow = Record<string, unknown> & {
   matched_row_count?: unknown;
   source_row_count?: unknown;
   capped_sample?: unknown;
+  contributing_symbols?: unknown;
   criteria?: FactorBacktestCriterion[];
-};
-
-export type StockVsSectorComparisonRow = Record<string, unknown> & {
-  symbol?: unknown;
-  company_name?: unknown;
-  stock_sector?: unknown;
-  requested_sector?: unknown;
-  resolved_sector?: unknown;
-  explicit_sector_valid?: unknown;
-  comparison_sector_found?: unknown;
-  as_of_date?: unknown;
-  stock_conviction_score_pct?: unknown;
-  stock_conviction_bucket?: unknown;
-  stock_valuation_bucket?: unknown;
-  stock_momentum_bucket?: unknown;
-  stock_quality_bucket?: unknown;
-  stock_growth_bucket?: unknown;
-  stock_leverage_bucket?: unknown;
-  stock_hit_rate_pct?: unknown;
-  stock_median_return_pct?: unknown;
-  sector_conviction_score_pct?: unknown;
-  sector_conviction_bucket?: unknown;
-  sector_momentum_bucket?: unknown;
-  sector_quality_bucket?: unknown;
-  sector_growth_bucket?: unknown;
-  sector_leverage_bucket?: unknown;
-  sector_hit_rate_pct?: unknown;
-  features_freshness_state?: unknown;
-  features_completed_at?: unknown;
-  peer_freshness_state?: unknown;
-  peer_completed_at?: unknown;
-  forward_freshness_state?: unknown;
-  forward_completed_at?: unknown;
-  stock_forward_overlay_available?: unknown;
-  sector_forward_overlay_available?: unknown;
-};
-
-export type SectorVsSectorComparisonRow = Record<string, unknown> & {
-  left_sector?: unknown;
-  right_sector?: unknown;
-  left_sector_found?: unknown;
-  right_sector_found?: unknown;
-  as_of_date?: unknown;
-  left_conviction_score_pct?: unknown;
-  left_conviction_bucket?: unknown;
-  left_momentum_bucket?: unknown;
-  left_quality_bucket?: unknown;
-  left_growth_bucket?: unknown;
-  left_leverage_bucket?: unknown;
-  left_hit_rate_pct?: unknown;
-  right_conviction_score_pct?: unknown;
-  right_conviction_bucket?: unknown;
-  right_momentum_bucket?: unknown;
-  right_quality_bucket?: unknown;
-  right_growth_bucket?: unknown;
-  right_leverage_bucket?: unknown;
-  right_hit_rate_pct?: unknown;
-  peer_freshness_state?: unknown;
-  peer_completed_at?: unknown;
-  forward_freshness_state?: unknown;
-  forward_completed_at?: unknown;
-  left_forward_overlay_available?: unknown;
-  right_forward_overlay_available?: unknown;
-};
-
-export type SymbolVsSymbolComparisonRow = Record<string, unknown> & {
-  left_requested_symbol?: unknown;
-  right_requested_symbol?: unknown;
-  left_symbol?: unknown;
-  right_symbol?: unknown;
-  left_symbol_found?: unknown;
-  right_symbol_found?: unknown;
-  left_company_name?: unknown;
-  right_company_name?: unknown;
-  left_sector?: unknown;
-  right_sector?: unknown;
-  as_of_date?: unknown;
-  left_conviction_score_pct?: unknown;
-  left_conviction_bucket?: unknown;
-  left_valuation_bucket?: unknown;
-  left_momentum_bucket?: unknown;
-  left_quality_bucket?: unknown;
-  left_growth_bucket?: unknown;
-  left_leverage_bucket?: unknown;
-  left_hit_rate_pct?: unknown;
-  left_median_return_pct?: unknown;
-  right_conviction_score_pct?: unknown;
-  right_conviction_bucket?: unknown;
-  right_valuation_bucket?: unknown;
-  right_momentum_bucket?: unknown;
-  right_quality_bucket?: unknown;
-  right_growth_bucket?: unknown;
-  right_leverage_bucket?: unknown;
-  right_hit_rate_pct?: unknown;
-  right_median_return_pct?: unknown;
-  features_freshness_state?: unknown;
-  features_completed_at?: unknown;
-  peer_freshness_state?: unknown;
-  peer_completed_at?: unknown;
-  forward_freshness_state?: unknown;
-  forward_completed_at?: unknown;
-  left_forward_overlay_available?: unknown;
-  right_forward_overlay_available?: unknown;
 };
 
 export type RegimeHistoricalPlaybookRow = Record<string, unknown> & {

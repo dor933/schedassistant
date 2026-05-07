@@ -209,6 +209,82 @@ export async function buildResearchObjects(input: {
   return { objects, objectsUpdated, stats, warnings };
 }
 
+/**
+ * Anchorless capabilities pick a list of stocks/sectors via SQL and then need
+ * the SAME deep research-object payload that anchored answers see — same
+ * cache, same shape, no second POV. This wrapper synthesises the minimum
+ * Classification needed to call `buildResearchObjects` so capabilities don't
+ * fabricate one inline.
+ */
+export type BuildForAnchorsInput = {
+  symbols?: string[];
+  sectors?: string[];
+  regimeRequested?: boolean;
+  snapshots: SnapshotBundle;
+  toolOutputs?: ToolOutputs;
+  priorResearchObjects?: CachedResearchObject[];
+};
+
+export async function buildResearchObjectsForAnchors(
+  input: BuildForAnchorsInput,
+): Promise<ResearchObjectBuildResult> {
+  const symbols = uniqueUpperList(input.symbols).slice(0, 25);
+  const sectors = uniqueList(input.sectors).slice(0, 15);
+  const regimeRequested = input.regimeRequested === true;
+
+  if (!symbols.length && !sectors.length && !regimeRequested) {
+    return {
+      objects: [],
+      objectsUpdated: [],
+      stats: { hits: 0, misses: 0, writes: 0 },
+      warnings: [],
+    };
+  }
+
+  const classification: Classification = {
+    intent: "stock",
+    symbols,
+    sectors,
+    regimeRequested,
+    isFollowUp: false,
+    requiresTools: [],
+    confidence: "medium",
+    warnings: [],
+  };
+  return buildResearchObjects({
+    classification,
+    snapshots: input.snapshots,
+    toolOutputs: input.toolOutputs ?? {},
+    priorResearchObjects: input.priorResearchObjects,
+  });
+}
+
+function uniqueUpperList(values: string[] | undefined): string[] {
+  if (!values?.length) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const normalized = value?.trim().toUpperCase();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function uniqueList(values: string[] | undefined): string[] {
+  if (!values?.length) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
 export function stockContextFromResearchObjects(
   objects: CachedResearchObject[],
   fallback: StockResearchContext,

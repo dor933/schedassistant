@@ -76,6 +76,19 @@ const sessionSummarizationSchema = z.object({
 });
 
 /**
+ * Hard ceiling on transcript size sent to the summarisation LLM. Past this,
+ * we mark the thread as summarised (so `executeChatTurn` rotates it) but
+ * skip the LLM call entirely. Big transcripts blow the summariser's context
+ * window or get soft-failed in the catch below — both paths leave the
+ * rotation trigger un-flipped and the thread keeps growing. Rotating
+ * without a real summary is preferable to that runaway.
+ */
+const SUMMARIZATION_MAX_MESSAGES = parseInt(
+  process.env.SUMMARIZATION_MAX_MESSAGES ?? "200",
+  10,
+);
+
+/**
  * Cheap, fast model per vendor used exclusively for session summarisation.
  * Summarisation is a structured-output task with bounded scope and runs once
  * per closed thread — paying for the agent's frontier chat model would be
@@ -340,6 +353,49 @@ export async function sessionSummarizationNode(
   }
 
   try {
+    if (messages.length > SUMMARIZATION_MAX_MESSAGES) {
+      logger.warn(
+        "Session summarization skipped — over message threshold; rotating thread without summary",
+        {
+          threadId,
+          userId,
+          messageCount: messages.length,
+          threshold: SUMMARIZATION_MAX_MESSAGES,
+        },
+      );
+
+      const now = new Date();
+      const placeholderSummary: SessionSummary = {
+        text:
+          `(Auto-skipped: thread reached ${messages.length} messages, ` +
+          `over the ${SUMMARIZATION_MAX_MESSAGES}-message summarization cap. ` +
+          `No LLM summary was generated; thread has been rotated.)`,
+        createdAt: now.toISOString(),
+        messageCount: messages.length,
+        confidence: "low",
+        ...(sessionWorkspacePath ? { workspacePath: sessionWorkspacePath } : {}),
+      };
+
+      await Thread.update(
+        {
+          summary: placeholderSummary,
+          summarizedAt: now,
+          claudeSessionId: null,
+          codexThreadId: null,
+        },
+        { where: { id: threadId } },
+      );
+
+      return {
+        summaryLen: placeholderSummary.text.length,
+        chunkCount: 0,
+        fileCount: 0,
+        summary: placeholderSummary.text,
+        claudeSessionId: null,
+        codexThreadId: null,
+      } as Partial<AgentState>;
+    }
+
     logger.info("Starting session summarization", { threadId, userId, messageCount: messages.length });
 
     return await observeWithContext(

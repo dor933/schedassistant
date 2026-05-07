@@ -14,7 +14,6 @@ export const INTENTS = [
   "stock_idea_discovery",
   "feature_screen",
   "factor_conditioned_backtest",
-  "comparison",
   "market_regime_historical_playbook",
   "regime",
   "stock_sector",
@@ -42,22 +41,32 @@ export const TOOL_NAMES = [
   "get_homepage_focus_context",
 ] as const;
 
-// Classification + priorResearchObjects are passthrough records — the
-// upstream caller (StocksScanner) is trusted (auth'd via the application
-// token), and the structured-output classifier and our own DB shape have
-// already validated these. We re-cast on the consumer side.
+// The main ask endpoint requires a classifier-produced envelope. Cache-hit
+// records are still trusted passthrough payloads from StocksScanner.
 const passthroughRecord = z.object({}).passthrough();
+const classificationRecord = z
+  .object({
+    intent: z.enum(INTENTS),
+    symbols: z.array(z.string()),
+    sectors: z.array(z.string()),
+    regimeRequested: z.boolean(),
+    isFollowUp: z.boolean(),
+    requiresTools: z.array(z.enum(TOOL_NAMES)),
+    confidence: z.enum(["high", "medium", "low"]),
+    warnings: z.array(z.string()),
+  })
+  .passthrough();
 
 export const askGrahamyRequestSchema = z.object({
   userId: z.string().trim().min(1),
   conversationId: z.string().trim().min(1).optional().nullable(),
   message: z.string().trim().min(1).max(4000),
   /**
-   * Optional. When the caller has already classified the message via
-   * `POST /api/ask-grahamy/classify`, it supplies the result here so we
-   * skip the LLM classify call. Absent → agent_service classifies internally.
+   * Required. The caller has already classified the message via
+   * `POST /api/ask-grahamy/classify` and supplies the result here.
+   * The main graph does not run classification.
    */
-  classification: passthroughRecord.optional(),
+  classification: classificationRecord,
   /**
    * Optional. Existing research objects the caller already has cached for
    * the classified anchors. agent_service uses these when cache_key matches
@@ -68,7 +77,7 @@ export const askGrahamyRequestSchema = z.object({
   /**
    * Optional. Existing pgCapability views the caller has cached for the
    * classified intent (sector_conviction_leaderboard, sector_divergence,
-   * week_over_week_sector_delta, stock_idea_discovery, stock_vs_sector_comparison).
+   * week_over_week_sector_delta, stock_idea_discovery, feature_screen, etc.).
    * agent_service skips the corresponding SQL when `cache_key` matches.
    * Mirrors `priorResearchObjects` for the non-`stock_sector_regime` intents.
    */
@@ -162,44 +171,10 @@ export type Classification = {
   focus?: ClassificationFocus;
   featureCriteria?: FeatureScreenCriterion[];
   factorBacktest?: FactorBacktestClassification;
-  comparison?: ComparisonClassification;
   requiresTools: ToolName[];
   confidence: Confidence;
   warnings: string[];
 };
-
-export type ComparisonAnchor =
-  | {
-      type: "stock";
-      symbol: string;
-    }
-  | {
-      type: "sector";
-      sector?: string;
-    }
-  | {
-      type: "implicit_stock_sector";
-      sector?: string;
-    };
-
-export type ComparisonClassification =
-  | {
-      comparisonType: "stock_vs_sector";
-      left: Extract<ComparisonAnchor, { type: "stock" }>;
-      right:
-        | Extract<ComparisonAnchor, { type: "sector" }>
-        | Extract<ComparisonAnchor, { type: "implicit_stock_sector" }>;
-    }
-  | {
-      comparisonType: "sector_vs_sector";
-      left: Extract<ComparisonAnchor, { type: "sector" }>;
-      right: Extract<ComparisonAnchor, { type: "sector" }>;
-    }
-  | {
-      comparisonType: "symbol_vs_symbol";
-      left: Extract<ComparisonAnchor, { type: "stock" }>;
-      right: Extract<ComparisonAnchor, { type: "stock" }>;
-    };
 
 export type SnapshotName =
   | "daily_brief"
@@ -394,6 +369,11 @@ export type SectorLeaderboardRowView = {
   momentumBucket?: string;
   priceMomentumSeparation?: string;
   defensiveCyclicalLabel?: string;
+  /** Cache key of the sector Research Object that carries the deep payload
+   * for this row. Resolves via the shared research-object cache so the
+   * discovery answer and any anchored answer for the same sector see the
+   * exact same data. */
+  researchObjectKey: string;
 };
 
 export type SectorLeaderboardView = {
@@ -407,6 +387,9 @@ export type SectorLeaderboardView = {
   rankingBasis: "conviction" | "historical_forward" | "divergence";
   asOfDate?: string;
   rows: SectorLeaderboardRowView[];
+  /** All sector Research Object cache keys this view points at (deduplicated,
+   * row order). Reader resolves via the shared research-object cache. */
+  researchObjectKeys: string[];
   freshness: PublicFreshnessView;
   warnings: string[];
 };
@@ -423,6 +406,7 @@ export type SectorDivergenceRowView = {
   medianForwardReturnPct?: number;
   evidenceStrength?: string;
   interpretationBullets: string[];
+  researchObjectKey: string;
 };
 
 export type SectorDivergenceView = {
@@ -434,6 +418,7 @@ export type SectorDivergenceView = {
   evaluatedSectorCount?: number;
   clearDivergenceCount?: number;
   rows: SectorDivergenceRowView[];
+  researchObjectKeys: string[];
   freshness: PublicFreshnessView;
   warnings: string[];
 };
@@ -459,6 +444,7 @@ export type SectorDeltaRowView = {
   momentumDeltaPct?: number;
   direction: SectorDeltaDirection;
   interpretationBullets: string[];
+  researchObjectKey: string;
 };
 
 export type SectorDeltaView = {
@@ -470,6 +456,7 @@ export type SectorDeltaView = {
   priorAsOfDate?: string;
   rankingBasis: SectorDeltaRankingBasis;
   rows: SectorDeltaRowView[];
+  researchObjectKeys: string[];
   freshness: PublicFreshnessView;
   warnings: string[];
 };
@@ -493,6 +480,7 @@ export type StockIdeaRowView = {
   p10MaxDrawdownPct?: number;
   recoveredByHorizonRatePct?: number;
   reasonBullets: string[];
+  researchObjectKey: string;
 };
 
 export type StockIdeaView = {
@@ -506,6 +494,7 @@ export type StockIdeaView = {
     | "historical_forward"
     | "risk_adjusted";
   rows: StockIdeaRowView[];
+  researchObjectKeys: string[];
   freshness: PublicFreshnessView;
   warnings: string[];
 };
@@ -524,6 +513,7 @@ export type FeatureScreenRowView = {
   hitRatePct?: number;
   medianReturnPct?: number;
   reasonBullets: string[];
+  researchObjectKey: string;
 };
 
 export type FeatureScreenView = {
@@ -533,6 +523,7 @@ export type FeatureScreenView = {
   asOfDate?: string;
   screenCriteria: FeatureScreenCriterion[];
   rows: FeatureScreenRowView[];
+  researchObjectKeys: string[];
   freshness: PublicFreshnessView;
   warnings: string[];
 };
@@ -549,60 +540,10 @@ export type FactorBacktestView = {
   p25ReturnPct?: number;
   p75ReturnPct?: number;
   sampleAdequacy?: "ROBUST" | "ADEQUATE" | "THIN" | "UNKNOWN";
-  freshness: PublicFreshnessView;
-  warnings: string[];
-};
-
-export type ComparisonSideMetrics = {
-  convictionScorePct?: number;
-  convictionBucket?: string;
-  valuationBucket?: string;
-  momentumBucket?: string;
-  qualityBucket?: string;
-  growthBucket?: string;
-  leverageBucket?: string;
-  hitRatePct?: number;
-  medianReturnPct?: number;
-  pathRiskBucket?: string;
-};
-
-export type ComparisonSideView = {
-  type: "stock" | "sector";
-  label: string;
-  symbol?: string;
-  sector?: string;
-  metrics: ComparisonSideMetrics;
-};
-
-export type ComparisonDeltaMetric =
-  | "conviction"
-  | "valuation"
-  | "momentum"
-  | "quality"
-  | "growth"
-  | "leverage"
-  | "historical_forward"
-  | "path_risk";
-
-export type ComparisonDeltaView = {
-  metric: ComparisonDeltaMetric;
-  leftValue?: number | string;
-  rightValue?: number | string;
-  delta?: number;
-  interpretationBucket: "left_stronger" | "right_stronger" | "similar" | "mixed";
-  explanation: string;
-};
-
-export type ComparisonView = {
-  viewSchemaVersion: number;
-  state: EvidenceState;
-  comparisonType: "stock_vs_sector" | "sector_vs_sector" | "symbol_vs_symbol";
-  source: "pg_current_features" | "pg_sector_peer_daily";
-  asOfDate?: string;
-  left: ComparisonSideView;
-  right: ComparisonSideView;
-  deltas: ComparisonDeltaView[];
-  summaryBullets: string[];
+  /** Cache keys for the most-recent contributing-sample stock Research
+   * Objects (capped to a small N). Resolves via the shared research-object
+   * cache so the aggregate answer can show the same depth as anchored ones. */
+  contributingResearchObjectKeys: string[];
   freshness: PublicFreshnessView;
   warnings: string[];
 };
@@ -617,6 +558,7 @@ export type RegimeHistoricalPlaybookRowView = {
   medianForwardReturnPct?: number;
   evidenceStrength?: string;
   interpretationBullets: string[];
+  researchObjectKey: string;
 };
 
 export type RegimeHistoricalPlaybookRiskView = {
@@ -634,6 +576,10 @@ export type RegimeHistoricalPlaybookView = {
   rows: RegimeHistoricalPlaybookRowView[];
   risks: RegimeHistoricalPlaybookRiskView[];
   summaryBullets: string[];
+  /** Sector Research Object keys for the rows above (deduplicated, row order). */
+  researchObjectKeys: string[];
+  /** Regime Research Object key for the regime header (typically "REGIME:MARKET:<asOfDate>"). */
+  regimeResearchObjectKey?: string;
   freshness: PublicFreshnessView;
   warnings: string[];
 };
@@ -659,7 +605,7 @@ export type DecayRiskBucket =
   | "insufficient_decay_data";
 
 export type ValidatedEdgeEvidenceAnchorView = {
-  type: "stock" | "sector" | "regime" | "comparison";
+  type: "stock" | "sector" | "regime";
   symbol?: string;
   sector?: string;
   regime?: string;
@@ -702,7 +648,6 @@ export type PgCapabilityViews = {
   stockIdeaView?: StockIdeaView;
   featureScreenView?: FeatureScreenView;
   factorBacktestView?: FactorBacktestView;
-  comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
 };
 
@@ -771,7 +716,6 @@ export type PublicResearchView = {
   stockIdeaView?: StockIdeaView;
   featureScreenView?: FeatureScreenView;
   factorBacktestView?: FactorBacktestView;
-  comparisonView?: ComparisonView;
   regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
   validatedEdgeEvidenceView?: ValidatedEdgeEvidenceView;
   evidence: Record<string, unknown>;

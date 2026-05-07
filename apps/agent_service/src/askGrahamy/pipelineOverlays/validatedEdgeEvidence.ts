@@ -191,50 +191,11 @@ export function mapValidatedEdgeEvidenceView(input: {
 function resolveAnchorRequest(
   classification: Classification,
 ): ValidatedEvidenceAnchorRequest {
-  if (classification.intent === "comparison" && classification.comparison) {
-    const comparison = classification.comparison;
-    if (comparison.comparisonType === "symbol_vs_symbol") {
-      const left = comparison.left.symbol.toUpperCase();
-      const right = comparison.right.symbol.toUpperCase();
-      return {
-        anchor: {
-          type: "comparison",
-          label: `${left} vs ${right}`,
-        },
-        fetch: (client) => client.fetchSymbolComparison(left, right),
-      };
-    }
-    if (comparison.comparisonType === "sector_vs_sector") {
-      const left = comparison.left.sector;
-      const right = comparison.right.sector;
-      if (!left || !right) {
-        return {
-          unavailableAnchor: {
-            type: "comparison",
-            label: "sector comparison",
-          },
-          warning:
-            "Pipeline validated evidence comparison is unavailable because a sector anchor is missing.",
-        };
-      }
-      return {
-        anchor: {
-          type: "comparison",
-          label: `${left} vs ${right}`,
-        },
-        fetch: (client) => client.fetchSectorComparison(left, right),
-      };
-    }
-    return {
-      unavailableAnchor: {
-        type: "comparison",
-        label: "stock versus sector",
-      },
-      warning:
-        "Pipeline validated evidence comparison is unavailable for this comparison shape.",
-    };
-  }
-
+  // Comparison-style turns now have multiple anchors expressed via
+  // classification.symbols / classification.sectors. The overlay still fetches
+  // a single primary anchor — the first stock if any, then sector, then
+  // regime — and the agent does the side-by-side analysis itself from the
+  // per-anchor research objects.
   const symbol = classification.symbols[0]?.trim().toUpperCase();
   if (symbol) {
     return {

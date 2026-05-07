@@ -13,7 +13,6 @@ import {
 import {
   answerNode,
   buildMetaNode,
-  classifyIntentNode,
   compileEvidenceNode,
   executeToolsNode,
   fetchBaseSnapshotsNode,
@@ -23,6 +22,7 @@ import {
   loadPipelineOverlaysNode,
   loadResearchObjectsNode,
   researchPlannerNode,
+  requireClassificationNode,
   safeErrorResponseNode,
   selectToolsNode,
 } from "./nodes";
@@ -34,7 +34,6 @@ import type {
   AskGrahamyResponse,
   AskGrahamyState,
   CachedResearchObject,
-  Classification,
 } from "./types";
 
 export type { RunAskGrahamyGraphOptions };
@@ -51,7 +50,7 @@ function routeAfterResearchPlanner(
 }
 
 const askGrahamyWorkflow = new StateGraph(AskGrahamyGraphAnnotation)
-  .addNode("classifyIntent", classifyIntentNode)
+  .addNode("requireClassification", requireClassificationNode)
   .addNode("fetchBaseSnapshots", fetchBaseSnapshotsNode)
   .addNode("selectTools", selectToolsNode)
   .addNode("executeTools", executeToolsNode)
@@ -65,8 +64,8 @@ const askGrahamyWorkflow = new StateGraph(AskGrahamyGraphAnnotation)
   .addNode("finalizeResponse", finalizeResponseNode)
   .addNode("safeErrorResponse", safeErrorResponseNode)
 
-  .addEdge(START, "classifyIntent")
-  .addConditionalEdges("classifyIntent", routeAfterNode, {
+  .addEdge(START, "requireClassification")
+  .addConditionalEdges("requireClassification", routeAfterNode, {
     next: "fetchBaseSnapshots",
     error: "safeErrorResponse",
   })
@@ -121,7 +120,7 @@ export { askGrahamyWorkflow };
 /**
  * askGrahamy graph — runs once per StocksScanner turn.
  *
- *   classify (skip if SS already supplied) -> fetch base snapshots ->
+ *   require supplied classification -> fetch base snapshots ->
  *   execute snapshot tools -> research planner ->
  *     planner handled: compile evidence -> synthesize answer -> moat guard
  *     standard path: load research objects/capabilities/overlays ->
@@ -136,11 +135,8 @@ export async function runAskGrahamyGraph(
   internalUserId: number,
   options: RunAskGrahamyGraphOptions = {},
 ): Promise<AskGrahamyResponse> {
-  // Caller (StocksScanner) may have already classified + pre-loaded its
-  // local research objects via POST /api/ask-grahamy/classify. When supplied
-  // we skip the LLM classify call and treat the prior objects as cache hits.
-  const suppliedClassification =
-    (request as { classification?: Classification }).classification;
+  // Caller (StocksScanner) must classify via POST /api/ask-grahamy/classify,
+  // then send that classification here with any cache hits it found locally.
   const suppliedPriorObjects =
     (request as { priorResearchObjects?: CachedResearchObject[] }).priorResearchObjects;
   const suppliedPriorCapabilityViews =
@@ -152,7 +148,7 @@ export async function runAskGrahamyGraph(
     conversationId: request.conversationId ?? undefined,
     message: request.message,
     warnings: [],
-    classification: suppliedClassification,
+    classification: request.classification,
     priorResearchObjects: suppliedPriorObjects,
     priorCapabilityViews: suppliedPriorCapabilityViews,
   };
@@ -174,7 +170,7 @@ export async function runAskGrahamyGraph(
   // Top-level Langfuse observation for the whole askGrahamy turn — mirrors
   // `agent_chat_turn` from executeChatTurn.ts. Attaches a LangChain callback
   // handler to the graph invoke so each LangGraph node, plus any nested LLM
-  // calls (classification, planner, brief synthesizer, grahamy deep agent)
+  // calls (planner, brief synthesizer, grahamy deep agent)
   // emit child generation/chain spans automatically.
   return observeWithContext(
     "ask_grahamy_turn",

@@ -9,7 +9,6 @@ import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import type {
   CachedResearchObject,
   Classification,
-  ComparisonClassification,
   FactorBacktestCriterion,
   FactorBacktestHorizon,
   FeatureScreenCriterion,
@@ -52,7 +51,6 @@ export const PLANNABLE_CAPABILITIES = [
   "stock_idea_discovery",
   "feature_screen",
   "factor_conditioned_backtest",
-  "comparison",
   "risk_path",
   "validated_edge_evidence",
 ] as const;
@@ -342,19 +340,6 @@ export const PLANNING_CAPABILITY_REGISTRY: Record<
     allowedChainingInputs: ["featureScreenView.screenCriteria"],
     whenNotToUse: ["Do not use unsupported factors or unsupported horizons."],
   },
-  comparison: {
-    name: "comparison",
-    answers: "Stock-vs-sector, sector-vs-sector, or symbol-vs-symbol comparison.",
-    requiredParams: ["comparisonType", "left", "right"],
-    optionalParams: [],
-    outputView: "comparisonView",
-    allowedChainingInputs: [
-      "explicit comparison anchors",
-      "stockIdeaView.rows[0].symbol",
-      "stock_research_object anchor",
-    ],
-    whenNotToUse: ["Do not use for broad rankings or screens."],
-  },
   risk_path: {
     name: "risk_path",
     answers: "Risk-focused answer from public pathRisk fields.",
@@ -460,12 +445,12 @@ export const RESEARCH_WORKFLOW_REGISTRY: ResearchWorkflowSpec[] = [
   },
   {
     workflowName: "stock_deep_dive_stack",
-    requiredSteps: ["stock_research_object", "risk_path", "comparison"],
-    optionalSteps: ["validated_edge_evidence"],
+    requiredSteps: ["stock_research_object", "risk_path"],
+    optionalSteps: ["sector_research_object", "validated_edge_evidence"],
     allowedStepOrder: [
       "stock_research_object",
+      "sector_research_object",
       "risk_path",
-      "comparison",
       "validated_edge_evidence",
     ],
     allowedChainingPaths: [
@@ -473,19 +458,19 @@ export const RESEARCH_WORKFLOW_REGISTRY: ResearchWorkflowSpec[] = [
       "featureScreenView.rows.symbol",
     ],
     maxSteps: 4,
-    maxSectors: 0,
+    maxSectors: 1,
     maxCandidates: 1,
     maxPipelineSymbols: 1,
-    fallbackBehavior: "Return the stock Research Object if comparison or Pipeline evidence is unavailable.",
-    publicSafeOutput: "stock Research Object, stock-vs-sector comparison, optional validatedEdgeEvidenceView.",
+    fallbackBehavior: "Return the stock Research Object if sibling sector or Pipeline evidence is unavailable.",
+    publicSafeOutput: "stock Research Object, optional sector Research Object, optional validatedEdgeEvidenceView.",
   },
   {
     workflowName: "idea_to_compare_and_risk",
-    requiredSteps: ["stock_idea_discovery", "comparison", "risk_path"],
-    optionalSteps: ["validated_edge_evidence"],
+    requiredSteps: ["stock_idea_discovery", "risk_path"],
+    optionalSteps: ["sector_research_object", "validated_edge_evidence"],
     allowedStepOrder: [
       "stock_idea_discovery",
-      "comparison",
+      "sector_research_object",
       "risk_path",
       "validated_edge_evidence",
     ],
@@ -494,11 +479,11 @@ export const RESEARCH_WORKFLOW_REGISTRY: ResearchWorkflowSpec[] = [
       "stock_research_object anchor",
     ],
     maxSteps: 4,
-    maxSectors: 0,
+    maxSectors: 1,
     maxCandidates: 1,
     maxPipelineSymbols: 1,
-    fallbackBehavior: "Return the stock idea candidate if comparison or risk is unavailable.",
-    publicSafeOutput: "stockIdeaView, top candidate Research Object, stock-vs-sector comparison, optional validatedEdgeEvidenceView.",
+    fallbackBehavior: "Return the stock idea candidate if sibling sector or risk evidence is unavailable.",
+    publicSafeOutput: "stockIdeaView, top candidate Research Object, optional sector Research Object, optional validatedEdgeEvidenceView.",
   },
 ];
 
@@ -582,11 +567,11 @@ export function buildFallbackResearchPlan(message: string): ResearchPlan | null 
         workflowName,
         steps: [
           { id: "stock_context", capability: "stock_research_object", purpose: "Load public stock Research Object.", params: symbol ? { symbol } : {} },
+          { id: "sector_context", capability: "sector_research_object", purpose: "Load the sibling sector Research Object so the agent can compare side-by-side.", params: {}, dependsOn: ["stock_context"], optional: true },
           { id: "risk_context", capability: "risk_path", purpose: "Add public risk evidence for the stock.", params: {}, dependsOn: ["stock_context"] },
-          { id: "sector_comparison", capability: "comparison", purpose: "Compare the stock to its sector.", params: { comparisonType: "stock_vs_sector" }, dependsOn: ["stock_context"] },
           pipelineCheckStep("stock_context", true),
         ],
-        expectedViews: ["researchObjectViews", "comparisonView", "validatedEdgeEvidenceView"],
+        expectedViews: ["researchObjectViews", "validatedEdgeEvidenceView"],
       });
     }
     case "idea_to_compare_and_risk":
@@ -594,24 +579,11 @@ export function buildFallbackResearchPlan(message: string): ResearchPlan | null 
         workflowName,
         steps: [
           { id: "idea", capability: "stock_idea_discovery", purpose: "Find a public research candidate.", params: {} },
-          {
-            id: "sector_comparison",
-            capability: "comparison",
-            purpose: "Compare the top research candidate to its sector.",
-            params: { comparisonType: "stock_vs_sector" },
-            dependsOn: ["idea"],
-            paramsFromPreviousSteps: {
-              symbol: {
-                stepId: "idea",
-                sourcePath: "stockIdeaView.rows[0].symbol",
-                transform: "top_candidate_symbol",
-              },
-            },
-          },
+          { id: "sector_context", capability: "sector_research_object", purpose: "Load the sibling sector Research Object for the top candidate so the agent can compare side-by-side.", params: {}, dependsOn: ["idea"], optional: true },
           { id: "risk_context", capability: "risk_path", purpose: "Add public risk evidence for the top candidate.", params: {}, dependsOn: ["idea"] },
           pipelineCheckStep("idea", true),
         ],
-        expectedViews: ["stockIdeaView", "comparisonView", "validatedEdgeEvidenceView"],
+        expectedViews: ["stockIdeaView", "researchObjectViews", "validatedEdgeEvidenceView"],
       });
   }
 }
@@ -763,9 +735,10 @@ Planning rules:
 - For screen plus historical setup questions, use:
   feature_screen -> factor_conditioned_backtest with the same public criteria.
 - For explicit stock deep dives asking for risk and sector comparison, use:
-  stock_research_object -> risk_path -> comparison -> optional validated_edge_evidence.
+  stock_research_object -> optional sector_research_object -> risk_path -> optional validated_edge_evidence.
+  The agent compares the stock and sector side-by-side directly from the research objects.
 - For interesting stock idea plus sector/risk checks, use:
-  stock_idea_discovery -> comparison for the top public candidate -> risk_path -> optional validated_edge_evidence.
+  stock_idea_discovery -> optional sector_research_object for the top public candidate -> risk_path -> optional validated_edge_evidence.
 - Use sourcePath values only from public views.
 - Allowed chaining examples:
   regimeHistoricalPlaybookView.rows[role=leader].sector -> feature_screen sectorConstraints with transform top_3_unique_sectors.
@@ -773,7 +746,7 @@ Planning rules:
   sectorDivergenceView.rows.sector -> feature_screen sectorConstraints with transform top_3_divergence_sectors.
   featureScreenView.rows.symbol -> optional validated_edge_evidence symbols with transform top_3_symbols.
   featureScreenView.screenCriteria -> factor_conditioned_backtest criteria with transform public_criteria_only.
-  stockIdeaView.rows[0].symbol -> comparison/risk/validated_edge_evidence with transform top_candidate_symbol.
+  stockIdeaView.rows[0].symbol -> sector_research_object/risk_path/validated_edge_evidence with transform top_candidate_symbol.
 - finalAnswerGoal should describe the public analyst output, such as ranked_research_candidates.
 Return only the structured ResearchPlan object.`;
 
@@ -1181,20 +1154,6 @@ function validateWorkflowSpecificRules(match: ResearchWorkflowMatch): string[] {
     const stockStep = match.steps.find((step) => step.capability === "stock_research_object");
     const symbol = stringParam(stockStep?.params.symbol);
     if (!symbol) errors.push("stock_deep_dive_stack requires one explicit symbol.");
-    const comparisonStep = match.steps.find((step) => step.capability === "comparison");
-    if (comparisonStep && comparisonStep.params.comparisonType !== "stock_vs_sector") {
-      errors.push("stock_deep_dive_stack only supports stock_vs_sector comparison.");
-    }
-  }
-
-  if (match.workflowName === "idea_to_compare_and_risk") {
-    requireStepSource(
-      match,
-      "comparison",
-      "stockIdeaView.rows[0].symbol",
-      "top_candidate_symbol",
-      errors,
-    );
   }
 
   if (
@@ -1243,7 +1202,6 @@ function isAllowedSourcePath(sourcePath: string): boolean {
     /^featureScreenView\.screenCriteria$/,
     /^stockIdeaView\.rows\[0\]\.symbol$/,
     /^stock_research_object anchor$/,
-    /^comparisonView$/,
   ].some((pattern) => pattern.test(sourcePath));
 }
 
@@ -1614,44 +1572,65 @@ async function executeStockDeepDiveStack(
     ...capabilityClassification(input.classification, "stock"),
     symbols: [symbol.toUpperCase()],
   };
-  const researchObjects = await runPlannerResearchObjects(input, stockClassification);
-  warnings.push(...researchObjects.warnings);
-  const comparisonResult = await runPlannerPgCapability(input, {
-    ...capabilityClassification(input.classification, "comparison"),
-    symbols: [symbol.toUpperCase()],
-    comparison: stockVsSectorComparison(symbol),
-  });
-  warnings.push(...comparisonResult.warnings);
+  const stockResearchObjects = await runPlannerResearchObjects(input, stockClassification);
+  warnings.push(...stockResearchObjects.warnings);
+  // Pull a sibling sector research object so the agent can do the
+  // stock-vs-sector comparison directly from research objects. The sector
+  // is inferred from the stock's research object when available.
+  const sectorAnchor = inferSectorFromResearchObjects(stockResearchObjects.objects);
+  const allObjects = [...stockResearchObjects.objects];
+  if (sectorAnchor) {
+    const sectorResearchObjects = await runPlannerResearchObjects(input, {
+      ...capabilityClassification(input.classification, "sector"),
+      sectors: [sectorAnchor],
+    });
+    warnings.push(...sectorResearchObjects.warnings);
+    allObjects.push(...sectorResearchObjects.objects);
+  }
   const pipelineLabels = hasOptionalPipelineStep(workflow)
     ? await runOptionalSymbolsPipelineLabels(input, [symbol])
     : { labels: {}, warnings: [] };
   warnings.push(...pipelineLabels.warnings);
   return {
     handled: true,
-    researchObjects: researchObjects.objects,
+    researchObjects: allObjects,
     researchObjectsUpdated: [],
-    researchObjectCacheStats: researchObjects.stats,
-    pgCapabilityViews: comparisonResult.views,
+    researchObjectCacheStats: stockResearchObjects.stats,
+    pgCapabilityViews: {},
     compoundResearchContext: {
       workflowName: workflow.workflowName,
       planType: "approved_multi_step_workflow",
       selectedSymbol: symbol.toUpperCase(),
+      ...(sectorAnchor ? { selectedSectors: [sectorAnchor] } : {}),
       candidatePipelineLabels: pipelineLabels.labels,
       warnings: unique(warnings),
     },
     workflowExecutionResult: buildWorkflowExecutionResult({
       workflowName: workflow.workflowName,
       publicViews: {
-        researchObjectViews: researchObjects.objects
+        researchObjectViews: allObjects
           .map((item) => item.view)
           .filter((view): view is NonNullable<typeof view> => Boolean(view)),
-        pgCapabilityViews: comparisonResult.views,
+        pgCapabilityViews: {},
       },
       pipelineLabels: pipelineLabels.labels,
       warnings: unique(warnings),
     }),
     warnings: unique(warnings),
   };
+}
+
+function inferSectorFromResearchObjects(
+  objects: CachedResearchObject[],
+): string | undefined {
+  for (const object of objects) {
+    if (object.objectType !== "stock") continue;
+    const summary = object.publicSummary as { sector?: unknown } | undefined;
+    if (typeof summary?.sector === "string" && summary.sector.trim().length) {
+      return summary.sector.trim();
+    }
+  }
+  return undefined;
 }
 
 async function executeIdeaToCompareAndRisk(
@@ -1691,36 +1670,38 @@ async function executeIdeaToCompareAndRisk(
     ...capabilityClassification(input.classification, "stock"),
     symbols: [symbol],
   };
-  const researchObjects = await runPlannerResearchObjects(input, stockClassification);
-  warnings.push(...researchObjects.warnings);
-  const comparisonResult = await runPlannerPgCapability(input, {
-    ...capabilityClassification(input.classification, "comparison"),
-    symbols: [symbol],
-    comparison: stockVsSectorComparison(symbol),
-  });
-  warnings.push(...comparisonResult.warnings);
+  const stockResearchObjects = await runPlannerResearchObjects(input, stockClassification);
+  warnings.push(...stockResearchObjects.warnings);
+  const sectorAnchor = inferSectorFromResearchObjects(stockResearchObjects.objects);
+  const allObjects = [...stockResearchObjects.objects];
+  if (sectorAnchor) {
+    const sectorResearchObjects = await runPlannerResearchObjects(input, {
+      ...capabilityClassification(input.classification, "sector"),
+      sectors: [sectorAnchor],
+    });
+    warnings.push(...sectorResearchObjects.warnings);
+    allObjects.push(...sectorResearchObjects.objects);
+  }
   const pipelineLabels = hasOptionalPipelineStep(workflow)
     ? await runOptionalSymbolsPipelineLabels(input, [symbol])
     : { labels: {}, warnings: [] };
   warnings.push(...pipelineLabels.warnings);
   return {
     handled: true,
-    researchObjects: researchObjects.objects,
+    researchObjects: allObjects,
     researchObjectsUpdated: [],
-    researchObjectCacheStats: researchObjects.stats,
+    researchObjectCacheStats: stockResearchObjects.stats,
     pgCapabilityViews: {
       stockIdeaView: ideaView,
-      ...comparisonResult.views,
     },
     workflowExecutionResult: buildWorkflowExecutionResult({
       workflowName: workflow.workflowName,
       publicViews: {
-        researchObjectViews: researchObjects.objects
+        researchObjectViews: allObjects
           .map((item) => item.view)
           .filter((view): view is NonNullable<typeof view> => Boolean(view)),
         pgCapabilityViews: {
           stockIdeaView: ideaView,
-          ...comparisonResult.views,
         },
       },
       pipelineLabels: pipelineLabels.labels,
@@ -1733,6 +1714,7 @@ async function executeIdeaToCompareAndRisk(
       workflowName: workflow.workflowName,
       planType: "approved_multi_step_workflow",
       selectedSymbol: symbol,
+      ...(sectorAnchor ? { selectedSectors: [sectorAnchor] } : {}),
       candidatePipelineLabels: pipelineLabels.labels,
       warnings: unique([
         ...warnings,
@@ -1797,7 +1779,6 @@ function capabilityClassification(
     sectors: [],
     featureCriteria: undefined,
     factorBacktest: undefined,
-    comparison: undefined,
     regimeRequested: intent === "regime",
   };
 }
@@ -1892,7 +1873,6 @@ async function runSectorFeatureScreens(
         sectors: [],
         regimeRequested: false,
         factorBacktest: undefined,
-        comparison: undefined,
         focus: undefined,
       });
       warnings.push(...result.warnings);
@@ -1939,7 +1919,7 @@ function mergeFeatureScreenViews(
     { state: "unknown" as const };
 
   return {
-    viewSchemaVersion: 1,
+    viewSchemaVersion: 2,
     state: rows.length
       ? hasPartialView
         ? "partial"
@@ -1951,6 +1931,9 @@ function mergeFeatureScreenViews(
     asOfDate,
     screenCriteria: criteria,
     rows,
+    researchObjectKeys: Array.from(
+      new Set(rows.map((row) => row.researchObjectKey).filter(Boolean)),
+    ),
     freshness,
     warnings: rows.length
       ? warnings
@@ -1966,11 +1949,12 @@ function emptySectorScreenView(
     .slice(0, MAX_SECTOR_CONSTRAINTS)
     .map((sector): FeatureScreenCriterion => ({ factor: "sector", bucket: sector }));
   return {
-    viewSchemaVersion: 1,
+    viewSchemaVersion: 2,
     state: sectors.length ? "complete" : "unavailable",
     source: "pg_current_features",
     screenCriteria: criteria,
     rows: [],
+    researchObjectKeys: [],
     freshness: { state: "unknown" },
     warnings: [warning],
   };
@@ -2043,7 +2027,6 @@ async function runOptionalSymbolsPipelineLabels(
           focus: "validated_evidence",
           featureCriteria: undefined,
           factorBacktest: undefined,
-          comparison: undefined,
         },
         message: input.message,
       });
@@ -2067,14 +2050,6 @@ function hasOptionalPipelineStep(workflow: ResearchWorkflowMatch): boolean {
   return workflow.steps.some(
     (step) => step.capability === "validated_edge_evidence" && step.optional === true,
   );
-}
-
-function stockVsSectorComparison(symbol: string): ComparisonClassification {
-  return {
-    comparisonType: "stock_vs_sector",
-    left: { type: "stock", symbol: symbol.toUpperCase() },
-    right: { type: "implicit_stock_sector" },
-  };
 }
 
 function topStockIdeaSymbol(

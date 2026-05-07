@@ -174,21 +174,24 @@ function buildWorkflowPathRisk(
 function buildWorkflowComparison(
   result: WorkflowExecutionResult,
 ): EvidenceLayer | undefined {
-  const comparison = result.publicViews.pgCapabilityViews?.comparisonView;
-  if (!comparison) return undefined;
+  const ros = result.publicViews.researchObjectViews ?? [];
+  if (ros.length < 2) return undefined;
+  const warnings = ros.flatMap((ro) => ro.warnings).slice(0, 5);
   return layer({
-    state: comparison.state,
-    sourceView: "comparisonView",
+    state: "complete",
+    sourceView: "publicResearchObjectView",
     keyData: [
-      `${comparison.left.label} vs ${comparison.right.label}.`,
-      ...comparison.summaryBullets.slice(0, 3),
-      ...(result.comparisonRows ?? []).slice(0, 5).map((row) =>
-        `${row.metric}: ${row.interpretation}${row.explanation ? `; ${row.explanation}` : ""}`,
-      ),
+      `Comparison anchors: ${ros.map((ro) => `${ro.objectType.toUpperCase()} ${ro.anchor}`).join(" vs ")}.`,
+      ...ros.slice(0, 4).map((ro) => {
+        const headline = ro.fiveQuestion.whatMattersNow[0] ?? ro.fiveQuestion.whyNow ?? "research object available";
+        return `${ro.objectType.toUpperCase()} ${ro.anchor}: ${headline}`;
+      }),
+      "Derive the side-by-side analysis from the per-anchor research objects.",
     ],
-    interpretation: "Public relative comparison evidence is available.",
-    strength: comparison.state === "complete" ? "moderate" : "weak",
-    warnings: comparison.warnings,
+    interpretation:
+      "Multiple research objects loaded — perform the comparison directly from them.",
+    strength: "moderate",
+    warnings,
   });
 }
 
@@ -208,13 +211,23 @@ function buildWorkflowPipelineEvidence(
 }
 
 function inferWorkflowAnchor(result: WorkflowExecutionResult): EvidencePack["anchor"] {
-  const ro = result.publicViews.researchObjectViews?.[0];
-  if (ro) return { type: ro.objectType, label: ro.title ?? ro.anchor, symbol: ro.objectType === "stock" ? ro.anchor : undefined, sector: ro.objectType === "sector" ? ro.anchor : undefined };
-  const comparison = result.publicViews.pgCapabilityViews?.comparisonView;
-  if (comparison) {
+  const ros = result.publicViews.researchObjectViews ?? [];
+  if (ros.length >= 2) {
     return {
       type: "comparison",
-      label: `${comparison.left.label} vs ${comparison.right.label}`,
+      label: ros
+        .slice(0, 4)
+        .map((ro) => ro.title ?? ro.anchor)
+        .join(" vs "),
+    };
+  }
+  const ro = ros[0];
+  if (ro) {
+    return {
+      type: ro.objectType,
+      label: ro.title ?? ro.anchor,
+      symbol: ro.objectType === "stock" ? ro.anchor : undefined,
+      sector: ro.objectType === "sector" ? ro.anchor : undefined,
     };
   }
   if (result.candidateRows?.length) return { type: "screen", label: "Current candidate screen" };
@@ -230,7 +243,7 @@ function synthesizeWorkflowConfidence(input: {
   const hasHistorical =
     Boolean(input.result.publicViews.pgCapabilityViews?.factorBacktestView) ||
     Boolean(input.result.publicViews.pgCapabilityViews?.regimeHistoricalPlaybookView);
-  const hasComparison = Boolean(input.result.publicViews.pgCapabilityViews?.comparisonView);
+  const hasComparison = (input.result.publicViews.researchObjectViews?.length ?? 0) >= 2;
   const hasPipeline = Boolean(Object.keys(input.result.pipelineLabels ?? {}).length);
   const hasStaleWarning = input.result.freshness?.state === "stale";
 

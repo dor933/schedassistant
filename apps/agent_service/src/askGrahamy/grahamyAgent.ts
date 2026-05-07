@@ -214,7 +214,10 @@ const SYMBOL_PRESERVE_KEYS = new Set([
   "symbols",
   "anchor",
   "cacheKey",
+  "researchObjectKey",
   "researchObjectKeys",
+  "regimeResearchObjectKey",
+  "contributingResearchObjectKeys",
 ]);
 
 function humanizeEnum(value: string): string {
@@ -346,16 +349,6 @@ function formatPgCapabilitiesForPrompt(views: PgCapabilityViews | undefined): st
       `## FACTOR-CONDITIONED BACKTEST — PG historical evidence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
     );
   }
-  if (views?.comparisonView) {
-    const humanized = humanizeJsonValue({
-      comparisonView: views.comparisonView,
-      freshness: views.comparisonView.freshness,
-      warnings: views.comparisonView.warnings,
-    });
-    blocks.push(
-      `## COMPARISON — PG historical intelligence\n\`\`\`json\n${JSON.stringify(humanized, null, 2)}\n\`\`\``,
-    );
-  }
   if (views?.regimeHistoricalPlaybookView) {
     const humanized = humanizeJsonValue({
       regimeHistoricalPlaybookView: views.regimeHistoricalPlaybookView,
@@ -484,6 +477,7 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Do not expose Client API endpoint names, raw sections, raw anchors, derivation, manifest internals, IDs, gates, thresholds, feature rules, table names, SQL, or raw rows for \`validatedEdgeEvidenceView\`.
 - Do not expose Sentinel lifecycle state names/counts, raw Sentinel rows, Coroner classifications, Coroner postmortems, parent-refined-out language, raw discovery/convergence fields, or raw Pipeline lifecycle detail.
 - Do not turn validated evidence into stop-loss, sizing, trade instruction, or buy/sell language.
+- For any PG capability row that includes \`researchObjectKey\`, use the matching Research Object block for deeper stock/sector/regime context. Do not introduce extra rows or anchors outside the capability view; the Research Object is supporting detail for the listed row.
 - For sector leaderboard questions, use only \`sectorLeaderboardView.rows\`. Rank sectors only from those rows, mention \`asOfDate\` or data-through freshness, and do not invent sectors, scores, or ranks.
 - Treat \`sectorLeaderboardView\` as PG historical/current composite evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
 - If \`sectorLeaderboardView.rows\` is empty or the view state is unavailable, say the sector leaderboard is unavailable instead of naming sectors.
@@ -509,17 +503,18 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Treat \`featureScreenView\` as PG current-feature screening evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
 - If \`featureScreenView.state = complete\` and \`rows\` is empty, say no matching candidates were found. If unavailable, say the feature screen is unavailable.
 - For historical factor-combination questions, use only \`factorBacktestView\`. Mention \`horizon\`, \`sampleSize\`, and \`sampleAdequacy\`.
+- \`factorBacktestView.contributingResearchObjectKeys\` names a bounded sample of recent contributing stock Research Objects. Use those Research Objects only as examples of what matched the factor condition, not as proof that the aggregate result applies to every future stock.
 - Treat \`factorBacktestView\` as historical evidence, not a prediction, recommendation, validated live edge, Sentinel signal, Coroner result, trade card, or accepted hypothesis.
 - Do not describe \`factorBacktestView\` as current, latest market data, or today's data. Use \`freshness.dataThrough\` only as the historical sample-through date for the selected horizon.
 - Do not overstate thin samples. If \`factorBacktestView.state = partial\`, explain the public sample limitation from \`warnings\`.
 - Do not expose thresholds, formulas, SQL, raw rows, table names, internal factor definitions, feature rules, IDs, gates, scoring internals, or operational source details for \`factorBacktestView\`.
 - If \`factorBacktestView.state = complete\` and \`sampleSize = 0\`, say no matching historical observations were found. If unavailable, say factor backtest data is unavailable.
-- For stock-vs-sector, sector-vs-sector, and symbol-vs-symbol comparison questions, use only \`comparisonView\`. Do not use raw Research Objects, memory, table names, formulas, or inferred metrics to compare.
-- For \`comparisonView\`, prefer dimensional language like "the left side is stronger on X and weaker on Y." Do not say "better" unless multiple public \`deltas\` and \`summaryBullets\` clearly support it.
-- Mention \`comparisonView.asOfDate\` or \`comparisonView.freshness.dataThrough\`. Treat \`comparisonView\` as PG current/historical comparison evidence, not validated live edge evidence.
-- Explain \`comparisonView.state = partial\` by naming the public missing area from \`warnings\`; if unavailable, ask for a valid stock/sector/symbol target or say the comparison data is unavailable.
-- Do not expose table names, SQL, raw feature values, thresholds, scoring formulas, IDs, gates, or operational source details for \`comparisonView\`.
-- For symbol-vs-symbol comparisons, mention when sectors differ and keep the answer dimensional ("stronger on X, weaker on Y") rather than treating it as an investment recommendation.
+- For comparison-style questions (stock-vs-stock, stock-vs-sector, sector-vs-sector, anchored to the regime, etc.), the evidence is the set of per-anchor Research Objects rendered above — one per stock, sector, and (when relevant) the regime. Read each Research Object and perform the comparison yourself, dimension by dimension, using only fields that exist in those objects: \`fiveQuestion.whatMattersNow\`, \`probabilisticEvidence\`, \`pathRisk\`, \`edgeEvidence\`, freshness, and warnings.
+- Use dimensional language like "X is stronger on quality but weaker on momentum" rather than declaring an overall winner. Only call one side "better" if multiple dimensions clearly point the same way.
+- When the user supplies regime/sector context alongside a stock-vs-stock comparison, frame the comparison through that context — explain how the regime/sector backdrop changes how the per-stock evidence should be read.
+- Mention each Research Object's \`asOfDate\` or \`freshness.dataThrough\`. If a Research Object is partial or unavailable, name the missing area instead of inventing the comparison.
+- If only one Research Object loaded for what looks like a comparison, ask the user to confirm the second anchor and answer from the single Research Object you have.
+- Treat the Research Objects as PG current/historical evidence — not validated live edge evidence. Do not expose internal feature names, thresholds, scoring formulas, or table names while comparing.
 - For current-regime historical playbook questions, use only \`regimeHistoricalPlaybookView\`. Mention the \`regime\` and \`asOfDate\` or \`freshness.dataThrough\`.
 - Treat \`regimeHistoricalPlaybookView\` as PG historical evidence, not a live edge validation, prediction, Sentinel signal, Coroner result, trade card, accepted hypothesis, or recommendation.
 - For approved compound research answers, use the public views produced in this turn and the \`compoundResearchContext.workflowName\` summary only as an execution guide. Do not expose the workflow name, plan, step ids, source paths, or implementation details.
@@ -528,7 +523,7 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - For \`sector_delta_to_stock_screen\`, sectors must come only from \`sectorDeltaView.rows\` where direction is improved.
 - For \`sector_divergence_to_stock_screen\`, sectors must come only from \`sectorDivergenceView.rows\`; if rows are empty, say no clear divergence candidates were found.
 - For \`feature_screen_plus_backtest\`, \`factorBacktestView\` is aggregate historical context for the screen criteria, not stock-specific proof.
-- For \`stock_deep_dive_stack\`, use the stock Research Object, public risk fields, \`comparisonView\`, and optional \`validatedEdgeEvidenceView\`; do not introduce extra stocks.
+- For \`stock_deep_dive_stack\`, use the stock Research Object, public risk fields, any sibling sector/regime Research Objects produced for the same turn, and optional \`validatedEdgeEvidenceView\`; do not introduce extra stocks.
 - For \`idea_to_compare_and_risk\`, call the top \`stockIdeaView.rows\` item a research candidate, not a top pick or recommendation.
 - If \`compoundResearchContext.candidatePipelineLabels\` is present, use only those public labels in a Pipeline column. If a label is missing, write "לא זמין בתור הזה" in Hebrew answers or "not available in this turn" in English answers.
 - For Hebrew compound answers, include: "השורה התחתונה", "סקטורים חזקים היסטורית", "מועמדי מחקר נוכחיים", "מה חסר / מה לבדוק עכשיו", and "מגבלות הנתונים" when the evidence supports those sections.

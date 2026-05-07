@@ -11,9 +11,6 @@ const QUERY_FILES: Record<PgCapabilityQueryName, string> = {
   query_feature_screen: "query_feature_screen.sql",
   query_factor_conditioned_backtest: "query_factor_conditioned_backtest.sql",
   query_regime_historical_playbook: "query_regime_historical_playbook.sql",
-  query_stock_vs_sector_comparison: "query_stock_vs_sector_comparison.sql",
-  query_sector_vs_sector_comparison: "query_sector_vs_sector_comparison.sql",
-  query_symbol_vs_symbol_comparison: "query_symbol_vs_symbol_comparison.sql",
 };
 
 const DEFAULT_QUERIES_DIR = path.join(__dirname, "queries");

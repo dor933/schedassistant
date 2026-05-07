@@ -199,6 +199,15 @@ metadata AS (
     (SELECT COUNT(*) FROM source_candidates) AS source_row_count,
     (SELECT COUNT(*) FROM source_candidates) >= (SELECT source_row_cap FROM config)
       OR (SELECT COUNT(*) FROM bounded) >= (SELECT max_sample_size FROM config) AS capped_sample
+),
+contributing_symbols AS (
+  SELECT ARRAY(
+    SELECT b.symbol
+    FROM bounded b
+    WHERE b.symbol IS NOT NULL
+    ORDER BY b.as_of_date DESC, b.symbol ASC
+    LIMIT 10
+  ) AS symbols
 )
 SELECT
   m.as_of_date,
@@ -210,6 +219,8 @@ SELECT
   ROUND(a.p75_return_pct::numeric, 2) AS p75_return_pct,
   m.matched_row_count,
   m.source_row_count,
-  m.capped_sample
+  m.capped_sample,
+  c.symbols AS contributing_symbols
 FROM metadata m
-CROSS JOIN aggregate_stats a;
+CROSS JOIN aggregate_stats a
+CROSS JOIN contributing_symbols c;

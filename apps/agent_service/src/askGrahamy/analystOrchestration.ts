@@ -1,7 +1,6 @@
 import type {
   AskGrahamyState,
   Classification,
-  ComparisonView,
   FactorBacktestView,
   FeatureScreenView,
   PathRiskView,
@@ -78,6 +77,7 @@ export function mapQuestionType(classification?: Classification): AnalystQuestio
   if (classification.focus === "validated_evidence") {
     return "validated_pipeline_evidence";
   }
+  if (isComparisonClassification(classification)) return "comparison";
   switch (classification.intent) {
     case "stock":
     case "stock_sector":
@@ -89,8 +89,6 @@ export function mapQuestionType(classification?: Classification): AnalystQuestio
       return "sector_analysis";
     case "regime":
       return "regime_analysis";
-    case "comparison":
-      return "comparison";
     case "sector_conviction_leaderboard":
       return "leaderboard";
     case "stock_idea_discovery":
@@ -104,6 +102,21 @@ export function mapQuestionType(classification?: Classification): AnalystQuestio
     default:
       return "unknown";
   }
+}
+
+/**
+ * Comparison-style turns no longer have a dedicated intent — they're
+ * recognised structurally: ≥2 stocks, ≥2 sectors, or a stock/sector mix.
+ * The downstream agent reads the per-anchor research objects and produces
+ * the side-by-side analysis itself.
+ */
+function isComparisonClassification(classification: Classification): boolean {
+  const symbolCount = classification.symbols.length;
+  const sectorCount = classification.sectors.length;
+  if (symbolCount >= 2) return true;
+  if (sectorCount >= 2) return true;
+  if (symbolCount >= 1 && sectorCount >= 1) return true;
+  return false;
 }
 
 export function buildEvidencePack(input: EvidencePackInput): EvidencePack {
@@ -132,7 +145,7 @@ export function buildEvidencePack(input: EvidencePackInput): EvidencePack {
     pgViews,
   );
   const pathRisk = buildPathRiskLayer(questionType, publicResearchObjectViews);
-  const relativeComparison = buildComparisonLayer(questionType, pgViews?.comparisonView);
+  const relativeComparison = buildComparisonLayer(questionType, publicResearchObjectViews);
   const pipelineEvidence = buildPipelineEvidenceLayer(
     questionType,
     pipelineViews?.validatedEdgeEvidenceView,
@@ -289,7 +302,6 @@ function pgViewsFromPublicResearchView(view: PublicResearchView): PgCapabilityVi
     ...(view.factorBacktestView
       ? { factorBacktestView: view.factorBacktestView }
       : {}),
-    ...(view.comparisonView ? { comparisonView: view.comparisonView } : {}),
     ...(view.regimeHistoricalPlaybookView
       ? { regimeHistoricalPlaybookView: view.regimeHistoricalPlaybookView }
       : {}),
@@ -314,11 +326,13 @@ function inferAnchor(
 ): AnalystAnchor | undefined {
   const pipelineAnchor = pipelineViews?.validatedEdgeEvidenceView?.anchor;
   if (pipelineAnchor) return { ...pipelineAnchor };
-  const comparison = pgViews?.comparisonView;
-  if (comparison) {
+  if (classification && isComparisonClassification(classification) && ros.length >= 2) {
     return {
       type: "comparison",
-      label: `${comparison.left.label} vs ${comparison.right.label}`,
+      label: ros
+        .slice(0, 4)
+        .map((ro) => ro.title ?? ro.anchor)
+        .join(" vs "),
     };
   }
   const ro = ros[0];
@@ -514,27 +528,27 @@ function buildPathRiskLayer(
 
 function buildComparisonLayer(
   questionType: AnalystQuestionType,
-  view: ComparisonView | undefined,
+  ros: PublicResearchObjectView[],
 ): EvidenceLayer | undefined {
-  if (!view) return undefined;
-  if (questionType !== "comparison" && questionType !== "stock_opinion") {
-    return undefined;
-  }
+  if (questionType !== "comparison") return undefined;
+  if (ros.length < 2) return undefined;
+  const warnings = ros.flatMap((ro) => ro.warnings).slice(0, 5);
+  const keyData = [
+    `Comparison anchors: ${ros.map((ro) => `${ro.objectType.toUpperCase()} ${ro.anchor}`).join(" vs ")}.`,
+    ...ros.slice(0, 4).map((ro) => {
+      const headline = ro.fiveQuestion.whatMattersNow[0] ?? ro.fiveQuestion.whyNow ?? "research object available";
+      return `${ro.objectType.toUpperCase()} ${ro.anchor}: ${headline}`;
+    }),
+    "Derive the side-by-side analysis directly from the per-anchor research objects (whatMattersNow, probabilisticEvidence, pathRisk, edgeEvidence).",
+  ];
   return layer({
-    state: view.state,
-    keyData: [
-      `Comparison type: ${view.comparisonType}.`,
-      `Left: ${view.left.label}.`,
-      `Right: ${view.right.label}.`,
-      ...view.deltas.slice(0, 5).map((delta) =>
-        `${delta.metric}: ${delta.interpretationBucket}; ${delta.explanation}`,
-      ),
-      ...view.summaryBullets.slice(0, 3),
-    ],
-    interpretation: "Relative comparison evidence is available.",
-    strength: strengthFromState(view.state, view.deltas),
-    warnings: view.warnings,
-    sourceView: "comparisonView",
+    state: "complete",
+    keyData,
+    interpretation:
+      "Multiple research objects are available — use them to perform the comparison side-by-side.",
+    strength: strengthFromState("complete", ros),
+    warnings,
+    sourceView: "publicResearchObjectView",
   });
 }
 
@@ -653,7 +667,6 @@ function inferFreshness(
 ): PublicFreshnessView | undefined {
   const candidates: Array<PublicFreshnessView | undefined> = [
     pipelineViews?.validatedEdgeEvidenceView?.freshness,
-    pgViews?.comparisonView?.freshness,
     pgViews?.featureScreenView?.freshness,
     pgViews?.factorBacktestView?.freshness,
     pgViews?.stockIdeaView?.freshness,
@@ -796,22 +809,6 @@ function detectContradictions(input: {
     }
   }
 
-  const comparison = input.pgViews?.comparisonView;
-  if (comparison) {
-    const quality = comparison.deltas.find((item) => item.metric === "quality");
-    const historical = comparison.deltas.find(
-      (item) => item.metric === "historical_forward",
-    );
-    if (
-      quality?.interpretationBucket === "left_stronger" &&
-      historical?.interpretationBucket === "right_stronger"
-    ) {
-      bullets.push(
-        `${comparison.left.label} is stronger on quality but weaker on historical forward evidence.`,
-      );
-    }
-  }
-
   return [...new Set(bullets)].slice(0, 6);
 }
 
@@ -858,7 +855,9 @@ function detectMissingEvidence(input: {
     input.questionType === "comparison" &&
     (!input.relativeComparison || input.relativeComparison.state === "unavailable")
   ) {
-    bullets.push("Comparison evidence is unavailable.");
+    bullets.push(
+      "Comparison evidence is unavailable — fewer than two research objects were built.",
+    );
   }
   if (
     input.questionType === "factor_backtest" &&

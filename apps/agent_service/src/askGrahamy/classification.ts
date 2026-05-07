@@ -107,43 +107,6 @@ const classifierOutputSchema = z.object({
     })
     .nullable()
     .optional(),
-  comparison: z
-    .discriminatedUnion("comparisonType", [
-      z.object({
-        comparisonType: z.literal("stock_vs_sector"),
-        left: z.object({
-          type: z.literal("stock"),
-          symbol: z.string(),
-        }),
-        right: z.object({
-          type: z.enum(["sector", "implicit_stock_sector"]),
-          sector: z.string().nullable(),
-        }),
-      }),
-      z.object({
-        comparisonType: z.literal("sector_vs_sector"),
-        left: z.object({
-          type: z.literal("sector"),
-          sector: z.string(),
-        }),
-        right: z.object({
-          type: z.literal("sector"),
-          sector: z.string(),
-        }),
-      }),
-      z.object({
-        comparisonType: z.literal("symbol_vs_symbol"),
-        left: z.object({
-          type: z.literal("stock"),
-          symbol: z.string(),
-        }),
-        right: z.object({
-          type: z.literal("stock"),
-          symbol: z.string(),
-        }),
-      }),
-    ])
-    .nullable(),
   confidence: z.enum(["high", "medium", "low"]),
 });
 
@@ -173,7 +136,9 @@ The downstream system can answer when the message is anchored to one or more of:
   • an anchorless bounded stock screen request with user-specified current feature buckets.
   • an anchorless historical factor-combination backtest / forward-profile request.
   • an anchorless current-regime historical playbook request.
-  • a stock-vs-sector, sector-vs-sector, or stock-vs-stock comparison request.
+  • a comparison-style request between two or more stocks/sectors (handled by listing every
+    mentioned entity in symbols / sectors and turning on regimeRequested when relevant —
+    there is no separate "comparison" intent).
   • an anchored risk / path-risk / drawdown / probability-of-loss question.
   • an anchored Pipeline validated-evidence / evidence-backed question.
 
@@ -210,7 +175,7 @@ Without prior context:
 intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
 stock_sector_regime, sector_conviction_leaderboard, sector_momentum_vs_conviction_divergence,
 week_over_week_sector_delta, stock_idea_discovery, market_regime_historical_playbook,
-feature_screen, factor_conditioned_backtest, comparison, follow_up, unknown.
+feature_screen, factor_conditioned_backtest, follow_up, unknown.
 
 Use intent = "sector_conviction_leaderboard" when the user asks for a sector-wide ranking without
 naming a specific sector. Examples:
@@ -318,41 +283,26 @@ leads, underperforms, or matters in the current market regime. This is different
   • "What does a neutral regime usually favor?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
-Use intent = "comparison" for stock-vs-sector, sector-vs-sector, and stock-vs-stock comparison requests. Put
-the anchors in comparison.left/right (NOT in symbols), so the PG comparison capability can
-run without building full Stock Research Objects. For this intent, symbols=[], sectors=[],
-regimeRequested=false is valid.
+Comparison-style requests (stock-vs-stock, stock-vs-sector, sector-vs-sector) do NOT have
+their own intent. Instead, list EVERY entity the user mentioned in symbols / sectors and set
+regimeRequested=true if regime/market context is part of the comparison. The downstream
+system builds one research object per stock/sector and one regime research object, then the
+agent reads those objects and performs the comparison itself — no specialised comparison
+query exists. Apply the natural intent based on which kinds of anchors appear:
+  • two or more stocks, no sector mentioned → intent="stock"
+  • stock + sector → intent="stock_sector"
+  • stock + sector + regime context → intent="stock_sector_regime"
+  • two sectors → intent="sector"
+  • two sectors + regime context → intent="sector_regime"
 
-Supported stock-vs-sector examples:
-  • "Compare GSL to its sector"
-  • "How does GSL look versus Financial Services?"
-  • "Is GSL better than its sector?"
-  • "Compare GSL with its industry/sector"
-For implicit-sector wording ("its sector", "its industry", "the sector"):
-  comparison={ comparisonType:"stock_vs_sector", left:{type:"stock", symbol:"GSL"},
-    right:{type:"implicit_stock_sector", sector:null} }
-For explicit-sector wording:
-  comparison={ comparisonType:"stock_vs_sector", left:{type:"stock", symbol:"GSL"},
-    right:{type:"sector", sector:"Financial Services"} }   (use the best canonical sector label)
-
-Supported sector-vs-sector examples:
-  • "Compare Technology vs Industrials"
-  • "Which sector looks better, Energy or Industrials?"
-  • "Is Healthcare stronger than Financial Services?"
-  • "Compare Consumer Defensive with Consumer Cyclical"
-Use exact canonical labels when possible:
-  comparison={ comparisonType:"sector_vs_sector", left:{type:"sector", sector:"Technology"},
-    right:{type:"sector", sector:"Industrials"} }
-
-Supported stock-vs-stock examples:
-  • "Compare GSL vs DAC"
-  • "Which is stronger, AMZN or NVDA?"
-  • "Is AMZN better than NVDA?"
-  • "Compare AAPL and MSFT"
-Use ticker symbols only when you can resolve them confidently:
-  comparison={ comparisonType:"symbol_vs_symbol", left:{type:"stock", symbol:"GSL"},
-    right:{type:"stock", symbol:"DAC"} }
-For every non-comparison message, set comparison=null.
+Examples:
+  • "Compare AMZN and NVDA"                              → symbols=["AMZN","NVDA"], sectors=[], regimeRequested=false, intent="stock"
+  • "Compare AMZN and NVDA in the context of the market regime and the tech sector"
+                                                         → symbols=["AMZN","NVDA"], sectors=["Technology"], regimeRequested=true, intent="stock_sector_regime"
+  • "Compare GSL to its sector"                          → symbols=["GSL"], sectors=[], regimeRequested=false, intent="stock"  (the implicit "its sector" stays implicit; downstream resolves it from the stock research object)
+  • "How does GSL look versus Financial Services?"        → symbols=["GSL"], sectors=["Financial Services"], regimeRequested=false, intent="stock_sector"
+  • "Compare Technology vs Industrials"                   → symbols=[], sectors=["Technology","Industrials"], regimeRequested=false, intent="sector"
+  • "Which is stronger, AMZN or NVDA, given the regime?"  → symbols=["AMZN","NVDA"], sectors=[], regimeRequested=true, intent="stock_regime"
 
 Set focus="risk" only when the user is specifically asking about risk, downside risk, path
 risk, temporary drawdown, "how bad can it fall along the way", or probability of losing more
@@ -521,15 +471,18 @@ export async function classifyMessage(
       typeof previousContext?.lastIntent === "string" &&
       previousContext.lastIntent.includes("regime");
   }
-  const comparison =
-    normalizeComparison(raw.comparison) ??
-    // Sector inference runs first because "Compare FAKE123 to its sector"
-    // is a supported stock-vs-sector shape even when the stock is not found
-    // later in PG. Symbol-vs-symbol inference runs after sector comparisons
-    // so canonical sector names do not get treated as ticker tokens.
-    inferStockVsSectorComparisonFromMessage(message) ??
-    inferSectorVsSectorComparisonFromMessage(message) ??
-    inferSymbolVsSymbolComparisonFromMessage(message);
+  const inferredComparisonAnchors = inferComparisonAnchorsFromMessage(message);
+  if (inferredComparisonAnchors) {
+    for (const inferredSymbol of inferredComparisonAnchors.symbols) {
+      if (!symbols.includes(inferredSymbol)) symbols.push(inferredSymbol);
+    }
+    for (const inferredSector of inferredComparisonAnchors.sectors) {
+      if (!sectors.includes(inferredSector)) sectors.push(inferredSector);
+    }
+    if (inferredComparisonAnchors.regimeRequested) regimeRequested = true;
+    symbols = symbols.slice(0, 5);
+    sectors = sectors.slice(0, 5);
+  }
   const inferredAnchorlessCapability = inferAnchorlessCapabilityFromMessage(
     message,
     previousContext,
@@ -551,54 +504,45 @@ export async function classifyMessage(
   const hasRiskAnchor = focus === "risk" && (symbols.length > 0 || sectors.length > 0 || regimeRequested);
   const hasValidatedEvidenceAnchor =
     focus === "validated_evidence" &&
-    (symbols.length > 0 || sectors.length > 0 || regimeRequested || !!comparison);
+    (symbols.length > 0 || sectors.length > 0 || regimeRequested);
   // Trust the LLM's "unknown" verdict; otherwise re-derive intent from the
   // resolved (symbols, sectors, regime) tuple so requiresTools and intent
   // stay consistent even if the model returned a mismatched label.
-  const intent: Intent =
-    factorBacktest && !comparison
-      ? "factor_conditioned_backtest"
-      : featureCriteria.length && !comparison
+  const intent: Intent = factorBacktest
+    ? "factor_conditioned_backtest"
+    : featureCriteria.length
       ? "feature_screen"
-      : inferredAnchorlessCapability && !comparison
-      ? inferredAnchorlessCapability
-      : focus === "risk" && !hasRiskAnchor && !comparison
-      ? "unknown"
-      : focus === "validated_evidence" && !hasValidatedEvidenceAnchor
-      ? "unknown"
-      : hasRiskAnchor && !comparison
-        ? inferred
-        : hasValidatedEvidenceAnchor && !comparison
-          ? inferred
-        : raw.intent === "unknown" && comparison
-          ? "comparison"
-          : raw.intent === "unknown"
+      : inferredAnchorlessCapability
+        ? inferredAnchorlessCapability
+        : focus === "risk" && !hasRiskAnchor
+          ? "unknown"
+          : focus === "validated_evidence" && !hasValidatedEvidenceAnchor
             ? "unknown"
-            : raw.intent === "comparison" && comparison
-              ? "comparison"
-              : raw.intent === "comparison"
-                ? "unknown"
-                : isAnchorlessCapabilityIntent(raw.intent)
-                  ? raw.intent
-                  : inferredAnchorlessCapability ?? inferred;
+            : hasRiskAnchor
+              ? inferred
+              : hasValidatedEvidenceAnchor
+                ? inferred
+                : raw.intent === "unknown"
+                  ? "unknown"
+                  : isAnchorlessCapabilityIntent(raw.intent)
+                    ? raw.intent
+                    : inferredAnchorlessCapability ?? inferred;
   const includeFocus =
     (focus === "risk" || focus === "validated_evidence") &&
     intent !== "unknown" &&
-    !isAnchorlessCapabilityIntent(intent) &&
-    (focus === "validated_evidence" || intent !== "comparison");
+    !isAnchorlessCapabilityIntent(intent);
 
   return {
     intent,
-    symbols: intent === "comparison" ? [] : symbols,
-    sectors: intent === "comparison" ? [] : sectors,
-    regimeRequested: intent === "comparison" ? false : regimeRequested,
+    symbols,
+    sectors,
+    regimeRequested,
     isFollowUp: raw.isFollowUp,
     ...(includeFocus ? { focus } : {}),
     ...(intent === "feature_screen" ? { featureCriteria } : {}),
     ...(intent === "factor_conditioned_backtest" && factorBacktest
       ? { factorBacktest }
       : {}),
-    ...(intent === "comparison" && comparison ? { comparison } : {}),
     requiresTools: toolsForIntent(intent),
     confidence: raw.confidence,
     warnings:
@@ -672,7 +616,6 @@ export function toolsForIntent(intent: Intent): ToolName[] {
     case "feature_screen":
     case "factor_conditioned_backtest":
     case "market_regime_historical_playbook":
-    case "comparison":
       return ["get_market_context"];
     case "stock_sector":
     case "stock_sector_regime":
@@ -1074,153 +1017,56 @@ function uniqueFactorBacktestCriteria(
   return out.slice(0, 6);
 }
 
-function normalizeComparison(
-  comparison: ClassifierOutput["comparison"],
-): import("./types").ComparisonClassification | undefined {
-  if (!comparison) return undefined;
+type InferredComparisonAnchors = {
+  symbols: string[];
+  sectors: string[];
+  regimeRequested: boolean;
+};
 
-  if (comparison.comparisonType === "sector_vs_sector") {
-    return {
-      comparisonType: "sector_vs_sector",
-      left: {
-        type: "sector",
-        sector: comparison.left.sector.trim(),
-      },
-      right: {
-        type: "sector",
-        sector: comparison.right.sector.trim(),
-      },
-    };
-  }
-
-  if (comparison.comparisonType === "symbol_vs_symbol") {
-    const leftSymbol = comparison.left.symbol.trim().toUpperCase();
-    const rightSymbol = comparison.right.symbol.trim().toUpperCase();
-    if (!leftSymbol || !rightSymbol || leftSymbol.length > 10 || rightSymbol.length > 10) {
-      return undefined;
-    }
-    if (leftSymbol === rightSymbol) {
-      return undefined;
-    }
-    return {
-      comparisonType: "symbol_vs_symbol",
-      left: { type: "stock", symbol: leftSymbol },
-      right: { type: "stock", symbol: rightSymbol },
-    };
-  }
-
-  if (comparison.comparisonType !== "stock_vs_sector") return undefined;
-  const symbol = comparison.left.symbol.trim().toUpperCase();
-  if (!symbol || symbol.length > 10) return undefined;
-  if (comparison.right.type === "implicit_stock_sector") {
-    return {
-      comparisonType: "stock_vs_sector",
-      left: { type: "stock", symbol },
-      right: { type: "implicit_stock_sector" },
-    };
-  }
-  const sector = comparison.right.sector?.trim();
-  return {
-    comparisonType: "stock_vs_sector",
-    left: { type: "stock", symbol },
-    right: {
-      type: "sector",
-      ...(sector ? { sector } : {}),
-    },
-  };
-}
-
-function inferStockVsSectorComparisonFromMessage(
+/**
+ * Backstop for comparison-style messages — extracts ALL named entities and
+ * any market/regime context. Runs after the LLM classifier so it only adds
+ * anchors the LLM may have missed (or, for the deterministic fallback, fills
+ * them in entirely). Returns undefined when the message doesn't look like a
+ * comparison, so we don't widen anchors on plain "stock X" turns.
+ */
+function inferComparisonAnchorsFromMessage(
   message: string,
-): import("./types").ComparisonClassification | undefined {
-  const stockMatch = message.match(/\b(?:compare|how\s+does|is)\s+([A-Za-z][A-Za-z0-9.]{0,9})\b/i);
-  const symbol = stockMatch?.[1]?.trim();
-  if (!symbol || !looksLikeTickerAnchor(symbol)) return undefined;
+): InferredComparisonAnchors | undefined {
+  const hasComparisonCue = /\b(compare|versus|vs\.?|stronger|better|weaker|worse|or)\b/i.test(message)
+    || /\b(?:its|the)\s+(?:sector|industry)\b/i.test(message)
+    || /\bindustry\/sector\b/i.test(message);
+  if (!hasComparisonCue) return undefined;
 
-  if (
-    /\b(?:its|the)\s+(?:sector|industry)\b/i.test(message) ||
-    /\bindustry\/sector\b/i.test(message)
-  ) {
-    return {
-      comparisonType: "stock_vs_sector",
-      left: { type: "stock", symbol: symbol.toUpperCase() },
-      right: { type: "implicit_stock_sector" },
-    };
-  }
-
-  const targetMatch = message.match(/\b(?:versus|against|than|to)\s+(.+?)(?:[?.!]|$)/i);
-  const rawTarget = targetMatch?.[1]?.trim().replace(/^the\s+/i, "");
-  if (!rawTarget) return undefined;
-
-  const canonicalSector = canonicalSectorLabel(rawTarget);
-  if (canonicalSector || /\bsector\b/i.test(rawTarget)) {
-    return {
-      comparisonType: "stock_vs_sector",
-      left: { type: "stock", symbol: symbol.toUpperCase() },
-      right: { type: "sector", sector: canonicalSector ?? rawTarget },
-    };
-  }
-
-  return undefined;
-}
-
-function inferSectorVsSectorComparisonFromMessage(
-  message: string,
-): import("./types").ComparisonClassification | undefined {
-  if (!/\b(compare|versus|vs\.?|stronger|better|weaker|worse)\b/i.test(message)) {
-    return undefined;
-  }
-
-  const sectors = findSectorMentions(message);
-  if (sectors.length >= 2) {
-    return {
-      comparisonType: "sector_vs_sector",
-      left: { type: "sector", sector: sectors[0].label },
-      right: { type: "sector", sector: sectors[1].label },
-    };
-  }
-
-  const compareMatch = message.match(
-    /\bcompare\s+(.+?)\s+(?:vs\.?|versus|against|with|to|and)\s+(.+?)(?:[?.!]|$)/i,
-  );
-  if (compareMatch) {
-    const left = compareMatch[1]?.trim().replace(/^the\s+/i, "");
-    const right = compareMatch[2]?.trim().replace(/^the\s+/i, "");
-    if (left && right && (mentionsSectorWord(left) || mentionsSectorWord(right))) {
-      return {
-        comparisonType: "sector_vs_sector",
-        left: { type: "sector", sector: canonicalSectorLabel(left) ?? left },
-        right: { type: "sector", sector: canonicalSectorLabel(right) ?? right },
-      };
-    }
-  }
-
-  return undefined;
-}
-
-function inferSymbolVsSymbolComparisonFromMessage(
-  message: string,
-): import("./types").ComparisonClassification | undefined {
-  if (!/\b(compare|versus|vs\.?|stronger|better|weaker|worse)\b/i.test(message)) {
-    return undefined;
-  }
-  const tokens = extractTickerLikeTokens(message).filter(
+  const sectorMentions = findSectorMentions(message).map((m) => m.label);
+  const tickerTokens = extractTickerLikeTokens(message).filter(
     (token) => !canonicalSectorLabel(token),
   );
-  if (tokens.length !== 2) return undefined;
-  const [left, right] = tokens;
-  if (!left || !right || left === right) {
-    return {
-      comparisonType: "symbol_vs_symbol",
-      left: { type: "stock", symbol: left ?? "UNKNOWN" },
-      right: { type: "stock", symbol: right ?? left ?? "UNKNOWN" },
-    };
+  const regimeRequested = mentionsRegime(message);
+
+  // Only treat as a comparison candidate when the user clearly named ≥2
+  // entities of any kind (2+ stocks, 2+ sectors, or a stock+sector pair).
+  const totalAnchors = sectorMentions.length + tickerTokens.length;
+  const hasStockSectorPair =
+    tickerTokens.length >= 1 &&
+    (sectorMentions.length >= 1 ||
+      /\b(?:its|the)\s+(?:sector|industry)\b/i.test(message) ||
+      /\bindustry\/sector\b/i.test(message));
+  if (totalAnchors < 2 && !hasStockSectorPair && !regimeRequested) {
+    return undefined;
   }
+
   return {
-    comparisonType: "symbol_vs_symbol",
-    left: { type: "stock", symbol: left },
-    right: { type: "stock", symbol: right },
+    symbols: tickerTokens,
+    sectors: sectorMentions,
+    regimeRequested,
   };
+}
+
+function mentionsRegime(message: string): boolean {
+  return /\b(?:market\s+regime|regime|macro|market\s+context|market\s+backdrop|the\s+market)\b/i.test(
+    message,
+  );
 }
 
 function extractTickerLikeTokens(message: string): string[] {
@@ -1235,14 +1081,23 @@ function extractTickerLikeTokens(message: string): string[] {
     "VERSUS",
     "WITH",
     "AND",
+    "OR",
     "LOOKS",
     "SECTOR",
+    "MARKET",
+    "REGIME",
+    "THE",
+    "ITS",
+    "IS",
   ]);
   const matches = message.match(/\b[A-Z][A-Z0-9.]{0,9}\b/g) ?? [];
-  return matches
-    .map((token) => token.trim().toUpperCase())
-    .filter((token) => token.length > 0 && !ignored.has(token))
-    .slice(0, 3);
+  return Array.from(
+    new Set(
+      matches
+        .map((token) => token.trim().toUpperCase())
+        .filter((token) => token.length > 0 && !ignored.has(token)),
+    ),
+  ).slice(0, 5);
 }
 
 function findSectorMentions(message: string): Array<{ label: string; index: number }> {
@@ -1253,17 +1108,6 @@ function findSectorMentions(message: string): Array<{ label: string; index: numb
     if (match?.index != null) mentions.push({ label: sector, index: match.index });
   }
   return mentions.sort((a, b) => a.index - b.index);
-}
-
-function mentionsSectorWord(value: string): boolean {
-  return /\bsector\b/i.test(value);
-}
-
-function looksLikeTickerAnchor(value: string): boolean {
-  const token = value.trim();
-  if (!/^[A-Za-z][A-Za-z0-9.]{0,9}$/.test(token)) return false;
-  if (token === token.toUpperCase()) return true;
-  return token.length <= 5;
 }
 
 function canonicalSectorLabel(value: string): string | undefined {

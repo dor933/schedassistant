@@ -124,7 +124,6 @@ function inferAnswerType(
   if (classification.intent === "stock_idea_discovery") return "stock";
   if (classification.intent === "feature_screen") return "stock";
   if (classification.intent === "factor_conditioned_backtest") return "stock";
-  if (classification.intent === "comparison") return "mixed";
   if (classification.intent === "market_regime_historical_playbook") return "regime";
   const stock = classification.symbols.length > 0;
   const sector = classification.sectors.length > 0;

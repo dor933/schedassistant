@@ -61,7 +61,6 @@ export function compilePublicResearchView(input: {
     ...(input.pgCapabilityViews?.factorBacktestView
       ? ["factorBacktestView"]
       : []),
-    ...(input.pgCapabilityViews?.comparisonView ? ["comparisonView"] : []),
     ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
       ? ["regimeHistoricalPlaybookView"]
       : []),
@@ -107,9 +106,6 @@ export function compilePublicResearchView(input: {
       : {}),
     ...(input.pgCapabilityViews?.factorBacktestView
       ? { factorBacktestView: input.pgCapabilityViews.factorBacktestView }
-      : {}),
-    ...(input.pgCapabilityViews?.comparisonView
-      ? { comparisonView: input.pgCapabilityViews.comparisonView }
       : {}),
     ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
       ? {
@@ -186,15 +182,6 @@ export function compilePublicResearchView(input: {
               input.pgCapabilityViews.factorBacktestView.horizon,
           }
         : {}),
-      ...(input.pgCapabilityViews?.comparisonView
-        ? {
-            comparisonState: input.pgCapabilityViews.comparisonView.state,
-            comparisonType:
-              input.pgCapabilityViews.comparisonView.comparisonType,
-            comparisonDeltas:
-              input.pgCapabilityViews.comparisonView.deltas.length,
-          }
-        : {}),
       ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
         ? {
             regimeHistoricalPlaybookState:
@@ -236,7 +223,6 @@ function inferObjectType(classification: Classification): PublicResearchView["ob
   if (classification.intent === "stock_idea_discovery") return "stock";
   if (classification.intent === "feature_screen") return "stock";
   if (classification.intent === "factor_conditioned_backtest") return "stock";
-  if (classification.intent === "comparison") return "mixed";
   if (classification.intent === "market_regime_historical_playbook") return "regime";
   const hasStock = classification.symbols.length > 0;
   const hasSector = classification.sectors.length > 0;

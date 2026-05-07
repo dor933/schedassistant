@@ -6,6 +6,10 @@ import type {
   FactorBacktestHorizon,
   FactorBacktestView,
 } from "../types";
+import {
+  buildResearchObjectCacheKey,
+  buildResearchObjectsForAnchors,
+} from "../researchObjectBuilder";
 import { assessCapabilityFreshness } from "./freshnessGuard";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
@@ -15,7 +19,7 @@ import type {
   PgCapabilityRunResult,
 } from "./types";
 
-const VIEW_SCHEMA_VERSION = 1;
+const VIEW_SCHEMA_VERSION = 2;
 const DEFAULT_HORIZON: FactorBacktestHorizon = "60-day";
 const MAX_SAMPLE_SIZE = 250000;
 const THIN_SAMPLE_THRESHOLD = 30;
@@ -103,17 +107,36 @@ export async function buildFactorConditionedBacktestView(
       MAX_SAMPLE_SIZE: maxSampleSize,
       ...criteriaToParams(backtest.criteria),
     });
+    const draft = rowsToView(
+      rows,
+      backtest.criteria,
+      horizon,
+      publicNotesForInput(backtest, input.message),
+      options.now,
+    );
+    if (draft.state === "unavailable" || !draft.contributingResearchObjectKeys.length) {
+      return {
+        views: {
+          factorBacktestView: draft,
+        },
+        warnings: [],
+      };
+    }
+    const fanout = await fanOutContributingResearchObjects(input, draft, rows[0]);
     return {
       views: {
-        factorBacktestView: rowsToView(
-          rows,
-          backtest.criteria,
-          horizon,
-          publicNotesForInput(backtest, input.message),
-          options.now,
-        ),
+        factorBacktestView: fanout.view,
       },
-      warnings: [],
+      warnings: fanout.warnings,
+      ...(fanout.researchObjects.length
+        ? { researchObjects: fanout.researchObjects }
+        : {}),
+      ...(fanout.researchObjectsUpdated.length
+        ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
+        : {}),
+      ...(fanout.stats
+        ? { researchObjectCacheStats: fanout.stats }
+        : {}),
     };
   } catch (err) {
     const message = "Factor-conditioned backtest query failed.";
@@ -154,6 +177,7 @@ function rowsToView(
 
   const row = rows[0];
   const asOfDate = dateStringValue(row.as_of_date);
+  const contributingSymbols = symbolListValue(row.contributing_symbols);
   const freshnessAssessment = buildFreshness(row, asOfDate, now);
   const freshness = freshnessAssessment.publicFreshness;
   if (freshnessAssessment.decision === "unavailable") {
@@ -217,8 +241,60 @@ function rowsToView(
       p75ReturnPct: roundNumber(row.p75_return_pct, 2),
     }),
     sampleAdequacy,
+    contributingResearchObjectKeys: contributingSymbols.map((symbol) =>
+      buildResearchObjectCacheKey(
+        "STOCK",
+        symbol,
+        asOfDate ?? new Date().toISOString().slice(0, 10),
+      ),
+    ),
     freshness,
     warnings,
+  };
+}
+
+async function fanOutContributingResearchObjects(
+  input: PgCapabilityRunInput,
+  draft: FactorBacktestView,
+  row: FactorBacktestRow | undefined,
+): Promise<{
+  view: FactorBacktestView;
+  researchObjects: import("../types").CachedResearchObject[];
+  researchObjectsUpdated: import("../types").CachedResearchObject[];
+  stats: { hits: number; misses: number; writes: number } | undefined;
+  warnings: string[];
+}> {
+  const symbols = symbolListValue(row?.contributing_symbols);
+  const builder = input.researchObjectBuilder ?? buildResearchObjectsForAnchors;
+  const result = await builder({
+    symbols,
+    snapshots: input.snapshots,
+    toolOutputs: input.toolOutputs,
+    priorResearchObjects: input.priorResearchObjects,
+  });
+  const keyBySymbol = new Map<string, string>();
+  for (const obj of result.objects) {
+    if (obj.objectType === "stock") {
+      keyBySymbol.set(obj.anchor.toUpperCase(), obj.cacheKey);
+    }
+  }
+  const contributingResearchObjectKeys = symbols
+    .map((symbol, index) => {
+      const fallback = draft.contributingResearchObjectKeys[index];
+      return keyBySymbol.get(symbol.toUpperCase()) ?? fallback;
+    })
+    .filter((key): key is string => Boolean(key));
+  return {
+    view: {
+      ...draft,
+      contributingResearchObjectKeys: Array.from(
+        new Set(contributingResearchObjectKeys),
+      ),
+    },
+    researchObjects: result.objects,
+    researchObjectsUpdated: result.objectsUpdated,
+    stats: result.stats,
+    warnings: result.warnings,
   };
 }
 
@@ -256,6 +332,7 @@ function unavailableView(
     source: "pg_factor_history",
     horizon,
     criteria,
+    contributingResearchObjectKeys: [],
     freshness,
     warnings,
   };
@@ -372,6 +449,28 @@ function boolValue(value: unknown): boolean {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") return value.toLowerCase() === "true";
   return value === 1;
+}
+
+function symbolListValue(value: unknown): string[] {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value
+          .replace(/^\{|\}$/g, "")
+          .split(",")
+      : [];
+  const seen = new Set<string>();
+  const symbols: string[] = [];
+  for (const item of rawItems) {
+    const symbol = String(item ?? "")
+      .replace(/^"|"$/g, "")
+      .trim()
+      .toUpperCase();
+    if (!symbol || seen.has(symbol)) continue;
+    seen.add(symbol);
+    symbols.push(symbol);
+  }
+  return symbols.slice(0, 10);
 }
 
 function dateStringValue(value: unknown): string | undefined {

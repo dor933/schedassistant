@@ -1,6 +1,10 @@
 import { logger } from "../../logger";
 import { numberValue, stringValue } from "../snapshotClient";
 import type { SectorLeaderboardRowView, SectorLeaderboardView } from "../types";
+import {
+  buildResearchObjectCacheKey,
+  buildResearchObjectsForAnchors,
+} from "../researchObjectBuilder";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
   CapabilityFreshness,
@@ -10,7 +14,7 @@ import type {
 } from "./types";
 import { assessCapabilityFreshness } from "./freshnessGuard";
 
-const VIEW_SCHEMA_VERSION = 1;
+const VIEW_SCHEMA_VERSION = 2;
 const DEFAULT_MAX_ROWS = 10;
 const MAX_ROWS_CAP = 20;
 
@@ -56,8 +60,24 @@ export async function buildSectorConvictionLeaderboardView(
       MAX_ROWS: maxRows,
       RANK_BY: rankingBasis,
     });
-    const view = rowsToView(rows, rankingBasis, options.now);
-    return { views: { sectorLeaderboardView: view }, warnings: [] };
+    const draft = rowsToView(rows, rankingBasis, options.now);
+    if (draft.state === "unavailable") {
+      return { views: { sectorLeaderboardView: draft }, warnings: [] };
+    }
+    const fanout = await fanOutSectorResearchObjects(input, draft);
+    return {
+      views: { sectorLeaderboardView: fanout.view },
+      warnings: fanout.warnings,
+      ...(fanout.researchObjects.length
+        ? { researchObjects: fanout.researchObjects }
+        : {}),
+      ...(fanout.researchObjectsUpdated.length
+        ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
+        : {}),
+      ...(fanout.stats
+        ? { researchObjectCacheStats: fanout.stats }
+        : {}),
+    };
   } catch (err) {
     const message = "Sector conviction leaderboard query failed.";
     logger.warn("Ask Grahamy PG capability failed", {
@@ -94,8 +114,9 @@ function rowsToView(
   }
 
   const first = rows[0];
+  const asOfDate = dateStringValue(first.as_of_date);
   const publicRows = rows
-    .map(rowToPublicRow)
+    .map((row) => rowToPublicRow(row, asOfDate))
     .filter((row): row is SectorLeaderboardRowView => !!row);
   if (!publicRows.length) {
     return unavailableView(rankingBasis, [
@@ -103,7 +124,6 @@ function rowsToView(
     ]);
   }
   const overlayAvailable = rows.some((row) => boolValue(row.overlay_available));
-  const asOfDate = dateStringValue(first.as_of_date);
   const warnings: string[] = [];
   if (!overlayAvailable) {
     warnings.push(
@@ -129,6 +149,10 @@ function rowsToView(
     warnings.push(freshness.warning);
   }
 
+  const researchObjectKeys = Array.from(
+    new Set(publicRows.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+
   return {
     viewSchemaVersion: VIEW_SCHEMA_VERSION,
     state: overlayAvailable ? "complete" : "partial",
@@ -137,13 +161,56 @@ function rowsToView(
     rankingBasis,
     asOfDate,
     rows: publicRows,
+    researchObjectKeys,
     freshness,
     warnings,
   };
 }
 
+async function fanOutSectorResearchObjects(
+  input: PgCapabilityRunInput,
+  draft: SectorLeaderboardView,
+): Promise<{
+  view: SectorLeaderboardView;
+  researchObjects: import("../types").CachedResearchObject[];
+  researchObjectsUpdated: import("../types").CachedResearchObject[];
+  stats: { hits: number; misses: number; writes: number } | undefined;
+  warnings: string[];
+}> {
+  const sectors = draft.rows.map((row) => row.sector);
+  const builder = input.researchObjectBuilder ?? buildResearchObjectsForAnchors;
+  const result = await builder({
+    sectors,
+    snapshots: input.snapshots,
+    toolOutputs: input.toolOutputs,
+    priorResearchObjects: input.priorResearchObjects,
+  });
+  const keyBySector = new Map<string, string>();
+  for (const obj of result.objects) {
+    if (obj.objectType === "sector") {
+      keyBySector.set(obj.anchor.toUpperCase(), obj.cacheKey);
+    }
+  }
+  const rowsWithKeys = draft.rows.map((row) => ({
+    ...row,
+    researchObjectKey:
+      keyBySector.get(row.sector.toUpperCase()) ?? row.researchObjectKey,
+  }));
+  const researchObjectKeys = Array.from(
+    new Set(rowsWithKeys.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+  return {
+    view: { ...draft, rows: rowsWithKeys, researchObjectKeys },
+    researchObjects: result.objects,
+    researchObjectsUpdated: result.objectsUpdated,
+    stats: result.stats,
+    warnings: result.warnings,
+  };
+}
+
 function rowToPublicRow(
   row: SectorConvictionLeaderboardRow,
+  asOfDate: string | undefined,
 ): SectorLeaderboardRowView | null {
   const sector = stringValue(row.sector);
   const rank = integerValue(row.rank);
@@ -159,6 +226,11 @@ function rowToPublicRow(
     momentumBucket: stringValue(row.momentum_bucket),
     priceMomentumSeparation: stringValue(row.price_momentum_separation),
     defensiveCyclicalLabel: stringValue(row.defensive_cyclical_label),
+    researchObjectKey: buildResearchObjectCacheKey(
+      "SECTOR",
+      sector,
+      asOfDate ?? new Date().toISOString().slice(0, 10),
+    ),
   });
 }
 
@@ -203,6 +275,7 @@ function unavailableView(
     period: "latest",
     rankingBasis,
     rows: [],
+    researchObjectKeys: [],
     freshness,
     warnings,
   };

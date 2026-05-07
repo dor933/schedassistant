@@ -1,6 +1,10 @@
 import { logger } from "../../logger";
 import { numberValue, stringValue } from "../snapshotClient";
 import type { SectorDivergenceRowView, SectorDivergenceView } from "../types";
+import {
+  buildResearchObjectCacheKey,
+  buildResearchObjectsForAnchors,
+} from "../researchObjectBuilder";
 import { assessCapabilityFreshness } from "./freshnessGuard";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
@@ -10,7 +14,7 @@ import type {
   SectorDivergenceRow,
 } from "./types";
 
-const VIEW_SCHEMA_VERSION = 1;
+const VIEW_SCHEMA_VERSION = 2;
 const DEFAULT_MAX_ROWS = 10;
 const MAX_ROWS_CAP = 20;
 const CLEAR_DIVERGENCE_TYPE = "conviction_but_weak_price_action";
@@ -37,7 +41,7 @@ export function sectorDivergenceCacheKeyParams(
 }
 
 export async function buildSectorDivergenceView(
-  _input: PgCapabilityRunInput,
+  input: PgCapabilityRunInput,
   options: SectorDivergenceOptions = {},
 ): Promise<PgCapabilityRunResult> {
   const maxRows = clampMaxRows(options.maxRows ?? DEFAULT_MAX_ROWS);
@@ -57,8 +61,24 @@ export async function buildSectorDivergenceView(
     const rows = await (options.queryRunner ?? defaultQueryRunner)({
       MAX_ROWS: maxRows,
     });
-    const view = rowsToView(rows, options.now);
-    return { views: { sectorDivergenceView: view }, warnings: [] };
+    const draft = rowsToView(rows, options.now);
+    if (draft.state === "unavailable" || !draft.rows.length) {
+      return { views: { sectorDivergenceView: draft }, warnings: [] };
+    }
+    const fanout = await fanOutSectorResearchObjects(input, draft);
+    return {
+      views: { sectorDivergenceView: fanout.view },
+      warnings: fanout.warnings,
+      ...(fanout.researchObjects.length
+        ? { researchObjects: fanout.researchObjects }
+        : {}),
+      ...(fanout.researchObjectsUpdated.length
+        ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
+        : {}),
+      ...(fanout.stats
+        ? { researchObjectCacheStats: fanout.stats }
+        : {}),
+    };
   } catch (err) {
     const message = "Sector momentum/conviction divergence query failed.";
     logger.warn("Ask Grahamy PG capability failed", {
@@ -72,6 +92,47 @@ export async function buildSectorDivergenceView(
       warnings: [message],
     };
   }
+}
+
+async function fanOutSectorResearchObjects(
+  input: PgCapabilityRunInput,
+  draft: SectorDivergenceView,
+): Promise<{
+  view: SectorDivergenceView;
+  researchObjects: import("../types").CachedResearchObject[];
+  researchObjectsUpdated: import("../types").CachedResearchObject[];
+  stats: { hits: number; misses: number; writes: number } | undefined;
+  warnings: string[];
+}> {
+  const sectors = draft.rows.map((row) => row.sector);
+  const builder = input.researchObjectBuilder ?? buildResearchObjectsForAnchors;
+  const result = await builder({
+    sectors,
+    snapshots: input.snapshots,
+    toolOutputs: input.toolOutputs,
+    priorResearchObjects: input.priorResearchObjects,
+  });
+  const keyBySector = new Map<string, string>();
+  for (const obj of result.objects) {
+    if (obj.objectType === "sector") {
+      keyBySector.set(obj.anchor.toUpperCase(), obj.cacheKey);
+    }
+  }
+  const rowsWithKeys = draft.rows.map((row) => ({
+    ...row,
+    researchObjectKey:
+      keyBySector.get(row.sector.toUpperCase()) ?? row.researchObjectKey,
+  }));
+  const researchObjectKeys = Array.from(
+    new Set(rowsWithKeys.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+  return {
+    view: { ...draft, rows: rowsWithKeys, researchObjectKeys },
+    researchObjects: result.objects,
+    researchObjectsUpdated: result.objectsUpdated,
+    stats: result.stats,
+    warnings: result.warnings,
+  };
 }
 
 function defaultQueryRunner(
@@ -94,14 +155,14 @@ function rowsToView(
   }
 
   const first = rows[0];
+  const asOfDate = dateStringValue(first.as_of_date);
   const publicRows = rows
-    .map(rowToPublicRow)
+    .map((row) => rowToPublicRow(row, asOfDate))
     .filter((row): row is SectorDivergenceRowView => {
       return !!row && row.divergenceType === CLEAR_DIVERGENCE_TYPE;
     });
 
   const overlayAvailable = rows.some((row) => boolValue(row.overlay_available));
-  const asOfDate = dateStringValue(first.as_of_date);
   const evaluatedSectorCount =
     integerValue(first.evaluated_sector_count) ?? rows.length;
   const clearDivergenceCount =
@@ -132,6 +193,9 @@ function rowsToView(
   if (!publicRows.length) {
     warnings.unshift(NO_CLEAR_DIVERGENCE_WARNING);
   }
+  const researchObjectKeys = Array.from(
+    new Set(publicRows.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
 
   return {
     viewSchemaVersion: VIEW_SCHEMA_VERSION,
@@ -142,12 +206,16 @@ function rowsToView(
     evaluatedSectorCount,
     clearDivergenceCount,
     rows: publicRows,
+    researchObjectKeys,
     freshness,
     warnings,
   };
 }
 
-function rowToPublicRow(row: SectorDivergenceRow): SectorDivergenceRowView | null {
+function rowToPublicRow(
+  row: SectorDivergenceRow,
+  asOfDate: string | undefined,
+): SectorDivergenceRowView | null {
   const sector = stringValue(row.sector);
   const rank = integerValue(row.rank);
   if (!sector || rank == null) return null;
@@ -168,11 +236,16 @@ function rowToPublicRow(row: SectorDivergenceRow): SectorDivergenceRowView | nul
   return {
     ...publicRow,
     interpretationBullets: buildInterpretationBullets(publicRow),
+    researchObjectKey: buildResearchObjectCacheKey(
+      "SECTOR",
+      sector,
+      asOfDate ?? new Date().toISOString().slice(0, 10),
+    ),
   };
 }
 
 function buildInterpretationBullets(
-  row: Omit<SectorDivergenceRowView, "interpretationBullets">,
+  row: Omit<SectorDivergenceRowView, "interpretationBullets" | "researchObjectKey">,
 ): string[] {
   const bullets: string[] = [];
   if (row.convictionBucket) {
@@ -242,6 +315,7 @@ function unavailableView(
     evaluatedSectorCount: 0,
     clearDivergenceCount: 0,
     rows: [],
+    researchObjectKeys: [],
     freshness,
     warnings,
   };

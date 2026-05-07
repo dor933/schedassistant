@@ -1,4 +1,5 @@
-import type { Classification, Intent } from "../types";
+import type { CachedResearchObject, Classification, Intent } from "../types";
+import { buildResearchObjectsForAnchors } from "../researchObjectBuilder";
 import {
   buildFactorConditionedBacktestView,
   factorConditionedBacktestCacheKeyParams,
@@ -24,24 +25,9 @@ import {
   sectorDivergenceCacheKeyParams,
 } from "./sectorDivergence";
 import {
-  buildSectorVsSectorComparisonView,
-  sectorVsSectorComparisonAnchors,
-  sectorVsSectorComparisonCacheKeyParams,
-} from "./sectorVsSectorComparison";
-import {
   buildStockIdeaDiscoveryView,
   stockIdeaDiscoveryCacheKeyParams,
 } from "./stockIdeaDiscovery";
-import {
-  buildStockVsSectorComparisonView,
-  stockVsSectorComparisonAnchors,
-  stockVsSectorComparisonCacheKeyParams,
-} from "./stockVsSectorComparison";
-import {
-  buildSymbolVsSymbolComparisonView,
-  symbolVsSymbolComparisonAnchors,
-  symbolVsSymbolComparisonCacheKeyParams,
-} from "./symbolVsSymbolComparison";
 import type {
   CachedCapabilityView,
   CapabilityCacheKeyParams,
@@ -161,65 +147,11 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     viewSlot: "regimeHistoricalPlaybookView",
     cacheKeyParams: regimeHistoricalPlaybookCacheKeyParams,
   },
-  {
-    name: "stock_vs_sector_comparison",
-    intent: "comparison",
-    requiredParams: ["comparison.left.symbol"],
-    queryName: "query_stock_vs_sector_comparison",
-    source: "pg_current_features",
-    freshnessSources: [
-      "md_features_daily",
-      "md_research_sector_peer_daily",
-      "md_forward_returns",
-    ],
-    fallback: "unavailable_empty_rows",
-    sanitizer: "public_safe_capability_view",
-    run: buildStockVsSectorComparisonView,
-    viewSlot: "comparisonView",
-    cacheKeyParams: stockVsSectorComparisonCacheKeyParams,
-    cacheAnchors: stockVsSectorComparisonAnchors,
-  },
-  {
-    name: "sector_vs_sector_comparison",
-    intent: "comparison",
-    requiredParams: ["comparison.left.sector", "comparison.right.sector"],
-    queryName: "query_sector_vs_sector_comparison",
-    source: "pg_sector_peer_daily",
-    freshnessSources: [
-      "md_research_sector_peer_daily",
-      "md_research_sector_regime_fwd_agg",
-    ],
-    fallback: "unavailable_empty_rows",
-    sanitizer: "public_safe_capability_view",
-    run: buildSectorVsSectorComparisonView,
-    viewSlot: "comparisonView",
-    cacheKeyParams: sectorVsSectorComparisonCacheKeyParams,
-    cacheAnchors: sectorVsSectorComparisonAnchors,
-  },
-  {
-    name: "symbol_vs_symbol_comparison",
-    intent: "comparison",
-    requiredParams: ["comparison.left.symbol", "comparison.right.symbol"],
-    queryName: "query_symbol_vs_symbol_comparison",
-    source: "pg_current_features",
-    freshnessSources: [
-      "md_features_daily",
-      "md_research_sector_peer_daily",
-      "md_forward_returns",
-    ],
-    fallback: "unavailable_empty_rows",
-    sanitizer: "public_safe_capability_view",
-    run: buildSymbolVsSymbolComparisonView,
-    viewSlot: "comparisonView",
-    cacheKeyParams: symbolVsSymbolComparisonCacheKeyParams,
-    cacheAnchors: symbolVsSymbolComparisonAnchors,
-  },
 ];
 
 /**
- * Intent → registry entry index. `comparison` has multiple implementation
- * entries; this map stores the stock_vs_sector default for legacy callers.
- * Classification-aware dispatch below chooses the concrete comparison type.
+ * Intent → registry entry index. One capability per intent today; the lookup
+ * stays a Map for O(1) dispatch as new capabilities are added.
  */
 const REGISTRY_BY_INTENT = new Map<Intent, PgCapabilityRegistryEntry>();
 for (const entry of PG_CAPABILITY_REGISTRY) {
@@ -235,30 +167,14 @@ export function capabilityForIntent(
 }
 
 /**
- * Classification-aware capability dispatcher. For most intents it behaves
- * identically to `capabilityForIntent`; for `intent="comparison"` it reads
- * `classification.comparison.comparisonType` and routes to the concrete
- * comparison capability. Missing or future comparison types fall back to the
- * stock_vs_sector default so misclassified inputs surface as unavailable
- * instead of crashing.
+ * Classification-aware capability dispatcher — currently a thin wrapper over
+ * `capabilityForIntent`. Kept as a separate function so future intent-aware
+ * dispatch can land here without touching call sites.
  */
 export function capabilityForClassification(
   classification: Classification,
 ): PgCapabilityRegistryEntry | undefined {
-  if (classification.intent !== "comparison") {
-    return REGISTRY_BY_INTENT.get(classification.intent);
-  }
-  const comparisonType = classification.comparison?.comparisonType;
-  const targetName: PgCapabilityRegistryEntry["name"] | undefined =
-    comparisonType === "stock_vs_sector"
-      ? "stock_vs_sector_comparison"
-      : comparisonType === "sector_vs_sector"
-        ? "sector_vs_sector_comparison"
-        : comparisonType === "symbol_vs_symbol"
-          ? "symbol_vs_symbol_comparison"
-      : undefined;
-  if (!targetName) return REGISTRY_BY_INTENT.get("comparison");
-  return PG_CAPABILITY_REGISTRY.find((entry) => entry.name === targetName);
+  return REGISTRY_BY_INTENT.get(classification.intent);
 }
 
 /**
@@ -320,11 +236,25 @@ export async function executePgCapabilitiesWithCache(
         priorViewVersion === prior.viewSchemaVersion &&
         (liveViewVersion === undefined || liveViewVersion === priorViewVersion)
       ) {
+        // Cache hit on the capability view — we still need to (re)resolve the
+        // attached research objects so the agent prompt has the deep payload.
+        // priorResearchObjects acts as the cache for that fan-out, so this
+        // typically resolves entirely from cache.
+        const fanout = await fanOutResearchObjectsForCachedView(input, prior.view);
         return {
           views: { [entry.viewSlot]: prior.view } as PgCapabilityViews,
-          warnings: [],
+          warnings: fanout.warnings,
           viewsUpdated: [],
           cacheStats: { hits: 1, misses: 0, writes: 0 },
+          ...(fanout.researchObjects.length
+            ? { researchObjects: fanout.researchObjects }
+            : {}),
+          ...(fanout.researchObjectsUpdated.length
+            ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
+            : {}),
+          ...(fanout.stats
+            ? { researchObjectCacheStats: fanout.stats }
+            : {}),
         };
       }
     }
@@ -359,6 +289,117 @@ export async function executePgCapabilitiesWithCache(
       misses: 1,
       writes: viewsUpdated.length,
     },
+  };
+}
+
+/**
+ * Cache-hit path: the persisted capability view already names the research
+ * objects it depends on via `researchObjectKeys` (and `regimeResearchObjectKey`
+ * for the regime playbook). Resolve those keys back to full research objects
+ * — `priorResearchObjects` is the upstream caller's cache, so most calls
+ * complete without hitting the database again.
+ */
+async function fanOutResearchObjectsForCachedView(
+  input: PgCapabilityRunInput,
+  view: unknown,
+): Promise<{
+  researchObjects: CachedResearchObject[];
+  researchObjectsUpdated: CachedResearchObject[];
+  stats: { hits: number; misses: number; writes: number } | undefined;
+  warnings: string[];
+}> {
+  const targets = anchorsFromCachedView(view);
+  if (
+    !targets.symbols.length &&
+    !targets.sectors.length &&
+    !targets.regimeRequested
+  ) {
+    return {
+      researchObjects: [],
+      researchObjectsUpdated: [],
+      stats: undefined,
+      warnings: [],
+    };
+  }
+  const builder = input.researchObjectBuilder ?? buildResearchObjectsForAnchors;
+  const result = await builder({
+    symbols: targets.symbols,
+    sectors: targets.sectors,
+    regimeRequested: targets.regimeRequested,
+    snapshots: input.snapshots,
+    toolOutputs: input.toolOutputs,
+    priorResearchObjects: input.priorResearchObjects,
+  });
+  return {
+    researchObjects: result.objects,
+    researchObjectsUpdated: result.objectsUpdated,
+    stats: result.stats,
+    warnings: result.warnings,
+  };
+}
+
+function anchorsFromCachedView(view: unknown): {
+  symbols: string[];
+  sectors: string[];
+  regimeRequested: boolean;
+} {
+  if (!view || typeof view !== "object") {
+    return { symbols: [], sectors: [], regimeRequested: false };
+  }
+  const record = view as {
+    rows?: unknown;
+    researchObjectKeys?: unknown;
+    regimeResearchObjectKey?: unknown;
+    contributingResearchObjectKeys?: unknown;
+  };
+  const keys = new Set<string>();
+  const symbols = new Map<string, string>();
+  const sectors = new Map<string, string>();
+  for (const list of [record.researchObjectKeys, record.contributingResearchObjectKeys]) {
+    if (Array.isArray(list)) {
+      for (const k of list) if (typeof k === "string" && k) keys.add(k);
+    }
+  }
+  if (Array.isArray(record.rows)) {
+    for (const row of record.rows) {
+      if (
+        row &&
+        typeof row === "object"
+      ) {
+        const rowRecord = row as {
+          researchObjectKey?: unknown;
+          symbol?: unknown;
+          sector?: unknown;
+        };
+        if (typeof rowRecord.symbol === "string" && rowRecord.symbol) {
+          symbols.set(rowRecord.symbol.toUpperCase(), rowRecord.symbol.toUpperCase());
+        }
+        if (typeof rowRecord.sector === "string" && rowRecord.sector) {
+          sectors.set(rowRecord.sector.toUpperCase(), rowRecord.sector);
+        }
+        if (typeof rowRecord.researchObjectKey === "string") {
+          keys.add(rowRecord.researchObjectKey);
+        }
+      }
+    }
+  }
+  if (typeof record.regimeResearchObjectKey === "string" && record.regimeResearchObjectKey) {
+    keys.add(record.regimeResearchObjectKey);
+  }
+  let regimeRequested = false;
+  for (const key of keys) {
+    const [kind, anchor] = key.split(":");
+    if (!anchor) continue;
+    if (kind === "STOCK") symbols.set(anchor.toUpperCase(), anchor.toUpperCase());
+    else if (kind === "SECTOR" && !sectors.has(anchor.toUpperCase())) {
+      sectors.set(anchor.toUpperCase(), anchor);
+    }
+    else if (kind === "REGIME") regimeRequested = true;
+  }
+  return {
+    symbols: [...symbols.values()],
+    sectors: [...sectors.values()],
+    regimeRequested,
   };
 }
 
@@ -408,8 +449,18 @@ function extractPriorAsOfDate(view: unknown): string | undefined {
  * === 1` always matches. When we later bump a version we can centralise the
  * map here without touching graph.ts or each capability's call sites.
  */
+const CURRENT_VIEW_SCHEMA_VERSION_BY_SLOT: Record<keyof PgCapabilityViews, number> = {
+  sectorLeaderboardView: 2,
+  sectorDivergenceView: 2,
+  sectorDeltaView: 2,
+  stockIdeaView: 2,
+  featureScreenView: 2,
+  factorBacktestView: 2,
+  regimeHistoricalPlaybookView: 2,
+};
+
 function currentViewSchemaVersion(
-  _viewSlot: keyof PgCapabilityViews,
+  viewSlot: keyof PgCapabilityViews,
 ): number | undefined {
-  return undefined;
+  return CURRENT_VIEW_SCHEMA_VERSION_BY_SLOT[viewSlot];
 }

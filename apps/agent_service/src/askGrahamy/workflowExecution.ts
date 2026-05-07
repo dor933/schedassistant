@@ -56,12 +56,10 @@ const WORKFLOW_STEPS: Record<AnalystWorkflowName, string[]> = {
   stock_deep_dive_stack: [
     "stock_research_object",
     "risk_path",
-    "comparison",
     "validated_edge_evidence",
   ],
   idea_to_compare_and_risk: [
     "stock_idea_discovery",
-    "comparison",
     "risk_path",
     "validated_edge_evidence",
   ],
@@ -135,8 +133,6 @@ function capabilityState(
       return pg?.factorBacktestView?.state ?? "unavailable";
     case "stock_idea_discovery":
       return pg?.stockIdeaView?.state ?? "unavailable";
-    case "comparison":
-      return pg?.comparisonView?.state ?? "unavailable";
     case "validated_edge_evidence":
       return pipeline?.validatedEdgeEvidenceView?.state ?? "skipped";
     case "stock_research_object":
@@ -163,8 +159,6 @@ function capabilityWarnings(capability: string, views: WorkflowPublicViews): str
       return pg?.factorBacktestView?.warnings ?? [];
     case "stock_idea_discovery":
       return pg?.stockIdeaView?.warnings ?? [];
-    case "comparison":
-      return pg?.comparisonView?.warnings ?? [];
     case "validated_edge_evidence":
       return pipeline?.validatedEdgeEvidenceView?.warnings ?? [];
     case "stock_research_object":
@@ -235,16 +229,16 @@ function fromStockIdeaRow(
   };
 }
 
+/**
+ * After the v6 refactor, comparison-style turns no longer fire a dedicated
+ * SQL view; the agent derives deltas itself from the per-anchor research
+ * objects. We keep the function for shape compatibility but it always
+ * returns no rows.
+ */
 function buildComparisonRows(
-  pgViews: PgCapabilityViews | undefined,
+  _pgViews: PgCapabilityViews | undefined,
 ): WorkflowComparisonRow[] {
-  return (pgViews?.comparisonView?.deltas ?? []).slice(0, 8).map((delta) => ({
-    metric: delta.metric,
-    ...(delta.leftValue !== undefined ? { leftValue: delta.leftValue } : {}),
-    ...(delta.rightValue !== undefined ? { rightValue: delta.rightValue } : {}),
-    interpretation: delta.interpretationBucket,
-    explanation: delta.explanation,
-  }));
+  return [];
 }
 
 function deriveMissingEvidence(
@@ -262,9 +256,11 @@ function deriveMissingEvidence(
   }
   if (
     ["stock_deep_dive_stack", "idea_to_compare_and_risk"].includes(workflowName) &&
-    !views.pgCapabilityViews?.comparisonView
+    (views.researchObjectViews?.length ?? 0) < 2
   ) {
-    missing.push("Relative comparison evidence is unavailable.");
+    missing.push(
+      "Relative comparison evidence is unavailable — fewer than two research objects loaded.",
+    );
   }
   if (!Object.keys(pipelineLabels).length && workflowName !== "feature_screen_plus_backtest") {
     missing.push("Pipeline validation is unavailable in this turn.");
@@ -307,7 +303,6 @@ function inferWorkflowFreshness(
     pg?.featureScreenView?.freshness,
     pg?.factorBacktestView?.freshness,
     pg?.stockIdeaView?.freshness,
-    pg?.comparisonView?.freshness,
     pg?.regimeHistoricalPlaybookView?.freshness,
     pg?.sectorDeltaView?.freshness,
     pg?.sectorDivergenceView?.freshness,

@@ -1,6 +1,10 @@
 import { logger } from "../../logger";
 import { numberValue, stringValue } from "../snapshotClient";
 import type { StockIdeaRowView, StockIdeaView } from "../types";
+import {
+  buildResearchObjectCacheKey,
+  buildResearchObjectsForAnchors,
+} from "../researchObjectBuilder";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
   CapabilityFreshness,
@@ -10,7 +14,7 @@ import type {
 } from "./types";
 import { assessCapabilityFreshness } from "./freshnessGuard";
 
-const VIEW_SCHEMA_VERSION = 1;
+const VIEW_SCHEMA_VERSION = 2;
 const DEFAULT_MAX_ROWS = 10;
 const MAX_ROWS_CAP = 20;
 const DEFAULT_CANDIDATE_POOL_SIZE = 200;
@@ -65,8 +69,24 @@ export async function buildStockIdeaDiscoveryView(
       CANDIDATE_POOL_SIZE: candidatePoolSize,
       RANK_BY: rankingBasis,
     });
-    const view = rowsToView(rows, rankingBasis, options.now);
-    return { views: { stockIdeaView: view }, warnings: [] };
+    const draft = rowsToView(rows, rankingBasis, options.now);
+    if (draft.state === "unavailable") {
+      return { views: { stockIdeaView: draft }, warnings: [] };
+    }
+    const fanout = await fanOutStockResearchObjects(input, draft);
+    return {
+      views: { stockIdeaView: fanout.view },
+      warnings: fanout.warnings,
+      ...(fanout.researchObjects.length
+        ? { researchObjects: fanout.researchObjects }
+        : {}),
+      ...(fanout.researchObjectsUpdated.length
+        ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
+        : {}),
+      ...(fanout.stats
+        ? { researchObjectCacheStats: fanout.stats }
+        : {}),
+    };
   } catch (err) {
     const message = "Stock idea discovery query failed.";
     logger.warn("Ask Grahamy PG capability failed", {
@@ -80,6 +100,52 @@ export async function buildStockIdeaDiscoveryView(
       warnings: [message],
     };
   }
+}
+
+/**
+ * After SQL picks the candidate stocks, fan out to the per-stock research
+ * object cache so each row carries the full research-object payload (same
+ * source of truth that anchored answers use).
+ */
+async function fanOutStockResearchObjects(
+  input: PgCapabilityRunInput,
+  draft: StockIdeaView,
+): Promise<{
+  view: StockIdeaView;
+  researchObjects: import("../types").CachedResearchObject[];
+  researchObjectsUpdated: import("../types").CachedResearchObject[];
+  stats: { hits: number; misses: number; writes: number } | undefined;
+  warnings: string[];
+}> {
+  const symbols = draft.rows.map((row) => row.symbol);
+  const builder = input.researchObjectBuilder ?? buildResearchObjectsForAnchors;
+  const result = await builder({
+    symbols,
+    snapshots: input.snapshots,
+    toolOutputs: input.toolOutputs,
+    priorResearchObjects: input.priorResearchObjects,
+  });
+  const keyBySymbol = new Map<string, string>();
+  for (const obj of result.objects) {
+    if (obj.objectType === "stock") {
+      keyBySymbol.set(obj.anchor.toUpperCase(), obj.cacheKey);
+    }
+  }
+  const rowsWithKeys = draft.rows.map((row) => ({
+    ...row,
+    researchObjectKey:
+      keyBySymbol.get(row.symbol.toUpperCase()) ?? row.researchObjectKey,
+  }));
+  const researchObjectKeys = Array.from(
+    new Set(rowsWithKeys.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+  return {
+    view: { ...draft, rows: rowsWithKeys, researchObjectKeys },
+    researchObjects: result.objects,
+    researchObjectsUpdated: result.objectsUpdated,
+    stats: result.stats,
+    warnings: result.warnings,
+  };
 }
 
 function defaultQueryRunner(
@@ -103,8 +169,9 @@ function rowsToView(
   }
 
   const first = rows[0];
+  const asOfDate = dateStringValue(first.as_of_date);
   const publicRows = rows
-    .map(rowToPublicRow)
+    .map((row) => rowToPublicRow(row, asOfDate))
     .filter((row): row is StockIdeaRowView => !!row);
   if (!publicRows.length) {
     return unavailableView(rankingBasis, [
@@ -115,7 +182,6 @@ function rowsToView(
   const forwardOverlayAvailable = rows.some((row) =>
     boolValue(row.forward_overlay_available),
   );
-  const asOfDate = dateStringValue(first.as_of_date);
   const freshnessAssessment = buildFreshness(first, asOfDate, now);
   const freshness = freshnessAssessment.publicFreshness;
   if (freshnessAssessment.decision === "unavailable") {
@@ -143,6 +209,10 @@ function rowsToView(
     warnings.push(freshness.warning);
   }
 
+  const researchObjectKeys = Array.from(
+    new Set(publicRows.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+
   return {
     viewSchemaVersion: VIEW_SCHEMA_VERSION,
     state: "partial",
@@ -150,12 +220,16 @@ function rowsToView(
     asOfDate,
     rankingBasis,
     rows: publicRows,
+    researchObjectKeys,
     freshness,
     warnings,
   };
 }
 
-function rowToPublicRow(row: StockIdeaDiscoveryRow): StockIdeaRowView | null {
+function rowToPublicRow(
+  row: StockIdeaDiscoveryRow,
+  asOfDate: string | undefined,
+): StockIdeaRowView | null {
   const symbol = stringValue(row.symbol)?.toUpperCase();
   const rank = integerValue(row.rank);
   if (!symbol || rank == null) return null;
@@ -181,11 +255,16 @@ function rowToPublicRow(row: StockIdeaDiscoveryRow): StockIdeaRowView | null {
   return {
     ...publicRow,
     reasonBullets: buildReasonBullets(publicRow),
+    researchObjectKey: buildResearchObjectCacheKey(
+      "STOCK",
+      symbol,
+      asOfDate ?? new Date().toISOString().slice(0, 10),
+    ),
   };
 }
 
 function buildReasonBullets(
-  row: Omit<StockIdeaRowView, "reasonBullets">,
+  row: Omit<StockIdeaRowView, "reasonBullets" | "researchObjectKey">,
 ): string[] {
   const reasons: string[] = [];
   if (row.convictionBucket) {
@@ -254,6 +333,7 @@ function unavailableView(
     source: "pg_features_daily",
     rankingBasis,
     rows: [],
+    researchObjectKeys: [],
     freshness,
     warnings,
   };

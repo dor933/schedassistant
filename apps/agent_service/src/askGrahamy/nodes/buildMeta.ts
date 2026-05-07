@@ -89,18 +89,6 @@ export function buildMeta(
       name: "factor_conditioned_backtest",
     });
   }
-  if (pgCapabilityViews?.comparisonView) {
-    const comparisonType = pgCapabilityViews.comparisonView.comparisonType;
-    capabilitySources.push({
-      type: "research",
-      name:
-        comparisonType === "sector_vs_sector"
-          ? "sector_vs_sector_comparison"
-          : comparisonType === "symbol_vs_symbol"
-            ? "symbol_vs_symbol_comparison"
-            : "stock_vs_sector_comparison",
-    });
-  }
   if (pgCapabilityViews?.regimeHistoricalPlaybookView) {
     capabilitySources.push({
       type: "research",

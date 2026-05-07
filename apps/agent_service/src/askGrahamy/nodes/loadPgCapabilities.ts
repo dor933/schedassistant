@@ -1,6 +1,11 @@
 import { observeToolCall } from "../../langfuse";
 import { executePgCapabilitiesWithCache } from "../pgCapabilities/registry";
-import { EMPTY_CLASSIFICATION, type AskGrahamyState } from "../types";
+import {
+  EMPTY_CLASSIFICATION,
+  type AskGrahamyState,
+  type CachedResearchObject,
+  type ResponseMeta,
+} from "../types";
 import {
   type AskGrahamyGraphState,
   type AskGrahamyLangGraphState,
@@ -30,6 +35,10 @@ async function loadPgCapabilities(
     message: state.message,
     snapshots: state.snapshots ?? {},
     toolOutputs: state.toolOutputs ?? {},
+    priorResearchObjects: mergeCachedResearchObjects(
+      state.priorResearchObjects ?? [],
+      state.researchObjects ?? [],
+    ),
   };
   const result = await observeToolCall(
     "execute_pg_capabilities",
@@ -50,5 +59,42 @@ async function loadPgCapabilities(
   state.pgCapabilityViews = result.views;
   state.capabilityViewsUpdated = result.viewsUpdated;
   state.capabilityViewCacheStats = result.cacheStats;
+  state.researchObjects = mergeCachedResearchObjects(
+    state.researchObjects ?? [],
+    result.researchObjects ?? [],
+  );
+  state.researchObjectsUpdated = mergeCachedResearchObjects(
+    state.researchObjectsUpdated ?? [],
+    result.researchObjectsUpdated ?? [],
+  );
+  state.researchObjectCacheStats = mergeResearchObjectCacheStats(
+    state.researchObjectCacheStats,
+    result.researchObjectCacheStats,
+  );
   state.warnings.push(...result.warnings);
+}
+
+function mergeCachedResearchObjects(
+  first: CachedResearchObject[],
+  second: CachedResearchObject[],
+): CachedResearchObject[] {
+  const byKey = new Map<string, CachedResearchObject>();
+  for (const item of [...first, ...second]) {
+    if (!item.cacheKey || byKey.has(item.cacheKey)) continue;
+    byKey.set(item.cacheKey, item);
+  }
+  return [...byKey.values()];
+}
+
+function mergeResearchObjectCacheStats(
+  first: ResponseMeta["researchObjectCache"] | undefined,
+  second: ResponseMeta["researchObjectCache"] | undefined,
+): ResponseMeta["researchObjectCache"] | undefined {
+  if (!first) return second;
+  if (!second) return first;
+  return {
+    hits: first.hits + second.hits,
+    misses: first.misses + second.misses,
+    writes: first.writes + second.writes,
+  };
 }

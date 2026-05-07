@@ -1,5 +1,4 @@
 import { Annotation } from "@langchain/langgraph";
-import type { ClassifyOptions } from "./classification";
 import type { runGrahamyDeepAgent } from "./grahamyAgent";
 import type {
   AnalystBriefSynthesisInput,
@@ -29,10 +28,6 @@ export type SnapshotClient = Pick<
 
 export type RunAskGrahamyGraphOptions = {
   snapshotClient?: SnapshotClient;
-  // Test seam — lets graph.test.ts run without a live LLM. Production code
-  // leaves this undefined so classification falls back to the model-backed
-  // classifier configured in classification.ts.
-  classifier?: ClassifyOptions["classifier"];
   /**
    * Test seam for the underlying capability SQL run. Returns the raw
    * `{views, warnings}` shape — `loadPgCapabilities` wraps this in cache

@@ -5,6 +5,10 @@ import type {
   FeatureScreenRowView,
   FeatureScreenView,
 } from "../types";
+import {
+  buildResearchObjectCacheKey,
+  buildResearchObjectsForAnchors,
+} from "../researchObjectBuilder";
 import { assessCapabilityFreshness } from "./freshnessGuard";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
@@ -14,7 +18,7 @@ import type {
   PgCapabilityRunResult,
 } from "./types";
 
-const VIEW_SCHEMA_VERSION = 1;
+const VIEW_SCHEMA_VERSION = 2;
 const DEFAULT_MAX_ROWS = 10;
 const MAX_ROWS_CAP = 20;
 const DEFAULT_CANDIDATE_POOL_SIZE = 200;
@@ -75,8 +79,24 @@ export async function buildFeatureScreenView(
       CANDIDATE_POOL_SIZE: candidatePoolSize,
       ...criteriaToParams(criteria),
     });
-    const view = rowsToView(rows, criteria, options.now);
-    return { views: { featureScreenView: view }, warnings: [] };
+    const draft = rowsToView(rows, criteria, options.now);
+    if (draft.state === "unavailable") {
+      return { views: { featureScreenView: draft }, warnings: [] };
+    }
+    const fanout = await fanOutStockResearchObjects(input, draft);
+    return {
+      views: { featureScreenView: fanout.view },
+      warnings: fanout.warnings,
+      ...(fanout.researchObjects.length
+        ? { researchObjects: fanout.researchObjects }
+        : {}),
+      ...(fanout.researchObjectsUpdated.length
+        ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
+        : {}),
+      ...(fanout.stats
+        ? { researchObjectCacheStats: fanout.stats }
+        : {}),
+    };
   } catch (err) {
     const message = "Feature screen query failed.";
     logger.warn("Ask Grahamy PG capability failed", {
@@ -137,7 +157,7 @@ function rowsToView(
   }
 
   const publicRows = rows
-    .map((row) => rowToPublicRow(row, criteria))
+    .map((row) => rowToPublicRow(row, criteria, asOfDate))
     .filter((row): row is FeatureScreenRowView => !!row);
 
   const warnings: string[] = [
@@ -164,6 +184,10 @@ function rowsToView(
     warnings.push(freshness.warning);
   }
 
+  const researchObjectKeys = Array.from(
+    new Set(publicRows.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+
   return {
     viewSchemaVersion: VIEW_SCHEMA_VERSION,
     state: publicRows.length && !forwardOverlayAvailable ? "partial" : "complete",
@@ -171,14 +195,57 @@ function rowsToView(
     asOfDate,
     screenCriteria: criteria,
     rows: publicRows,
+    researchObjectKeys,
     freshness,
     warnings,
+  };
+}
+
+async function fanOutStockResearchObjects(
+  input: PgCapabilityRunInput,
+  draft: FeatureScreenView,
+): Promise<{
+  view: FeatureScreenView;
+  researchObjects: import("../types").CachedResearchObject[];
+  researchObjectsUpdated: import("../types").CachedResearchObject[];
+  stats: { hits: number; misses: number; writes: number } | undefined;
+  warnings: string[];
+}> {
+  const symbols = draft.rows.map((row) => row.symbol);
+  const builder = input.researchObjectBuilder ?? buildResearchObjectsForAnchors;
+  const result = await builder({
+    symbols,
+    snapshots: input.snapshots,
+    toolOutputs: input.toolOutputs,
+    priorResearchObjects: input.priorResearchObjects,
+  });
+  const keyBySymbol = new Map<string, string>();
+  for (const obj of result.objects) {
+    if (obj.objectType === "stock") {
+      keyBySymbol.set(obj.anchor.toUpperCase(), obj.cacheKey);
+    }
+  }
+  const rowsWithKeys = draft.rows.map((row) => ({
+    ...row,
+    researchObjectKey:
+      keyBySymbol.get(row.symbol.toUpperCase()) ?? row.researchObjectKey,
+  }));
+  const researchObjectKeys = Array.from(
+    new Set(rowsWithKeys.map((row) => row.researchObjectKey).filter(Boolean)),
+  );
+  return {
+    view: { ...draft, rows: rowsWithKeys, researchObjectKeys },
+    researchObjects: result.objects,
+    researchObjectsUpdated: result.objectsUpdated,
+    stats: result.stats,
+    warnings: result.warnings,
   };
 }
 
 function rowToPublicRow(
   row: FeatureScreenRow,
   criteria: FeatureScreenCriterion[],
+  asOfDate: string | undefined,
 ): FeatureScreenRowView | null {
   const symbol = stringValue(row.symbol)?.toUpperCase();
   const rank = integerValue(row.rank);
@@ -202,11 +269,16 @@ function rowToPublicRow(
   return {
     ...publicRow,
     reasonBullets: buildReasonBullets(publicRow, criteria, stringValue(row.risk_bucket)),
+    researchObjectKey: buildResearchObjectCacheKey(
+      "STOCK",
+      symbol,
+      asOfDate ?? new Date().toISOString().slice(0, 10),
+    ),
   };
 }
 
 function buildReasonBullets(
-  row: Omit<FeatureScreenRowView, "reasonBullets">,
+  row: Omit<FeatureScreenRowView, "reasonBullets" | "researchObjectKey">,
   criteria: FeatureScreenCriterion[],
   riskBucket?: string,
 ): string[] {
@@ -293,6 +365,7 @@ function unavailableView(
     asOfDate,
     screenCriteria: criteria,
     rows: [],
+    researchObjectKeys: [],
     freshness,
     warnings,
   };

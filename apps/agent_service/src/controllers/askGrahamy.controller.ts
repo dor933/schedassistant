@@ -20,7 +20,8 @@ import { buildSafeErrorAnswer } from "../askGrahamy/answerTemplates";
  *   {
  *     "userId": "<upstream client-app user id>",  // required, string
  *     "conversationId": "<uuid>",                 // optional
- *     "message": "..."                            // required, ≤ 4000 chars
+ *     "message": "...",                           // required, <= 4000 chars
+ *     "classification": { ... }                    // required; call /classify first
  *   }
  *
  * Service-to-service auth (header `x-application-agent-token`) is enforced
@@ -77,7 +78,8 @@ export class AskGrahamyController {
       return res.status(400).json(
         buildSafeErrorEnvelope("", "Invalid request payload.", {
           headline: "Invalid Ask Grahamy request.",
-          summary: "userId and non-empty message are required. conversationId is optional.",
+          summary:
+            "userId, non-empty message, and classification are required. Call /api/ask-grahamy/classify first.",
         }),
       );
     }
