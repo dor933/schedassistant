@@ -160,6 +160,21 @@ sector_base_rate AS (
   FROM regime_valuation_matrix
 ),
 
+-- feeds: deriveUpcomingEvents
+-- Percentage of sector constituents with earnings within the next two weeks.
+-- Uses md_historical_features_daily (same underlying table as market_state_today).
+-- Runtime impact: one additional index scan on (sector, as_of_date, is_delisted).
+sector_event_context AS (
+  SELECT
+    COUNT(*) FILTER (WHERE h.days_to_earnings BETWEEN 0 AND 14) * 100.0
+      / NULLIF(COUNT(*), 0)                                 AS pct_constituents_earnings_within_2w
+  FROM md_historical_features_daily h
+  WHERE h.sector = (SELECT target_sector FROM config)
+    AND h.as_of_date = (SELECT target_date FROM config)
+    AND h.is_delisted = false
+    AND h.days_to_earnings IS NOT NULL
+),
+
 assembled AS (
   SELECT
     cfg.target_sector,
@@ -255,7 +270,10 @@ assembled AS (
         ) ORDER BY median_h60 ASC)
         FROM (SELECT * FROM bucket_matrix ORDER BY median_h60 ASC LIMIT 5) r
       )
-    ))                                                      AS bucket_extremes_json
+    ))                                                      AS bucket_extremes_json,
+
+    -- feeds: deriveUpcomingEvents
+    sec.pct_constituents_earnings_within_2w                 AS event_pct_earnings_2w
 
   FROM config cfg
   -- LEFT JOIN (not CROSS JOIN) so the assembled row is emitted even when SPY
@@ -266,6 +284,7 @@ assembled AS (
   LEFT JOIN benchmark_vix bv      ON true
   LEFT JOIN sector_census sc      ON true
   LEFT JOIN sector_base_rate sbr  ON true
+  LEFT JOIN sector_event_context sec ON true
 )
 
 SELECT
@@ -337,6 +356,22 @@ SELECT
       'bucket_extremes',         COALESCE(a.bucket_extremes_json, '{}'::jsonb)
     ),
 
+    -- feeds: deriveUpcomingEvents
+    'event_context', JSONB_BUILD_OBJECT(
+      'pct_constituents_earnings_within_2w',
+        ROUND(COALESCE(a.event_pct_earnings_2w, 0)::numeric, 1),
+      'earnings_cluster_band',
+        CASE
+          WHEN a.event_pct_earnings_2w IS NULL     THEN NULL
+          WHEN a.event_pct_earnings_2w >= 30       THEN 'CONCENTRATED'
+          WHEN a.event_pct_earnings_2w >= 10       THEN 'MODERATE'
+          ELSE                                          'SPARSE'
+        END,
+      'note', 'Fraction of sector constituents (is_delisted=false, '
+           || 'days_to_earnings NOT NULL) with earnings within 14 calendar days. '
+           || 'Denominator excludes symbols with NULL days_to_earnings.'
+    ),
+
     'invalidation', JSONB_BUILD_OBJECT(
       'edge_evidence_seam', JSONB_BUILD_OBJECT(
         '_bridge_required', TRUE,
@@ -360,7 +395,8 @@ SELECT
     'target_date',             a.target_date,
     'raw_mean_composite',      a.mean_composite,
     'raw_base_avg_h60',        a.base_avg_h60,
-    'raw_vix_close',           a.vix_close
+    'raw_vix_close',           a.vix_close,
+    'raw_event_pct_earnings_2w', a.event_pct_earnings_2w
   ) AS debug_payload
 
 FROM assembled a;
