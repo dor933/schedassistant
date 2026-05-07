@@ -802,7 +802,7 @@ function buildRegimePublicResearchObjectView(input: {
           input.publicSummary.bottomSectorsHistorical,
         ),
       ],
-      invalidation: [],
+      invalidation: arrayOfStrings(input.publicSummary.invalidationSignals),
     },
     edgeEvidence,
     probabilisticEvidence,
@@ -1532,6 +1532,127 @@ function deriveSectorInvalidationSignals(
   return signals;
 }
 
+// ─── NEW: deriveRegimeForwardPerformance ─────────────────────────────────────
+// Same pattern as deriveSectorForwardPerformance — reads historical_base_rate
+// from the regime SQL output. Uses h60_p25_pct / h60_median_pct / h60_p75_pct
+// when present (Stage 2 regime SQL); falls back to h60_avg_pct when absent.
+function deriveRegimeForwardPerformance(
+  baseRate: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const sample =
+    numberFrom(baseRate.n_observations) ??
+    numberFrom(baseRate.n_with_h60) ??
+    numberFrom(baseRate.n);
+  if (sample == null || sample === 0) return undefined;
+
+  const hitRate = numberFrom(baseRate.h60_hit_rate);
+  const median =
+    numberFrom(baseRate.h60_median_pct) ??
+    numberFrom(baseRate.h60_avg_pct);
+  const p25 = numberFrom(baseRate.h60_p25_pct);
+  const p75 = numberFrom(baseRate.h60_p75_pct);
+
+  const sampleAdequacyRaw = stringValue(baseRate.sample_adequacy);
+  const sampleAdequacy = sampleAdequacyRaw ?? bucketSampleAdequacy(sample);
+
+  return {
+    sampleAdequacy,
+    forwardWrBucket: bucketHitRatePct(hitRate),
+    forwardOutcomeBucket: bucketMedianOutcomePct(median),
+    downsideQuartileBucket: bucketTailOutcomePct(p25),
+    upsideQuartileBucket: bucketTailOutcomePct(p75),
+    horizon: "60-day",
+    disclaimer: "Bucketed regime base-rate evidence. Not investment advice.",
+  };
+}
+
+// ─── NEW: deriveRegimeActiveSignals ──────────────────────────────────────────
+// Emits 0–2 regime-appropriate signals from sector_rollup and overall base rate.
+// Signal 1: strong sector breadth (>3 sectors with hit_rate_h60 > 70).
+// Signal 2: regime overall hit rate > 60 → positive for broad market.
+function deriveRegimeActiveSignals(
+  row: Record<string, unknown>,
+): ActiveSignal[] {
+  const signals: ActiveSignal[] = [];
+
+  const conditions = asRecord(row.under_which_conditions);
+  const sectorRollup = Array.isArray(conditions.sector_rollup)
+    ? conditions.sector_rollup.filter(isRecord)
+    : [];
+
+  // Signal 1: sector breadth — count sectors with hit_rate_h60 > 70
+  const strongSectors = sectorRollup.filter((r) => {
+    const rate = numberFrom(r.hit_rate_h60);
+    return rate != null && rate > 70;
+  }).length;
+
+  if (strongSectors > 3) {
+    signals.push({
+      family: "Regime",
+      signalStrength: "STRONG",
+      evidenceLanguage: "Strong sector breadth in this regime.",
+    });
+  }
+
+  // Signal 2: overall regime hit rate > 60
+  const historicalBaseRate = asRecord(row.historical_base_rate);
+  const overallHitRate = numberFrom(historicalBaseRate.h60_hit_rate);
+  if (overallHitRate != null && overallHitRate > 60) {
+    signals.push({
+      family: "Regime",
+      signalStrength: "STRONG",
+      evidenceLanguage: "Regime historically positive for broad market.",
+    });
+  }
+
+  return signals;
+}
+
+// ─── NEW: deriveRegimeInvalidationSignals ────────────────────────────────────
+// Reads sector_rollup and historical_base_rate to flag unfavorable regime signals.
+// Signal 1: >50% sectors have hit_rate_h60 < 45 → majority underperform.
+// Signal 2: overall h60_hit_rate < 45 → regime broadly unfavorable.
+// Signal 3: h60_avg_pct < 0 → negative expected return.
+function deriveRegimeInvalidationSignals(
+  row: Record<string, unknown>,
+): string[] {
+  const signals: string[] = [];
+
+  const conditions = asRecord(row.under_which_conditions);
+  const sectorRollup = Array.isArray(conditions.sector_rollup)
+    ? conditions.sector_rollup.filter(isRecord)
+    : [];
+
+  // Signal 1: majority of sectors historically underperform
+  if (sectorRollup.length > 0) {
+    const weakCount = sectorRollup.filter((r) => {
+      const rate = numberFrom(r.hit_rate_h60);
+      return rate != null && rate < 45;
+    }).length;
+    if (weakCount / sectorRollup.length > 0.5) {
+      signals.push(
+        "Majority of sectors historically underperform in this regime.",
+      );
+    }
+  }
+
+  const historicalBaseRate = asRecord(row.historical_base_rate);
+  const overallHitRate = numberFrom(historicalBaseRate.h60_hit_rate);
+  const overallAvg = numberFrom(historicalBaseRate.h60_avg_pct);
+
+  // Signal 2: regime broadly unfavorable
+  if (overallHitRate != null && overallHitRate < 45) {
+    signals.push("Regime historically unfavorable for broad market.");
+  }
+
+  // Signal 3: negative expected forward return
+  if (overallAvg != null && overallAvg < 0) {
+    signals.push("Negative expected forward return in this regime.");
+  }
+
+  return signals;
+}
+
 // ─── NEW: deriveSectorUpcomingEvents ─────────────────────────────────────────
 // Emits an event entry when earnings_cluster_band is CONCENTRATED or MODERATE.
 function deriveSectorUpcomingEvents(
@@ -1992,6 +2113,11 @@ function buildRegimeSummary(
     : [];
   const { topSectors, bottomSectors } = rankSectorsByHitRate(sectorRollup);
 
+  // Regime derive* calls
+  const forwardPerformance = deriveRegimeForwardPerformance(historicalBaseRate);
+  const activeSignals = deriveRegimeActiveSignals(researchObject);
+  const invalidationSignals = deriveRegimeInvalidationSignals(researchObject);
+
   const sectorLeadership = Array.isArray(whatMatters.sector_leadership_today)
     ? whatMatters.sector_leadership_today.filter(isRecord)
     : [];
@@ -2030,6 +2156,11 @@ function buildRegimeSummary(
     sectorsActiveToday: numberFrom(whatMatters.sectors_active_today),
     topSectorsTodayRank: topSectorsToday,
     leaderCount: topLeadersToday.length,
+
+    // Regime derive* fields
+    forwardPerformance,
+    activeSignals,
+    invalidationSignals,
 
     whyNow: buildRegimeWhyNow({
       regime,
