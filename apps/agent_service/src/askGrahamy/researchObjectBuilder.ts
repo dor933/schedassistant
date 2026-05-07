@@ -746,6 +746,7 @@ function buildSectorPublicResearchObjectView(input: {
         ),
       ],
       invalidation: [
+        ...arrayOfStrings(input.publicSummary.invalidationSignals),
         input.publicSummary.currentRegimeBelowBest === true
           ? "Current regime is below the sector's best historical regime bucket."
           : undefined,
@@ -950,9 +951,10 @@ function deriveAggregateProbabilisticEvidence(
     horizon === "60-day"
       ? numberFrom(baseRate.h60_hit_rate)
       : numberFrom(baseRate.h252_hit_rate);
+  // Prefer median over avg when available (Stage 2 SQL provides h60_median_pct)
   const outcome =
-    numberFrom(baseRate.h60_avg_pct) ??
-    numberFrom(baseRate.h60_median_pct);
+    numberFrom(baseRate.h60_median_pct) ??
+    numberFrom(baseRate.h60_avg_pct);
   const p25 = numberFrom(baseRate.h60_p25_pct);
   const p75 = numberFrom(baseRate.h60_p75_pct);
   const sample =
@@ -960,9 +962,29 @@ function deriveAggregateProbabilisticEvidence(
     numberFrom(baseRate.n_with_h60) ??
     numberFrom(baseRate.n);
 
+  // Derive state from sample_adequacy field when present (Stage 2 SQL),
+  // otherwise fall back to computing from sample count.
+  const sampleAdequacyRaw = stringValue(baseRate.sample_adequacy);
+  const computedAdequacy = sampleAdequacyRaw ?? bucketSampleAdequacy(sample);
+
+  let state: ProbabilisticEvidenceView["state"];
+  if (hitRate == null) {
+    state = "unavailable";
+  } else if (
+    (computedAdequacy === "ADEQUATE" || computedAdequacy === "ROBUST") &&
+    hitRate != null
+  ) {
+    state = "complete";
+  } else if (computedAdequacy === "WEAK") {
+    state = "partial";
+  } else {
+    // INSUFFICIENT or missing adequacy
+    state = "unavailable";
+  }
+
   return {
     viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
-    state: hitRate == null ? "unavailable" : "partial",
+    state,
     horizon,
     referenceSet: "aggregate_base_rate",
     sampleSize: sample,
@@ -970,7 +992,7 @@ function deriveAggregateProbabilisticEvidence(
     medianReturnPct: outcome,
     p25ReturnPct: p25,
     p75ReturnPct: p75,
-    sampleAdequacy: bucketSampleAdequacy(sample),
+    sampleAdequacy: computedAdequacy,
     hitRateBucket: bucketHitRatePct(hitRate),
     medianOutcomeBucket: bucketMedianOutcomePct(outcome),
     notes: [
@@ -1141,7 +1163,7 @@ function buildStockWhatMattersNow(summary: Record<string, unknown>): string[] {
 }
 
 function buildSectorWhatMattersNow(summary: Record<string, unknown>): string[] {
-  return [
+  const lines: string[] = [
     numberFrom(summary.symbolsCovered) != null
       ? `${numberFrom(summary.symbolsCovered)} symbols are represented in the sector evidence set.`
       : undefined,
@@ -1152,6 +1174,17 @@ function buildSectorWhatMattersNow(summary: Record<string, unknown>): string[] {
       ? `Sample adequacy is ${stringValue(summary.sampleAdequacy)}.`
       : undefined,
   ].filter((item): item is string => !!item);
+
+  // Add active signals evidence language (up to 2)
+  const activeSignals = Array.isArray(summary.activeSignals)
+    ? (summary.activeSignals as ActiveSignal[])
+        .map((s) => s.evidenceLanguage)
+        .filter((lang): lang is string => !!lang)
+        .slice(0, 2)
+    : [];
+  lines.push(...activeSignals);
+
+  return lines;
 }
 
 function buildRegimeWhatMattersNow(summary: Record<string, unknown>): string[] {
@@ -1324,6 +1357,203 @@ function deriveForwardPerformance(analogSelf: Record<string, unknown>): Record<s
     horizon: "60-day",
     disclaimer: "Bucketed historical-analog evidence. Not investment advice.",
   };
+}
+
+// ─── NEW: deriveSectorForwardPerformance ──────────────────────────────────────
+// Uses h60_p25_pct / h60_median_pct / h60_p75_pct from historical_base_rate
+// (Stage 2 SQL). Falls back to h60_avg_pct when median is absent.
+function deriveSectorForwardPerformance(
+  baseRate: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const sample =
+    numberFrom(baseRate.n_observations) ??
+    numberFrom(baseRate.n_with_h60) ??
+    numberFrom(baseRate.n);
+  if (sample == null || sample === 0) return undefined;
+
+  const hitRate = numberFrom(baseRate.h60_hit_rate);
+  const median =
+    numberFrom(baseRate.h60_median_pct) ??
+    numberFrom(baseRate.h60_avg_pct);
+  const p25 = numberFrom(baseRate.h60_p25_pct);
+  const p75 = numberFrom(baseRate.h60_p75_pct);
+
+  const sampleAdequacyRaw = stringValue(baseRate.sample_adequacy);
+  const sampleAdequacy = sampleAdequacyRaw ?? bucketSampleAdequacy(sample);
+
+  return {
+    sampleAdequacy,
+    forwardWrBucket: bucketHitRatePct(hitRate),
+    forwardOutcomeBucket: bucketMedianOutcomePct(median),
+    downsideQuartileBucket: bucketTailOutcomePct(p25),
+    upsideQuartileBucket: bucketTailOutcomePct(p75),
+    horizon: "60-day",
+    disclaimer: "Bucketed sector base-rate evidence. Not investment advice.",
+  };
+}
+
+// ─── NEW: deriveSectorRegimeFit ───────────────────────────────────────────────
+// Reads regime_rollup array from under_which_conditions.
+// hit_rate > median + 5 → ALIGNED, < median - 5 → CHALLENGED, else NEUTRAL,
+// regime not found → UNCERTAIN.
+function deriveSectorRegimeFit(
+  currentRegime: string | undefined,
+  regimeRollup: Array<Record<string, unknown>>,
+): string | undefined {
+  if (!currentRegime || regimeRollup.length === 0) return undefined;
+
+  const rates = regimeRollup
+    .map((row) => numberFrom(row.hit_rate_h60))
+    .filter((n): n is number => n != null);
+  if (rates.length === 0) return "UNCERTAIN";
+
+  const median = rates.slice().sort((a, b) => a - b)[Math.floor(rates.length / 2)];
+
+  const currentRow = regimeRollup.find(
+    (row) => stringValue(row.regime) === currentRegime,
+  );
+  if (!currentRow) return "UNCERTAIN";
+
+  const currentRate = numberFrom(currentRow.hit_rate_h60);
+  if (currentRate == null) return "UNCERTAIN";
+
+  if (currentRate > median + 5) return "ALIGNED";
+  if (currentRate < median - 5) return "CHALLENGED";
+  return "NEUTRAL";
+}
+
+// ─── NEW: deriveSectorActiveSignals ──────────────────────────────────────────
+// Emits 2-4 sector-appropriate signals from fields already present in the
+// sector SQL output. Does not read per-company trajectory/quality/allocation.
+function deriveSectorActiveSignals(
+  row: Record<string, unknown>,
+  currentRegime: string | undefined,
+): ActiveSignal[] {
+  const signals: ActiveSignal[] = [];
+
+  const conditions = asRecord(row.under_which_conditions);
+  const regimeRollup = Array.isArray(conditions.regime_rollup)
+    ? conditions.regime_rollup.filter(isRecord)
+    : [];
+  const eventContext = asRecord(row.event_context);
+  const earningsClusterBand = stringValue(eventContext.earnings_cluster_band);
+
+  // Signal 1: current regime hit_rate_h60 > 60
+  if (currentRegime) {
+    const currentRow = regimeRollup.find(
+      (r) => stringValue(r.regime) === currentRegime,
+    );
+    const currentRate = numberFrom(currentRow?.hit_rate_h60);
+    if (currentRate != null && currentRate > 60) {
+      signals.push({
+        family: "Regime",
+        signalStrength: "STRONG",
+        evidenceLanguage: "Regime historically favorable for this sector.",
+      });
+    }
+  }
+
+  // Signal 2: earnings concentration
+  if (earningsClusterBand === "CONCENTRATED") {
+    signals.push({
+      family: "Event",
+      signalStrength: "STRONG",
+      evidenceLanguage:
+        "Earnings concentration: significant binary event risk within 2 weeks.",
+    });
+  }
+
+  // Signal 3: current regime is the best-performing bucket for this sector
+  if (currentRegime) {
+    const bucketExtremes = asRecord(conditions.bucket_extremes);
+    const bestH60 = Array.isArray(bucketExtremes.best_h60)
+      ? bucketExtremes.best_h60.filter(isRecord)
+      : [];
+    if (
+      bestH60.length > 0 &&
+      stringValue(bestH60[0].regime) === currentRegime
+    ) {
+      signals.push({
+        family: "Regime",
+        signalStrength: "MODERATE",
+        evidenceLanguage:
+          "Sector in historically best-performing bucket for current regime.",
+      });
+    }
+  }
+
+  return signals;
+}
+
+// ─── NEW: deriveSectorInvalidationSignals ────────────────────────────────────
+// Reads regime_rollup and event_context to produce up to 3 invalidation strings.
+function deriveSectorInvalidationSignals(
+  row: Record<string, unknown>,
+  currentRegime: string | undefined,
+): string[] {
+  const signals: string[] = [];
+
+  const conditions = asRecord(row.under_which_conditions);
+  const regimeRollup = Array.isArray(conditions.regime_rollup)
+    ? conditions.regime_rollup.filter(isRecord)
+    : [];
+  const eventContext = asRecord(row.event_context);
+  const earningsClusterBand = stringValue(eventContext.earnings_cluster_band);
+
+  if (currentRegime) {
+    const currentRow = regimeRollup.find(
+      (r) => stringValue(r.regime) === currentRegime,
+    );
+    const currentRate = numberFrom(currentRow?.hit_rate_h60);
+    const currentAvg = numberFrom(currentRow?.avg_h60_pct);
+
+    // Signal 1: hit_rate < 45 → unfavorable regime
+    if (currentRate != null && currentRate < 45) {
+      signals.push(
+        "Current regime historically unfavorable for this sector.",
+      );
+    }
+
+    // Signal 3: negative expected return in current regime
+    if (currentAvg != null && currentAvg < 0) {
+      signals.push(
+        "Negative expected return in current regime context.",
+      );
+    }
+  }
+
+  // Signal 2: earnings concentration creates binary reversal risk
+  if (earningsClusterBand === "CONCENTRATED") {
+    signals.push(
+      "Earnings concentration creates binary reversal risk.",
+    );
+  }
+
+  return signals;
+}
+
+// ─── NEW: deriveSectorUpcomingEvents ─────────────────────────────────────────
+// Emits an event entry when earnings_cluster_band is CONCENTRATED or MODERATE.
+function deriveSectorUpcomingEvents(
+  row: Record<string, unknown>,
+): Array<Record<string, unknown>> {
+  const events: Array<Record<string, unknown>> = [];
+  const eventContext = asRecord(row.event_context);
+  const earningsClusterBand = stringValue(eventContext.earnings_cluster_band);
+  const pctWithin2w = numberFrom(eventContext.pct_constituents_earnings_within_2w);
+
+  if (earningsClusterBand === "CONCENTRATED" || earningsClusterBand === "MODERATE") {
+    const event: Record<string, unknown> = {
+      type: "SECTOR_EARNINGS_CLUSTER",
+      windowBucket: earningsClusterBand,
+    };
+    if (pctWithin2w != null) {
+      event.pctConstituentsWithin2w = pctWithin2w;
+    }
+    events.push(event);
+  }
+
+  return events;
 }
 
 type ActiveSignal = {
@@ -1597,6 +1827,13 @@ function buildSectorSummary(
     asRecord(conditions.bucket_extremes).worst_h60,
   );
 
+  // New derive* calls
+  const forwardPerformance = deriveSectorForwardPerformance(historicalBaseRate);
+  const regimeFit = deriveSectorRegimeFit(regime, regimeRollup);
+  const activeSignals = deriveSectorActiveSignals(researchObject, regime);
+  const invalidationSignals = deriveSectorInvalidationSignals(researchObject, regime);
+  const upcomingEvents = deriveSectorUpcomingEvents(researchObject);
+
   return {
     sector,
     asOfDate: stringValue(meta.as_of_date),
@@ -1626,6 +1863,13 @@ function buildSectorSummary(
     // Qualitative conditions — abstracted, no raw numbers
     favorableConditions,
     unfavorableConditions,
+
+    // New derived fields
+    forwardPerformance,
+    regimeFit,
+    activeSignals,
+    invalidationSignals,
+    upcomingEvents,
 
     // Backwards-compat fields used by the generic answer fallback path
     stocksInFocus: numberFrom(whatMatters.stocks_in_focus) ?? snapshotSector?.stocksInFocus,
