@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { logger } from "../logger";
 import { classifyMessage, type ClassifyOptions } from "./classification";
 import { buildSafeErrorAnswer } from "./answerTemplates";
@@ -53,8 +54,10 @@ import {
   type ToolName,
 } from "./types";
 
+type SnapshotClient = Pick<GrahamySnapshotClient, "fetchPublishedSnapshots">;
+
 export type RunAskGrahamyGraphOptions = {
-  snapshotClient?: GrahamySnapshotClient;
+  snapshotClient?: SnapshotClient;
   // Test seam — lets graph.test.ts run without a live LLM. Production code
   // leaves this undefined so classification falls back to the model-backed
   // classifier configured in classification.ts.
@@ -84,13 +87,238 @@ const RESEARCH_PLANNER_TIMEOUT_MS = Number(
   process.env.ASK_GRAHAMY_RESEARCH_PLANNER_TIMEOUT_MS ?? 10_000,
 );
 
+type AskGrahamyGraphState = AskGrahamyState & {
+  options: RunAskGrahamyGraphOptions;
+  snapshotClient: SnapshotClient;
+  plannerHandled: boolean;
+  response?: AskGrahamyResponse;
+  error?: string;
+};
+
+function replaceStateValue<T>(state: T, update: T): T {
+  return update !== undefined ? update : state;
+}
+
+const AskGrahamyGraphAnnotation = Annotation.Root({
+  internalUserId: Annotation<number>({
+    reducer: replaceStateValue,
+    default: () => 0,
+  }),
+  conversationId: Annotation<AskGrahamyState["conversationId"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  message: Annotation<string>({
+    reducer: replaceStateValue,
+    default: () => "",
+  }),
+  messageId: Annotation<AskGrahamyState["messageId"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  previousContext: Annotation<AskGrahamyState["previousContext"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  classification: Annotation<AskGrahamyState["classification"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  snapshots: Annotation<AskGrahamyState["snapshots"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  selectedTools: Annotation<AskGrahamyState["selectedTools"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  toolOutputs: Annotation<AskGrahamyState["toolOutputs"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  priorResearchObjects: Annotation<AskGrahamyState["priorResearchObjects"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  researchObjects: Annotation<AskGrahamyState["researchObjects"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  researchObjectsUpdated: Annotation<AskGrahamyState["researchObjectsUpdated"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  researchObjectCacheStats: Annotation<AskGrahamyState["researchObjectCacheStats"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  priorCapabilityViews: Annotation<AskGrahamyState["priorCapabilityViews"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  pgCapabilityViews: Annotation<AskGrahamyState["pgCapabilityViews"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  pipelineOverlayViews: Annotation<AskGrahamyState["pipelineOverlayViews"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  compoundResearchContext: Annotation<AskGrahamyState["compoundResearchContext"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  workflowExecutionResult: Annotation<AskGrahamyState["workflowExecutionResult"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  evidencePack: Annotation<AskGrahamyState["evidencePack"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  analystBrief: Annotation<AskGrahamyState["analystBrief"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  capabilityViewsUpdated: Annotation<AskGrahamyState["capabilityViewsUpdated"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  capabilityViewCacheStats: Annotation<AskGrahamyState["capabilityViewCacheStats"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  publicResearchView: Annotation<AskGrahamyState["publicResearchView"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  answer: Annotation<AskGrahamyState["answer"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  ui: Annotation<AskGrahamyState["ui"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  meta: Annotation<AskGrahamyState["meta"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  warnings: Annotation<string[]>({
+    reducer: replaceStateValue,
+    default: () => [],
+  }),
+  options: Annotation<RunAskGrahamyGraphOptions>({
+    reducer: replaceStateValue,
+    default: () => ({}),
+  }),
+  snapshotClient: Annotation<SnapshotClient>({
+    reducer: replaceStateValue,
+    default: () => new GrahamySnapshotClient(),
+  }),
+  plannerHandled: Annotation<boolean>({
+    reducer: replaceStateValue,
+    default: () => false,
+  }),
+  response: Annotation<AskGrahamyResponse | undefined>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+  error: Annotation<string | undefined>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
+});
+
+type AskGrahamyLangGraphState = typeof AskGrahamyGraphAnnotation.State;
+
+function routeAfterNode(state: AskGrahamyLangGraphState): "next" | "error" {
+  return state.error ? "error" : "next";
+}
+
+function routeAfterResearchPlanner(
+  state: AskGrahamyLangGraphState,
+): "plannerHandled" | "standardLoaders" | "error" {
+  if (state.error) return "error";
+  return state.plannerHandled ? "plannerHandled" : "standardLoaders";
+}
+
+const askGrahamyWorkflow = new StateGraph(AskGrahamyGraphAnnotation)
+  .addNode("classifyIntent", classifyIntentNode)
+  .addNode("fetchBaseSnapshots", fetchBaseSnapshotsNode)
+  .addNode("selectTools", selectToolsNode)
+  .addNode("executeTools", executeToolsNode)
+  .addNode("researchPlanner", researchPlannerNode)
+  .addNode("loadResearchObjects", loadResearchObjectsNode)
+  .addNode("loadPgCapabilities", loadPgCapabilitiesNode)
+  .addNode("loadPipelineOverlays", loadPipelineOverlaysNode)
+  .addNode("compileEvidence", compileEvidenceNode)
+  .addNode("buildAnswer", answerNode)
+  .addNode("buildMeta", buildMetaNode)
+  .addNode("finalizeResponse", finalizeResponseNode)
+  .addNode("safeErrorResponse", safeErrorResponseNode)
+
+  .addEdge(START, "classifyIntent")
+  .addConditionalEdges("classifyIntent", routeAfterNode, {
+    next: "fetchBaseSnapshots",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("fetchBaseSnapshots", routeAfterNode, {
+    next: "selectTools",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("selectTools", routeAfterNode, {
+    next: "executeTools",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("executeTools", routeAfterNode, {
+    next: "researchPlanner",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("researchPlanner", routeAfterResearchPlanner, {
+    plannerHandled: "compileEvidence",
+    standardLoaders: "loadResearchObjects",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("loadResearchObjects", routeAfterNode, {
+    next: "loadPgCapabilities",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("loadPgCapabilities", routeAfterNode, {
+    next: "loadPipelineOverlays",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("loadPipelineOverlays", routeAfterNode, {
+    next: "compileEvidence",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("compileEvidence", routeAfterNode, {
+    next: "buildAnswer",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("buildAnswer", routeAfterNode, {
+    next: "buildMeta",
+    error: "safeErrorResponse",
+  })
+  .addConditionalEdges("buildMeta", routeAfterNode, {
+    next: "finalizeResponse",
+    error: "safeErrorResponse",
+  })
+  .addEdge("finalizeResponse", END)
+  .addEdge("safeErrorResponse", END);
+
+const compiledAskGrahamyWorkflow = askGrahamyWorkflow.compile();
+
+export { askGrahamyWorkflow };
+
 /**
  * askGrahamy graph — runs once per StocksScanner turn.
  *
- *   classify (skip if SS already supplied) → fetch base snapshots →
- *   execute snapshot tools → load research objects (priors + SQL miss) →
- *   compile publicResearchView (UI surface) → invoke Grahamy deep agent
- *   (PostgresSaver memory keyed on conversationId) → moat guard → return.
+ *   classify (skip if SS already supplied) -> fetch base snapshots ->
+ *   execute snapshot tools -> research planner ->
+ *     planner handled: compile evidence -> synthesize answer -> moat guard
+ *     standard path: load research objects/capabilities/overlays ->
+ *       compile evidence -> invoke Grahamy deep agent -> moat guard.
  *
  * Conversation memory lives in PostgresSaver via `thread_id = conversationId`,
  * NOT in a separate JSON conversation store. Follow-up resolution happens
@@ -129,121 +357,288 @@ export async function runAskGrahamyGraph(
   state.messageId = crypto.randomUUID();
 
   const snapshotClient = options.snapshotClient ?? new GrahamySnapshotClient();
+  const graphState: AskGrahamyGraphState = {
+    ...state,
+    options,
+    snapshotClient,
+    plannerHandled: false,
+  };
 
   try {
-    if (!state.classification) {
-      await classifyIntent(state, options.classifier);
+    const finalState = await compiledAskGrahamyWorkflow.invoke(graphState);
+    if (finalState.response) return finalState.response;
+    const missingResponseError = finalState.error
+      ? new Error(finalState.error)
+      : new Error("Ask Grahamy graph completed without a response.");
+    return await finalizeSafeGraphError(
+      toAskGrahamyState(finalState),
+      missingResponseError,
+    );
+  } catch (err) {
+    return await finalizeSafeGraphError(state, err);
+  }
+}
+
+function toAskGrahamyState(
+  state: AskGrahamyLangGraphState | AskGrahamyGraphState,
+): AskGrahamyState {
+  return {
+    ...state,
+    warnings: [...(state.warnings ?? [])],
+  };
+}
+
+function patchFromAskGrahamyState(
+  state: AskGrahamyState,
+): Partial<AskGrahamyGraphState> {
+  return {
+    ...state,
+    warnings: [...state.warnings],
+  };
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function runGraphNode(
+  state: AskGrahamyLangGraphState,
+  action: () => Promise<Partial<AskGrahamyGraphState>>,
+): Promise<Partial<AskGrahamyGraphState>> {
+  if (state.error) return {};
+  try {
+    return await action();
+  } catch (err) {
+    return { error: errorMessage(err) };
+  }
+}
+
+async function classifyIntentNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    if (!next.classification) {
+      await classifyIntent(next, state.options.classifier);
     }
+    return patchFromAskGrahamyState(next);
+  });
+}
 
-    // We deliberately do NOT short-circuit on `intent === "unknown"` here.
-    // With the deep agent + PostgresSaver thread memory, a turn with no
-    // freshly-named anchors is most often a legitimate follow-up like
-    // "what are the risks?" / "ומה הסיכונים?" — the agent has the prior
-    // turn(s) in memory and can answer. For genuinely off-topic first turns
-    // ("what's the weather?"), the agent's system prompt grounds it and it
-    // redirects to a stock/sector question naturally.
+async function fetchBaseSnapshotsNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    await fetchBaseSnapshots(next, state.snapshotClient);
+    return patchFromAskGrahamyState(next);
+  });
+}
 
-    await fetchBaseSnapshots(state, snapshotClient);
-    selectTools(state);
-    await executeTools(state);
-    const plannerHandled = await maybeRunResearchPlanner(state, options);
-    if (!plannerHandled) {
-      await loadResearchObjects(state);
-      await loadPgCapabilities(state, options.pgCapabilityRunner);
-      await loadPipelineOverlays(state, options.pipelineOverlayRunner);
-    }
+async function selectToolsNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    selectTools(next);
+    return patchFromAskGrahamyState(next);
+  });
+}
 
-    // publicResearchView is built for response.research / UI consumption.
-    // The deep agent reads its evidence from state.researchObjects directly,
-    // not from this view, so this is purely for the response payload shape.
-    state.publicResearchView = compilePublicResearchView({
-      classification: state.classification ?? EMPTY_CLASSIFICATION,
+async function executeToolsNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    await executeTools(next);
+    return patchFromAskGrahamyState(next);
+  });
+}
+
+async function researchPlannerNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    const plannerHandled = await maybeRunResearchPlanner(next, state.options);
+    return {
+      ...patchFromAskGrahamyState(next),
+      plannerHandled,
+    };
+  });
+}
+
+async function loadResearchObjectsNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    await loadResearchObjects(next);
+    return patchFromAskGrahamyState(next);
+  });
+}
+
+async function loadPgCapabilitiesNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    await loadPgCapabilities(next, state.options.pgCapabilityRunner);
+    return patchFromAskGrahamyState(next);
+  });
+}
+
+async function loadPipelineOverlaysNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    await loadPipelineOverlays(next, state.options.pipelineOverlayRunner);
+    return patchFromAskGrahamyState(next);
+  });
+}
+
+async function compileEvidenceNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    next.publicResearchView = compilePublicResearchView({
+      classification: next.classification ?? EMPTY_CLASSIFICATION,
       previousContext: undefined,
-      snapshots: state.snapshots ?? {},
-      toolOutputs: state.toolOutputs ?? {},
-      researchObjects: state.researchObjects ?? [],
-      pgCapabilityViews: state.pgCapabilityViews,
-      pipelineOverlayViews: state.pipelineOverlayViews,
-      warnings: state.warnings,
+      snapshots: next.snapshots ?? {},
+      toolOutputs: next.toolOutputs ?? {},
+      researchObjects: next.researchObjects ?? [],
+      pgCapabilityViews: next.pgCapabilityViews,
+      pipelineOverlayViews: next.pipelineOverlayViews,
+      warnings: next.warnings,
     });
-    state.evidencePack = state.workflowExecutionResult
-      ? buildEvidencePackFromWorkflowExecution(state.workflowExecutionResult)
-      : buildEvidencePack(state);
-    state.analystBrief = buildAnalystBriefContract(state.evidencePack);
+    next.evidencePack = next.workflowExecutionResult
+      ? buildEvidencePackFromWorkflowExecution(next.workflowExecutionResult)
+      : buildEvidencePack(next);
+    next.analystBrief = buildAnalystBriefContract(next.evidencePack);
+    return patchFromAskGrahamyState(next);
+  });
+}
 
-    if (state.workflowExecutionResult) {
+async function answerNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    if (next.workflowExecutionResult) {
+      next.evidencePack =
+        next.evidencePack ??
+        buildEvidencePackFromWorkflowExecution(next.workflowExecutionResult);
       const synthesis = await (
-        options.analystBriefSynthesizer ?? synthesizeAnalystBriefFromEvidencePack
+        state.options.analystBriefSynthesizer ??
+        synthesizeAnalystBriefFromEvidencePack
       )({
-        message: state.message,
-        evidencePack: state.evidencePack,
+        message: next.message,
+        evidencePack: next.evidencePack,
       });
-      state.warnings.push(...synthesis.warnings);
-      state.analystBrief = synthesis.brief;
+      next.warnings.push(...synthesis.warnings);
+      next.analystBrief = synthesis.brief;
       const rendered = renderAnalystBriefToAnswer(synthesis.brief);
-      state.answer = rendered.answer;
-      state.ui = rendered.ui;
+      next.answer = rendered.answer;
+      next.ui = rendered.ui;
     } else {
-      // Hand off to the deep agent. It composes the actual user-facing answer
-      // by reading state.researchObjects + state.message + its PostgresSaver
-      // thread history (prior turns in this conversation).
-      const grahamy = await (options.grahamyAgentRunner ?? runGrahamyDeepAgent)(state);
-      state.warnings.push(...grahamy.warnings);
-
-      state.answer = {
+      // The deep agent composes the user-facing answer from the turn evidence
+      // and its own PostgresSaver thread history keyed by conversationId.
+      const grahamy = await (
+        state.options.grahamyAgentRunner ?? runGrahamyDeepAgent
+      )(next);
+      next.warnings.push(...grahamy.warnings);
+      next.answer = {
         headline: "",
         summary: grahamy.answerText,
         bullets: [],
         watchpoints: [],
         disclaimer: DEFAULT_DISCLAIMER,
       };
-      state.ui = {
+      next.ui = {
         cards: [],
         tables: [],
-        // Use the agent-generated, conversation-aware follow-ups. If the agent
-        // didn't emit any (parse miss / model skipped the section), leave the
-        // array empty rather than falling back to a generic hardcoded list —
-        // a generic list would defeat the point of context-aware suggestions.
         suggestedFollowups: grahamy.suggestedFollowups,
       };
     }
-    state.meta = buildMeta(
-      state.selectedTools ?? [],
-      state.snapshots ?? {},
-      state.warnings,
-      state.classification ?? EMPTY_CLASSIFICATION,
-      state.researchObjects ?? [],
-      state.researchObjectCacheStats,
-      state.researchObjectsUpdated ?? [],
-      state.pgCapabilityViews,
-      state.capabilityViewsUpdated ?? [],
-      state.capabilityViewCacheStats,
-      state.pipelineOverlayViews,
-    );
+    return patchFromAskGrahamyState(next);
+  });
+}
 
-    return await finalizeResponse(state);
-  } catch (err) {
-    logger.error("Ask Grahamy graph failed", {
-      userId: state.internalUserId,
-      conversationId: state.conversationId,
-      messageId: state.messageId,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    state.answer = buildSafeErrorAnswer();
-    state.classification = state.classification ?? EMPTY_CLASSIFICATION;
-    state.publicResearchView = state.publicResearchView ?? EMPTY_PUBLIC_RESEARCH_VIEW;
-    state.ui = state.ui ?? { cards: [], tables: [], suggestedFollowups: [] };
-    state.meta = buildMeta(
-      state.selectedTools ?? [],
-      state.snapshots ?? {},
-      [
-        ...state.warnings,
-        "Ask Grahamy failed before a safe answer could be completed.",
-      ],
-      state.classification,
+async function buildMetaNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    next.meta = buildMeta(
+      next.selectedTools ?? [],
+      next.snapshots ?? {},
+      next.warnings,
+      next.classification ?? EMPTY_CLASSIFICATION,
+      next.researchObjects ?? [],
+      next.researchObjectCacheStats,
+      next.researchObjectsUpdated ?? [],
+      next.pgCapabilityViews,
+      next.capabilityViewsUpdated ?? [],
+      next.capabilityViewCacheStats,
+      next.pipelineOverlayViews,
     );
-    return await finalizeResponse(state, "error");
-  }
+    return patchFromAskGrahamyState(next);
+  });
+}
+
+async function finalizeResponseNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    const response = await finalizeResponse(next);
+    return {
+      ...patchFromAskGrahamyState(next),
+      response,
+    };
+  });
+}
+
+async function safeErrorResponseNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  const next = toAskGrahamyState(state);
+  const response = await finalizeSafeGraphError(
+    next,
+    new Error(state.error ?? "Unknown Ask Grahamy graph error."),
+  );
+  return {
+    ...patchFromAskGrahamyState(next),
+    response,
+  };
+}
+
+async function finalizeSafeGraphError(
+  state: AskGrahamyState,
+  err: unknown,
+): Promise<AskGrahamyResponse> {
+  logger.error("Ask Grahamy graph failed", {
+    userId: state.internalUserId,
+    conversationId: state.conversationId,
+    messageId: state.messageId,
+    error: errorMessage(err),
+  });
+  state.answer = buildSafeErrorAnswer();
+  state.classification = state.classification ?? EMPTY_CLASSIFICATION;
+  state.publicResearchView = state.publicResearchView ?? EMPTY_PUBLIC_RESEARCH_VIEW;
+  state.ui = state.ui ?? { cards: [], tables: [], suggestedFollowups: [] };
+  state.meta = buildMeta(
+    state.selectedTools ?? [],
+    state.snapshots ?? {},
+    [
+      ...state.warnings,
+      "Ask Grahamy failed before a safe answer could be completed.",
+    ],
+    state.classification,
+  );
+  return await finalizeResponse(state, "error");
 }
 
 async function classifyIntent(
@@ -258,7 +653,7 @@ async function classifyIntent(
 
 async function fetchBaseSnapshots(
   state: AskGrahamyState,
-  snapshotClient: GrahamySnapshotClient,
+  snapshotClient: SnapshotClient,
 ): Promise<void> {
   state.snapshots = await snapshotClient.fetchPublishedSnapshots();
   if (state.snapshots.freshness?.staleReason) {
