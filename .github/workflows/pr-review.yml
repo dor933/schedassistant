@@ -1,0 +1,84 @@
+name: PR Review Webhook
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  notify-agent:
+    # Only fire for "changes_requested" reviews
+    if: github.event.review.state == 'changes_requested'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch PR review comments
+        id: comments
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: reviews } = await github.rest.pulls.listReviews({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            // Get the review that triggered this event
+            const thisReview = reviews.find(r => r.id === context.payload.review.id);
+            const reviewBody = thisReview?.body || '';
+
+            // Fetch inline review comments for this PR
+            const { data: prComments } = await github.rest.pulls.listReviewComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+            });
+
+            // Filter to comments from this review
+            const reviewComments = prComments
+              .filter(c => c.pull_request_review_id === context.payload.review.id)
+              .map(c => ({
+                path: c.path,
+                line: c.line || c.original_line || null,
+                body: c.body,
+              }));
+
+            core.setOutput('review_body', reviewBody);
+            core.setOutput('comments', JSON.stringify(reviewComments));
+
+      - name: Look up repository ID
+        id: repo-lookup
+        run: |
+          # The repository ID is stored as a label on the PR by the epic orchestrator
+          # Format: "epic-repo:<uuid>"
+          REPO_ID=$(echo '${{ toJSON(github.event.pull_request.labels) }}' | \
+            jq -r '.[] | select(.name | startswith("epic-repo:")) | .name | sub("epic-repo:"; "")')
+
+          if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
+            echo "No epic-repo label found on PR — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "repository_id=$REPO_ID" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Notify agent service
+        if: steps.repo-lookup.outputs.skip != 'true'
+        env:
+          AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
+          EPIC_WEBHOOK_SECRET: ${{ secrets.EPIC_WEBHOOK_SECRET }}
+        run: |
+          curl -sf -X POST "$AGENT_SERVICE_URL/api/epics/hooks/pr-changes-requested" \
+            -H "Content-Type: application/json" \
+            -H "X-Webhook-Secret: $EPIC_WEBHOOK_SECRET" \
+            -d "$(jq -n \
+              --arg repoId "${{ steps.repo-lookup.outputs.repository_id }}" \
+              --argjson prNumber "${{ github.event.pull_request.number }}" \
+              --arg reviewBody "${{ steps.comments.outputs.review_body }}" \
+              --argjson comments '${{ steps.comments.outputs.comments }}' \
+              '{
+                repositoryId: $repoId,
+                prNumber: $prNumber,
+                reviewBody: $reviewBody,
+                comments: $comments
+              }'
+            )"

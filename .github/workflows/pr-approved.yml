@@ -1,0 +1,43 @@
+name: PR Approved Webhook
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  notify-agent:
+    if: github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Look up repository ID
+        id: repo-lookup
+        run: |
+          REPO_ID=$(echo '${{ toJSON(github.event.pull_request.labels) }}' | \
+            jq -r '.[] | select(.name | startswith("epic-repo:")) | .name | sub("epic-repo:"; "")')
+
+          if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
+            echo "No epic-repo label found on PR — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "repository_id=$REPO_ID" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Notify agent service
+        if: steps.repo-lookup.outputs.skip != 'true'
+        env:
+          AGENT_SERVICE_URL: ${{ secrets.AGENT_SERVICE_URL }}
+          EPIC_WEBHOOK_SECRET: ${{ secrets.EPIC_WEBHOOK_SECRET }}
+        run: |
+          curl -sf -X POST "$AGENT_SERVICE_URL/api/epics/hooks/pr-approved" \
+            -H "Content-Type: application/json" \
+            -H "X-Webhook-Secret: $EPIC_WEBHOOK_SECRET" \
+            -d "$(jq -n \
+              --arg repoId "${{ steps.repo-lookup.outputs.repository_id }}" \
+              --argjson prNumber "${{ github.event.pull_request.number }}" \
+              '{
+                repositoryId: $repoId,
+                prNumber: $prNumber
+              }'
+            )"
