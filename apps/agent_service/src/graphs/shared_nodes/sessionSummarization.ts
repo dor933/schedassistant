@@ -17,7 +17,7 @@ import { resolveModelSlug } from "../../chat/modelResolution";
 import { anthropicBaseConfig } from "../../chat/anthropic/anthropicContextManagement";
 import { resolveOrgVendor, type ResolvedOrgVendor } from "../../utils/resolveOrgVendor.service";
 import { runCodexOneShot } from "../../chat/codex/codexOneShot";
-import { loadCodexAuthObjectForAgent } from "../../utils/codexAuthJson.service";
+import { loadCodexAuthObjectForAgentWithOrg } from "../../utils/codexAuthJson.service";
 import { shouldUseCodexSdk } from "../../chat/codex/codexSdkRunner";
 import { runAnthropicOneShot } from "../../chat/anthropic/anthropicOneShot";
 import { shouldUseAgentSdk } from "../../chat/anthropic/agentSdkRunner";
@@ -112,11 +112,12 @@ async function resolveSummarizationVendor(
   summarizationSlug: string;
   /**
    * OpenAI-only: structured Codex auth.json blob. When set, Codex CLI
-   * authenticates from a per-turn temp $HOME instead of the OPENAI_API_KEY
-   * env var — see slice 14. null for every other vendor and for orgs
-   * that only configured an OpenAI API key.
+   * authenticates from a materialised $HOME instead of the OPENAI_API_KEY
+   * env var. null for every other vendor and for orgs that only configured
+   * an OpenAI API key.
    */
   codexAuthObject: Record<string, unknown> | null;
+  codexAuthOrganizationId: string | null;
 }> {
   const agentChatSlug = await resolveModelSlug(agentId);
   const vendor = await resolveOrgVendor(agentChatSlug, agentId ?? null);
@@ -128,10 +129,11 @@ async function resolveSummarizationVendor(
   // Codex's auth_object path is OpenAI-only and lives in a separate DB row
   // (key_type='auth_object'), so `resolveOrgVendor` won't surface it. Look
   // it up here so the apiKey-required check below can accept either path.
-  const codexAuthObject =
+  const codexAuth =
     vendor.vendorSlug === "openai"
-      ? await loadCodexAuthObjectForAgent(agentId ?? null)
+      ? await loadCodexAuthObjectForAgentWithOrg(agentId ?? null)
       : null;
+  const codexAuthObject = codexAuth?.authObject ?? null;
   if (!vendor.apiKey && !codexAuthObject) {
     throw new Error(
       `Cannot summarize session: this organization has not configured an API key for ${vendor.vendorSlug}`,
@@ -141,7 +143,12 @@ async function resolveSummarizationVendor(
   if (!summarizationSlug) {
     throw new Error(`Unsupported vendor "${vendor.vendorSlug}" for session summarization`);
   }
-  return { vendor, summarizationSlug, codexAuthObject };
+  return {
+    vendor,
+    summarizationSlug,
+    codexAuthObject,
+    codexAuthOrganizationId: codexAuth?.organizationId ?? null,
+  };
 }
 
 /**
@@ -361,8 +368,12 @@ export async function sessionSummarizationNode(
           });
         }
 
-        const { vendor, summarizationSlug, codexAuthObject } =
-          await resolveSummarizationVendor(agentId);
+        const {
+          vendor,
+          summarizationSlug,
+          codexAuthObject,
+          codexAuthOrganizationId,
+        } = await resolveSummarizationVendor(agentId);
 
         // Strong "this is data, not a chat turn" framing.
         //
@@ -426,6 +437,7 @@ export async function sessionSummarizationNode(
           const json = await runCodexOneShot({
             apiKey: codexAuthObject ? null : (vendor.apiKey ?? null),
             authObject: codexAuthObject,
+            authObjectOrganizationId: codexAuthOrganizationId,
             model: summarizationSlug,
             systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
             userPrompt,

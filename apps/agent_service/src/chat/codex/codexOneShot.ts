@@ -34,11 +34,14 @@ export interface CodexOneShotOptions {
    *  supply `authObject` instead. */
   apiKey?: string | null;
   /** Per-org Codex CLI auth.json blob (ChatGPT-account login).
-   *  Optional — when present, materialised to a per-turn temp $HOME
+   *  Optional — when present, materialised to a Codex-compatible $HOME
    *  for the spawned CLI to read. Mutually exclusive with `apiKey`
    *  in practice (matches the row-level CHECK on
    *  `organization_vendor_api_keys`). */
   authObject?: Record<string, unknown> | null;
+  /** Organization id for authObject. When supplied, Codex uses the
+   *  persistent per-org home under the agent Codex volume. */
+  authObjectOrganizationId?: string | null;
   /** Model slug — e.g. "gpt-4o" for cheap summarization, or whatever the
    *  caller's pricing tier wants. */
   model: string;
@@ -113,13 +116,10 @@ export async function runCodexOneShot(
     async () => {
       const sdk = await loadCodexSdk();
 
-      // When we're on the auth_object path, materialise it to a fresh
-      // temp $HOME so the spawned CLI reads our per-turn auth.json. Same
-      // pattern as `runOpenAiCodexSdk`. Cleaned up in the finally block
-      // below — no shared file, no race between concurrent one-shots
-      // from different orgs.
       const materialised = useAuthObject
-        ? await materialiseCodexHome(opts.authObject as Record<string, unknown>)
+        ? await materialiseCodexHome(opts.authObject as Record<string, unknown>, {
+            organizationId: opts.authObjectOrganizationId ?? null,
+          })
         : null;
       try {
         const codexOptions: CodexOptions = {

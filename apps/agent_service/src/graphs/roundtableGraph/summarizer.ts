@@ -19,7 +19,7 @@ import {
 } from "../../langfuse";
 import { logger } from "../../logger";
 import { runCodexOneShot } from "../../chat/codex/codexOneShot";
-import { loadCodexAuthObjectForAgent } from "../../utils/codexAuthJson.service";
+import { loadCodexAuthObjectForAgentWithOrg } from "../../utils/codexAuthJson.service";
 import { shouldUseCodexSdk } from "../../chat/codex/codexSdkRunner";
 import { runAnthropicOneShot } from "../../chat/anthropic/anthropicOneShot";
 import { shouldUseAgentSdk } from "../../chat/anthropic/agentSdkRunner";
@@ -173,10 +173,11 @@ export async function summarizeRoundtable(
   // Look up the auth_object alongside the api_key so we can satisfy the
   // "must have at least one credential" check whichever path the org
   // configured.
-  const codexAuthObject =
+  const codexAuth =
     vendor.vendorSlug === "openai"
-      ? await loadCodexAuthObjectForAgent(primaryAgentId)
+      ? await loadCodexAuthObjectForAgentWithOrg(primaryAgentId)
       : null;
+  const codexAuthObject = codexAuth?.authObject ?? null;
   if (!vendor.apiKey && !codexAuthObject) {
     throw new Error(
       `Cannot summarize roundtable: this organization has not configured an API key for ${vendor.vendorSlug}`,
@@ -257,6 +258,7 @@ export async function summarizeRoundtable(
             // the org only configured a plain OpenAI key.
             apiKey: codexAuthObject ? null : (vendor!.apiKey ?? null),
             authObject: codexAuthObject,
+            authObjectOrganizationId: codexAuth?.organizationId ?? null,
             model: modelSlug,
             systemPrompt: sysPrompt,
             userPrompt: usrPrompt,

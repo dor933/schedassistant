@@ -89,9 +89,9 @@ export async function resolveOrgVendor(
  * subscription-tier billing (Pro/Max). Rows that store a structured
  * `auth_object` (Codex CLI's auth.json) are SKIPPED here — the
  * Codex SDK runner looks them up separately via
- * `loadCodexAuthObjectForAgent` and materialises the blob to a per-turn
- * temp $HOME. Skipping them avoids returning a row whose `api_key` is
- * null (post-migration-127 it can be).
+ * `loadCodexAuthObjectForAgentWithOrg` and materialises the blob into a
+ * Codex-compatible $HOME. Skipping them avoids returning a row whose
+ * `api_key` is null (post-migration-127 it can be).
  */
 function pickPreferredCredential(
   rows: {

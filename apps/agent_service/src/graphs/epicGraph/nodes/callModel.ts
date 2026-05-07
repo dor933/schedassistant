@@ -66,6 +66,7 @@ import {
   StartAnthropicEpicTaskTool,
 } from "../../../tools/epicTaskTools";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
+import { UnsplashSearchPhotosTool } from "../../../tools/unsplashPhotoTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
@@ -285,6 +286,8 @@ export async function epicCallModelNode(
     tools.push(GetRepositoryTool());
   if (has("send_file_to_user"))
     tools.push(SendFileToUserTool(agentId));
+  if (has("unsplash_search_photos"))
+    tools.push(UnsplashSearchPhotosTool());
   if (has("search_epic_tasks_by_date"))
     tools.push(SearchEpicTasksByDateTool());
   if (has("get_epic_task_stages_and_tasks"))

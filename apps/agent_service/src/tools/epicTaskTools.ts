@@ -14,7 +14,7 @@ import {
   TaskExecution,
 } from "@scheduling-agent/database";
 import { runCodexInRepo } from "../chat/codex/codexInRepo";
-import { loadCodexAuthObjectForAgent } from "../utils/codexAuthJson.service";
+import { loadCodexAuthObjectForAgentWithOrg } from "../utils/codexAuthJson.service";
 import { resolveOrgVendor } from "../utils/resolveOrgVendor.service";
 import { resolveModelSlug } from "../chat/modelResolution";
 import { ensureSessionWorkspace } from "../workspace/sessionWorkspace";
@@ -1276,6 +1276,7 @@ const CODEX_EXECUTE_SYSTEM_PROMPT_BASE =
 interface ResolvedCodexAgentCredential {
   apiKey: string | null;
   authObject: Record<string, unknown> | null;
+  authObjectOrganizationId: string | null;
   modelSlug: string;
 }
 
@@ -1291,12 +1292,14 @@ async function resolveCodexAgentCredential(
   const modelSlug = await resolveModelSlug(agentId);
   const vendor = await resolveOrgVendor(modelSlug, agentId);
   if (!vendor || vendor.vendorSlug !== "openai") return null;
-  const authObject = await loadCodexAuthObjectForAgent(agentId);
+  const codexAuth = await loadCodexAuthObjectForAgentWithOrg(agentId);
+  const authObject = codexAuth?.authObject ?? null;
   const apiKey = vendor.apiKey ?? null;
   if (!authObject && !apiKey) return null;
   return {
     apiKey: authObject ? null : apiKey,
     authObject,
+    authObjectOrganizationId: codexAuth?.organizationId ?? null,
     modelSlug,
   };
 }
@@ -1397,6 +1400,7 @@ export function PlanEpicTaskCodexTool(callerAgentId: string) {
         const result = await runCodexInRepo({
           apiKey: cred.apiKey,
           authObject: cred.authObject,
+          authObjectOrganizationId: cred.authObjectOrganizationId,
           model: cred.modelSlug,
           systemPrompt: CODEX_PLAN_SYSTEM_PROMPT,
           userPrompt,
@@ -1646,6 +1650,7 @@ export function StartEpicTaskCodexTool(
               const result = await runCodexInRepo({
                 apiKey: cred.apiKey,
                 authObject: cred.authObject,
+                authObjectOrganizationId: cred.authObjectOrganizationId,
                 model: cred.modelSlug,
                 systemPrompt,
                 userPrompt,

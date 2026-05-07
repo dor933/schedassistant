@@ -35,6 +35,7 @@ import { googleTools } from "../tools/googleTools";
 import { ListSystemAgentsTool } from "../tools/listSystemAgentsTool";
 import { ListAgentsTool } from "../tools/listAgentsTool";
 import { TavilySearchTool } from "../tools/tavilySearchTool";
+import { UnsplashSearchPhotosTool } from "../tools/unsplashPhotoTool";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogle } from "@langchain/google";
@@ -740,6 +741,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
               const has = (slug: string) => activeSlugs.has(slug);
               const configurableTools: any[] = [];
               if (has("query_database")) configurableTools.push(QueryDatabaseTool());
+              if (has("unsplash_search_photos")) configurableTools.push(UnsplashSearchPhotosTool());
               if (has("consult_agent"))
                 configurableTools.push(ConsultAgentTool(executorAgent.id, userId, groupId ?? null, singleChatId ?? null));
               if (has("list_agents")) configurableTools.push(ListAgentsTool(executorAgent.id));

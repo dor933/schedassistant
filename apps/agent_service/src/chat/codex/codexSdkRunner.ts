@@ -82,7 +82,7 @@ import {
   updateActiveObservation,
 } from "../../langfuse";
 import {
-  loadCodexAuthObjectForAgent,
+  loadCodexAuthObjectForAgentWithOrg,
   materialiseCodexHome,
 } from "../../utils/codexAuthJson.service";
 
@@ -690,21 +690,22 @@ async function runOpenAiCodexSdkImpl(
     },
   });
 
-  // Per-turn Codex auth materialisation. Two paths:
+  // Codex auth materialisation. Two paths:
   //   - When the org has an `auth_object` row (ChatGPT-account login),
-  //     materialise the blob to a fresh temp $HOME's `.codex/auth.json`
-  //     and point the spawned CLI there via env.HOME. We do NOT set
-  //     OPENAI_API_KEY (the CLI's env-first lookup would otherwise win
-  //     over our auth.json).
+  //     materialise the blob to a persistent per-org $HOME's
+  //     `.codex/auth.json` and point the spawned CLI there via env.HOME.
+  //     We do NOT set OPENAI_API_KEY (the CLI's env-first lookup would
+  //     otherwise win over our auth.json). Keeping the $HOME stable per
+  //     org lets Codex resume the persisted `Thread.codexThreadId` because
+  //     its local rollout/session cache survives across turns.
   //   - When the org only has a plain `api_key`, point HOME at the
   //     default agent home and inject OPENAI_API_KEY normally.
-  //
-  // The temp dir is cleaned up in the outer `finally` block so each
-  // turn's auth.json is gone before the next one runs — multi-tenant
-  // safe under concurrent turns.
-  const codexAuthObject = await loadCodexAuthObjectForAgent(agentId);
+  const codexAuth = await loadCodexAuthObjectForAgentWithOrg(agentId);
+  const codexAuthObject = codexAuth?.authObject ?? null;
   const materialised = codexAuthObject
-    ? await materialiseCodexHome(codexAuthObject)
+    ? await materialiseCodexHome(codexAuthObject, {
+        organizationId: codexAuth?.organizationId ?? null,
+      })
     : null;
   // When using an auth_object, prefer it over the simple-string apiKey
   // (the auth_object path is the ChatGPT-account billing route the
@@ -916,9 +917,8 @@ async function runOpenAiCodexSdkImpl(
     };
   } finally {
     releaseTools(registryId);
-    // Wipe the per-turn temp $HOME (with its materialised auth.json)
-    // before another turn can race in. Idempotent — `cleanup()` is
-    // safe to call repeatedly.
+    // Idempotent. For persistent per-org Codex homes this is a no-op; for
+    // temp homes used by other call paths it wipes the materialised auth.
     if (materialised) {
       try {
         await materialised.cleanup();

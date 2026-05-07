@@ -124,6 +124,7 @@ export async function runArchitectureScan(
     const result = await runCodexScanCwd({
       apiKey: codexCred.apiKey,
       authObject: codexCred.authObject,
+      authObjectOrganizationId: codexCred.authObjectOrganizationId,
       model: CODEX_SCAN_MODEL,
       systemPrompt: SCAN_SYSTEM_PROMPT,
       userPrompt: opts.prompt,
@@ -168,6 +169,7 @@ interface AnthropicCred {
 interface CodexCred {
   apiKey: string | null;
   authObject: Record<string, unknown> | null;
+  authObjectOrganizationId: string | null;
 }
 
 /**
@@ -251,5 +253,6 @@ async function resolveCodexCredentialForOrg(
   return {
     apiKey: apiKeyRow?.apiKey ?? null,
     authObject: authObjectRow?.authObject ?? null,
+    authObjectOrganizationId: authObjectRow ? organizationId : null,
   };
 }

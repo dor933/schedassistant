@@ -38,6 +38,7 @@ import {
 } from "../../../tools/roundtableRecallTools";
 import { ListProjectsTool, ListRepositoriesTool, GetRepositoryTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
+import { UnsplashSearchPhotosTool } from "../../../tools/unsplashPhotoTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
@@ -267,6 +268,8 @@ export async function roundtableCallModelNode(
     tools.push(GetRepositoryTool());
   if (has("query_database"))
     tools.push(QueryDatabaseTool());
+  if (has("unsplash_search_photos"))
+    tools.push(UnsplashSearchPhotosTool());
 
   // Vendor-conditional auto-bind for Claude Agent SDK's `Task` discovery
   // (slice 19). The roundtable runner doesn't pass sub-agent bundles to

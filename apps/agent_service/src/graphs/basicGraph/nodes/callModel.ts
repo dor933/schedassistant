@@ -43,6 +43,7 @@ import {
 } from "../../../tools/roundtableRecallTools";
 import { ListProjectsTool, ListRepositoriesTool, GetRepositoryTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
+import { UnsplashSearchPhotosTool } from "../../../tools/unsplashPhotoTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { InvokeApplicationAgentTool } from "../../../tools/invokeApplicationAgentTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
@@ -356,6 +357,8 @@ export async function callModelNode(
     tools.push(GetRepositoryTool());
   if (has("query_database"))
     tools.push(QueryDatabaseTool());
+  if (has("unsplash_search_photos"))
+    tools.push(UnsplashSearchPhotosTool());
   if (has("send_file_to_user"))
     tools.push(SendFileToUserTool(agentId));
   if (has("invoke_application_agent"))

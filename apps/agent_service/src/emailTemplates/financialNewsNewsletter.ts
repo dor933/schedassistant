@@ -214,6 +214,7 @@ export const financialNewsNewsletterTemplate = (content: FinancialNewsNewsletter
           .story-content p:last-child { margin-bottom: 0; }
           .story-meta { color: #9AA6B2 !important; letter-spacing: 0.6px; }
           .fine-print { font-size: 13px; color: #9AA6B2 !important; line-height: 1.5; }
+          .footer-line { padding-bottom: 10px; }
         </mj-style>
 
         <mj-style>
@@ -224,6 +225,7 @@ export const financialNewsNewsletterTemplate = (content: FinancialNewsNewsletter
             .story-headline div { font-size: 19px !important; }
             .story-content div, .story-content p { font-size: 14px !important; }
             .fine-print { font-size: 12px !important; }
+            .footer-line { padding-bottom: 14px !important; }
           }
         </mj-style>
       </mj-head>
@@ -269,11 +271,11 @@ export const financialNewsNewsletterTemplate = (content: FinancialNewsNewsletter
           `
           <mj-divider border-width="1px" border-style="solid" border-color="#2A3441" padding="20px 0" />
 
-          <mj-text css-class="fine-print" align="center" padding="0 0 8px 0" color="#9AA6B2">
+          <mj-text css-class="fine-print footer-line" align="center" padding="0 0 10px 0" color="#9AA6B2">
             Market news is provided for informational purposes only and is not financial advice.
           </mj-text>
 
-          <mj-text css-class="fine-print" align="center" padding="0 0 8px 0" color="#9AA6B2">
+          <mj-text css-class="fine-print footer-line" align="center" padding="0 0 10px 0" color="#9AA6B2">
             Need assistance? Our team is available at
             <a href="mailto:office@grahamy.com" style="color: #D4AF37; text-decoration: none;">office@grahamy.com</a>
           </mj-text>
