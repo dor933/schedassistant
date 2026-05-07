@@ -716,7 +716,7 @@ function buildSectorPublicResearchObjectView(input: {
     historicalBaseRate,
     "60-day",
   );
-  const pathRisk = deriveAggregatePathRisk(historicalBaseRate);
+  const pathRisk = deriveSectorPathRisk(asRecord(input.researchObject));
   const edgeEvidence = unavailableEdgeEvidence(
     "Validated edge evidence is not yet bridged for sector Research Objects in Ask Grahamy.",
   );
@@ -773,7 +773,7 @@ function buildRegimePublicResearchObjectView(input: {
     historicalBaseRate,
     "60-day",
   );
-  const pathRisk = deriveAggregatePathRisk(historicalBaseRate);
+  const pathRisk = deriveRegimePathRisk(asRecord(input.researchObject));
   const edgeEvidence = unavailableEdgeEvidence(
     "Validated edge evidence is not yet bridged for regime Research Objects in Ask Grahamy.",
   );
@@ -1118,6 +1118,187 @@ function deriveAggregatePathRisk(
     ],
     notes: [
       "Aggregate path risk has base-rate loss probability only; daily path metrics are not available for this aggregate anchor yet.",
+    ],
+  };
+}
+
+
+function deriveSectorPathRisk(
+  researchObject: Record<string, unknown>,
+): PathRiskView {
+  const pathBase = asRecord(researchObject.path_risk_base);
+  const hasPathBase = numberFrom(pathBase.n) != null;
+
+  if (hasPathBase) {
+    const sampleSize = numberFrom(pathBase.n);
+    const sampleAdequacy = stringValue(pathBase.sample_adequacy);
+    const lossRate = numberFrom(pathBase.loss_rate_h60_pct);
+    const severeLossRate = numberFrom(pathBase.severe_loss_rate_h60_pct);
+    const p10MaxDrawdownPct = numberFrom(pathBase.p10_max_drawdown_pct);
+    const p25MaxDrawdownPct = numberFrom(pathBase.p25_max_drawdown_pct);
+    const worstMaxDrawdownPct = numberFrom(pathBase.worst_max_drawdown_pct);
+    const probDrawdownGt5Pct = numberFrom(pathBase.prob_drawdown_gt_5_pct);
+    const probDrawdownGt10Pct = numberFrom(pathBase.prob_drawdown_gt_10_pct);
+    const probDrawdownGt15Pct = numberFrom(pathBase.prob_drawdown_gt_15_pct);
+    const probDrawdownGt20Pct = numberFrom(pathBase.prob_drawdown_gt_20_pct);
+    const recoveryDays = numberFrom(pathBase.median_recovery_days);
+    const recoveredByHorizonRatePct = numberFrom(pathBase.recovered_by_horizon_rate_pct);
+    const hasNumericDrawdown =
+      p10MaxDrawdownPct != null ||
+      worstMaxDrawdownPct != null ||
+      probDrawdownGt5Pct != null ||
+      probDrawdownGt10Pct != null ||
+      probDrawdownGt15Pct != null ||
+      probDrawdownGt20Pct != null;
+    const warnings = [
+      sampleAdequacy === "INSUFFICIENT"
+        ? "Daily path-risk sample is insufficient; numeric drawdown fields are directional only."
+        : undefined,
+      !hasNumericDrawdown
+        ? "Daily path rows were present, but numeric drawdown distribution fields were unavailable."
+        : undefined,
+    ].filter((item): item is string => !!item);
+    return {
+      viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+      state: sampleAdequacy === "INSUFFICIENT" || !hasNumericDrawdown ? "partial" : "complete",
+      horizon: "60-day",
+      source: "pg_daily_price_path",
+      sampleSize,
+      observedPathCount: sampleSize,
+      sampleAdequacy: sampleAdequacy ?? undefined,
+      p10MaxDrawdownPct,
+      worstMaxDrawdownPct,
+      probDrawdownGt5Pct,
+      probDrawdownGt10Pct,
+      probDrawdownGt15Pct,
+      probDrawdownGt20Pct,
+      recoveredByHorizonRatePct,
+      lossProbabilityBucket: bucketLossRatePct(lossRate),
+      severeLossProbabilityBucket: bucketLossRatePct(severeLossRate),
+      downsideTailBucket: bucketTailOutcomePct(p25MaxDrawdownPct),
+      adverseExcursionBucket: bucketTailOutcomePct(p25MaxDrawdownPct),
+      maxDrawdownBucket: bucketTailOutcomePct(p25MaxDrawdownPct),
+      recoveryProfile: bucketRecoveryDays(recoveryDays),
+      validatedEvidence: {
+        edgeSpecificPathRisk: "unavailable",
+        sentinelRealizedDrawdown: "unavailable",
+        coronerDecay: "unavailable",
+      },
+      warnings,
+      notes: [
+        "Sector path risk is computed from daily price paths of all current sector constituents over a 60-day horizon.",
+      ],
+    };
+  }
+
+  const historicalBaseRate = asRecord(researchObject.historical_base_rate);
+  const hitRate = numberFrom(historicalBaseRate.h60_hit_rate);
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    state: hitRate == null ? "unavailable" : "partial",
+    horizon: "60-day",
+    source: hitRate == null ? "unavailable" : "analog_return_distribution",
+    lossProbabilityBucket: bucketLossProbabilityPct(hitRate),
+    validatedEvidence: {
+      edgeSpecificPathRisk: "unavailable",
+      sentinelRealizedDrawdown: "unavailable",
+      coronerDecay: "unavailable",
+    },
+    warnings: [
+      "Numeric drawdown distribution is unavailable for aggregate anchors in this Ask path.",
+    ],
+    notes: [
+      "Aggregate sector path risk has base-rate loss probability only; daily path metrics are not available for this anchor yet.",
+    ],
+  };
+}
+
+function deriveRegimePathRisk(
+  researchObject: Record<string, unknown>,
+): PathRiskView {
+  const pathBase = asRecord(researchObject.path_risk_base);
+  const hasPathBase = numberFrom(pathBase.n) != null;
+
+  if (hasPathBase) {
+    const sampleSize = numberFrom(pathBase.n);
+    const sampleAdequacy = stringValue(pathBase.sample_adequacy);
+    const lossRate = numberFrom(pathBase.loss_rate_h60_pct);
+    const severeLossRate = numberFrom(pathBase.severe_loss_rate_h60_pct);
+    const p10MaxDrawdownPct = numberFrom(pathBase.p10_max_drawdown_pct);
+    const p25MaxDrawdownPct = numberFrom(pathBase.p25_max_drawdown_pct);
+    const worstMaxDrawdownPct = numberFrom(pathBase.worst_max_drawdown_pct);
+    const probDrawdownGt5Pct = numberFrom(pathBase.prob_drawdown_gt_5_pct);
+    const probDrawdownGt10Pct = numberFrom(pathBase.prob_drawdown_gt_10_pct);
+    const probDrawdownGt15Pct = numberFrom(pathBase.prob_drawdown_gt_15_pct);
+    const probDrawdownGt20Pct = numberFrom(pathBase.prob_drawdown_gt_20_pct);
+    const recoveryDays = numberFrom(pathBase.median_recovery_days);
+    const recoveredByHorizonRatePct = numberFrom(pathBase.recovered_by_horizon_rate_pct);
+    const hasNumericDrawdown =
+      p10MaxDrawdownPct != null ||
+      worstMaxDrawdownPct != null ||
+      probDrawdownGt5Pct != null ||
+      probDrawdownGt10Pct != null ||
+      probDrawdownGt15Pct != null ||
+      probDrawdownGt20Pct != null;
+    const warnings = [
+      sampleAdequacy === "INSUFFICIENT"
+        ? "Daily path-risk sample is insufficient; numeric drawdown fields are directional only."
+        : undefined,
+      !hasNumericDrawdown
+        ? "Daily path rows were present, but numeric drawdown distribution fields were unavailable."
+        : undefined,
+    ].filter((item): item is string => !!item);
+    return {
+      viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+      state: sampleAdequacy === "INSUFFICIENT" || !hasNumericDrawdown ? "partial" : "complete",
+      horizon: "60-day",
+      source: "pg_daily_price_path",
+      sampleSize,
+      observedPathCount: sampleSize,
+      sampleAdequacy: sampleAdequacy ?? undefined,
+      p10MaxDrawdownPct,
+      worstMaxDrawdownPct,
+      probDrawdownGt5Pct,
+      probDrawdownGt10Pct,
+      probDrawdownGt15Pct,
+      probDrawdownGt20Pct,
+      recoveredByHorizonRatePct,
+      lossProbabilityBucket: bucketLossRatePct(lossRate),
+      severeLossProbabilityBucket: bucketLossRatePct(severeLossRate),
+      downsideTailBucket: bucketTailOutcomePct(p25MaxDrawdownPct),
+      adverseExcursionBucket: bucketTailOutcomePct(p25MaxDrawdownPct),
+      maxDrawdownBucket: bucketTailOutcomePct(p25MaxDrawdownPct),
+      recoveryProfile: bucketRecoveryDays(recoveryDays),
+      validatedEvidence: {
+        edgeSpecificPathRisk: "unavailable",
+        sentinelRealizedDrawdown: "unavailable",
+        coronerDecay: "unavailable",
+      },
+      warnings,
+      notes: [
+        "Regime path risk is computed from daily price paths of all constituents in the current market regime over a 60-day horizon.",
+      ],
+    };
+  }
+
+  const historicalBaseRate = asRecord(researchObject.historical_base_rate);
+  const hitRate = numberFrom(historicalBaseRate.h60_hit_rate);
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    state: hitRate == null ? "unavailable" : "partial",
+    horizon: "60-day",
+    source: hitRate == null ? "unavailable" : "analog_return_distribution",
+    lossProbabilityBucket: bucketLossProbabilityPct(hitRate),
+    validatedEvidence: {
+      edgeSpecificPathRisk: "unavailable",
+      sentinelRealizedDrawdown: "unavailable",
+      coronerDecay: "unavailable",
+    },
+    warnings: [
+      "Numeric drawdown distribution is unavailable for aggregate anchors in this Ask path.",
+    ],
+    notes: [
+      "Aggregate regime path risk has base-rate loss probability only; daily path metrics are not available for this anchor yet.",
     ],
   };
 }
