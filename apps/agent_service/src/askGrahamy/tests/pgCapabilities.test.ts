@@ -1,25 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSectorConvictionLeaderboardView } from "./pgCapabilities/sectorConvictionLeaderboard";
-import { buildSectorDeltaView } from "./pgCapabilities/sectorDelta";
-import { buildSectorDivergenceView } from "./pgCapabilities/sectorDivergence";
-import { buildSectorVsSectorComparisonView } from "./pgCapabilities/sectorVsSectorComparison";
-import { buildRegimeHistoricalPlaybookView } from "./pgCapabilities/regimeHistoricalPlaybook";
-import { buildStockIdeaDiscoveryView } from "./pgCapabilities/stockIdeaDiscovery";
-import { buildStockVsSectorComparisonView } from "./pgCapabilities/stockVsSectorComparison";
-import { buildSymbolVsSymbolComparisonView } from "./pgCapabilities/symbolVsSymbolComparison";
+import { buildSectorConvictionLeaderboardView } from "../pgCapabilities/sectorConvictionLeaderboard";
+import { buildSectorDeltaView } from "../pgCapabilities/sectorDelta";
+import { buildSectorDivergenceView } from "../pgCapabilities/sectorDivergence";
+import { buildSectorVsSectorComparisonView } from "../pgCapabilities/sectorVsSectorComparison";
+import { buildRegimeHistoricalPlaybookView } from "../pgCapabilities/regimeHistoricalPlaybook";
+import { buildStockIdeaDiscoveryView } from "../pgCapabilities/stockIdeaDiscovery";
+import { buildStockVsSectorComparisonView } from "../pgCapabilities/stockVsSectorComparison";
+import { buildSymbolVsSymbolComparisonView } from "../pgCapabilities/symbolVsSymbolComparison";
 import {
   buildCapabilityCacheKey,
   capabilityForClassification,
   capabilityForIntent,
   executePgCapabilitiesWithCache,
-} from "./pgCapabilities/registry";
-import type { CachedCapabilityView } from "./pgCapabilities/types";
-import { assessCapabilityFreshness } from "./pgCapabilities/freshnessGuard";
-import { buildFactorConditionedBacktestView } from "./pgCapabilities/factorConditionedBacktest";
-import { buildFeatureScreenView } from "./pgCapabilities/featureScreen";
-import { compilePublicResearchView } from "./publicResearch";
-import type { Classification } from "./types";
+} from "../pgCapabilities/registry";
+import type { CachedCapabilityView } from "../pgCapabilities/types";
+import { assessCapabilityFreshness } from "../pgCapabilities/freshnessGuard";
+import { buildFactorConditionedBacktestView } from "../pgCapabilities/factorConditionedBacktest";
+import { buildFeatureScreenView } from "../pgCapabilities/featureScreen";
+import { compilePublicResearchView } from "../publicResearch";
+import type { Classification } from "../types";
 
 const leaderboardClassification: Classification = {
   intent: "sector_conviction_leaderboard",

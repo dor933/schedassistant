@@ -59,7 +59,7 @@ import { observeToolCall } from "../../../langfuse";
 const MAX_TOOL_ROUNDS = 10;
 
 /** Max characters for a single tool result before truncation. */
-const MAX_TOOL_RESULT_CHARS = 10_000;
+const MAX_TOOL_RESULT_CHARS = 30_000;
 
 /**
  * Sanitizes a tool result before passing it back to the LLM:

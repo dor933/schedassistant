@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSystemPrompt } from "./grahamyAgent";
-import type { AskGrahamyState } from "./types";
+import { buildSystemPrompt } from "../grahamyAgent";
+import type { AskGrahamyState } from "../types";
 
 test("LLM prompt includes only public-safe sector leaderboard payload", () => {
   const state: AskGrahamyState = {

@@ -2,21 +2,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { PipelineOverlayClient } from "./pipelineOverlays/client";
-import { PIPELINE_OVERLAY_FORBIDDEN_TERMS } from "./pipelineOverlays/forbiddenFields";
-import { mapManifestToPublicFreshness } from "./pipelineOverlays/manifestFreshness";
+import { PipelineOverlayClient } from "../pipelineOverlays/client";
+import { PIPELINE_OVERLAY_FORBIDDEN_TERMS } from "../pipelineOverlays/forbiddenFields";
+import { mapManifestToPublicFreshness } from "../pipelineOverlays/manifestFreshness";
 import {
   createPublicOverlayResult,
   stripForbiddenPipelineOverlayFields,
-} from "./pipelineOverlays/publicMapper";
+} from "../pipelineOverlays/publicMapper";
 import {
   PIPELINE_OVERLAY_REGISTRY,
   pipelineOverlayRegistryEntry,
-} from "./pipelineOverlays/registry";
+} from "../pipelineOverlays/registry";
 import {
   executeValidatedEdgeEvidenceOverlay,
   mapValidatedEdgeEvidenceView,
-} from "./pipelineOverlays/validatedEdgeEvidence";
+} from "../pipelineOverlays/validatedEdgeEvidence";
 
 type CapturedRequest = {
   url: string;

@@ -1,0 +1,141 @@
+import type {
+  CachedResearchObject,
+  Classification,
+  PgCapabilityViews,
+  PipelineOverlayViews,
+  ResponseMeta,
+  SnapshotBundle,
+  ToolName,
+} from "../types";
+import { EMPTY_CLASSIFICATION } from "../types";
+import {
+  type AskGrahamyGraphState,
+  type AskGrahamyLangGraphState,
+  type CachedCapabilityView,
+  patchFromAskGrahamyState,
+  runGraphNode,
+  toAskGrahamyState,
+} from "../askGrahamyState";
+
+export async function buildMetaNode(
+  state: AskGrahamyLangGraphState,
+): Promise<Partial<AskGrahamyGraphState>> {
+  return runGraphNode(state, async () => {
+    const next = toAskGrahamyState(state);
+    next.meta = buildMeta(
+      next.selectedTools ?? [],
+      next.snapshots ?? {},
+      next.warnings,
+      next.classification ?? EMPTY_CLASSIFICATION,
+      next.researchObjects ?? [],
+      next.researchObjectCacheStats,
+      next.researchObjectsUpdated ?? [],
+      next.pgCapabilityViews,
+      next.capabilityViewsUpdated ?? [],
+      next.capabilityViewCacheStats,
+      next.pipelineOverlayViews,
+    );
+    return patchFromAskGrahamyState(next);
+  });
+}
+
+export function buildMeta(
+  toolsUsed: ToolName[],
+  snapshots: SnapshotBundle,
+  warnings: string[],
+  classification: Classification,
+  researchObjects: CachedResearchObject[] = [],
+  researchObjectCacheStats?: ResponseMeta["researchObjectCache"],
+  researchObjectsUpdated: CachedResearchObject[] = [],
+  pgCapabilityViews?: PgCapabilityViews,
+  capabilityViewsUpdated: CachedCapabilityView[] = [],
+  capabilityViewCacheStats?: ResponseMeta["capabilityViewCache"],
+  pipelineOverlayViews?: PipelineOverlayViews,
+): ResponseMeta {
+  // Only research objects are "sources" the answer was actually grounded in.
+  // Snapshots are background scaffolding the graph fetches for system-prompt
+  // context — the agent never quotes them, so listing them as numbered
+  // citations in the UI was misleading. Snapshot fetch state is still
+  // captured in `freshness` / `upstreamLatency` for telemetry.
+  const researchSources = researchObjects.map((item) => ({
+    type: "research" as const,
+    name: item.cacheKey,
+  }));
+  const capabilitySources: Array<{ type: "research"; name: string }> = [];
+  if (pgCapabilityViews?.sectorLeaderboardView) {
+    capabilitySources.push({ type: "research", name: "sector_conviction_leaderboard" });
+  }
+  if (pgCapabilityViews?.sectorDivergenceView) {
+    capabilitySources.push({
+      type: "research",
+      name: "sector_momentum_vs_conviction_divergence",
+    });
+  }
+  if (pgCapabilityViews?.sectorDeltaView) {
+    capabilitySources.push({
+      type: "research",
+      name: "week_over_week_sector_delta",
+    });
+  }
+  if (pgCapabilityViews?.stockIdeaView) {
+    capabilitySources.push({ type: "research", name: "stock_idea_discovery" });
+  }
+  if (pgCapabilityViews?.featureScreenView) {
+    capabilitySources.push({ type: "research", name: "feature_screen" });
+  }
+  if (pgCapabilityViews?.factorBacktestView) {
+    capabilitySources.push({
+      type: "research",
+      name: "factor_conditioned_backtest",
+    });
+  }
+  if (pgCapabilityViews?.comparisonView) {
+    const comparisonType = pgCapabilityViews.comparisonView.comparisonType;
+    capabilitySources.push({
+      type: "research",
+      name:
+        comparisonType === "sector_vs_sector"
+          ? "sector_vs_sector_comparison"
+          : comparisonType === "symbol_vs_symbol"
+            ? "symbol_vs_symbol_comparison"
+            : "stock_vs_sector_comparison",
+    });
+  }
+  if (pgCapabilityViews?.regimeHistoricalPlaybookView) {
+    capabilitySources.push({
+      type: "research",
+      name: "market_regime_historical_playbook",
+    });
+  }
+  if (pipelineOverlayViews?.validatedEdgeEvidenceView) {
+    capabilitySources.push({
+      type: "research",
+      name: "validated_edge_evidence",
+    });
+  }
+  return {
+    sourcesUsed: [...researchSources, ...capabilitySources],
+    freshness: snapshots.freshness ?? {},
+    warnings: Array.from(
+      new Set([
+        ...warnings,
+        ...classification.warnings,
+        ...Object.values(snapshots.errors ?? {}),
+      ]),
+    ),
+    toolsUsed,
+    researchObjectKeys: researchObjects.map((item) => item.cacheKey),
+    researchObjectCache: researchObjectCacheStats,
+    researchObjectsUpdated: researchObjectsUpdated.length
+      ? researchObjectsUpdated
+      : undefined,
+    capabilityViewKeys: capabilityViewsUpdated.length
+      ? capabilityViewsUpdated.map((item) => item.cacheKey)
+      : undefined,
+    capabilityViewCache: capabilityViewCacheStats,
+    capabilityViewsUpdated: capabilityViewsUpdated.length
+      ? capabilityViewsUpdated
+      : undefined,
+    upstreamLatency: snapshots.latencyMs,
+  };
+}
