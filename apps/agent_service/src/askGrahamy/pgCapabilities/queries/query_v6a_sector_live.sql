@@ -160,6 +160,40 @@ sector_base_rate AS (
   FROM regime_valuation_matrix
 ),
 
+-- feeds: deriveForwardPerformance, deriveProbabilisticEvidence
+-- Weighted percentile approximation of h60 forward returns across all
+-- (regime, valuation_bucket) cells for this sector. Uses each cell's median_h60
+-- weighted by n_with_h60 via generate_series repetition to produce p25/p50/p75.
+-- Identical technique to regime query's regime_forward_pct CTE.
+sector_forward_pct AS (
+  SELECT
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY median_h60) AS p25_h60,
+    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY median_h60) AS median_h60,
+    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY median_h60) AS p75_h60
+  FROM (
+    SELECT
+      s.median_h60
+    FROM regime_valuation_matrix s
+    JOIN LATERAL generate_series(1, LEAST(s.n_with_h60, 50)) ON true
+    WHERE s.median_h60 IS NOT NULL
+  ) weighted_cells
+),
+
+-- feeds: deriveUpcomingEvents
+-- Percentage of sector constituents with earnings within the next two weeks.
+-- Uses md_historical_features_daily (same underlying table as market_state_today).
+-- Runtime impact: one additional index scan on (sector, as_of_date, is_delisted).
+sector_event_context AS (
+  SELECT
+    COUNT(*) FILTER (WHERE h.days_to_earnings BETWEEN 0 AND 14) * 100.0
+      / NULLIF(COUNT(*), 0)                                 AS pct_constituents_earnings_within_2w
+  FROM md_historical_features_daily h
+  WHERE h.sector = (SELECT target_sector FROM config)
+    AND h.as_of_date = (SELECT target_date FROM config)
+    AND h.is_delisted = false
+    AND h.days_to_earnings IS NOT NULL
+),
+
 assembled AS (
   SELECT
     cfg.target_sector,
@@ -199,6 +233,11 @@ assembled AS (
     sbr.total_h60                                           AS base_total_h60,
     sbr.wins_h252                                           AS base_wins_h252,
     sbr.total_h252                                          AS base_total_h252,
+
+    -- feeds: deriveForwardPerformance
+    sfp.p25_h60                                             AS base_p25_h60,
+    sfp.median_h60                                          AS base_median_h60,
+    sfp.p75_h60                                             AS base_p75_h60,
 
     (SELECT JSONB_AGG(JSONB_BUILD_OBJECT(
         'regime',           market_regime,
@@ -255,7 +294,10 @@ assembled AS (
         ) ORDER BY median_h60 ASC)
         FROM (SELECT * FROM bucket_matrix ORDER BY median_h60 ASC LIMIT 5) r
       )
-    ))                                                      AS bucket_extremes_json
+    ))                                                      AS bucket_extremes_json,
+
+    -- feeds: deriveUpcomingEvents
+    sec.pct_constituents_earnings_within_2w                 AS event_pct_earnings_2w
 
   FROM config cfg
   -- LEFT JOIN (not CROSS JOIN) so the assembled row is emitted even when SPY
@@ -266,6 +308,8 @@ assembled AS (
   LEFT JOIN benchmark_vix bv      ON true
   LEFT JOIN sector_census sc      ON true
   LEFT JOIN sector_base_rate sbr  ON true
+  LEFT JOIN sector_forward_pct sfp ON true
+  LEFT JOIN sector_event_context sec ON true
 )
 
 SELECT
@@ -325,6 +369,17 @@ SELECT
       'h60_avg_pct',             ROUND((COALESCE(a.base_avg_h60,0) * 100)::numeric, 2),
       'h60_hit_rate',            ROUND((a.base_wins_h60::numeric / NULLIF(a.base_total_h60, 0) * 100), 1),
       'h252_hit_rate',           ROUND((a.base_wins_h252::numeric / NULLIF(a.base_total_h252, 0) * 100), 1),
+      'h60_median_pct',          ROUND((COALESCE(a.base_median_h60,0) * 100)::numeric, 2),
+      'h60_p25_pct',             ROUND((COALESCE(a.base_p25_h60,0) * 100)::numeric, 2),
+      'h60_p75_pct',             ROUND((COALESCE(a.base_p75_h60,0) * 100)::numeric, 2),
+      -- feeds: deriveProbabilisticEvidence (state: 'partial' -> 'complete' when ADEQUATE+)
+      'sample_adequacy',
+        CASE
+          WHEN COALESCE(a.base_n, 0) < 200  THEN 'INSUFFICIENT'
+          WHEN a.base_n < 500               THEN 'WEAK'
+          WHEN a.base_n < 2000              THEN 'ADEQUATE'
+          ELSE                                   'ROBUST'
+        END,
       'framing_note',            'Unconditional Monday-sampled forward-return aggregate '
                               || 'across ALL historical observations for this sector. '
                               || 'For analog-distance-matched self-analogs, use deep mode (V5.2).'
@@ -335,6 +390,22 @@ SELECT
       'valuation_rollup',        COALESCE(a.valuation_rollup_json, '[]'::jsonb),
       'regime_valuation_matrix', COALESCE(a.matrix_json, '[]'::jsonb),
       'bucket_extremes',         COALESCE(a.bucket_extremes_json, '{}'::jsonb)
+    ),
+
+    -- feeds: deriveUpcomingEvents
+    'event_context', JSONB_BUILD_OBJECT(
+      'pct_constituents_earnings_within_2w',
+        ROUND(COALESCE(a.event_pct_earnings_2w, 0)::numeric, 1),
+      'earnings_cluster_band',
+        CASE
+          WHEN a.event_pct_earnings_2w IS NULL     THEN NULL
+          WHEN a.event_pct_earnings_2w >= 30       THEN 'CONCENTRATED'
+          WHEN a.event_pct_earnings_2w >= 10       THEN 'MODERATE'
+          ELSE                                          'SPARSE'
+        END,
+      'note', 'Fraction of sector constituents (is_delisted=false, '
+           || 'days_to_earnings NOT NULL) with earnings within 14 calendar days. '
+           || 'Denominator excludes symbols with NULL days_to_earnings.'
     ),
 
     'invalidation', JSONB_BUILD_OBJECT(
@@ -360,7 +431,12 @@ SELECT
     'target_date',             a.target_date,
     'raw_mean_composite',      a.mean_composite,
     'raw_base_avg_h60',        a.base_avg_h60,
-    'raw_vix_close',           a.vix_close
+    'raw_vix_close',           a.vix_close,
+    'raw_event_pct_earnings_2w', a.event_pct_earnings_2w,
+    'raw_base_median_h60',     a.base_median_h60,
+    'raw_base_p25_h60',        a.base_p25_h60,
+    'raw_base_p75_h60',        a.base_p75_h60,
+    'raw_base_n',              a.base_n
   ) AS debug_payload
 
 FROM assembled a;
