@@ -42,7 +42,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { SpawnOptions, SpawnedProcess } from "@anthropic-ai/claude-agent-sdk";
 
-import { Agent, Thread } from "@scheduling-agent/database";
+import { Thread } from "@scheduling-agent/database";
 
 import {
   AGENT_TOOLS_MCP_SERVER_NAME,
@@ -59,6 +59,7 @@ import type { AgentState } from "../../state";
 import { logger } from "../../logger";
 import type { ResolvedOrgVendor } from "../../utils/resolveOrgVendor.service";
 import { drainSessionFileLedger } from "../../workspace/sessionWorkspace";
+import { getAgentSdkCapabilities } from "../../utils/sdkCapabilities.service";
 import {
   observeWithContext,
   recordSdkGeneration,
@@ -243,6 +244,29 @@ async function saveClaudeSessionId(
     logger.warn("Failed to persist claudeSessionId", {
       threadId,
       sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Wipes the persisted `claudeSessionId` for a thread so the next turn starts
+ * a fresh Claude SDK session instead of resuming a poisoned one. Used when
+ * `error_max_turns` fires — the resumed session would otherwise keep tripping
+ * the same per-turn tool-call budget every time the user sends a message.
+ */
+async function clearClaudeSessionId(
+  threadId: string | null | undefined,
+): Promise<void> {
+  if (!threadId) return;
+  try {
+    await Thread.update(
+      { claudeSessionId: null },
+      { where: { id: threadId } },
+    );
+  } catch (err) {
+    logger.warn("Failed to clear claudeSessionId", {
+      threadId,
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -826,36 +850,15 @@ async function runAnthropicAgentSdkImpl(
   const existingSessionId =
     state.claudeSessionId ?? (await loadClaudeSessionId(threadId));
 
-  // ── Built-in opt-in ────────────────────────────────────────────────────
-  // Two flags on the agent row drive whether SDK built-ins / Bash are exposed:
-  //   - `allow_sdk_builtins` → Read/Write/Edit/MultiEdit/Glob/Grep/WebFetch
-  //                           (the read+edit surface). Migration 125
-  //                           flipped the column default to TRUE and
-  //                           backfilled existing Anthropic rows, so the
-  //                           typical case is "always on" — admins can
-  //                           still opt a specific agent OUT for an
-  //                           unusual reason by toggling the row flag.
-  //   - `allow_sdk_bash`     → Bash. Defaults to FALSE; admins opt in per
-  //                           agent. The blast radius (arbitrary shell)
-  //                           is meaningfully larger than the file-tool
-  //                           surface, so the runner never auto-enables
-  //                           it without the row flag.
-  let allowBuiltins = false;
-  let allowBash = false;
-  if (agentId) {
-    try {
-      const agentRow = await Agent.findByPk(agentId, {
-        attributes: ["allowSdkBuiltins", "allowSdkBash"],
-      });
-      allowBuiltins = agentRow?.allowSdkBuiltins === true;
-      allowBash = agentRow?.allowSdkBash === true;
-    } catch (err) {
-      logger.warn("Failed to load SDK builtin flags — defaulting both to false", {
-        agentId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  // ── SDK capability lookup ─────────────────────────────────────────────
+  // Migration 145 moved the legacy `allow_sdk_builtins` / `allow_sdk_bash`
+  // boolean columns into the `sdk_capabilities` table + the
+  // `agent_sdk_capabilities` junction. The helper does the join and returns
+  // `{ hasFilesystem, hasBash }`. Same conservative deny-by-default on
+  // lookup failure as the legacy code path.
+  const caps = await getAgentSdkCapabilities(agentId ?? null);
+  const allowBuiltins = caps.hasFilesystem;
+  const allowBash = caps.hasBash;
 
   const mcpServer = await createAgentToolsMcpServer(tools, onToolResult);
 
@@ -1002,27 +1005,105 @@ async function runAnthropicAgentSdkImpl(
     });
   }
 
-  // Persist any new session id we got back, including the fresh one after a
-  // successful retry.
-  if (result.sessionId && result.sessionId !== existingSessionId) {
-    await saveClaudeSessionId(threadId, result.sessionId);
+  // Max-turns is a soft failure, not a hard error. The SDK ran the model's
+  // tool loop until our `maxTurns` cap and bailed before the model could
+  // produce final text. Two things must happen so the agent isn't stuck
+  // re-tripping the same budget every subsequent message:
+  //   1. Don't persist the SDK session id — resuming it next turn would
+  //      restart mid-tool-loop and almost certainly hit the cap again.
+  //      Clear any previously-stored value so `loadClaudeSessionId` returns
+  //      null on the next turn and we get a fresh session.
+  //   2. Treat the turn as a successful checkpoint: keep the partial work
+  //      the model already did (`result.streamMessages`) and append a soft
+  //      AIMessage telling the user we hit the cap. Returning `error`
+  //      here is what was creating the per-message error loop the user
+  //      reported.
+  if (result.hitMaxTurns) {
+    await clearClaudeSessionId(threadId);
+    const sessionFilesAtCap = drainSessionFileLedger(threadId);
+    const messagesAtCap: BaseMessage[] = [...result.streamMessages];
+    messagesAtCap.push(
+      new AIMessage({
+        content:
+          "I hit my per-turn tool-call budget while working on that. " +
+          "Some intermediate work above may have completed. Ask me to " +
+          "continue and I'll pick up from where I stopped in a fresh session.",
+      }),
+    );
+    const lastAiAtCap = [...messagesAtCap]
+      .reverse()
+      .find((m): m is AIMessage => m instanceof AIMessage);
+    if (lastAiAtCap) {
+      lastAiAtCap.additional_kwargs = {
+        ...(lastAiAtCap.additional_kwargs ?? {}),
+        modelSlug,
+        vendorSlug: vendor.vendorSlug,
+        modelName: vendor.modelName,
+        // Session is intentionally abandoned — surface that on the trace.
+        claudeSessionId: null,
+        runtime: "claude_agent_sdk",
+        hitMaxTurns: true,
+      };
+    }
+    logger.warn("Agent SDK turn hit maxTurns — session cleared, soft-completing", {
+      threadId,
+      source,
+      modelSlug,
+      vendorSlug: vendor.vendorSlug,
+      abandonedSessionId: result.sessionId ?? existingSessionId ?? null,
+      streamMessages: messagesAtCap.length,
+      sessionFiles: sessionFilesAtCap.length,
+    });
+    return {
+      messages: messagesAtCap,
+      // Explicitly null in state so the next turn doesn't read a stale
+      // value out of the in-memory checkpoint either.
+      claudeSessionId: null,
+      ...(sessionFilesAtCap.length > 0 ? { sessionFiles: sessionFilesAtCap } : {}),
+    };
   }
 
   const sessionFiles = drainSessionFileLedger(threadId);
 
+  // ── Hard-failure path: subprocess crashed, exited non-zero, or the SDK
+  //    raised a non-success result subtype OTHER than `error_max_turns`
+  //    (which the soft-success branch above catches). The original code
+  //    persisted `result.sessionId` here even though the run failed — and
+  //    then returned that same id on the state — which meant every
+  //    subsequent user message resumed the broken session and triggered
+  //    the same crash. The orchestrator hitting "claude exited with status
+  //    code 1" on every message was exactly this loop.
+  //
+  //    Mirror the max-turns recovery: clear the persisted session id on
+  //    BOTH the DB row and the returned state, so the next user message
+  //    starts a fresh Claude SDK session. The conversation history is
+  //    rebuilt from `state.messages` via `contextBuilder` on the next
+  //    turn, so no user-visible history is lost — only the SDK's
+  //    server-side session cache.
   if (result.errorText && !result.finalText) {
-    logger.error("Agent SDK turn failed", {
+    await clearClaudeSessionId(threadId);
+    logger.error("Agent SDK turn failed — session cleared so next turn starts fresh", {
       threadId,
       modelSlug,
       vendorSlug: vendor.vendorSlug,
       error: result.errorText,
       hitMaxTurns: result.hitMaxTurns,
+      abandonedSessionId: result.sessionId ?? existingSessionId ?? null,
     });
     return {
       error: result.errorText,
-      ...(result.sessionId ? { claudeSessionId: result.sessionId } : {}),
+      claudeSessionId: null,
       ...(sessionFiles.length > 0 ? { sessionFiles } : {}),
     };
+  }
+
+  // Success path — persist any new session id we got back, including the
+  // fresh one after a successful retry. Deliberately AFTER the error
+  // branches above: we never want to persist a session id from a run that
+  // failed (the session might have been started but never produced
+  // anything we'd want to resume into).
+  if (result.sessionId && result.sessionId !== existingSessionId) {
+    await saveClaudeSessionId(threadId, result.sessionId);
   }
 
   // Build the messages array to checkpoint. Mirrors the legacy `bindTools`

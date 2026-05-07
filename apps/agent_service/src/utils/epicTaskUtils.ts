@@ -1,6 +1,6 @@
 import { execSync, spawnSync } from "child_process";
 import fs from "node:fs";
-import { QueryTypes } from "sequelize";
+import { Op, QueryTypes, type Transaction } from "sequelize";
 import {
   sequelize,
   Project,
@@ -29,10 +29,9 @@ import type {
 } from "@scheduling-agent/types";
 import { logger } from "../logger";
 import {
-  buildArchitectureOverviewPrompt,
-  MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS,
-} from "./architectureOverviewPrompt.service";
-import { runArchitectureScan } from "./architectureScan.service";
+  resolveEpicWorkspacePath,
+  ensureEpicWorkspace,
+} from "../workspace/sessionWorkspace";
 
 // The agent_service container runs as root, but Claude CLI (and gh) must run
 // as the non-root `agent` user via `su-exec`. `su-exec` inherits env unchanged,
@@ -172,26 +171,34 @@ export async function startExecution(
     prompt?: string;
     metadata?: Record<string, unknown>;
   } = {},
+  options: { transaction?: Transaction } = {},
 ): Promise<TaskExecution> {
   const lastExec = await TaskExecution.findOne({
     where: { agentTaskId: taskId },
     order: [["attempt_number", "DESC"]],
+    transaction: options.transaction,
   });
   const attemptNumber = (lastExec?.attemptNumber ?? 0) + 1;
 
-  return TaskExecution.create({
-    agentTaskId: taskId,
-    attemptNumber,
-    prompt: data.prompt ?? null,
-    metadata: data.metadata ?? null,
-  });
+  return TaskExecution.create(
+    {
+      agentTaskId: taskId,
+      attemptNumber,
+      prompt: data.prompt ?? null,
+      metadata: data.metadata ?? null,
+    },
+    { transaction: options.transaction },
+  );
 }
 
 export async function completeExecution(
   executionId: TaskExecutionId,
   data: { result: string; metadata?: Record<string, unknown> },
+  options: { transaction?: Transaction } = {},
 ): Promise<TaskExecution> {
-  const execution = await TaskExecution.findByPk(executionId);
+  const execution = await TaskExecution.findByPk(executionId, {
+    transaction: options.transaction,
+  });
   if (!execution) throw new Error(`Task execution ${executionId} not found`);
 
   const updates: Record<string, unknown> = {
@@ -203,15 +210,18 @@ export async function completeExecution(
     updates.metadata = { ...(execution.metadata ?? {}), ...data.metadata };
   }
 
-  await execution.update(updates);
+  await execution.update(updates, { transaction: options.transaction });
   return execution;
 }
 
 export async function failExecution(
   executionId: TaskExecutionId,
   data: { error: string; metadata?: Record<string, unknown> },
+  options: { transaction?: Transaction } = {},
 ): Promise<TaskExecution> {
-  const execution = await TaskExecution.findByPk(executionId);
+  const execution = await TaskExecution.findByPk(executionId, {
+    transaction: options.transaction,
+  });
   if (!execution) throw new Error(`Task execution ${executionId} not found`);
 
   const updates: Record<string, unknown> = {
@@ -223,7 +233,7 @@ export async function failExecution(
     updates.metadata = { ...(execution.metadata ?? {}), ...data.metadata };
   }
 
-  await execution.update(updates);
+  await execution.update(updates, { transaction: options.transaction });
   return execution;
 }
 
@@ -264,11 +274,11 @@ export async function getReadyTasks(epicId: EpicTaskId): Promise<AgentTask[]> {
 }
 
 /**
- * Flip the next stage's `pending` agent tasks to `ready` once their preceding
- * stages are all cleared (completed AND, for code_change stages, PR
- * approved/merged), and run `propagateStatus` once so the next stage's
- * derived status (`pending` → `in_progress`) catches up immediately rather
- * than waiting for `executeTask` to start the first task.
+ * Flip the FIRST `pending` agent task of each newly-unblocked stage to `ready`
+ * (sequential-within-stage rule — only one task per stage is ever `ready` at
+ * a time), and run `propagateStatus` once so the next stage's derived status
+ * (`pending` → `in_progress`) catches up immediately rather than waiting for
+ * `executeTask` to start the first task.
  *
  * Single source of truth shared by:
  *   - `propagateStatus` auto-completion of `kind='plan'` stages
@@ -307,7 +317,25 @@ export async function advanceNextStageReadyTasks(
 
   if (newlyReady.length === 0) return [];
 
-  const ids = newlyReady.map((t) => t.id);
+  // Sequential-within-stage rule: only flip the first pending task of each
+  // unblocked stage to `ready`. The remaining tasks in those stages stay
+  // `pending` and get promoted one-by-one by `advanceNextTaskInStage` as the
+  // prior task in the same stage completes. The SQL above is already ordered
+  // by `(ts.sort_order, at.sort_order)`, so taking the first row per stage in
+  // iteration order picks the lowest-sortOrder task of each stage.
+  const firstPerStage = new Map<string, AgentTask>();
+  for (const t of newlyReady) {
+    const stageId = (t as unknown as { taskStageId?: string; task_stage_id?: string }).taskStageId
+      ?? (t as unknown as { task_stage_id?: string }).task_stage_id
+      ?? "";
+    if (!stageId) continue;
+    if (!firstPerStage.has(stageId)) {
+      firstPerStage.set(stageId, t);
+    }
+  }
+  const ids = [...firstPerStage.values()].map((t) => t.id);
+  if (ids.length === 0) return [];
+
   await AgentTask.update(
     { status: "ready" as AgentTaskStatus },
     { where: { id: ids } },
@@ -332,6 +360,47 @@ export async function advanceNextStageReadyTasks(
   return ids;
 }
 
+/**
+ * Sequential-within-stage rule: after a task completes, hand the baton to the
+ * next sibling task in the same stage by flipping it from `pending` → `ready`.
+ *
+ * Called from `finalizeEpicTaskExecution` after `updateTaskStatus(...,'completed')`.
+ * No-op when (a) the just-completed task is the last in its stage, or (b) some
+ * later sibling is already past `pending` (defensive — should not happen under
+ * the new invariant, but guards against retries that reset multiple rows).
+ *
+ * Returns the promoted task id, or null when nothing was advanced.
+ */
+export async function advanceNextTaskInStage(
+  completedTaskId: AgentTaskId,
+): Promise<AgentTaskId | null> {
+  const completed = await AgentTask.findByPk(completedTaskId);
+  if (!completed) return null;
+
+  const next = await AgentTask.findOne({
+    where: {
+      taskStageId: completed.taskStageId,
+      status: "pending" as AgentTaskStatus,
+      sortOrder: { [Op.gt]: completed.sortOrder },
+    },
+    order: [["sortOrder", "ASC"]],
+  });
+  if (!next) return null;
+
+  await next.update({ status: "ready" as AgentTaskStatus });
+
+  try {
+    await propagateStatus(next.id);
+  } catch (err: any) {
+    logger.warn(
+      "advanceNextTaskInStage: propagateStatus failed (status will catch up on next task transition)",
+      { taskId: next.id, error: err?.message },
+    );
+  }
+
+  return next.id;
+}
+
 // ─── Active-state Resolvers ────────────────────────────────────────────────
 //
 // The Epic Orchestrator is a system-wide singleton: at any moment the DB
@@ -347,12 +416,25 @@ export async function advanceNextStageReadyTasks(
 // caller gets an actionable error.
 
 /**
- * Returns the unique active (pending or in_progress) epic.
+ * Returns the unique active (pending, in_progress, or failed) epic.
  * Throws a descriptive error if there are zero or more-than-one.
+ *
+ * `failed` is included for legacy backward-compat: older rows in the DB may
+ * be at `status='failed'` from the previous propagation rule. They still
+ * count as the singleton-active epic and can be retried via the existing
+ * task-level retry fallback. The current propagation rule (see
+ * `propagateStatus`) no longer auto-flips epics to `failed` at all — only
+ * `cancel_epic` ever takes an epic out of the active set going forward.
  */
 export async function resolveActiveEpic(): Promise<EpicTask> {
   const active = await EpicTask.findAll({
-    where: { status: ["pending" as EpicTaskStatus, "in_progress" as EpicTaskStatus] },
+    where: {
+      status: [
+        "pending" as EpicTaskStatus,
+        "in_progress" as EpicTaskStatus,
+        "failed" as EpicTaskStatus,
+      ],
+    },
     order: [["createdAt", "DESC"]],
   });
   if (active.length === 0) {
@@ -395,11 +477,77 @@ export async function resolveActiveEpic(): Promise<EpicTask> {
 export async function resolveNextRetryableTask(
   epicId: EpicTaskId,
 ): Promise<AgentTask | null> {
+  // getReadyTasks + the failed-fallback both run via sequelize.query with
+  // QueryTypes.SELECT, which returns plain row objects — not Sequelize model
+  // instances. Callers expect to call instance methods like .update() on the
+  // result, so re-fetch via findByPk to materialize a real model instance.
+  //
+  // We include `stage` (with its `repository`) on every returned task so
+  // callers don't have to do a second query to:
+  //   (a) render the stage label in the task prompt (was "Stage (unknown)"
+  //       before this include landed), and
+  //   (b) resolve the working directory via `task.stage.repository.localPath`
+  //       — replaces the old "first epic-level repo with a localPath" fallback
+  //       that picked the wrong repo on multi-repo epics.
+  const includeStageRepo = [{
+    model: TaskStage,
+    as: "stage",
+    include: [{ model: Repository, as: "repository" }],
+  }];
   const ready = await getReadyTasks(epicId);
-  if (ready.length > 0) return ready[0];
+  if (ready.length > 0) {
+    return AgentTask.findByPk(ready[0].id, { include: includeStageRepo });
+  }
 
-  const failed = await sequelize.query<AgentTask>(
-    `SELECT at.*
+  // Orphan auto-recovery (added with the start_epic_task transaction fix).
+  //
+  // An AgentTask can land at `status='in_progress'` with NO live execution row
+  // when `start_epic_task` crashed between the `next.update({status:'in_progress'})`
+  // and the `startExecution()` calls (or the worker was killed mid-call).
+  // The historical `failed`-fallback below ignores those because it filters
+  // on `at.status='failed'`, so the task is invisible — and the orchestrator
+  // gets a "no actionable tasks" reply forever, even though the stage is
+  // clearly unfinished. The escape hatch was a manual `reset_stuck_task` call,
+  // which the orchestrator only knows to make if you tell it to.
+  //
+  // Predicate: `agent_tasks.status='in_progress'` AND no `task_executions` row
+  // for this task is currently `running`. That uniquely identifies "no live
+  // worker is doing this" — covers both zero-execution-rows (start_epic_task
+  // crashed before insert) and all-executions-completed-but-task-still-stuck
+  // (a different, even rarer crash pattern). When matched, flip the task back
+  // to `ready` and return it so the caller starts a fresh execution.
+  //
+  // We deliberately do NOT touch tasks that have a `running` execution row —
+  // those might be a genuinely live worker, and `reset_stuck_task` is still
+  // the correct (manual, deliberate) tool for that case.
+  const orphans = await sequelize.query<{ id: string }>(
+    `SELECT at.id
+       FROM agent_tasks at
+       JOIN task_stages ts ON at.task_stage_id = ts.id
+      WHERE ts.epic_task_id = :epicId
+        AND at.status = 'in_progress'
+        AND NOT EXISTS (
+          SELECT 1 FROM task_executions te
+           WHERE te.agent_task_id = at.id AND te.status = 'running'
+        )
+      ORDER BY ts.sort_order, at.sort_order
+      LIMIT 1`,
+    { replacements: { epicId }, type: QueryTypes.SELECT },
+  );
+  if (orphans[0]) {
+    const orphan = await AgentTask.findByPk(orphans[0].id, { include: includeStageRepo });
+    if (orphan) {
+      logger.warn(
+        "resolveNextRetryableTask: auto-recovering orphan in_progress task with no running execution",
+        { taskId: orphan.id, epicId },
+      );
+      await orphan.update({ status: "ready" as AgentTaskStatus });
+      return orphan;
+    }
+  }
+
+  const failed = await sequelize.query<{ id: string }>(
+    `SELECT at.id
        FROM agent_tasks at
        JOIN task_stages ts ON at.task_stage_id = ts.id
       WHERE ts.epic_task_id = :epicId
@@ -409,7 +557,8 @@ export async function resolveNextRetryableTask(
       LIMIT 1`,
     { replacements: { epicId }, type: QueryTypes.SELECT },
   );
-  return failed[0] ?? null;
+  if (!failed[0]) return null;
+  return AgentTask.findByPk(failed[0].id, { include: includeStageRepo });
 }
 
 /**
@@ -482,56 +631,90 @@ export async function resolveActivePrPendingStage(): Promise<{
 
 // ─── Status Propagation ─────────────────────────────────────────────────────
 
-export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
-  const task = await AgentTask.findByPk(taskId);
+export async function propagateStatus(
+  taskId: AgentTaskId,
+  options: { transaction?: Transaction } = {},
+): Promise<void> {
+  const txn = options.transaction;
+  const task = await AgentTask.findByPk(taskId, { transaction: txn });
   if (!task) return;
 
-  // Propagate to stage. Plan stages park at `pr_pending` exactly like
-  // code-change stages so the user can review the produced plan/spec before
-  // explicitly approving it via `approve_stage` — auto-completing plan stages
-  // would skip review. The only difference is in the gating predicate
-  // (see `getReadyTasks` SQL): a `kind='plan'` previous stage clears as soon
-  // as it's `status='completed'`, without requiring `pr_status` because no
-  // PR ever exists.
+  // Propagate to stage. `failed` is a per-TASK concept only — a failed task
+  // is retryable via the existing fallback in `resolveNextRetryableTask` and
+  // does NOT mean the stage or epic is dead. Cascading `failed` up would
+  // hide the stage from `resolveNextRetryableTask` (which requires
+  // `ts.status='in_progress'`) and pull the epic out of `resolveActiveEpic`,
+  // effectively cancelling the whole thing on a single recoverable failure.
+  // So: stages stay `in_progress` while ANY task is non-terminal (including
+  // `failed`); the only terminal stage statuses come from explicit user
+  // action (`cancel_epic`, `approve_stage`, PR approval) — not from
+  // automatic rollup here.
+  //
+  // Plan stages park at `pr_pending` exactly like code-change stages so the
+  // user can review the produced plan/spec before explicitly approving it
+  // via `approve_stage`. The gating predicate (see `getReadyTasks` SQL)
+  // clears a `kind='plan'` previous stage as soon as it's `status='completed'`,
+  // without requiring `pr_status`.
   const stageTasks = await AgentTask.findAll({
     where: { taskStageId: task.taskStageId },
+    transaction: txn,
   });
 
   const stageStatuses = stageTasks.map((t) => t.status);
   let newStageStatus: TaskStageStatus;
 
-  if (stageStatuses.every((s) => s === "completed")) {
-    // All tasks done — wait for explicit user approval (PR for code_change,
-    // chat-confirmation for plan) before becoming "completed".
+  const nonCancelled = stageStatuses.filter((s) => s !== "cancelled");
+  if (nonCancelled.length === 0 && stageStatuses.length > 0) {
+    // Every task was cancelled — the stage is cancelled too.
+    newStageStatus = "cancelled";
+  } else if (nonCancelled.every((s) => s === "completed")) {
+    // All non-cancelled tasks done — wait for explicit user approval
+    // (PR for code_change, chat-confirmation for plan) before becoming
+    // "completed".
     newStageStatus = "pr_pending";
-  } else if (stageStatuses.some((s) => s === "failed")) {
-    newStageStatus = "failed";
-  } else if (stageStatuses.some((s) => s === "in_progress" || s === "ready")) {
+  } else if (
+    stageStatuses.some(
+      (s) => s === "in_progress" || s === "ready" || s === "failed",
+    )
+  ) {
+    // Failed tasks count as active here — they're retryable, not terminal.
     newStageStatus = "in_progress";
   } else {
     newStageStatus = "pending";
   }
 
-  await TaskStage.update({ status: newStageStatus }, { where: { id: task.taskStageId } });
+  await TaskStage.update(
+    { status: newStageStatus },
+    { where: { id: task.taskStageId }, transaction: txn },
+  );
 
-  // Propagate to epic — never mark epic completed here;
-  // epic completion is handled by handlePrApproval / force_approve_stage_pr
-  const stage = await TaskStage.findByPk(task.taskStageId);
+  // Propagate to epic. Same rule as stages: `failed` does NOT propagate up.
+  // Epic terminal status (`cancelled` / `completed`) only happens via user
+  // action — `cancel_epic` for cancellation, PR approval for completion.
+  const stage = await TaskStage.findByPk(task.taskStageId, { transaction: txn });
   if (!stage) return;
 
   const epicStages = await TaskStage.findAll({
     where: { epicTaskId: stage.epicTaskId },
+    transaction: txn,
   });
 
   const epicStatuses = epicStages.map((s) => s.status);
   let newEpicStatus: EpicTaskStatus;
 
-  if (epicStatuses.some((s) => s === "failed")) {
-    newEpicStatus = "failed";
-  } else if (epicStatuses.some((s) => s === "in_progress" || s === "pr_pending")) {
+  const nonCancelledStages = epicStatuses.filter((s) => s !== "cancelled");
+  if (nonCancelledStages.length === 0 && epicStatuses.length > 0) {
+    // All stages cancelled — keep the epic active in `resolveActiveEpic`'s
+    // sense (the user explicitly cancels via `cancel_epic` if they want it
+    // gone). Just hold at `in_progress` so the singleton slot stays held.
     newEpicStatus = "in_progress";
-  } else if (epicStatuses.every((s) => s === "completed")) {
-    // All stages completed (which only happens after PR approval) — epic is done
+  } else if (
+    epicStatuses.some((s) => s === "in_progress" || s === "pr_pending")
+  ) {
+    newEpicStatus = "in_progress";
+  } else if (nonCancelledStages.every((s) => s === "completed")) {
+    // All non-cancelled stages completed (which only happens after PR
+    // approval / explicit approval) — epic is done.
     newEpicStatus = "completed";
   } else {
     newEpicStatus = "pending";
@@ -541,13 +724,21 @@ export async function propagateStatus(taskId: AgentTaskId): Promise<void> {
   if (newEpicStatus === "completed") {
     epicUpdates.completedAt = new Date();
   }
-  await EpicTask.update(epicUpdates, { where: { id: stage.epicTaskId } });
+  await EpicTask.update(epicUpdates, {
+    where: { id: stage.epicTaskId },
+    transaction: txn,
+  });
 }
 
 // ─── Update Task Status ──────────────────────────────────────────────────────
 
-export async function updateTaskStatus(taskId: AgentTaskId, status: AgentTaskStatus): Promise<AgentTask> {
-  const task = await AgentTask.findByPk(taskId);
+export async function updateTaskStatus(
+  taskId: AgentTaskId,
+  status: AgentTaskStatus,
+  options: { transaction?: Transaction } = {},
+): Promise<AgentTask> {
+  const txn = options.transaction;
+  const task = await AgentTask.findByPk(taskId, { transaction: txn });
   if (!task) throw new Error(`Agent task ${taskId} not found`);
 
   const updates: Partial<{ status: AgentTaskStatus; startedAt: Date | null; completedAt: Date | null }> = { status };
@@ -559,8 +750,8 @@ export async function updateTaskStatus(taskId: AgentTaskId, status: AgentTaskSta
     updates.completedAt = new Date();
   }
 
-  await task.update(updates);
-  await propagateStatus(taskId);
+  await task.update(updates, { transaction: txn });
+  await propagateStatus(taskId, { transaction: txn });
   return task;
 }
 
@@ -787,11 +978,9 @@ function buildStageBranchName(epic: EpicTask, stage: TaskStage): string {
  *   • Other repos in the same epic (non-primary) always pull their default
  *     branch.
  *
- * Architecture overviews are NOT refreshed here — that happens once per epic,
- * at plan-creation time, against each repo's DEFAULT branch (see
- * `refreshArchitectureOverviewOnDefault`). Refreshing here would risk writing
- * back an overview derived from an unmerged stage branch that may be
- * abandoned or rewritten.
+ * Architecture overviews are NOT refreshed here. Refreshing during task
+ * sync would risk writing an overview derived from an unmerged stage branch
+ * that may be abandoned or rewritten.
  */
 export async function preExecutionSync(
   epicId: EpicTaskId,
@@ -824,8 +1013,34 @@ export async function preExecutionSync(
       `preExecutionSync: agent task ${taskId} has no parent stage — refusing to sync without a stage context`,
     );
   }
-  const primaryRepoId: string | null =
-    stage.repositoryId ?? repos.find((r) => r.localPath)?.id ?? null;
+  // Resolve the stage's targeted repository:
+  //   1. Honor an explicit `stage.repositoryId` (set at plan time via
+  //      `create_epic_plan`'s per-stage `repositoryId`, or by an earlier
+  //      `preExecutionSync` run that auto-filled it).
+  //   2. For SINGLE-REPO epics with no explicit value, auto-fill from the
+  //      only choice — back-compat for epics planned before per-stage
+  //      `repositoryId` was a thing, and the convenience path the schema
+  //      validation already auto-fills at create time too.
+  //   3. For MULTI-REPO epics with no explicit value, REFUSE — picking the
+  //      "first repo with a localPath" silently was the source of the wrong-
+  //      repo bug (StocksScanner task running against grahamy-agents). The
+  //      user should cancel + replan with per-stage `repositoryId`.
+  let primaryRepoId: string | null;
+  if (stage.repositoryId) {
+    primaryRepoId = stage.repositoryId;
+  } else if (repos.length === 1 && repos[0].localPath) {
+    primaryRepoId = repos[0].id;
+  } else if (repos.length > 1) {
+    throw new Error(
+      `preExecutionSync: stage "${stage.title}" (id ${stage.id}) has no ` +
+      `repositoryId set, but its epic spans ${repos.length} repositories. ` +
+      `Refusing to fall back to "first repo with a localPath" — that picks ` +
+      `the wrong repo half the time on multi-repo epics. Cancel this epic ` +
+      `and replan with a per-stage repositoryId on every stage.`,
+    );
+  } else {
+    primaryRepoId = null;
+  }
 
   // If the stage is on its first task (no branch yet), create one FROM the
   // primary repo's default branch BEFORE looping over repos — so the main
@@ -969,176 +1184,6 @@ export async function preExecutionSync(
   }
 }
 
-// ─── Architecture Overview Refresh ──────────────────────────────────────────
-
-/**
- * Spawns a quick Claude CLI call to analyze the repo at `cwd` and produce a
- * concise architecture overview, then persists it to the repository record.
- *
- * The caller is responsible for checking out the correct branch before
- * invoking — the CLI just reads the working tree as it finds it. In practice
- * this is always the repo's default branch, so the stored overview describes
- * the canonical/merged state of the repo.
- *
- * `agentId` attributes the run to the orchestrator agent that created the
- * epic; pass `null` for admin-triggered manual refreshes.
- */
-async function generateArchitectureOverview(
-  repo: Repository,
-  cwd: string,
-  agentId: AgentId | null,
-): Promise<void> {
-  const currentOverview = repo.architectureOverview?.trim() || "(none)";
-  const prompt = buildArchitectureOverviewPrompt(currentOverview);
-
-  try {
-    // Slice 21: scan via the SDK (Anthropic preferred, Codex fallback)
-    // instead of spawning the Claude CLI as a subprocess. The org is
-    // resolved from the orchestrator agent that created the epic; if
-    // there's no agentId on this path we cannot bill the scan and must
-    // skip — the architecture refresh is a nice-to-have, not blocking.
-    if (!agentId) {
-      logger.warn(
-        "generateArchitectureOverview: skipped (no agentId for credential resolution)",
-        { repoId: repo.id },
-      );
-      return;
-    }
-    const agent = await Agent.findByPk(agentId, {
-      attributes: ["organizationId"],
-    });
-    if (!agent?.organizationId) {
-      logger.warn(
-        "generateArchitectureOverview: skipped (orchestrator agent has no organization)",
-        { repoId: repo.id, agentId },
-      );
-      return;
-    }
-    const text = (
-      await runArchitectureScan({
-        cwd,
-        prompt,
-        organizationId: agent.organizationId,
-      })
-    ).trim();
-    if (text && text.length > 20) {
-      const stored =
-        text.length > MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS
-          ? text.slice(0, MAX_ARCHITECTURE_OVERVIEW_STORE_CHARS)
-          : text;
-      const previous = repo.architectureOverview;
-      await repo.update({ architectureOverview: stored });
-      logger.info("generateArchitectureOverview: updated architecture overview", {
-        repoId: repo.id,
-        repoName: repo.name,
-        previousLength: previous?.length ?? 0,
-        newLength: stored.length,
-      });
-    }
-  } catch (err) {
-    logger.warn("generateArchitectureOverview: SDK architecture scan failed", {
-      repoId: repo.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-/**
- * Checks out the repo's default branch, pulls the latest, and refreshes
- * `repo.architectureOverview` if the repo has drifted (or has no overview yet).
- *
- * Call this once per epic, at plan-creation time — NOT per task. The stored
- * overview must always describe the merged/canonical state of the repo, so we
- * must analyze it on the default branch, never on a speculative stage branch
- * that may be abandoned or rewritten during review.
- *
- * Concurrency: safe to call from `createEpicWithPlan` because the epic
- * orchestrator enforces a system-wide "one active epic at a time" invariant
- * (see `CreateEpicPlanTool`), so no executing task can be holding the repo's
- * working tree on another branch when this runs.
- *
- * Non-fatal: git or CLI hiccups are logged and swallowed so epic creation
- * is never blocked on architecture refresh.
- */
-export async function refreshArchitectureOverviewOnDefault(
-  repo: Repository,
-  agentId: AgentId | null,
-): Promise<void> {
-  if (!repo.localPath) return;
-
-  const cwd = repo.localPath;
-  const defaultBranch = repo.defaultBranch || "main";
-
-  // ── 1. Put the working tree on the default branch ──
-  try {
-    gitAsAgent(cwd, ["fetch", "origin"]);
-    try {
-      gitAsAgent(cwd, ["switch", defaultBranch]);
-    } catch {
-      gitAsAgent(cwd, ["checkout", "-B", defaultBranch, `origin/${defaultBranch}`]);
-    }
-    gitAsAgent(cwd, ["pull", "origin", defaultBranch]);
-  } catch (err) {
-    logger.warn("refreshArchitectureOverviewOnDefault: git sync failed", {
-      repoId: repo.id,
-      defaultBranch,
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return;
-  }
-
-  // ── 2. Detect structural changes ──
-  try {
-    const hasArchitecture = !!repo.architectureOverview?.trim();
-
-    let diffNameOnly = "";
-    try {
-      diffNameOnly = gitAsAgent(cwd, [
-        "log",
-        "--name-status",
-        "--diff-filter=ADRT",
-        "--pretty=format:",
-        "-20",
-      ]);
-    } catch {
-      try {
-        diffNameOnly = gitAsAgent(cwd, ["diff", "--name-status", "HEAD~10", "HEAD"]);
-      } catch {
-        // Repo may have <10 commits — nothing to compare against.
-        if (!hasArchitecture) {
-          await generateArchitectureOverview(repo, cwd, agentId);
-        }
-        return;
-      }
-    }
-
-    if (!diffNameOnly) {
-      // No recent structural activity — only generate if we have nothing stored.
-      if (!hasArchitecture) {
-        await generateArchitectureOverview(repo, cwd, agentId);
-      }
-      return;
-    }
-
-    // Structural changes: new/deleted/renamed files.
-    const structuralPatterns = /^[ADR]\t/m;
-    const hasStructuralChanges = structuralPatterns.test(diffNameOnly);
-
-    if (!hasStructuralChanges && hasArchitecture) {
-      // Content-only changes — architecture hasn't drifted.
-      return;
-    }
-
-    // ── 3. Analyze and update architecture ──
-    await generateArchitectureOverview(repo, cwd, agentId);
-  } catch (err) {
-    logger.warn("refreshArchitectureOverviewOnDefault: architecture check failed", {
-      repoId: repo.id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
 // ─── Architecture Context Builder ───────────────────────────────────────────
 
 /**
@@ -1223,12 +1268,57 @@ export async function createEpicWithPlan(data: {
     title: string;
     description?: string;
     kind?: TaskStageKind;
+    /** Optional in the input; required and validated by this function when the
+     *  epic spans more than one repository. Auto-filled from `repositoryIds[0]`
+     *  for single-repo epics. */
+    repositoryId?: RepositoryId;
     tasks: Array<{
       title: string;
       description?: string;
     }>;
   }>;
 }): Promise<EpicTask> {
+  // ── Per-stage repo validation (one stage = one repo) ────────────────────
+  // The PR fields (prNumber, prUrl, prStatus, branchName, baseCommitSha) live
+  // on the TaskStage row, so a stage can target at most one repository.
+  // Single-repo epics auto-fill from the only choice; multi-repo epics MUST
+  // disambiguate explicitly. Throw before opening the transaction so the
+  // failure surfaces cleanly with no partial DB state.
+  const epicRepoIds = data.repositoryIds ?? [];
+  const epicRepoIdSet = new Set<string>(epicRepoIds);
+  for (let si = 0; si < data.stages.length; si++) {
+    const stageData = data.stages[si];
+    const stageLabel = `stage[${si}] "${stageData.title}"`;
+    if (stageData.repositoryId) {
+      if (!epicRepoIdSet.has(stageData.repositoryId)) {
+        throw new Error(
+          `${stageLabel} has repositoryId="${stageData.repositoryId}" but that id ` +
+          `is not in the epic's repositoryIds. Each stage's repositoryId must be ` +
+          `one of the repos passed in the epic's repositoryIds.`,
+        );
+      }
+    } else if (epicRepoIds.length > 1) {
+      throw new Error(
+        `${stageLabel} has no repositoryId, but the epic spans ${epicRepoIds.length} ` +
+        `repositories. Specify which repository this stage targets — one stage = one ` +
+        `repo. If a single unit of work crosses repos, plan one stage per repo.`,
+      );
+    }
+    // epicRepoIds.length <= 1: auto-fill from repositoryIds[0] below, or leave
+    // null when the epic has no repos at all (rare — repo-less plan-only epics).
+  }
+
+  // Look up the orchestrator agent's workspacePath BEFORE opening the
+  // transaction — needed to compute the per-epic workspace folder path.
+  // When the orchestrator has no workspace configured (rare; system-only
+  // agents), the column stays NULL and start_epic_task simply doesn't
+  // surface a workspace path to sub-agents. Pre-existing epics also stay
+  // NULL by design (no backfill).
+  const orchestratorRow = await Agent.findByPk(data.agentId, {
+    attributes: ["workspacePath"],
+  });
+  const orchestratorWorkspacePath = orchestratorRow?.workspacePath ?? null;
+
   const transaction = await sequelize.transaction();
   try {
     const epic = await EpicTask.create(
@@ -1241,6 +1331,18 @@ export async function createEpicWithPlan(data: {
       },
       { transaction },
     );
+
+    // Now that we have the epic id, compute the per-epic workspace folder
+    // (`<orchestrator.workspacePath>/epics/<epic.id>/`) and persist on the
+    // row inside the same transaction. Folder creation on disk happens
+    // post-commit so a mkdir error doesn't roll back epic creation.
+    const epicWorkspacePath = resolveEpicWorkspacePath(
+      orchestratorWorkspacePath,
+      epic.id,
+    );
+    if (epicWorkspacePath) {
+      await epic.update({ workspacePath: epicWorkspacePath }, { transaction });
+    }
 
     if (data.repositoryIds?.length) {
       await EpicTaskRepository.bulkCreate(
@@ -1256,6 +1358,11 @@ export async function createEpicWithPlan(data: {
 
     for (let si = 0; si < data.stages.length; si++) {
       const stageData = data.stages[si];
+      // Auto-fill for single-repo epics; otherwise honor the validated explicit
+      // value from the input.
+      const resolvedRepoId: RepositoryId | undefined =
+        stageData.repositoryId ??
+        (epicRepoIds.length === 1 ? epicRepoIds[0] : undefined);
       const stage = await TaskStage.create(
         {
           epicTaskId: epic.id,
@@ -1263,18 +1370,29 @@ export async function createEpicWithPlan(data: {
           description: stageData.description,
           kind: stageData.kind ?? ("code_change" as TaskStageKind),
           sortOrder: si,
+          ...(resolvedRepoId ? { repositoryId: resolvedRepoId } : {}),
         },
         { transaction },
       );
 
+      // Sequential-within-stage rule: at any moment at most ONE task per
+      // stage is `ready` — the rest stay `pending` until the prior task
+      // completes. The very first task of the very first stage seeds the
+      // chain by starting `ready` so the orchestrator can pick it up via
+      // `resolveNextRetryableTask`. `advanceNextTaskInStage` (called from
+      // `finalizeEpicTaskExecution` on completion) hands the baton to the
+      // next sibling, and `advanceNextStageReadyTasks` (called when the
+      // prior stage clears) flips only the first task of the next stage.
       for (let ti = 0; ti < stageData.tasks.length; ti++) {
         const taskData = stageData.tasks[ti];
+        const isFirstTaskOfFirstStage = si === 0 && ti === 0;
         const task = await AgentTask.create(
           {
             taskStageId: stage.id,
             title: taskData.title,
             description: taskData.description,
             sortOrder: ti,
+            status: (isFirstTaskOfFirstStage ? "ready" : "pending") as AgentTaskStatus,
           },
           { transaction },
         );
@@ -1284,38 +1402,26 @@ export async function createEpicWithPlan(data: {
 
     await transaction.commit();
 
-    // Refresh architecture overviews from each repo's DEFAULT branch. This
-    // runs once per epic (here, at plan-creation time) rather than per task,
-    // so the stored overview always reflects the repo's merged/canonical
-    // state — never a speculative stage branch that may be abandoned. By the
-    // time the first task runs, `buildArchitectureContext` will pick up the
-    // fresh overview and inject it into the executor's system prompt.
-    //
-    // Non-fatal: failures are logged inside the helper and must not block
-    // epic creation.
-    if (data.repositoryIds?.length) {
-      const planRepos = await Repository.findAll({
-        where: { id: data.repositoryIds as unknown as string[] },
-      });
-      for (const repo of planRepos) {
-        await refreshArchitectureOverviewOnDefault(repo, data.agentId);
+    // First-stage tasks were created with `status='ready'` inside the
+    // transaction above (atomic with epic/stage/task creation), so there's
+    // no post-commit flip needed here.
+
+    // Best-effort folder creation post-commit. If mkdir fails (permissions,
+    // disk full, etc.) we log and continue — the column is already populated
+    // on the row, and the next caller that needs the folder can recreate it
+    // (mkdir { recursive: true } is idempotent). Failing this would be worse
+    // than letting it: the epic is fully planned in the DB and rolling back
+    // for a workspace mkdir blip would lose that work.
+    if (epicWorkspacePath) {
+      try {
+        await ensureEpicWorkspace(epicWorkspacePath);
+      } catch (err: any) {
+        logger.warn("createEpicWithPlan: failed to mkdir epic workspace folder (non-fatal)", {
+          epicId: epic.id,
+          epicWorkspacePath,
+          error: err?.message,
+        });
       }
-    }
-
-    // Mark all tasks in stage 1 (first stage) as 'ready'
-    const firstStageId = allTasks.length > 0
-      ? (await TaskStage.findOne({
-          where: { epicTaskId: epic.id },
-          order: [["sort_order", "ASC"]],
-          attributes: ["id"],
-        }))?.id
-      : null;
-
-    if (firstStageId) {
-      await AgentTask.update(
-        { status: "ready" as AgentTaskStatus },
-        { where: { taskStageId: firstStageId } },
-      );
     }
 
     return getEpic(epic.id, { includeStages: true, includeTasks: true }) as Promise<EpicTask>;
@@ -1600,8 +1706,20 @@ function buildContinuationTag(payload: EpicContinuationPayload): string {
 }
 
 /**
- * Given a taskId, resolves its epic and checks if more tasks remain.
- * Returns the continuation tag string (or empty string if no continuation needed).
+ * Given a taskId, returns any post-task follow-up text that should be appended
+ * to the finalize tool result.
+ *
+ * Per-task pause invariant: when more tasks remain in the epic, this returns
+ * an empty string — auto-continuation is intentionally disabled. The user
+ * must explicitly tell the orchestrator to continue before the next task
+ * runs. The PR-created and plan-stage-awaiting-approval branches below still
+ * fire when the *whole stage* completes, since those messages tell the user
+ * what they need to act on next (review the PR / approve the plan).
+ *
+ * Note: name kept as `appendContinuationMarker` for callsite stability — it
+ * no longer emits the EPIC_CONTINUATION marker, but the legacy parser still
+ * lives in `parseContinuationMarker` as a defensive no-op in case any other
+ * code path emits one.
  */
 export async function appendContinuationMarker(taskId: string): Promise<string> {
   try {
@@ -1616,11 +1734,11 @@ export async function appendContinuationMarker(taskId: string): Promise<string> 
     const readyTasks = await getReadyTasks(stage.epicTaskId);
 
     if (readyTasks.length > 0) {
-      return buildContinuationTag({
-        epicId: stage.epicTaskId,
-        completedTaskTitle: task.title,
-        remainingTasks: readyTasks.length,
-      });
+      // Tasks remain — pause for explicit user continuation. The orchestrator
+      // tool result already carries the per-task summary + attachment link
+      // (see `finalizeEpicTaskExecution`), so the user gets the file in chat
+      // and the conversation simply stops until they say to proceed.
+      return "";
     }
 
     // No more ready tasks — check if this stage just finished all tasks and needs PR action

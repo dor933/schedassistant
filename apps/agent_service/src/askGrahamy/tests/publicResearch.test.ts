@@ -173,6 +173,287 @@ test("publicResearchView does not leak raw objects, internal ids, raw SQL, raw a
   assertNoForbiddenPublicKeys(view);
 });
 
+test("publicResearchView includes PG sector leaderboard view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "sector_conviction_leaderboard",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      sectorLeaderboardView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_peer_daily",
+        period: "latest",
+        rankingBasis: "conviction",
+        asOfDate: "2026-05-01",
+        rows: [
+          {
+            sector: "Industrials",
+            rank: 1,
+            convictionScorePct: 81.2,
+            convictionBucket: "HIGH",
+          },
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: [],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.sectorLeaderboardView?.state, "complete");
+  assert.equal(view.sectorLeaderboardView?.rows[0]?.sector, "Industrials");
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("publicResearchView includes stock idea discovery view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "stock_idea_discovery",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      stockIdeaView: {
+        viewSchemaVersion: 1,
+        state: "partial",
+        source: "pg_features_daily",
+        asOfDate: "2026-05-01",
+        rankingBasis: "setup_quality",
+        rows: [
+          {
+            symbol: "GSL",
+            companyName: "Global Ship Lease, Inc.",
+            sector: "Industrials",
+            rank: 1,
+            convictionScorePct: 81.2,
+            convictionBucket: "HIGH",
+            momentumBucket: "STRONG",
+            reasonBullets: ["Sector-relative conviction bucket is HIGH."],
+          },
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: ["These are research candidates to review."],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.stockIdeaView?.state, "partial");
+  assert.equal(view.stockIdeaView?.rows[0]?.symbol, "GSL");
+  assert.equal(view.evidence.stockIdeaRows, 1);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("publicResearchView includes sector divergence view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "sector_momentum_vs_conviction_divergence",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      sectorDivergenceView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_peer_daily",
+        period: "latest",
+        asOfDate: "2026-05-01",
+        rows: [
+          {
+            sector: "Utilities",
+            rank: 1,
+            convictionScorePct: 70,
+            convictionBucket: "CONSTRUCTIVE",
+            momentumScorePct: 30,
+            momentumBucket: "WEAK",
+            divergenceType: "conviction_but_weak_price_action",
+            hitRatePct: 58.2,
+            evidenceStrength: "ADEQUATE",
+            interpretationBullets: [
+              "Conviction is constructive but current price action is not confirming it.",
+            ],
+          },
+        ],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: [],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.objectType, "sector");
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.sectorDivergenceView?.state, "complete");
+  assert.equal(view.sectorDivergenceView?.rows[0]?.sector, "Utilities");
+  assert.equal(view.evidence.sectorDivergenceRows, 1);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("publicResearchView includes sector delta view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "week_over_week_sector_delta",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-04-27" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      sectorDeltaView: {
+        viewSchemaVersion: 1,
+        state: "complete",
+        source: "pg_sector_weekly_history",
+        period: "week_over_week",
+        currentAsOfDate: "2026-04-27",
+        priorAsOfDate: "2026-04-20",
+        rankingBasis: "overall_change",
+        rows: [
+          {
+            sector: "Technology",
+            rank: 1,
+            currentConvictionScorePct: 76,
+            priorConvictionScorePct: 68,
+            convictionDeltaPct: 8,
+            currentConvictionBucket: "HIGH",
+            priorConvictionBucket: "CONSTRUCTIVE",
+            currentMomentumBucket: "STRONG",
+            priorMomentumBucket: "MIXED",
+            momentumDeltaPct: 5,
+            direction: "improved",
+            interpretationBullets: [
+              "Weekly conviction proxy improved by 8 points.",
+            ],
+          },
+        ],
+        freshness: { dataThrough: "2026-04-27", state: "fresh" },
+        warnings: [],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.objectType, "sector");
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.sectorDeltaView?.state, "complete");
+  assert.equal(view.sectorDeltaView?.rows[0]?.sector, "Technology");
+  assert.equal(view.evidence.sectorDeltaRows, 1);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("publicResearchView includes comparison view without raw research objects", () => {
+  const view = compilePublicResearchView({
+    classification: {
+      intent: "comparison",
+      symbols: [],
+      sectors: [],
+      regimeRequested: false,
+      isFollowUp: false,
+      comparison: {
+        comparisonType: "stock_vs_sector",
+        left: { type: "stock", symbol: "GSL" },
+        right: { type: "implicit_stock_sector" },
+      },
+      requiresTools: ["get_market_context"],
+      confidence: "high",
+      warnings: [],
+    },
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: {
+      comparisonView: {
+        viewSchemaVersion: 1,
+        state: "partial",
+        comparisonType: "stock_vs_sector",
+        source: "pg_current_features",
+        asOfDate: "2026-05-01",
+        left: {
+          type: "stock",
+          label: "GSL",
+          symbol: "GSL",
+          sector: "Industrials",
+          metrics: {
+            convictionScorePct: 82,
+            convictionBucket: "HIGH",
+            momentumBucket: "STRONG",
+          },
+        },
+        right: {
+          type: "sector",
+          label: "Industrials",
+          sector: "Industrials",
+          metrics: {
+            convictionScorePct: 55,
+            convictionBucket: "MIXED",
+            momentumBucket: "MIXED",
+          },
+        },
+        deltas: [
+          {
+            metric: "conviction",
+            leftValue: 82,
+            rightValue: 55,
+            delta: 27,
+            interpretationBucket: "left_stronger",
+            explanation: "Compares public conviction fields.",
+          },
+        ],
+        summaryBullets: ["GSL screens stronger than Industrials on conviction."],
+        freshness: { dataThrough: "2026-05-01", state: "fresh" },
+        warnings: ["Daily path-risk comparison is unavailable in V1."],
+      },
+    },
+    warnings: [],
+  });
+
+  assert.equal(view.objectType, "mixed");
+  assert.equal(view.researchObjectViews.length, 0);
+  assert.equal(view.researchObjectKeys.length, 0);
+  assert.equal(view.comparisonView?.comparisonType, "stock_vs_sector");
+  assert.equal(view.comparisonView?.left.symbol, "GSL");
+  assert.equal(view.evidence.comparisonState, "partial");
+  assertNoForbiddenPublicKeys(view);
+});
+
 test("stale cached views are rebuilt from parts and marked for persistence", async () => {
   const previousHost = process.env.EXTERNAL_PG_HOST;
   const previousDb = process.env.EXTERNAL_PG_DATABASE;
@@ -251,9 +532,31 @@ function assertNoForbiddenPublicKeys(value: unknown): void {
   assert.doesNotMatch(json, /edge_id/);
   assert.doesNotMatch(json, /hypothesis_id/);
   assert.doesNotMatch(json, /raw_sql/);
+  assert.doesNotMatch(json, /raw_rows/);
   assert.doesNotMatch(json, /signal_sql/);
   assert.doesNotMatch(json, /analog_rows/);
   assert.doesNotMatch(json, /path_rows/);
   assert.doesNotMatch(json, /gate_name/);
   assert.doesNotMatch(json, /internal_threshold/);
+  assert.doesNotMatch(json, /setup_score/);
+  assert.doesNotMatch(json, /sector_delta_formula/);
+  assert.doesNotMatch(json, /comparison_formula/);
+  assert.doesNotMatch(json, /conviction_formula/);
+  assert.doesNotMatch(json, /divergence_score_pct/);
+  assert.doesNotMatch(json, /divergenceScorePct/);
+  assert.doesNotMatch(json, /score_formula/);
+  assert.doesNotMatch(json, /feature_rules/);
+  assert.doesNotMatch(json, /md_research_refresh_latest/);
+  assert.doesNotMatch(json, /md_research_refresh_stale/);
+  assert.doesNotMatch(json, /md_features_daily/);
+  assert.doesNotMatch(json, /md_historical_features_daily/);
+  assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /md_research_sector_monday_hist/);
+  assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
+  assert.doesNotMatch(json, /pipeline_state/);
+  assert.doesNotMatch(json, /run_id/);
+  assert.doesNotMatch(json, /stage/);
+  assert.doesNotMatch(json, /last_success_at/);
+  assert.doesNotMatch(json, /completed_at/);
+  assert.doesNotMatch(json, /max_age/);
 }

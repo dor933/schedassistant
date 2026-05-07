@@ -1,5 +1,10 @@
+import { useState } from "react";
 import Box from "@mui/material/Box";
 import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
+import ClickAwayListener from "@mui/material/ClickAwayListener";
+import useMediaQuery from "@mui/material/useMediaQuery";
+import { useTheme } from "@mui/material/styles";
 import type { ConversationModelInfo } from "../api";
 
 export function VendorIcon({ slug }: { slug: string }) {
@@ -45,32 +50,74 @@ export default function VendorModelBadge({
 }: {
   model: ConversationModelInfo | null;
 }) {
+  // Hooks must run unconditionally — keep them above the null guard.
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+
   if (!model) return null;
 
   const vendorSlug = model.vendor?.slug ?? "unknown";
   const colors =
     vendorColors[vendorSlug] ??
     "bg-gray-50 text-gray-600 border-gray-200 shadow-gray-100/50";
+  const fullLabel = `${model.vendor?.name ?? "Unknown"} — ${model.name}`;
 
+  // Mobile: render only the vendor icon, tap to reveal the model name as
+  // a controlled tooltip. The native `title` attribute doesn't work on
+  // touch devices (no hover), so we drive the Tooltip's `open` ourselves
+  // and dismiss with ClickAwayListener.
+  if (isMobile) {
+    return (
+      <ClickAwayListener onClickAway={() => setTooltipOpen(false)}>
+        <Tooltip
+          open={tooltipOpen}
+          onClose={() => setTooltipOpen(false)}
+          title={fullLabel}
+          arrow
+          placement="bottom"
+          disableFocusListener
+          disableHoverListener
+          disableTouchListener
+        >
+          <Box
+            component="button"
+            type="button"
+            onClick={() => setTooltipOpen((v) => !v)}
+            aria-label={fullLabel}
+            className={`flex items-center justify-center rounded-full border font-semibold shadow-sm ${colors}`}
+            sx={{
+              p: "6px",
+              flexShrink: 0,
+              cursor: "pointer",
+            }}
+          >
+            <VendorIcon slug={vendorSlug} />
+          </Box>
+        </Tooltip>
+      </ClickAwayListener>
+    );
+  }
+
+  // Desktop: full badge with model name (existing behavior).
   return (
     <Stack
       direction="row"
       alignItems="center"
       className={`rounded-full border font-semibold shadow-sm ${colors}`}
       sx={{
-        gap: { xs: "4px", sm: "6px" },
-        px: { xs: "8px", sm: "12px" },
-        py: { xs: "4px", sm: "6px" },
-        fontSize: { xs: "10px", sm: "11px" },
+        gap: "6px",
+        px: "12px",
+        py: "6px",
+        fontSize: "11px",
         flexShrink: 0,
       }}
-      title={`${model.vendor?.name ?? "Unknown"} — ${model.name}`}
+      title={fullLabel}
     >
       <VendorIcon slug={vendorSlug} />
       <Box
         component="span"
         sx={{
-          maxWidth: { xs: "5rem", sm: "none" },
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",

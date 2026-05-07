@@ -9,8 +9,18 @@ export const FORBIDDEN_PATTERNS = [
   "raw_alpha",
   "backtest_details",
   "internal_score",
+  "setup_score",
+  "score_formula",
+  "scoring_formula",
+  "divergence_score",
+  "divergence_formula",
+  "sector_delta_formula",
+  "comparison_formula",
+  "conviction_formula",
+  "momentum_formula",
   "feature_rules",
   "raw_sql",
+  "raw_rows",
   "analog_rows",
   "raw_analog_rows",
   "path_rows",
@@ -30,8 +40,18 @@ const FORBIDDEN_KEY_PARTS = [
   "raw_alpha",
   "backtest_details",
   "internal_score",
+  "setup_score",
+  "score_formula",
+  "scoring_formula",
+  "divergence_score",
+  "divergence_formula",
+  "sector_delta_formula",
+  "comparison_formula",
+  "conviction_formula",
+  "momentum_formula",
   "feature_rules",
   "raw_sql",
+  "raw_rows",
   "analog_rows",
   "raw_analog_rows",
   "path_rows",
@@ -50,8 +70,19 @@ const FORBIDDEN_TEXT_REGEXES = [
   /\braw_alpha\b/gi,
   /\bbacktest_details\b/gi,
   /\binternal_score\b/gi,
+  /\bsetup_score\b/gi,
+  /\bscore_formula\b/gi,
+  /\bscoring_formula\b/gi,
+  /\bdivergence_score(?:_pct)?\b/gi,
+  /\bdivergenceScorePct\b/g,
+  /\bdivergence_formula\b/gi,
+  /\bsector_delta_formula\b/gi,
+  /\bcomparison_formula\b/gi,
+  /\bconviction_formula\b/gi,
+  /\bmomentum_formula\b/gi,
   /\bfeature_rules\b/gi,
   /\braw_sql\b/gi,
+  /\braw_rows\b/gi,
   /\banalog_rows\b/gi,
   /\braw_analog_rows\b/gi,
   /\bpath_rows\b/gi,
@@ -123,6 +154,10 @@ function isForbiddenKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (lower === "run_id" || lower === "runid") return true;
   if (lower === "gate" || lower === "gates" || lower === "gate_name") return true;
+  if (lower === "divergencescorepct" || lower === "divergenceformula") return true;
+  if (lower === "sectordeltaformula" || lower === "convictionformula") return true;
+  if (lower === "comparisonformula") return true;
+  if (lower === "scoringformula" || lower === "momentumformula") return true;
   if (lower.endsWith("_gate") || lower.startsWith("gate_")) return true;
   return FORBIDDEN_KEY_PARTS.some((part) => lower.includes(part));
 }

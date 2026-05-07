@@ -42,7 +42,7 @@ import {
   shouldUseAgentSdk,
 } from "../chat/anthropic/agentSdkRunner";
 import { shouldUseCodexSdk } from "../chat/codex/codexSdkRunner";
-import { loadCodexAuthObjectForAgent } from "../utils/codexAuthJson.service";
+import { loadCodexAuthObjectForAgentWithOrg } from "../utils/codexAuthJson.service";
 import type { ResolvedOrgVendor } from "../utils/resolveOrgVendor.service";
 
 /** Default summary lookback for the "Prior conversations" injection. */
@@ -206,12 +206,14 @@ export async function summariseAndStorePairTurn(args: {
       // Codex one-shot needs the auth_object when the org is on the
       // ChatGPT-account login path (slice 14). Falls back to the api_key
       // row when no auth_object exists.
-      const codexAuthObject = await loadCodexAuthObjectForAgent(
+      const codexAuth = await loadCodexAuthObjectForAgentWithOrg(
         args.executorAgentForAuth,
       );
+      const codexAuthObject = codexAuth?.authObject ?? null;
       summaryText = await runCodexOneShot({
         apiKey: codexAuthObject ? null : (args.vendor.apiKey ?? null),
         authObject: codexAuthObject,
+        authObjectOrganizationId: codexAuth?.organizationId ?? null,
         model: args.modelSlug,
         systemPrompt,
         userPrompt,

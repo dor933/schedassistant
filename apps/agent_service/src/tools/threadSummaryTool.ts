@@ -16,7 +16,6 @@ import { agentMayAccessThread } from "../utils/agentThreadAccess";
  */
 function formatFilesSection(
   files: SessionFileEntry[] | undefined,
-  threadId: string,
 ): string {
   if (!files || files.length === 0) return "";
   const lines: string[] = [];
@@ -24,8 +23,9 @@ function formatFilesSection(
   lines.push("");
   lines.push("### Files written during this session");
   lines.push(
-    `Use \`read_session_file\` with \`threadId="${threadId}"\` and the path below ` +
-      "to read any of these.",
+    "Each path below is the absolute file location. Open it directly with your built-in " +
+      "file tools (`Read`/`Grep`/`Glob` for Anthropic SDK, `shell` for Codex SDK). " +
+      "Do NOT invent filenames not listed here.",
   );
   lines.push("");
   for (const f of files) {
@@ -111,7 +111,7 @@ export function GetThreadSummaryTool(agentId: AgentId | null) {
           if (s.confidence) meta.push(`confidence: ${s.confidence}`);
           const metaLine = meta.length > 0 ? `\n\n_${meta.join(" · ")}_` : "";
 
-          const filesSection = formatFilesSection(s.files, threadId);
+          const filesSection = formatFilesSection(s.files);
 
           parts.push(
             `## Session summary${when}\n\n${s.text}${metaLine}${filesSection}`,
@@ -143,8 +143,10 @@ export function GetThreadSummaryTool(agentId: AgentId | null) {
         "chunk isn't self-sufficient — e.g. it mentions 'the Q2 roadmap review' but lacks the " +
         "conclusions — call this tool with the chunk's thread_id to pull the full saved summary.\n\n" +
         "When a thread produced files, the response also includes a 'Files written during this session' " +
-        "section with each file's path and a short content summary. If one of those files looks like it " +
-        "holds the detail you need, follow up with `read_session_file` to fetch its contents.\n\n" +
+        "section with each file's absolute path and a short content summary. If one of those files looks " +
+        "like it holds the detail you need, open it directly with your built-in file tools " +
+        "(`Read`/`Grep`/`Glob` for Anthropic SDK, `shell` for Codex SDK). Do NOT invent filenames not " +
+        "listed in the manifest.\n\n" +
         "Returns whichever are available: the session-level summary (from `threads.summary`) and, " +
         "if the thread was a roundtable, the final roundtable summary as well. " +
         "Returns nothing useful if the thread has no saved summary or wasn't one of your conversations.",

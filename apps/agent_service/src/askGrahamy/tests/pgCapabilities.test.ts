@@ -1,0 +1,2701 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { buildSectorConvictionLeaderboardView } from "../pgCapabilities/sectorConvictionLeaderboard";
+import { buildSectorDeltaView } from "../pgCapabilities/sectorDelta";
+import { buildSectorDivergenceView } from "../pgCapabilities/sectorDivergence";
+import { buildSectorVsSectorComparisonView } from "../pgCapabilities/sectorVsSectorComparison";
+import { buildRegimeHistoricalPlaybookView } from "../pgCapabilities/regimeHistoricalPlaybook";
+import { buildStockIdeaDiscoveryView } from "../pgCapabilities/stockIdeaDiscovery";
+import { buildStockVsSectorComparisonView } from "../pgCapabilities/stockVsSectorComparison";
+import { buildSymbolVsSymbolComparisonView } from "../pgCapabilities/symbolVsSymbolComparison";
+import {
+  buildCapabilityCacheKey,
+  capabilityForClassification,
+  capabilityForIntent,
+  executePgCapabilitiesWithCache,
+} from "../pgCapabilities/registry";
+import type { CachedCapabilityView } from "../pgCapabilities/types";
+import { assessCapabilityFreshness } from "../pgCapabilities/freshnessGuard";
+import { buildFactorConditionedBacktestView } from "../pgCapabilities/factorConditionedBacktest";
+import { buildFeatureScreenView } from "../pgCapabilities/featureScreen";
+import { compilePublicResearchView } from "../publicResearch";
+import type { Classification } from "../types";
+
+const leaderboardClassification: Classification = {
+  intent: "sector_conviction_leaderboard",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const stockIdeaClassification: Classification = {
+  intent: "stock_idea_discovery",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const featureScreenClassification: Classification = {
+  intent: "feature_screen",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  featureCriteria: [
+    { factor: "valuation", bucket: "ATTRACTIVE" },
+    { factor: "quality", bucket: "STRONG" },
+  ],
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const factorBacktestClassification: Classification = {
+  intent: "factor_conditioned_backtest",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  factorBacktest: {
+    horizon: "60-day",
+    criteria: [
+      { factor: "valuation", bucket: "ATTRACTIVE" },
+      { factor: "quality", bucket: "STRONG" },
+    ],
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const divergenceClassification: Classification = {
+  intent: "sector_momentum_vs_conviction_divergence",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const sectorDeltaClassification: Classification = {
+  intent: "week_over_week_sector_delta",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const comparisonClassification: Classification = {
+  intent: "comparison",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  comparison: {
+    comparisonType: "stock_vs_sector",
+    left: { type: "stock", symbol: "GSL" },
+    right: { type: "implicit_stock_sector" },
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const sectorVsSectorClassification: Classification = {
+  intent: "comparison",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  comparison: {
+    comparisonType: "sector_vs_sector",
+    left: { type: "sector", sector: "Technology" },
+    right: { type: "sector", sector: "Industrials" },
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const symbolVsSymbolClassification: Classification = {
+  intent: "comparison",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  comparison: {
+    comparisonType: "symbol_vs_symbol",
+    left: { type: "stock", symbol: "GSL" },
+    right: { type: "stock", symbol: "DAC" },
+  },
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const regimePlaybookClassification: Classification = {
+  intent: "market_regime_historical_playbook",
+  symbols: [],
+  sectors: [],
+  regimeRequested: false,
+  isFollowUp: false,
+  requiresTools: ["get_market_context"],
+  confidence: "high",
+  warnings: [],
+};
+
+const FRESH_FIXTURE_NOW = new Date("2026-05-03T12:00:00Z");
+
+test("sector conviction leaderboard returns complete public view with overlay", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildSectorConvictionLeaderboardView(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            sector: "Industrials",
+            rank: 1,
+            conviction_score_pct: 82.44,
+            conviction_bucket: "HIGH",
+            evidence_strength: "ADEQUATE",
+            hit_rate_pct: 58.22,
+            momentum_bucket: "MIXED",
+            price_momentum_separation: "conviction_but_weak_price_action",
+            defensive_cyclical_label: "cyclical",
+            as_of_date: "2026-05-01",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:30:04Z",
+            forward_freshness_state: "FRESH",
+            forward_completed_at: "2026-04-28T10:55:23Z",
+            overlay_available: true,
+            raw_sql: "must-not-leak",
+            edge_id: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  assert.equal(replacements.RANK_BY, "conviction");
+  const view = result.views.sectorLeaderboardView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_sector_peer_daily");
+  assert.equal(view.asOfDate, "2026-05-01");
+  assert.equal(view.rows.length, 1);
+  assert.equal(view.rows[0].sector, "Industrials");
+  assert.equal(view.rows[0].convictionScorePct, 82.4);
+  assert.equal(view.rows[0].hitRatePct, 58.2);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("FreshnessGuard treats Friday data as fresh on Sunday", () => {
+  const assessment = assessCapabilityFreshness({
+    capability: "stock_idea_discovery",
+    dataThrough: "2026-05-01",
+    now: new Date("2026-05-03T12:00:00Z"),
+    sources: [
+      {
+        sourceId: "features_daily",
+        tableOrView: "md_features_daily",
+        required: true,
+        refreshState: "FRESH",
+        lastSuccessAt: "2026-05-03T12:30:00Z",
+      },
+    ],
+  });
+
+  assert.equal(assessment.decision, "allow");
+  assert.equal(assessment.publicFreshness.state, "fresh");
+  assert.equal(assessment.publicFreshness.dataThrough, "2026-05-01");
+  assert.equal(assessment.publicFreshness.warning, undefined);
+});
+
+test("FreshnessGuard returns public stale warning without source names", () => {
+  const assessment = assessCapabilityFreshness({
+    capability: "sector_conviction_leaderboard",
+    dataThrough: "2026-04-30",
+    now: new Date("2026-05-03T12:00:00Z"),
+    sources: [
+      {
+        sourceId: "sector_peer_daily",
+        tableOrView: "md_research_sector_peer_daily",
+        required: true,
+        refreshState: "STALE",
+        lastSuccessAt: "2026-05-01T12:30:00Z",
+        maxAge: "28:00:00",
+      },
+    ],
+  });
+
+  assert.equal(assessment.decision, "allow_with_caveat");
+  assert.equal(assessment.publicFreshness.state, "stale");
+  assert.match(assessment.publicFreshness.warning ?? "", /data through 2026-04-30/i);
+  assertNoFreshnessInternals(assessment.publicFreshness);
+  assert.match(JSON.stringify(assessment.internalDiagnostics), /md_research_sector_peer_daily/);
+});
+
+test("FreshnessGuard marks missing dataThrough as unknown", () => {
+  const assessment = assessCapabilityFreshness({
+    capability: "stock_idea_discovery",
+    now: new Date("2026-05-03T12:00:00Z"),
+    sources: [
+      {
+        sourceId: "features_daily",
+        tableOrView: "md_features_daily",
+        required: true,
+        refreshState: "FRESH",
+      },
+    ],
+  });
+
+  assert.equal(assessment.decision, "allow_with_caveat");
+  assert.equal(assessment.reasonCode, "missing_data_through");
+  assert.deepEqual(assessment.publicFreshness, {
+    state: "unknown",
+    warning: "Freshness could not be verified for this view.",
+  });
+});
+
+test("FreshnessGuard marks hard-stale primary data unavailable", () => {
+  const assessment = assessCapabilityFreshness({
+    capability: "stock_idea_discovery",
+    dataThrough: "2026-04-20",
+    now: new Date("2026-05-03T12:00:00Z"),
+    sources: [
+      {
+        sourceId: "features_daily",
+        tableOrView: "md_features_daily",
+        required: true,
+        refreshState: "FRESH",
+      },
+    ],
+  });
+
+  assert.equal(assessment.decision, "unavailable");
+  assert.equal(assessment.reasonCode, "hard_stale");
+  assert.equal(assessment.publicFreshness.state, "stale");
+  assert.match(assessment.publicFreshness.warning ?? "", /current ranking is unavailable/i);
+});
+
+test("PG capability registry routes stock idea discovery intent", () => {
+  const entry = capabilityForIntent("stock_idea_discovery");
+  assert.ok(entry);
+  assert.equal(entry.name, "stock_idea_discovery");
+  assert.equal(entry.queryName, "query_stock_idea_discovery");
+  assert.deepEqual(entry.requiredParams, []);
+});
+
+test("PG capability registry routes feature screen intent", () => {
+  const entry = capabilityForIntent("feature_screen");
+  assert.ok(entry);
+  assert.equal(entry.name, "feature_screen");
+  assert.equal(entry.queryName, "query_feature_screen");
+  assert.equal(entry.source, "pg_current_features");
+  assert.deepEqual(entry.requiredParams, ["featureCriteria"]);
+});
+
+test("PG capability registry routes factor-conditioned backtest intent", () => {
+  const entry = capabilityForIntent("factor_conditioned_backtest");
+  assert.ok(entry);
+  assert.equal(entry.name, "factor_conditioned_backtest");
+  assert.equal(entry.queryName, "query_factor_conditioned_backtest");
+  assert.equal(entry.source, "pg_factor_history");
+  assert.deepEqual(entry.requiredParams, ["factorBacktest.criteria"]);
+});
+
+test("PG capability registry routes sector divergence intent", () => {
+  const entry = capabilityForIntent("sector_momentum_vs_conviction_divergence");
+  assert.ok(entry);
+  assert.equal(entry.name, "sector_momentum_vs_conviction_divergence");
+  assert.equal(entry.queryName, "query_sector_divergence");
+  assert.deepEqual(entry.requiredParams, []);
+});
+
+test("PG capability registry routes week-over-week sector delta intent", () => {
+  const entry = capabilityForIntent("week_over_week_sector_delta");
+  assert.ok(entry);
+  assert.equal(entry.name, "week_over_week_sector_delta");
+  assert.equal(entry.queryName, "query_sector_delta");
+  assert.equal(entry.source, "pg_sector_weekly_history");
+  assert.deepEqual(entry.requiredParams, []);
+});
+
+test("PG capability registry routes market regime historical playbook intent", () => {
+  const entry = capabilityForIntent("market_regime_historical_playbook");
+  assert.ok(entry);
+  assert.equal(entry.name, "market_regime_historical_playbook");
+  assert.equal(entry.queryName, "query_regime_historical_playbook");
+  assert.equal(entry.source, "pg_regime_history");
+  assert.deepEqual(entry.requiredParams, []);
+});
+
+test("PG capability registry routes comparison intent to stock-vs-sector capability", () => {
+  const entry = capabilityForIntent("comparison");
+  assert.ok(entry);
+  assert.equal(entry.name, "stock_vs_sector_comparison");
+  assert.equal(entry.queryName, "query_stock_vs_sector_comparison");
+  assert.equal(entry.source, "pg_current_features");
+  assert.deepEqual(entry.requiredParams, ["comparison.left.symbol"]);
+});
+
+test("capabilityForClassification routes sector_vs_sector to sector comparison capability", () => {
+  const entry = capabilityForClassification(sectorVsSectorClassification);
+  assert.ok(entry);
+  assert.equal(entry.name, "sector_vs_sector_comparison");
+  assert.equal(entry.queryName, "query_sector_vs_sector_comparison");
+  assert.equal(entry.source, "pg_sector_peer_daily");
+  assert.deepEqual(entry.requiredParams, [
+    "comparison.left.sector",
+    "comparison.right.sector",
+  ]);
+});
+
+test("capabilityForClassification routes symbol_vs_symbol to symbol comparison capability", () => {
+  const entry = capabilityForClassification(symbolVsSymbolClassification);
+  assert.ok(entry);
+  assert.equal(entry.name, "symbol_vs_symbol_comparison");
+  assert.equal(entry.queryName, "query_symbol_vs_symbol_comparison");
+  assert.equal(entry.source, "pg_current_features");
+  assert.deepEqual(entry.requiredParams, [
+    "comparison.left.symbol",
+    "comparison.right.symbol",
+  ]);
+});
+
+test("sector conviction leaderboard returns partial when forward overlay is absent", async () => {
+  const result = await buildSectorConvictionLeaderboardView(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Utilities",
+          rank: 1,
+          conviction_score_pct: 70,
+          conviction_bucket: "CONSTRUCTIVE",
+          evidence_strength: "WEAK",
+          momentum_bucket: "WEAK",
+          price_momentum_separation: "conviction_but_weak_price_action",
+          defensive_cyclical_label: "defensive",
+          as_of_date: "2026-05-01",
+          overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorLeaderboardView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.rankingBasis, "divergence");
+  assert.match(view.warnings.join(" "), /overlay is unavailable/i);
+  assert.equal(view.rows[0].hitRatePct, undefined);
+  assert.equal(view.freshness.state, "unknown");
+  assert.match(view.freshness.warning ?? "", /Freshness could not be verified/i);
+  assertNoFreshnessInternals(view.freshness);
+});
+
+test("sector conviction leaderboard returns unavailable for hard-stale primary source", async () => {
+  const result = await buildSectorConvictionLeaderboardView(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: new Date("2026-05-03T12:00:00Z"),
+      queryRunner: async () => [
+        {
+          sector: "Utilities",
+          rank: 1,
+          conviction_score_pct: 70,
+          conviction_bucket: "CONSTRUCTIVE",
+          evidence_strength: "WEAK",
+          as_of_date: "2026-04-20",
+          peer_freshness_state: "FRESH",
+          peer_completed_at: "2026-04-20T12:31:04Z",
+          overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorLeaderboardView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.equal(view.freshness.state, "stale");
+  assert.match(view.freshness.warning ?? "", /stale data through 2026-04-20/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector conviction leaderboard returns unavailable when source has no rows", async () => {
+  const result = await buildSectorConvictionLeaderboardView(
+    {
+      classification: leaderboardClassification,
+      message: "Show me the sector conviction leaderboard",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.sectorLeaderboardView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /No sector leaderboard rows/i);
+});
+
+test("publicResearchView carries sectorLeaderboardView without Research Objects", async () => {
+  const result = await buildSectorConvictionLeaderboardView(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Technology",
+          rank: 1,
+          conviction_score_pct: 80,
+          conviction_bucket: "HIGH",
+          evidence_strength: "ROBUST",
+          hit_rate_pct: 60,
+          momentum_bucket: "STRONG",
+          price_momentum_separation: "price_action_confirms_conviction",
+          defensive_cyclical_label: "cyclical",
+          as_of_date: "2026-05-01",
+          overlay_available: true,
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: leaderboardClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "sector");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.sectorLeaderboardView?.rows[0].sector, "Technology");
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("sector divergence returns complete public view with optional overlay", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            sector: "Utilities",
+            rank: 1,
+            conviction_score_pct: 70.04,
+            conviction_bucket: "CONSTRUCTIVE",
+            momentum_score_pct: 30,
+            momentum_bucket: "WEAK",
+            divergence_type: "conviction_but_weak_price_action",
+            evidence_strength: "ADEQUATE",
+            hit_rate_pct: 58.22,
+            as_of_date: "2026-05-01",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:30:04Z",
+            forward_freshness_state: "FRESH",
+            forward_completed_at: "2026-04-28T10:55:23Z",
+            overlay_available: true,
+            evaluated_sector_count: 2,
+            clear_divergence_count: 1,
+            divergence_score_pct: 91,
+            score_formula: "must-not-leak",
+            raw_sql: "must-not-leak",
+          },
+          {
+            sector: "Industrials",
+            rank: 2,
+            conviction_score_pct: 50,
+            conviction_bucket: "MIXED",
+            momentum_score_pct: 75,
+            momentum_bucket: "STRONG",
+            divergence_type: "in_line",
+            evidence_strength: "ROBUST",
+            hit_rate_pct: 56.2,
+            as_of_date: "2026-05-01",
+            overlay_available: true,
+            evaluated_sector_count: 2,
+            clear_divergence_count: 1,
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_sector_peer_daily");
+  assert.equal(view.asOfDate, "2026-05-01");
+  assert.equal(view.evaluatedSectorCount, 2);
+  assert.equal(view.clearDivergenceCount, 1);
+  assert.equal(view.rows.length, 1);
+  assert.deepEqual(view.rows[0], {
+    sector: "Utilities",
+    rank: 1,
+    convictionScorePct: 70,
+    convictionBucket: "CONSTRUCTIVE",
+    momentumScorePct: 30,
+    momentumBucket: "WEAK",
+    divergenceType: "conviction_but_weak_price_action",
+    hitRatePct: 58.2,
+    evidenceStrength: "ADEQUATE",
+    interpretationBullets: [
+      "Conviction bucket is CONSTRUCTIVE.",
+      "Price momentum bucket is WEAK.",
+      "Conviction is constructive but current price action is not confirming it.",
+      "Historical forward hit-rate evidence is available.",
+    ],
+  });
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector divergence returns complete empty view when no clear divergence exists", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Industrials",
+          rank: 1,
+          conviction_score_pct: 50,
+          conviction_bucket: "MIXED",
+          momentum_score_pct: 75,
+          momentum_bucket: "STRONG",
+          divergence_type: "in_line",
+          evidence_strength: "ROBUST",
+          hit_rate_pct: 56.2,
+          as_of_date: "2026-05-01",
+          peer_freshness_state: "FRESH",
+          peer_completed_at: "2026-05-02T12:30:04Z",
+          overlay_available: true,
+          evaluated_sector_count: 10,
+          clear_divergence_count: 0,
+        },
+        {
+          sector: "Technology",
+          rank: 2,
+          conviction_score_pct: 50,
+          conviction_bucket: "MIXED",
+          momentum_score_pct: 90,
+          momentum_bucket: "STRONG",
+          divergence_type: "in_line",
+          evidence_strength: "ROBUST",
+          hit_rate_pct: 54.2,
+          as_of_date: "2026-05-01",
+          overlay_available: true,
+          evaluated_sector_count: 10,
+          clear_divergence_count: 0,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.evaluatedSectorCount, 10);
+  assert.equal(view.clearDivergenceCount, 0);
+  assert.deepEqual(view.rows, []);
+  assert.match(
+    view.warnings.join(" "),
+    /No clear conviction-versus-momentum divergence was found/i,
+  );
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector divergence returns partial when forward overlay is absent", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have strong evidence but poor momentum?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Healthcare",
+          rank: 1,
+          conviction_score_pct: 66,
+          conviction_bucket: "CONSTRUCTIVE",
+          momentum_score_pct: 55,
+          momentum_bucket: "MIXED",
+          divergence_type: "conviction_but_weak_price_action",
+          evidence_strength: "WEAK",
+          as_of_date: "2026-05-01",
+          overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.rows[0].hitRatePct, undefined);
+  assert.match(view.warnings.join(" "), /overlay is unavailable/i);
+  assert.equal(view.freshness.state, "unknown");
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector divergence returns unavailable for hard-stale primary source", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: new Date("2026-05-03T12:00:00Z"),
+      queryRunner: async () => [
+        {
+          sector: "Healthcare",
+          rank: 1,
+          conviction_score_pct: 66,
+          conviction_bucket: "CONSTRUCTIVE",
+          momentum_score_pct: 55,
+          momentum_bucket: "MIXED",
+          divergence_type: "conviction_but_weak_price_action",
+          as_of_date: "2026-04-20",
+          peer_freshness_state: "FRESH",
+          peer_completed_at: "2026-04-20T12:31:04Z",
+          overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.equal(view.freshness.state, "stale");
+  assert.match(view.freshness.warning ?? "", /stale data through 2026-04-20/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector divergence returns unavailable when source has no rows", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Where is there divergence between conviction and momentum?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.sectorDivergenceView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /No sector divergence rows/i);
+});
+
+test("publicResearchView carries sectorDivergenceView without Research Objects", async () => {
+  const result = await buildSectorDivergenceView(
+    {
+      classification: divergenceClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Utilities",
+          rank: 1,
+          conviction_score_pct: 70,
+          conviction_bucket: "CONSTRUCTIVE",
+          momentum_score_pct: 30,
+          momentum_bucket: "WEAK",
+          divergence_type: "conviction_but_weak_price_action",
+          evidence_strength: "ADEQUATE",
+          hit_rate_pct: 58.2,
+          as_of_date: "2026-05-01",
+          overlay_available: true,
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: divergenceClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "sector");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.sectorDivergenceView?.rows[0].sector, "Utilities");
+  assert.equal(publicView.evidence.sectorDivergenceRows, 1);
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("sector weekly delta returns complete improvement view with current and prior dates", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildSectorDeltaView(
+    {
+      classification: sectorDeltaClassification,
+      message: "Which sectors improved most versus last week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      now: new Date("2026-04-29T12:00:00Z"),
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            sector: "Technology",
+            rank: 1,
+            current_conviction_score_pct: 76.24,
+            prior_conviction_score_pct: 68.12,
+            conviction_delta_pct: 8.12,
+            current_conviction_bucket: "HIGH",
+            prior_conviction_bucket: "CONSTRUCTIVE",
+            current_momentum_bucket: "STRONG",
+            prior_momentum_bucket: "MIXED",
+            momentum_delta_pct: 5.64,
+            direction: "improved",
+            include_in_public: true,
+            current_as_of_date: "2026-04-27",
+            prior_as_of_date: "2026-04-20",
+            weekly_freshness_state: "FRESH",
+            weekly_completed_at: "2026-04-28T12:30:04Z",
+            evaluated_sector_count: 11,
+            meaningful_delta_count: 1,
+            sector_delta_formula: "must-not-leak",
+            raw_sql: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  assert.equal(replacements.RANK_BY, "overall_change");
+  assert.equal(replacements.DIRECTION_FILTER, "improved");
+  const view = result.views.sectorDeltaView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_sector_weekly_history");
+  assert.equal(view.currentAsOfDate, "2026-04-27");
+  assert.equal(view.priorAsOfDate, "2026-04-20");
+  assert.equal(view.rankingBasis, "overall_change");
+  assert.equal(view.rows.length, 1);
+  assert.deepEqual(view.rows[0], {
+    sector: "Technology",
+    rank: 1,
+    currentConvictionScorePct: 76.2,
+    priorConvictionScorePct: 68.1,
+    convictionDeltaPct: 8.1,
+    currentConvictionBucket: "HIGH",
+    priorConvictionBucket: "CONSTRUCTIVE",
+    currentMomentumBucket: "STRONG",
+    priorMomentumBucket: "MIXED",
+    momentumDeltaPct: 5.6,
+    direction: "improved",
+    interpretationBullets: [
+      "Weekly conviction proxy improved by 8.1 points.",
+      "Weekly price momentum improved by 5.6 points.",
+      "Conviction bucket moved from CONSTRUCTIVE to HIGH.",
+      "Momentum bucket moved from MIXED to STRONG.",
+    ],
+  });
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-04-27",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector weekly delta returns only deterioration rows for deterioration prompts", async () => {
+  const result = await buildSectorDeltaView(
+    {
+      classification: sectorDeltaClassification,
+      message: "Which sectors deteriorated versus last week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Energy",
+          rank: 1,
+          current_conviction_score_pct: 42,
+          prior_conviction_score_pct: 60,
+          conviction_delta_pct: -18,
+          current_conviction_bucket: "WEAK",
+          prior_conviction_bucket: "CONSTRUCTIVE",
+          current_momentum_bucket: "WEAK",
+          prior_momentum_bucket: "MIXED",
+          momentum_delta_pct: -10,
+          direction: "deteriorated",
+          include_in_public: true,
+          current_as_of_date: "2026-04-27",
+          prior_as_of_date: "2026-04-20",
+          weekly_freshness_state: "FRESH",
+          weekly_completed_at: "2026-04-28T12:30:04Z",
+        },
+        {
+          sector: "Technology",
+          rank: 2,
+          conviction_delta_pct: 8,
+          momentum_delta_pct: 4,
+          direction: "improved",
+          include_in_public: false,
+          current_as_of_date: "2026-04-27",
+          prior_as_of_date: "2026-04-20",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorDeltaView;
+  assert.ok(view);
+  assert.equal(view.rankingBasis, "deterioration");
+  assert.equal(view.rows.length, 1);
+  assert.equal(view.rows[0].sector, "Energy");
+  assert.equal(view.rows[0].direction, "deteriorated");
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector weekly delta returns unavailable when prior baseline is missing", async () => {
+  const result = await buildSectorDeltaView(
+    {
+      classification: sectorDeltaClassification,
+      message: "Which sectors gained conviction week-over-week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.sectorDeltaView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /prior weekly sector baseline is missing/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector weekly delta returns complete empty view when no meaningful delta exists", async () => {
+  const result = await buildSectorDeltaView(
+    {
+      classification: sectorDeltaClassification,
+      message: "What changed since last week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Utilities",
+          rank: 1,
+          current_conviction_score_pct: 50,
+          prior_conviction_score_pct: 49,
+          conviction_delta_pct: 1,
+          current_conviction_bucket: "MIXED",
+          prior_conviction_bucket: "MIXED",
+          current_momentum_bucket: "MIXED",
+          prior_momentum_bucket: "MIXED",
+          momentum_delta_pct: 0.5,
+          direction: "flat",
+          include_in_public: false,
+          current_as_of_date: "2026-04-27",
+          prior_as_of_date: "2026-04-20",
+          weekly_freshness_state: "FRESH",
+          weekly_completed_at: "2026-04-28T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.sectorDeltaView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.deepEqual(view.rows, []);
+  assert.match(
+    view.warnings.join(" "),
+    /No meaningful week-over-week sector delta was found/i,
+  );
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("publicResearchView carries sectorDeltaView without Research Objects", async () => {
+  const result = await buildSectorDeltaView(
+    {
+      classification: sectorDeltaClassification,
+      message: "Which sectors improved most versus last week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          sector: "Technology",
+          rank: 1,
+          current_conviction_score_pct: 76,
+          prior_conviction_score_pct: 68,
+          conviction_delta_pct: 8,
+          current_conviction_bucket: "HIGH",
+          prior_conviction_bucket: "CONSTRUCTIVE",
+          current_momentum_bucket: "STRONG",
+          prior_momentum_bucket: "MIXED",
+          momentum_delta_pct: 5,
+          direction: "improved",
+          include_in_public: true,
+          current_as_of_date: "2026-04-27",
+          prior_as_of_date: "2026-04-20",
+          weekly_freshness_state: "FRESH",
+          weekly_completed_at: "2026-04-28T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: sectorDeltaClassification,
+    snapshots: { freshness: { dataThrough: "2026-04-27" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "sector");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.sectorDeltaView?.rows[0].sector, "Technology");
+  assert.equal(publicView.evidence.sectorDeltaRows, 1);
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("regime historical playbook returns complete public view", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "Which sectors historically lead in the current regime?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      now: new Date("2026-05-05T12:00:00Z"),
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            regime: "NEUTRAL",
+            as_of_date: "2026-05-04",
+            sector: "Industrials",
+            rank: 1,
+            role: "leader",
+            include_in_public: true,
+            sample_size: 110744,
+            hit_rate_pct: 56.23,
+            median_forward_return_pct: 2.08,
+            evidence_strength: "ROBUST",
+            vix_risk_bucket: "MODERATE",
+            breadth_risk_bucket: "BROAD",
+            dispersion_risk_bucket: "NORMAL",
+            trend_risk_bucket: "STRONG_RALLY",
+            risk_context_available: true,
+            regime_freshness_state: "FRESH",
+            regime_completed_at: "2026-05-04T12:30:04Z",
+            macro_freshness_state: "FRESH",
+            macro_completed_at: "2026-05-04T12:30:04Z",
+            raw_sql: "must-not-leak",
+            vix_close: 18.3,
+          },
+          {
+            regime: "NEUTRAL",
+            as_of_date: "2026-05-04",
+            sector: "Real Estate",
+            rank: 2,
+            role: "laggard",
+            include_in_public: true,
+            sample_size: 44290,
+            hit_rate_pct: 55,
+            evidence_strength: "ROBUST",
+            vix_risk_bucket: "MODERATE",
+            breadth_risk_bucket: "BROAD",
+            dispersion_risk_bucket: "NORMAL",
+            trend_risk_bucket: "STRONG_RALLY",
+            risk_context_available: true,
+            regime_freshness_state: "FRESH",
+            regime_completed_at: "2026-05-04T12:30:04Z",
+            macro_freshness_state: "FRESH",
+            macro_completed_at: "2026-05-04T12:30:04Z",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  assert.equal(replacements.ROLE_FILTER, "leaders");
+  const view = result.views.regimeHistoricalPlaybookView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_regime_history");
+  assert.equal(view.regime, "NEUTRAL");
+  assert.equal(view.asOfDate, "2026-05-04");
+  assert.equal(view.rows.length, 2);
+  assert.deepEqual(view.rows[0], {
+    sector: "Industrials",
+    rank: 1,
+    role: "leader",
+    hitRatePct: 56.2,
+    medianForwardReturnPct: 2.08,
+    evidenceStrength: "ROBUST",
+    interpretationBullets: [
+      "Industrials has historically screened among stronger sectors in NEUTRAL regimes.",
+      "Historical positive-return hit-rate evidence is available.",
+      "Historical median forward-return evidence is available.",
+      "Sample adequacy is ROBUST.",
+    ],
+  });
+  assert.equal(view.risks.length, 4);
+  assert.match(view.summaryBullets.join(" "), /NEUTRAL regimes/i);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-04",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("regime historical playbook returns partial when risk context is missing", async () => {
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "What usually works in this regime?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          regime: "NEUTRAL",
+          as_of_date: "2026-05-04",
+          sector: "Technology",
+          rank: 1,
+          role: "leader",
+          include_in_public: true,
+          sample_size: 84207,
+          hit_rate_pct: 54.2,
+          evidence_strength: "ROBUST",
+          vix_risk_bucket: "UNKNOWN",
+          breadth_risk_bucket: "UNKNOWN",
+          dispersion_risk_bucket: "UNKNOWN",
+          trend_risk_bucket: "UNKNOWN",
+          risk_context_available: false,
+          regime_freshness_state: "FRESH",
+          regime_completed_at: "2026-05-04T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.regimeHistoricalPlaybookView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.rows.length, 1);
+  assert.deepEqual(view.risks, []);
+  assert.match(view.warnings.join(" "), /macro risk context is unavailable/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("regime historical playbook returns unavailable when current regime is missing", async () => {
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "What does a neutral regime usually favor?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.regimeHistoricalPlaybookView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.deepEqual(view.risks, []);
+  assert.match(view.warnings.join(" "), /Current regime/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("regime historical playbook returns complete empty view when no rows are public", async () => {
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "What historically underperforms in this regime?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          regime: "NEUTRAL",
+          as_of_date: "2026-05-04",
+          sector: "Utilities",
+          rank: 1,
+          role: "mixed",
+          include_in_public: false,
+          vix_risk_bucket: "MODERATE",
+          breadth_risk_bucket: "BROAD",
+          dispersion_risk_bucket: "NORMAL",
+          trend_risk_bucket: "POSITIVE",
+          risk_context_available: true,
+          regime_freshness_state: "FRESH",
+          regime_completed_at: "2026-05-04T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.regimeHistoricalPlaybookView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.deepEqual(view.rows, []);
+  assert.match(
+    view.warnings.join(" "),
+    /No meaningful historical regime leaders or laggards/i,
+  );
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("publicResearchView carries regimeHistoricalPlaybookView without Research Objects", async () => {
+  const result = await buildRegimeHistoricalPlaybookView(
+    {
+      classification: regimePlaybookClassification,
+      message: "What usually works in this regime?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          regime: "NEUTRAL",
+          as_of_date: "2026-05-04",
+          sector: "Industrials",
+          rank: 1,
+          role: "leader",
+          include_in_public: true,
+          hit_rate_pct: 56.2,
+          evidence_strength: "ROBUST",
+          vix_risk_bucket: "MODERATE",
+          breadth_risk_bucket: "BROAD",
+          dispersion_risk_bucket: "NORMAL",
+          trend_risk_bucket: "STRONG_RALLY",
+          risk_context_available: true,
+          regime_freshness_state: "FRESH",
+          regime_completed_at: "2026-05-04T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: regimePlaybookClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-04" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "regime");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.regimeHistoricalPlaybookView?.regime, "NEUTRAL");
+  assert.equal(publicView.regimeHistoricalPlaybookView?.rows[0].sector, "Industrials");
+  assert.equal(publicView.evidence.regimeHistoricalPlaybookRows, 1);
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("stock idea discovery returns partial public view with bounded forward overlay", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildStockIdeaDiscoveryView(
+    {
+      classification: stockIdeaClassification,
+      message: "Show me top conviction names today",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      candidatePoolSize: 1000,
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            symbol: "GSL",
+            company_name: "Global Ship Lease, Inc.",
+            sector: "Industrials",
+            rank: 1,
+            conviction_score_pct: 84.42,
+            conviction_bucket: "HIGH",
+            evidence_strength: "ADEQUATE",
+            hit_rate_pct: 61.23,
+            median_return_pct: 5.241,
+            p25_return_pct: -8.11,
+            p75_return_pct: 26.46,
+            momentum_bucket: "STRONG",
+            quality_bucket: "CONSTRUCTIVE",
+            valuation_bucket: "ATTRACTIVE",
+            path_risk_bucket: "Numeric daily path-risk is unavailable in V1.",
+            as_of_date: "2026-05-01",
+            features_freshness_state: "FRESH",
+            features_completed_at: "2026-05-02T12:30:04Z",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_overlay_available: true,
+            setup_score: 91.2,
+            raw_sql: "must-not-leak",
+            feature_rules: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  assert.equal(replacements.CANDIDATE_POOL_SIZE, 500);
+  assert.equal(replacements.RANK_BY, "conviction");
+  const view = result.views.stockIdeaView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.source, "pg_features_daily");
+  assert.equal(view.asOfDate, "2026-05-01");
+  assert.equal(view.rows.length, 1);
+  assert.equal(view.rows[0].symbol, "GSL");
+  assert.equal(view.rows[0].convictionScorePct, 84.4);
+  assert.equal(view.rows[0].hitRatePct, 61.2);
+  assert.equal(view.rows[0].medianReturnPct, 5.24);
+  assert.equal(view.rows[0].p10MaxDrawdownPct, undefined);
+  assert.equal(view.rows[0].recoveredByHorizonRatePct, undefined);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
+  assert.match(view.warnings.join(" "), /research candidates/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("stock idea discovery returns unavailable when source has no rows", async () => {
+  const result = await buildStockIdeaDiscoveryView(
+    {
+      classification: stockIdeaClassification,
+      message: "Give me an interesting stock",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.stockIdeaView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /No stock idea discovery rows/i);
+});
+
+test("stock idea discovery returns unavailable when external PG is not configured", async () => {
+  const previousHost = process.env.EXTERNAL_PG_HOST;
+  const previousDb = process.env.EXTERNAL_PG_DATABASE;
+  delete process.env.EXTERNAL_PG_HOST;
+  delete process.env.EXTERNAL_PG_DATABASE;
+
+  try {
+    const result = await buildStockIdeaDiscoveryView({
+      classification: stockIdeaClassification,
+      message: "What stock looks interesting today?",
+      snapshots: {},
+      toolOutputs: {},
+    });
+    const view = result.views.stockIdeaView;
+    assert.ok(view);
+    assert.equal(view.state, "unavailable");
+    assert.deepEqual(view.rows, []);
+    assert.match(view.warnings.join(" "), /not configured/i);
+  } finally {
+    if (previousHost == null) delete process.env.EXTERNAL_PG_HOST;
+    else process.env.EXTERNAL_PG_HOST = previousHost;
+    if (previousDb == null) delete process.env.EXTERNAL_PG_DATABASE;
+    else process.env.EXTERNAL_PG_DATABASE = previousDb;
+  }
+});
+
+test("publicResearchView carries stockIdeaView without Research Objects", async () => {
+  const result = await buildStockIdeaDiscoveryView(
+    {
+      classification: stockIdeaClassification,
+      message: "Give me an interesting stock",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          sector: "Industrials",
+          rank: 1,
+          conviction_score_pct: 80,
+          conviction_bucket: "HIGH",
+          evidence_strength: "CURRENT_ONLY",
+          momentum_bucket: "STRONG",
+          quality_bucket: "CONSTRUCTIVE",
+          valuation_bucket: "ATTRACTIVE",
+          path_risk_bucket: "Numeric daily path-risk is unavailable in V1.",
+          as_of_date: "2026-05-01",
+          forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: stockIdeaClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "stock");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.stockIdeaView?.rows[0].symbol, "GSL");
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("feature screen returns partial public view with bounded criteria", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildFeatureScreenView(
+    {
+      classification: featureScreenClassification,
+      message: "Find me cheap quality stocks",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      maxRows: 50,
+      candidatePoolSize: 1000,
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            symbol: "GSL",
+            company_name: "Global Ship Lease, Inc.",
+            sector: "Industrials",
+            rank: 1,
+            valuation_bucket: "ATTRACTIVE",
+            quality_bucket: "STRONG",
+            momentum_bucket: "CONSTRUCTIVE",
+            growth_bucket: "STRONG",
+            leverage_bucket: "CONSTRUCTIVE",
+            risk_bucket: "MODERATE",
+            conviction_bucket: "HIGH",
+            hit_rate_pct: 61.23,
+            median_return_pct: 5.241,
+            as_of_date: "2026-05-01",
+            current_row_count: 3200,
+            matched_row_count: 18,
+            features_freshness_state: "FRESH",
+            features_completed_at: "2026-05-02T12:30:04Z",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_overlay_available: true,
+            internal_rank_score: 99,
+            raw_sql: "must-not-leak",
+            feature_rules: "must-not-leak",
+            score_formula: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.MAX_ROWS, 20);
+  assert.equal(replacements.CANDIDATE_POOL_SIZE, 500);
+  assert.equal(replacements.VALUATION_BUCKET, "ATTRACTIVE");
+  assert.equal(replacements.QUALITY_BUCKET, "STRONG");
+  const view = result.views.featureScreenView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_current_features");
+  assert.equal(view.asOfDate, "2026-05-01");
+  assert.deepEqual(view.screenCriteria, featureScreenClassification.featureCriteria);
+  assert.equal(view.rows.length, 1);
+  assert.equal(view.rows[0].symbol, "GSL");
+  assert.equal(view.rows[0].valuationBucket, "ATTRACTIVE");
+  assert.equal(view.rows[0].qualityBucket, "STRONG");
+  assert.equal(view.rows[0].hitRatePct, 61.2);
+  assert.equal(view.rows[0].medianReturnPct, 5.24);
+  assert.match(view.rows[0].reasonBullets.join(" "), /Valuation bucket matched ATTRACTIVE/i);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("feature screen returns complete empty view when no stocks match", async () => {
+  const result = await buildFeatureScreenView(
+    {
+      classification: {
+        ...featureScreenClassification,
+        featureCriteria: [{ factor: "sector", bucket: "Technology" }],
+      },
+      message: "Find high-quality stocks in Technology",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          as_of_date: "2026-05-01",
+          current_row_count: 3200,
+          matched_row_count: 0,
+          features_freshness_state: "FRESH",
+          features_completed_at: "2026-05-02T12:30:04Z",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.featureScreenView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /No stocks matched/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("feature screen returns unavailable when no supported criteria exist", async () => {
+  const result = await buildFeatureScreenView({
+    classification: {
+      ...featureScreenClassification,
+      featureCriteria: [],
+    },
+    message: "Find stocks with moonshot potential",
+    snapshots: {},
+    toolOutputs: {},
+  });
+
+  const view = result.views.featureScreenView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.rows, []);
+  assert.match(view.warnings.join(" "), /No supported public screen criteria/i);
+});
+
+test("publicResearchView carries featureScreenView without Research Objects", async () => {
+  const result = await buildFeatureScreenView(
+    {
+      classification: featureScreenClassification,
+      message: "Find me cheap quality stocks",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          sector: "Industrials",
+          rank: 1,
+          valuation_bucket: "ATTRACTIVE",
+          quality_bucket: "STRONG",
+          momentum_bucket: "CONSTRUCTIVE",
+          growth_bucket: "STRONG",
+          leverage_bucket: "CONSTRUCTIVE",
+          conviction_bucket: "HIGH",
+          as_of_date: "2026-05-01",
+          current_row_count: 3200,
+          matched_row_count: 18,
+          forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: featureScreenClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "stock");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.featureScreenView?.rows[0].symbol, "GSL");
+  assert.equal(publicView.evidence.featureScreenRows, 1);
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("factor-conditioned backtest returns complete aggregate public view", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildFactorConditionedBacktestView(
+    {
+      classification: factorBacktestClassification,
+      message: "Do cheap high-quality stocks work historically?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            as_of_date: "2026-02-02",
+            horizon: "60-day",
+            sample_size: 125,
+            hit_rate_pct: 57.45,
+            median_return_pct: 2.345,
+            p25_return_pct: -6.789,
+            p75_return_pct: 11.234,
+            matched_row_count: 125,
+            source_row_count: 50000,
+            capped_sample: false,
+            raw_rows: [{ symbol: "GSL" }],
+            raw_sql: "must-not-leak",
+            factor_formula: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.HORIZON, "60-day");
+  assert.equal(replacements.VALUATION_BUCKET, "ATTRACTIVE");
+  assert.equal(replacements.QUALITY_BUCKET, "STRONG");
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.source, "pg_factor_history");
+  assert.equal(view.horizon, "60-day");
+  assert.deepEqual(view.criteria, factorBacktestClassification.factorBacktest?.criteria);
+  assert.equal(view.sampleSize, 125);
+  assert.equal(view.hitRatePct, 57.5);
+  assert.equal(view.medianReturnPct, 2.35);
+  assert.equal(view.p25ReturnPct, -6.79);
+  assert.equal(view.p75ReturnPct, 11.23);
+  assert.equal(view.sampleAdequacy, "ROBUST");
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-02-02",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("factor-conditioned backtest returns partial view for thin samples", async () => {
+  const result = await buildFactorConditionedBacktestView(
+    {
+      classification: factorBacktestClassification,
+      message: "What historically happens when quality is strong but momentum is weak?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async () => [
+        {
+          as_of_date: "2026-02-02",
+          sample_size: 12,
+          hit_rate_pct: 50,
+          median_return_pct: 1,
+          p25_return_pct: -8,
+          p75_return_pct: 9,
+          matched_row_count: 12,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.sampleAdequacy, "THIN");
+  assert.match(view.warnings.join(" "), /thin/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("factor-conditioned backtest returns unavailable for unsupported horizon", async () => {
+  const result = await buildFactorConditionedBacktestView({
+    classification: {
+      ...factorBacktestClassification,
+      factorBacktest: {
+        criteria: [{ factor: "quality", bucket: "STRONG" }],
+        horizon: "60-day",
+        unsupportedHorizon: "90-day",
+      },
+    },
+    message: "What is the 90-day forward profile for strong quality?",
+    snapshots: {},
+    toolOutputs: {},
+  });
+
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.match(view.warnings.join(" "), /Unsupported backtest horizon/i);
+});
+
+test("factor-conditioned backtest returns unavailable for unsupported public factors", async () => {
+  const result = await buildFactorConditionedBacktestView({
+    classification: {
+      ...factorBacktestClassification,
+      factorBacktest: {
+        criteria: [],
+        horizon: "60-day",
+        unsupportedCriteria: ["insider buying"],
+      },
+    },
+    message: "What happens historically when insider buying is high?",
+    snapshots: {},
+    toolOutputs: {},
+  });
+
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.criteria, []);
+  assert.match(view.warnings.join(" "), /Unsupported public factor criteria/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("factor-conditioned backtest returns complete zero-sample view when no matches exist", async () => {
+  const result = await buildFactorConditionedBacktestView(
+    {
+      classification: factorBacktestClassification,
+      message: "Do cheap high-quality stocks work historically?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async () => [
+        {
+          as_of_date: "2026-02-02",
+          sample_size: 0,
+          matched_row_count: 0,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.factorBacktestView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.sampleSize, 0);
+  assert.equal(view.sampleAdequacy, "THIN");
+  assert.match(view.warnings.join(" "), /No historical observations/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("publicResearchView carries factorBacktestView without Research Objects", async () => {
+  const result = await buildFactorConditionedBacktestView(
+    {
+      classification: factorBacktestClassification,
+      message: "Do cheap high-quality stocks work historically?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async () => [
+        {
+          as_of_date: "2026-02-02",
+          sample_size: 125,
+          hit_rate_pct: 57,
+          median_return_pct: 2,
+          p25_return_pct: -6,
+          p75_return_pct: 11,
+          matched_row_count: 125,
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: factorBacktestClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "stock");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.factorBacktestView?.sampleSize, 125);
+  assert.equal(publicView.evidence.factorBacktestSampleSize, 125);
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("stock-vs-sector comparison returns partial public view with safe deltas", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: comparisonClassification,
+      message: "Compare GSL to its sector",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            symbol: "GSL",
+            company_name: "Global Ship Lease, Inc.",
+            stock_sector: "Industrials",
+            resolved_sector: "Industrials",
+            comparison_sector_found: true,
+            as_of_date: "2026-05-01",
+            stock_conviction_score_pct: 81.78,
+            stock_conviction_bucket: "HIGH",
+            stock_valuation_bucket: "ATTRACTIVE",
+            stock_momentum_bucket: "STRONG",
+            stock_quality_bucket: "CONSTRUCTIVE",
+            stock_growth_bucket: "CONSTRUCTIVE",
+            stock_leverage_bucket: "CONSTRUCTIVE",
+            stock_hit_rate_pct: 61.23,
+            stock_median_return_pct: 5.24,
+            sector_conviction_score_pct: 55.44,
+            sector_conviction_bucket: "MIXED",
+            sector_momentum_bucket: "MIXED",
+            sector_quality_bucket: "MIXED",
+            sector_growth_bucket: "MIXED",
+            sector_leverage_bucket: "CONSTRUCTIVE",
+            sector_hit_rate_pct: 54.1,
+            features_freshness_state: "FRESH",
+            features_completed_at: "2026-05-02T12:30:04Z",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_freshness_state: "FRESH",
+            forward_completed_at: "2026-05-02T12:32:04Z",
+            stock_forward_overlay_available: true,
+            sector_forward_overlay_available: true,
+            raw_sql: "must-not-leak",
+            comparison_formula: "must-not-leak",
+            setup_score: 99,
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.SYMBOL, "GSL");
+  assert.equal(replacements.SECTOR, "");
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.comparisonType, "stock_vs_sector");
+  assert.equal(view.asOfDate, "2026-05-01");
+  assert.equal(view.left.symbol, "GSL");
+  assert.equal(view.right.sector, "Industrials");
+  assert.equal(view.left.metrics.convictionScorePct, 81.8);
+  assert.equal(view.right.metrics.convictionScorePct, 55.4);
+  assert.equal(view.deltas[0].metric, "conviction");
+  assert.equal(view.deltas[0].interpretationBucket, "left_stronger");
+  assert.match(view.summaryBullets.join(" "), /GSL screens stronger/i);
+  assert.match(view.warnings.join(" "), /path-risk comparison is unavailable/i);
+  assert.deepEqual(view.freshness, {
+    dataThrough: "2026-05-01",
+    state: "fresh",
+  });
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("stock-vs-sector comparison returns unavailable for explicit invalid sector", async () => {
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: {
+        ...comparisonClassification,
+        comparison: {
+          comparisonType: "stock_vs_sector",
+          left: { type: "stock", symbol: "GSL" },
+          right: { type: "sector", sector: "Crypto Miners" },
+        },
+      },
+      message: "How does GSL look versus Crypto Miners?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => {
+        throw new Error("should not query invalid sectors");
+      },
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.deepEqual(view.deltas, []);
+  assert.match(view.warnings.join(" "), /not supported/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("stock-vs-sector comparison returns unavailable when stock row is missing", async () => {
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: comparisonClassification,
+      message: "Compare GSL to its sector",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    { queryRunner: async () => [] },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.match(view.warnings.join(" "), /No current PG feature row/i);
+});
+
+test("stock-vs-sector comparison returns unavailable when implicit sector cannot resolve", async () => {
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: comparisonClassification,
+      message: "Is GSL better than its sector?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          comparison_sector_found: false,
+          as_of_date: "2026-05-01",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.match(view.warnings.join(" "), /does not include a sector/i);
+});
+
+test("stock-vs-sector comparison uses explicit canonical sector parameter", async () => {
+  let replacements: Record<string, unknown> = {};
+  await buildStockVsSectorComparisonView(
+    {
+      classification: {
+        ...comparisonClassification,
+        comparison: {
+          comparisonType: "stock_vs_sector",
+          left: { type: "stock", symbol: "GSL" },
+          right: { type: "sector", sector: "financial services" },
+        },
+      },
+      message: "How does GSL look versus Financial Services?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async (params) => {
+        replacements = params;
+        return [];
+      },
+    },
+  );
+
+  assert.equal(replacements.SYMBOL, "GSL");
+  assert.equal(replacements.SECTOR, "Financial Services");
+});
+
+test("publicResearchView carries comparisonView without Research Objects", async () => {
+  const result = await buildStockVsSectorComparisonView(
+    {
+      classification: comparisonClassification,
+      message: "Compare GSL to its sector",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          stock_sector: "Industrials",
+          resolved_sector: "Industrials",
+          comparison_sector_found: true,
+          as_of_date: "2026-05-01",
+          stock_conviction_score_pct: 82,
+          stock_conviction_bucket: "HIGH",
+          stock_momentum_bucket: "STRONG",
+          sector_conviction_score_pct: 55,
+          sector_conviction_bucket: "MIXED",
+          sector_momentum_bucket: "MIXED",
+          features_freshness_state: "FRESH",
+          peer_freshness_state: "FRESH",
+        },
+      ],
+    },
+  );
+
+  const publicView = compilePublicResearchView({
+    classification: comparisonClassification,
+    snapshots: { freshness: { dataThrough: "2026-05-01" } },
+    toolOutputs: {},
+    researchObjects: [],
+    pgCapabilityViews: result.views,
+    warnings: [],
+  });
+
+  assert.equal(publicView.objectType, "mixed");
+  assert.equal(publicView.researchObjectViews.length, 0);
+  assert.deepEqual(publicView.researchObjectKeys, []);
+  assert.equal(publicView.comparisonView?.left.symbol, "GSL");
+  assert.equal(publicView.evidence.comparisonType, "stock_vs_sector");
+  assertNoForbiddenPublicKeys(publicView);
+});
+
+test("sector-vs-sector comparison returns complete public view with safe deltas", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildSectorVsSectorComparisonView(
+    {
+      classification: sectorVsSectorClassification,
+      message: "Compare Technology vs Industrials",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      now: FRESH_FIXTURE_NOW,
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            left_sector: "Technology",
+            right_sector: "Industrials",
+            left_sector_found: true,
+            right_sector_found: true,
+            as_of_date: "2026-05-01",
+            left_conviction_score_pct: 72.1,
+            left_conviction_bucket: "CONSTRUCTIVE",
+            left_momentum_bucket: "STRONG",
+            left_quality_bucket: "STRONG",
+            left_growth_bucket: "CONSTRUCTIVE",
+            left_leverage_bucket: "MIXED",
+            left_hit_rate_pct: 58.4,
+            right_conviction_score_pct: 51.2,
+            right_conviction_bucket: "MIXED",
+            right_momentum_bucket: "MIXED",
+            right_quality_bucket: "MIXED",
+            right_growth_bucket: "WEAK",
+            right_leverage_bucket: "MIXED",
+            right_hit_rate_pct: 55.1,
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_freshness_state: "FRESH",
+            forward_completed_at: "2026-05-02T12:32:04Z",
+            left_forward_overlay_available: true,
+            right_forward_overlay_available: true,
+            raw_sql: "must-not-leak",
+            comparison_formula: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.LEFT_SECTOR, "Technology");
+  assert.equal(replacements.RIGHT_SECTOR, "Industrials");
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "complete");
+  assert.equal(view.comparisonType, "sector_vs_sector");
+  assert.equal(view.source, "pg_sector_peer_daily");
+  assert.equal(view.left.type, "sector");
+  assert.equal(view.left.sector, "Technology");
+  assert.equal(view.right.sector, "Industrials");
+  assert.equal(view.deltas[0].metric, "conviction");
+  assert.equal(view.deltas[0].interpretationBucket, "left_stronger");
+  assert.match(view.summaryBullets.join(" "), /Technology screens stronger/i);
+  assert.deepEqual(view.warnings, []);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector-vs-sector comparison returns unavailable for invalid sector anchor", async () => {
+  const result = await buildSectorVsSectorComparisonView(
+    {
+      classification: {
+        ...sectorVsSectorClassification,
+        comparison: {
+          comparisonType: "sector_vs_sector",
+          left: { type: "sector", sector: "Banana Sector" },
+          right: { type: "sector", sector: "Industrials" },
+        },
+      },
+      message: "Compare Banana Sector vs Industrials",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => {
+        throw new Error("should not query invalid sectors");
+      },
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.equal(view.comparisonType, "sector_vs_sector");
+  assert.deepEqual(view.deltas, []);
+  assert.match(view.warnings.join(" "), /Unsupported sector comparison anchor/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("sector-vs-sector comparison returns partial when optional forward overlay is absent", async () => {
+  const result = await buildSectorVsSectorComparisonView(
+    {
+      classification: sectorVsSectorClassification,
+      message: "Which sector looks better, Technology or Industrials?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          left_sector_found: true,
+          right_sector_found: true,
+          as_of_date: "2026-05-01",
+          left_conviction_score_pct: 70,
+          left_conviction_bucket: "CONSTRUCTIVE",
+          right_conviction_score_pct: 50,
+          right_conviction_bucket: "MIXED",
+          peer_freshness_state: "FRESH",
+          left_forward_overlay_available: false,
+          right_forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.match(view.warnings.join(" "), /forward-return overlay is unavailable/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("symbol-vs-symbol comparison returns public view with safe deltas", async () => {
+  let replacements: Record<string, unknown> = {};
+  const result = await buildSymbolVsSymbolComparisonView(
+    {
+      classification: symbolVsSymbolClassification,
+      message: "Compare GSL vs DAC",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async (params) => {
+        replacements = params;
+        return [
+          {
+            left_requested_symbol: "GSL",
+            right_requested_symbol: "DAC",
+            left_symbol: "GSL",
+            right_symbol: "DAC",
+            left_symbol_found: true,
+            right_symbol_found: true,
+            left_company_name: "Global Ship Lease, Inc.",
+            right_company_name: "Danaos Corporation",
+            left_sector: "Industrials",
+            right_sector: "Industrials",
+            as_of_date: "2026-05-01",
+            left_conviction_score_pct: 81.78,
+            left_conviction_bucket: "HIGH",
+            left_valuation_bucket: "ATTRACTIVE",
+            left_momentum_bucket: "STRONG",
+            left_quality_bucket: "CONSTRUCTIVE",
+            left_growth_bucket: "CONSTRUCTIVE",
+            left_leverage_bucket: "CONSTRUCTIVE",
+            left_hit_rate_pct: 61.2,
+            left_median_return_pct: 5.24,
+            right_conviction_score_pct: 58.2,
+            right_conviction_bucket: "MIXED",
+            right_valuation_bucket: "FAIR",
+            right_momentum_bucket: "MIXED",
+            right_quality_bucket: "MIXED",
+            right_growth_bucket: "WEAK",
+            right_leverage_bucket: "CONSTRUCTIVE",
+            right_hit_rate_pct: 53.1,
+            right_median_return_pct: 2.05,
+            features_freshness_state: "FRESH",
+            features_completed_at: "2026-05-02T12:30:04Z",
+            peer_freshness_state: "FRESH",
+            peer_completed_at: "2026-05-02T12:31:04Z",
+            forward_freshness_state: "FRESH",
+            forward_completed_at: "2026-05-02T12:32:04Z",
+            left_forward_overlay_available: true,
+            right_forward_overlay_available: true,
+            raw_sql: "must-not-leak",
+            comparison_formula: "must-not-leak",
+          },
+        ];
+      },
+    },
+  );
+
+  assert.equal(replacements.LEFT_SYMBOL, "GSL");
+  assert.equal(replacements.RIGHT_SYMBOL, "DAC");
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.comparisonType, "symbol_vs_symbol");
+  assert.equal(view.source, "pg_current_features");
+  assert.equal(view.left.type, "stock");
+  assert.equal(view.left.symbol, "GSL");
+  assert.equal(view.right.symbol, "DAC");
+  assert.equal(view.left.sector, "Industrials");
+  assert.equal(view.right.sector, "Industrials");
+  assert.equal(view.deltas[0].metric, "conviction");
+  assert.equal(view.deltas[0].interpretationBucket, "left_stronger");
+  assert.match(view.summaryBullets.join(" "), /GSL screens stronger/i);
+  assert.match(view.warnings.join(" "), /path-risk comparison is unavailable/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("symbol-vs-symbol comparison returns unavailable for same symbol", async () => {
+  const result = await buildSymbolVsSymbolComparisonView(
+    {
+      classification: {
+        ...symbolVsSymbolClassification,
+        comparison: {
+          comparisonType: "symbol_vs_symbol",
+          left: { type: "stock", symbol: "GSL" },
+          right: { type: "stock", symbol: "GSL" },
+        },
+      },
+      message: "Compare GSL vs GSL",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => {
+        throw new Error("should not query same symbol");
+      },
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.equal(view.comparisonType, "symbol_vs_symbol");
+  assert.deepEqual(view.deltas, []);
+  assert.match(view.warnings.join(" "), /Cannot compare a symbol to itself/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("symbol-vs-symbol comparison returns unavailable when one symbol is missing", async () => {
+  const result = await buildSymbolVsSymbolComparisonView(
+    {
+      classification: {
+        ...symbolVsSymbolClassification,
+        comparison: {
+          comparisonType: "symbol_vs_symbol",
+          left: { type: "stock", symbol: "FAKE123" },
+          right: { type: "stock", symbol: "DAC" },
+        },
+      },
+      message: "Compare FAKE123 vs DAC",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          left_symbol_found: false,
+          right_symbol_found: true,
+          right_symbol: "DAC",
+          as_of_date: "2026-05-01",
+        },
+      ],
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "unavailable");
+  assert.match(view.warnings.join(" "), /FAKE123/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("symbol-vs-symbol comparison includes cross-sector caveat", async () => {
+  const result = await buildSymbolVsSymbolComparisonView(
+    {
+      classification: {
+        ...symbolVsSymbolClassification,
+        comparison: {
+          comparisonType: "symbol_vs_symbol",
+          left: { type: "stock", symbol: "AMZN" },
+          right: { type: "stock", symbol: "NVDA" },
+        },
+      },
+      message: "Which is stronger, AMZN or NVDA?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          left_symbol: "AMZN",
+          right_symbol: "NVDA",
+          left_symbol_found: true,
+          right_symbol_found: true,
+          left_sector: "Consumer Cyclical",
+          right_sector: "Technology",
+          as_of_date: "2026-05-01",
+          left_conviction_score_pct: 65,
+          right_conviction_score_pct: 80,
+          features_freshness_state: "FRESH",
+          left_forward_overlay_available: false,
+          right_forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.comparisonView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.match(view.warnings.join(" "), /different sectors/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("stock idea discovery public freshness is unknown when dataThrough is missing", async () => {
+  const result = await buildStockIdeaDiscoveryView(
+    {
+      classification: stockIdeaClassification,
+      message: "What stock looks interesting today?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    {
+      queryRunner: async () => [
+        {
+          symbol: "GSL",
+          company_name: "Global Ship Lease, Inc.",
+          sector: "Industrials",
+          rank: 1,
+          conviction_score_pct: 80,
+          conviction_bucket: "HIGH",
+          features_freshness_state: "FRESH",
+          peer_freshness_state: "FRESH",
+          forward_overlay_available: false,
+        },
+      ],
+    },
+  );
+
+  const view = result.views.stockIdeaView;
+  assert.ok(view);
+  assert.equal(view.state, "partial");
+  assert.equal(view.freshness.state, "unknown");
+  assert.match(view.freshness.warning ?? "", /Freshness could not be verified/i);
+  assertNoForbiddenPublicKeys(view);
+});
+
+test("executePgCapabilitiesWithCache returns empty result for non-capability intent", async () => {
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: {
+        ...leaderboardClassification,
+        intent: "stock_sector_regime",
+      },
+      message: "Tell me about MSFT",
+      snapshots: { freshness: { dataThrough: "2026-05-01" } },
+      toolOutputs: {},
+    },
+    [],
+  );
+  assert.deepEqual(result.views, {});
+  assert.deepEqual(result.viewsUpdated, []);
+  assert.deepEqual(result.cacheStats, { hits: 0, misses: 0, writes: 0 });
+});
+
+test("executePgCapabilitiesWithCache returns cache hit when prior key matches", async () => {
+  const asOfDate = "2026-05-01";
+  const cacheKey = buildCapabilityCacheKey(
+    "sector_conviction_leaderboard",
+    { rankingBasis: "conviction" },
+    asOfDate,
+  );
+  const cachedView = {
+    viewSchemaVersion: 1,
+    state: "complete" as const,
+    source: "pg_sector_peer_daily" as const,
+    period: "latest" as const,
+    rankingBasis: "conviction" as const,
+    asOfDate,
+    rows: [{ sector: "Industrials", rank: 1, convictionScorePct: 80 }],
+    freshness: { dataThrough: asOfDate, state: "fresh" as const },
+    warnings: [],
+  };
+  const prior: CachedCapabilityView = {
+    cacheKey,
+    capabilityName: "sector_conviction_leaderboard",
+    viewSchemaVersion: 1,
+    asOfDate,
+    view: cachedView,
+    generatedAt: "2026-05-01T18:00:00Z",
+  };
+
+  let runnerCalled = false;
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: { freshness: { dataThrough: asOfDate } },
+      toolOutputs: {},
+    },
+    [prior],
+    async () => {
+      runnerCalled = true;
+      return { views: {}, warnings: [] };
+    },
+  );
+
+  assert.equal(runnerCalled, false);
+  assert.equal(result.views.sectorLeaderboardView, cachedView);
+  assert.deepEqual(result.viewsUpdated, []);
+  assert.deepEqual(result.cacheStats, { hits: 1, misses: 0, writes: 0 });
+});
+
+test("executePgCapabilitiesWithCache miss runs runner and emits viewsUpdated", async () => {
+  const asOfDate = "2026-05-01";
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: { freshness: { dataThrough: asOfDate } },
+      toolOutputs: {},
+    },
+    [],
+    async () => ({
+      views: {
+        sectorLeaderboardView: {
+          viewSchemaVersion: 1,
+          state: "complete",
+          source: "pg_sector_peer_daily",
+          period: "latest",
+          rankingBasis: "conviction",
+          asOfDate,
+          rows: [{ sector: "Technology", rank: 1, convictionScorePct: 85 }],
+          freshness: { dataThrough: asOfDate, state: "fresh" },
+          warnings: [],
+        },
+      },
+      warnings: [],
+    }),
+  );
+
+  assert.equal(result.viewsUpdated.length, 1);
+  const updated = result.viewsUpdated[0];
+  assert.equal(updated.capabilityName, "sector_conviction_leaderboard");
+  assert.equal(updated.cacheKey, buildCapabilityCacheKey(
+    "sector_conviction_leaderboard",
+    { rankingBasis: "conviction" },
+    asOfDate,
+  ));
+  assert.equal(updated.viewSchemaVersion, 1);
+  assert.equal(updated.asOfDate, asOfDate);
+  assert.deepEqual(result.cacheStats, { hits: 0, misses: 1, writes: 1 });
+});
+
+test("executePgCapabilitiesWithCache different rankingBasis ⇒ different cache keys", async () => {
+  const asOfDate = "2026-05-01";
+  const k1 = buildCapabilityCacheKey(
+    "sector_conviction_leaderboard",
+    { rankingBasis: "conviction" },
+    asOfDate,
+  );
+  const k2 = buildCapabilityCacheKey(
+    "sector_conviction_leaderboard",
+    { rankingBasis: "divergence" },
+    asOfDate,
+  );
+  assert.notEqual(k1, k2);
+
+  // Prior under k1 must not satisfy a request that would key under k2.
+  const prior: CachedCapabilityView = {
+    cacheKey: k1,
+    capabilityName: "sector_conviction_leaderboard",
+    viewSchemaVersion: 1,
+    asOfDate,
+    view: {
+      viewSchemaVersion: 1,
+      state: "complete",
+      source: "pg_sector_peer_daily",
+      period: "latest",
+      rankingBasis: "conviction",
+      asOfDate,
+      rows: [],
+      freshness: { dataThrough: asOfDate, state: "fresh" },
+      warnings: [],
+    } as any,
+    generatedAt: "2026-05-01T18:00:00Z",
+  };
+
+  let runnerCalled = false;
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors have conviction but weak price action?",
+      snapshots: { freshness: { dataThrough: asOfDate } },
+      toolOutputs: {},
+    },
+    [prior],
+    async () => {
+      runnerCalled = true;
+      return {
+        views: {
+          sectorLeaderboardView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_sector_peer_daily",
+            period: "latest",
+            rankingBasis: "divergence",
+            asOfDate,
+            rows: [],
+            freshness: { dataThrough: asOfDate, state: "fresh" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      };
+    },
+  );
+  assert.equal(runnerCalled, true);
+  assert.deepEqual(result.cacheStats, { hits: 0, misses: 1, writes: 1 });
+});
+
+test("executePgCapabilitiesWithCache skips cache when dataThrough is missing", async () => {
+  let runnerCalled = false;
+  const result = await executePgCapabilitiesWithCache(
+    {
+      classification: leaderboardClassification,
+      message: "Which sectors are leading on conviction this week?",
+      snapshots: {},
+      toolOutputs: {},
+    },
+    [],
+    async () => {
+      runnerCalled = true;
+      return {
+        views: {
+          sectorLeaderboardView: {
+            viewSchemaVersion: 1,
+            state: "complete",
+            source: "pg_sector_peer_daily",
+            period: "latest",
+            rankingBasis: "conviction",
+            rows: [],
+            freshness: { state: "unknown" },
+            warnings: [],
+          },
+        },
+        warnings: [],
+      };
+    },
+  );
+  assert.equal(runnerCalled, true);
+  assert.deepEqual(result.viewsUpdated, []);
+  assert.deepEqual(result.cacheStats, { hits: 0, misses: 1, writes: 0 });
+});
+
+test("buildCapabilityCacheKey is deterministic and sorts keys", () => {
+  const a = buildCapabilityCacheKey(
+    "stock_vs_sector_comparison",
+    { leftSymbol: "GSL", rightSector: "Industrials" },
+    "2026-05-01",
+  );
+  const b = buildCapabilityCacheKey(
+    "stock_vs_sector_comparison",
+    { rightSector: "Industrials", leftSymbol: "GSL" },
+    "2026-05-01",
+  );
+  assert.equal(a, b);
+  assert.equal(
+    a,
+    "CAP:stock_vs_sector_comparison:2026-05-01:leftSymbol=GSL|rightSector=Industrials",
+  );
+});
+
+test("buildCapabilityCacheKey omits params section when none are supplied", () => {
+  assert.equal(
+    buildCapabilityCacheKey("sector_momentum_vs_conviction_divergence", {}, "2026-05-01"),
+    "CAP:sector_momentum_vs_conviction_divergence:2026-05-01",
+  );
+});
+
+test("capabilityForClassification still routes stock_vs_sector for explicit-sector compare", () => {
+  const entry = capabilityForClassification(comparisonClassification);
+  assert.ok(entry);
+  assert.equal(entry?.name, "stock_vs_sector_comparison");
+});
+
+test("capabilityForClassification routes sector_vs_sector for sector comparisons", () => {
+  const entry = capabilityForClassification(sectorVsSectorClassification);
+  assert.ok(entry);
+  assert.equal(entry?.name, "sector_vs_sector_comparison");
+});
+
+test("capabilityForClassification routes symbol_vs_symbol for stock comparisons", () => {
+  const entry = capabilityForClassification(symbolVsSymbolClassification);
+  assert.ok(entry);
+  assert.equal(entry?.name, "symbol_vs_symbol_comparison");
+});
+
+test("capabilityForIntent('comparison') still resolves to the stock_vs_sector default", () => {
+  const entry = capabilityForIntent("comparison");
+  assert.ok(entry);
+  assert.equal(entry?.name, "stock_vs_sector_comparison");
+});
+
+function assertNoForbiddenPublicKeys(value: unknown): void {
+  const json = JSON.stringify(value);
+  assert.doesNotMatch(json, /researchObjects/);
+  assert.doesNotMatch(json, /parts/);
+  assert.doesNotMatch(json, /publicSummary/);
+  assert.doesNotMatch(json, /edge_id/);
+  assert.doesNotMatch(json, /hypothesis_id/);
+  assert.doesNotMatch(json, /raw_sql/);
+  assert.doesNotMatch(json, /raw_rows/);
+  assert.doesNotMatch(json, /analog_rows/);
+  assert.doesNotMatch(json, /path_rows/);
+  assert.doesNotMatch(json, /gate_name/);
+  assert.doesNotMatch(json, /internal_threshold/);
+  assert.doesNotMatch(json, /setup_score/);
+  assert.doesNotMatch(json, /sector_delta_formula/);
+  assert.doesNotMatch(json, /comparison_formula/);
+  assert.doesNotMatch(json, /conviction_formula/);
+  assert.doesNotMatch(json, /divergence_score_pct/);
+  assert.doesNotMatch(json, /divergenceScorePct/);
+  assert.doesNotMatch(json, /score_formula/);
+  assert.doesNotMatch(json, /scoring_formula/);
+  assert.doesNotMatch(json, /divergence_formula/);
+  assert.doesNotMatch(json, /feature_rules/);
+  assert.doesNotMatch(json, /factor_formula/);
+  assert.doesNotMatch(json, /internal_factor_definitions/);
+  assertNoFreshnessInternals(value);
+}
+
+function assertNoFreshnessInternals(value: unknown): void {
+  const json = JSON.stringify(value);
+  assert.doesNotMatch(json, /md_research_refresh_latest/);
+  assert.doesNotMatch(json, /md_research_refresh_stale/);
+  assert.doesNotMatch(json, /md_features_daily/);
+  assert.doesNotMatch(json, /md_historical_features_daily/);
+  assert.doesNotMatch(json, /md_research_sector_peer_daily/);
+  assert.doesNotMatch(json, /md_research_sector_monday_hist/);
+  assert.doesNotMatch(json, /md_research_sector_regime_fwd_agg/);
+  assert.doesNotMatch(json, /md_macro_daily_snapshot/);
+  assert.doesNotMatch(json, /md_historical_benchmark_daily/);
+  assert.doesNotMatch(json, /md_forward_returns/);
+  assert.doesNotMatch(json, /sweep_universe/);
+  assert.doesNotMatch(json, /pipeline_state/);
+  assert.doesNotMatch(json, /run_id/);
+  assert.doesNotMatch(json, /stage/);
+  assert.doesNotMatch(json, /last_success_at/);
+  assert.doesNotMatch(json, /completed_at/);
+  assert.doesNotMatch(json, /max_age/);
+  assert.doesNotMatch(json, /refresh logs/);
+}

@@ -21,15 +21,16 @@ const QUERY_FILES: Record<ResearchQueryName, string> = {
 };
 
 /**
- * The .sql files live in `./queries` co-located with this module. In dev
- * (ts-node from src/) `__dirname` is `apps/agent_service/src/askGrahamy/`;
- * in prod (compiled, run from dist/) it's `apps/agent_service/dist/askGrahamy/`.
- * The Dockerfile copies the `queries/` folder into `dist/askGrahamy/` after
- * the TypeScript build so both paths resolve.
+ * The v6 .sql files now live alongside the pgCapability queries under
+ * `./pgCapabilities/queries`. In dev (ts-node from src/) `__dirname` is
+ * `apps/agent_service/src/askGrahamy/`; in prod (compiled, run from dist/)
+ * it's `apps/agent_service/dist/askGrahamy/`. The Dockerfile copies the
+ * `pgCapabilities/queries/` folder into `dist/askGrahamy/pgCapabilities/`
+ * after the TypeScript build so both paths resolve.
  *
  * `GRAHAMY_QUERIES_DIR` env override remains for ad-hoc deployments / tests.
  */
-const DEFAULT_QUERIES_DIR = path.join(__dirname, "queries");
+const DEFAULT_QUERIES_DIR = path.join(__dirname, "pgCapabilities", "queries");
 
 const queryTextCache = new Map<ResearchQueryName, string>();
 

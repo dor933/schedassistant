@@ -19,6 +19,8 @@ export interface CodexScanCwdOptions {
   /** Per-org Codex CLI auth.json blob. Mutually exclusive with
    *  `apiKey` in practice. */
   authObject?: Record<string, unknown> | null;
+  /** Organization id for authObject. */
+  authObjectOrganizationId?: string | null;
   model: string;
   systemPrompt: string;
   userPrompt: string;
@@ -37,6 +39,7 @@ export async function runCodexScanCwd(
   const result = await runCodexInRepo({
     apiKey: opts.apiKey ?? null,
     authObject: opts.authObject ?? null,
+    authObjectOrganizationId: opts.authObjectOrganizationId ?? null,
     model: opts.model,
     systemPrompt: opts.systemPrompt,
     userPrompt: opts.userPrompt,

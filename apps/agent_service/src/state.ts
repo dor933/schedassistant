@@ -110,7 +110,8 @@ export const AgentAnnotation = Annotation.Root({
    * workspace (e.g. system agents, agents without filesystem MCP).
    *
    * Used by FS-write instrumentation to know which writes belong to this
-   * session, and by `read_session_file` to scope reads.
+   * session. Reads happen through the agent's built-in file tools against
+   * the same absolute path.
    */
   sessionWorkspacePath: Annotation<string | null>({
     reducer: (state, update) => (update !== undefined ? update : state),

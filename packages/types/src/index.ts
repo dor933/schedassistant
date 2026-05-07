@@ -132,6 +132,40 @@ export function bashSkillSlugForVendor(
 }
 
 /**
+ * Epic-orchestrator workflow skill (vendor-split). The Anthropic and Codex
+ * flows differ enough that one shared skill body would force the model to
+ * constantly disambiguate which set of instructions applies — Anthropic uses
+ * `start_epic_task` + optional `Task()` sub-agent fan-out + `complete_epic_task`
+ * inside ONE synchronous orchestrator turn, while Codex uses
+ * `plan_epic_task` (optional) + `start_epic_task_codex` (detached run) + a
+ * server-side auto-finalize that explicitly forbids `complete_epic_task`.
+ *
+ * Auto-injection trigger: `autoSlugsForAgent` injects the vendor-matched
+ * variant iff the agent has the `create_epic_plan` tool granted, so we don't
+ * need a dedicated `agents.is_epic_orchestrator` flag — tool grants are the
+ * source of truth.
+ */
+export const EPIC_ORCHESTRATOR_SKILL_SLUG_SDK = "epic-orchestrator-sdk";
+export const EPIC_ORCHESTRATOR_SKILL_SLUG_CODEX = "epic-orchestrator-codex";
+export const EPIC_ORCHESTRATOR_SKILL_SLUGS: readonly string[] = [
+  EPIC_ORCHESTRATOR_SKILL_SLUG_SDK,
+  EPIC_ORCHESTRATOR_SKILL_SLUG_CODEX,
+];
+
+/**
+ * Picks the right epic-orchestrator skill slug for the agent's vendor.
+ * Anthropic → SDK variant (sub-agent fan-out + complete_epic_task).
+ * Anything else → Codex variant (detached run + server auto-finalize).
+ */
+export function epicOrchestratorSkillSlugForVendor(
+  vendorSlug: string | null | undefined,
+): string {
+  return vendorSlug === "anthropic"
+    ? EPIC_ORCHESTRATOR_SKILL_SLUG_SDK
+    : EPIC_ORCHESTRATOR_SKILL_SLUG_CODEX;
+}
+
+/**
  * @deprecated Use `FILESYSTEM_SKILL_SLUGS_SDK` /
  *             `FILESYSTEM_SKILL_SLUGS_MCP` and pick by vendor.
  *
@@ -152,6 +186,7 @@ export const AUTO_ASSIGNED_SKILL_SLUGS: readonly string[] = [
   ...FILESYSTEM_SKILL_SLUGS_MCP,
   BASH_SKILL_SLUG_SDK,
   BASH_SKILL_SLUG_CODEX,
+  ...EPIC_ORCHESTRATOR_SKILL_SLUGS,
 ];
 export const CORE_AUTO_ASSIGNED_SKILL_SLUG_SET: ReadonlySet<string> = new Set(
   CORE_AUTO_ASSIGNED_SKILL_SLUGS,
@@ -308,33 +343,50 @@ export interface AgentAttributes {
   isLocked: boolean;
   /** FK to `organizations.id` — the tenant this agent belongs to. */
   organizationId: OrganizationId;
-  /**
-   * Per-agent opt-in for the Claude Agent SDK's built-in I/O tools
-   * (Read/Write/Edit/MultiEdit/Glob/Grep/WebFetch). Defaults to FALSE so
-   * unmigrated agents keep their MCP-only tool surface; flipping to TRUE
-   * adds the built-ins to the SDK call's `allowedTools` (and to the agent's
-   * `AgentDefinition.tools` list when running as an SDK sub-agent).
-   *
-   * Built-in writes are still gated by the `.md`/`.txt` extension policy
-   * and captured into the session-file ledger via PreToolUse / PostToolUse
-   * hooks — same instrumentation as the filesystem MCP path.
-   */
-  allowSdkBuiltins: boolean;
-  /**
-   * Per-agent opt-in for the Claude Agent SDK's built-in `Bash` tool.
-   * Separate flag from `allowSdkBuiltins` because Bash has a meaningfully
-   * larger blast radius (arbitrary shell, network, kill processes) than the
-   * read/write/grep surface. Defaults to FALSE; flipping to TRUE adds
-   * `"Bash"` to the SDK call's `allowedTools` (and to the agent's
-   * `AgentDefinition.tools` list when running as an SDK sub-agent).
-   *
-   * When TRUE, the agent typically no longer needs the `mcp-shell` MCP
-   * server attached — the SDK's native Bash is more capable (persistent
-   * session, run_in_background, KillShell companion).
-   */
-  allowSdkBash: boolean;
+  // SDK capabilities (filesystem / bash) used to live here as
+  // `allowSdkBuiltins` / `allowSdkBash` boolean columns. Migration 145
+  // moved them out into the `sdk_capabilities` table + the
+  // `agent_sdk_capabilities` junction. Read them via the
+  // `getAgentSdkCapabilities(agentId)` helper instead of off the agent row.
   createdAt: Date;
   updatedAt: Date;
+}
+
+// ─── SDK Capabilities ──────────────────────────────────────────────────────
+
+/**
+ * Enum-style table holding the SDK-native capabilities an agent can opt into.
+ * Currently 2 rows seeded by migration 145:
+ *   - `filesystem` — gates the SDK Read/Write/Edit/MultiEdit/Glob/Grep/WebFetch
+ *     built-ins (replaces the legacy `agents.allow_sdk_builtins` column).
+ *   - `bash` — gates the SDK `Bash` tool. Also drives Codex's sandbox-mode
+ *     pick (`danger-full-access` when granted, `workspace-write` when not).
+ *     Replaces the legacy `agents.allow_sdk_bash` column.
+ *
+ * Distinct from `mcp_servers` so the latter can stay focused on external MCP
+ * subprocesses — SDK built-ins aren't subprocesses, just tools the SDK
+ * injects into the Claude Code child based on an attachment flag.
+ */
+export interface SdkCapabilityAttributes {
+  id: number;
+  slug: string;
+  name: string;
+  description: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/**
+ * Junction row attaching an SDK capability to an agent. Mirrors the shape of
+ * `agent_available_mcp_servers` so the admin UI can render both surfaces
+ * with the same component.
+ */
+export interface AgentSdkCapabilityAttributes {
+  id: number;
+  agentId: AgentId;
+  sdkCapabilityId: number;
+  active: boolean;
+  createdAt: Date;
 }
 
 // ─── MCP Servers ────────────────────────────────────────────────────────────
@@ -528,7 +580,7 @@ export interface ThreadAttributes {
  *  - "conversation" (default, also implied when absent): a slice of dialogue.
  *  - "file_summary": describes a file written into a session workspace; the
  *    `sessionFilePath` field gives the file's path relative to the per-thread
- *    workspace root so an agent can call `read_session_file` to fetch it.
+ *    workspace root so an agent can open it with its built-in file tools.
  */
 export type EpisodicChunkKind = "conversation" | "file_summary";
 
@@ -825,6 +877,20 @@ export interface EpicTaskAttributes {
   userId: UserId;
   agentId: AgentId;
   metadata: Record<string, unknown> | null;
+  /**
+   * Absolute path to the per-epic workspace folder shared by ALL tasks in
+   * this epic. Sibling to the per-thread `threads/<id>/` folders — lives at
+   * `<orchestrator.workspacePath>/epics/<epicId>/`. Sub-agents write
+   * deliverables, scratch notes, and any non-repo files here so the same
+   * folder is reachable across tasks (sub-agents don't carry memory across
+   * task dispatches; threading the path through gives them a stable shared
+   * location). Code edits still go to the repo cwd, NOT here.
+   *
+   * NULL for epics created before this column existed; populated at
+   * `create_epic_plan` time for new epics that have an orchestrator with a
+   * `workspacePath` set.
+   */
+  workspacePath: string | null;
   createdAt: Date;
   updatedAt: Date;
   completedAt: Date | null;

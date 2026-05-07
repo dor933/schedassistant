@@ -1,7 +1,14 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import MailComposer from "nodemailer/lib/mail-composer";
 import { resolveScopedSubject } from "../google/authz";
 import { fetchAsSubject, DWDNotConfiguredError } from "../google/dwdClient";
+import { genericMessageTemplate } from "../emailTemplates/genericMessage";
+import {
+  financialNewsNewsletterTemplate,
+  type FinancialNewsEvent,
+} from "../emailTemplates/financialNewsNewsletter";
+import { queryExternalReadonly } from "../utils/externalReadonlyDb";
 import { logger } from "../logger";
 
 /**
@@ -41,12 +48,125 @@ async function authorizeOrError(
   return { email: result.email };
 }
 
-function b64url(s: string): string {
-  return Buffer.from(s, "utf8")
-    .toString("base64")
+function b64url(input: string | Buffer): string {
+  const encoded = typeof input === "string"
+    ? Buffer.from(input, "utf8").toString("base64")
+    : input.toString("base64");
+
+  return encoded
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
+}
+
+const publicHttpsUrlSchema = z.string().trim().url().refine(
+  (url) => url.startsWith("https://"),
+  "Must be a public HTTPS URL.",
+);
+
+const financialNewsEventImageSchema = z.object({
+  src: publicHttpsUrlSchema.describe("Public HTTPS image URL for the story."),
+  alt: z.string().trim().min(1).optional().describe("Short accessible image description."),
+  href: publicHttpsUrlSchema.optional().describe("Optional HTTPS URL to open if the reader clicks the image."),
+  width: z.number().int().positive().optional().describe(
+    "Optional source image width from research. Accepted for compatibility with the newsletter skill; not rendered.",
+  ),
+  height: z.number().int().positive().optional().describe(
+    "Optional source image height from research. Accepted for compatibility with the newsletter skill; not rendered.",
+  ),
+  aspectRatio: z.string().trim().min(1).optional().describe(
+    "Optional source image aspect ratio from research, for example '2.4:1'. Accepted but not rendered.",
+  ),
+  imageSuitability: z.string().trim().min(1).optional().describe(
+    "Optional research note explaining why the image fits the email crop. Accepted but not rendered.",
+  ),
+}).passthrough();
+
+const financialNewsEventSchema = z.object({
+  title: z.string().min(1).describe("Short story label, such as 'Asia-Pacific Markets' or 'Central Banks'."),
+  headline: z.string().min(1).describe("Main story headline shown prominently in the newsletter card."),
+  content: z.string().min(1).describe(
+    "Plain-text story body. Do not pass HTML. Use concise paragraphs; line breaks are preserved.",
+  ),
+  image: z.union([publicHttpsUrlSchema, financialNewsEventImageSchema]).nullish().describe(
+    "Optional public HTTPS image URL, or an object with src/alt/href plus optional width/height/aspectRatio/imageSuitability metadata. Use null or omit when no suitable image exists.",
+  ),
+  region: z.string().optional().describe("Optional geographic or market region label."),
+  sourceName: z.string().optional().describe("Optional source or desk name to show under the headline."),
+  sourceUrl: z.string().url().optional().describe("Optional source URL linked in the story metadata."),
+});
+
+type FinancialNewsEventInput = z.infer<typeof financialNewsEventSchema>;
+
+function normalizeFinancialNewsEventImage(image: FinancialNewsEventInput["image"]): FinancialNewsEvent["image"] | undefined {
+  if (!image) return undefined;
+  if (typeof image === "string") {
+    const src = image.trim();
+    return src ? { src } : undefined;
+  }
+
+  const src = image.src.trim();
+  if (!src) return undefined;
+
+  const alt = image.alt?.trim();
+  const href = image.href?.trim();
+
+  return {
+    src,
+    ...(alt ? { alt } : {}),
+    ...(href ? { href } : {}),
+  };
+}
+
+function normalizeFinancialNewsEvents(newsEvents: FinancialNewsEventInput[]): FinancialNewsEvent[] {
+  return newsEvents.map((event) => {
+    const image = normalizeFinancialNewsEventImage(event.image);
+    return {
+      title: event.title,
+      headline: event.headline,
+      content: event.content,
+      ...(image ? { image } : {}),
+      ...(event.region ? { region: event.region } : {}),
+      ...(event.sourceName ? { sourceName: event.sourceName } : {}),
+      ...(event.sourceUrl ? { sourceUrl: event.sourceUrl } : {}),
+    };
+  });
+}
+
+type NewsletterRegistrationRow = Record<string, unknown> & {
+  id: unknown;
+  email: unknown;
+};
+
+const newsletterRecipientEmailSchema = z.string().trim().email();
+
+async function loadNewsletterRecipientEmails(): Promise<string[]> {
+  const rows = await queryExternalReadonly<NewsletterRegistrationRow>(
+    "SELECT id, email FROM newsletter_registrations",
+  );
+
+  const recipients: string[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (typeof row.email !== "string") continue;
+
+    const parsed = newsletterRecipientEmailSchema.safeParse(row.email);
+    if (!parsed.success) {
+      logger.warn("Skipping invalid newsletter registration email", {
+        id: row.id,
+        email: row.email,
+      });
+      continue;
+    }
+
+    const email = parsed.data;
+    const key = email.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    recipients.push(email);
+  }
+
+  return recipients;
 }
 
 export function googleTools(authorityAgentId: string) {
@@ -332,18 +452,32 @@ export function googleTools(authorityAgentId: string) {
   );
 
   const sendGmail = tool(
-    async ({ subjectEmail, to, subject, body }) => {
+    async ({ subjectEmail, to, cc, bcc, subject, recipientName, headline, bodyHtml, ctaText, ctaUrl, fromName, language }) => {
+      if ((ctaText && !ctaUrl) || (ctaUrl && !ctaText)) {
+        return "Error sending gmail: 'ctaText' and 'ctaUrl' must be provided together.";
+      }
       const authz = await authorizeOrError(authorityAgentId, subjectEmail, "gmail.send");
       if ("error" in authz) return authz.error;
       try {
-        const raw = b64url(
-          `To: ${to.join(", ")}\r\n` +
-          `From: ${authz.email}\r\n` +
-          `Subject: ${subject}\r\n` +
-          `Content-Type: text/plain; charset="UTF-8"\r\n` +
-          `MIME-Version: 1.0\r\n\r\n` +
-          body,
-        );
+        const html = genericMessageTemplate({
+          recipientName,
+          headline,
+          bodyHtml,
+          ctaText,
+          ctaUrl,
+          preview: subject,
+          language,
+        });
+        const composer = new MailComposer({
+          from: `${fromName ?? "Grahamy"} <${authz.email}>`,
+          to,
+          cc,
+          bcc,
+          subject,
+          html,
+        });
+        const mime = await composer.compile().build();
+        const raw = b64url(mime);
         const res = await fetchAsSubject(
           authz.email,
           [GMAIL_SEND],
@@ -353,19 +487,162 @@ export function googleTools(authorityAgentId: string) {
         const json = (await res.json()) as { id?: string; threadId?: string };
         return JSON.stringify({ ok: true, id: json.id, threadId: json.threadId });
       } catch (err) {
+        logger.warn("googleTools send_gmail failed", {
+          authorityAgentId,
+          subjectEmail,
+          error: formatError(err),
+        });
         return `Error sending gmail: ${formatError(err)}`;
       }
     },
     {
       name: "google_send_gmail",
       description:
-        "Send an email from another user's Gmail account. Requires a 'gmail.send' grant. " +
-        "The 'From' address is always the subject user — you cannot spoof other senders.",
+        "Send a Grahamy-branded HTML email from another user's Gmail account. Requires a " +
+        "'gmail.send' grant. The 'From' address is always the subject user (only the display " +
+        "name is configurable via 'fromName') — you cannot spoof other senders. The body is " +
+        "always rendered through the shared generic MJML template: pass 'headline' and " +
+        "'bodyHtml' (HTML allowed inside the message body), and optionally a CTA button via " +
+        "'ctaText' + 'ctaUrl'.",
       schema: z.object({
         subjectEmail: z.string().email().describe("Email of the user whose Gmail account sends the message."),
         to: z.array(z.string().email()).min(1),
+        cc: z.array(z.string().email()).optional(),
+        bcc: z.array(z.string().email()).optional(),
         subject: z.string().min(1),
-        body: z.string().min(1),
+        recipientName: z.string().optional().describe(
+          "Display name of the PERSON RECEIVING this email (i.e. the human listed in 'to'), " +
+          "used as the greeting at the top: 'Hello, <recipientName>'. NOT the sender's name " +
+          "and NOT the agent's name. If you don't know the recipient's name, omit this field " +
+          "and the greeting will fall back to a generic 'Hello'.",
+        ),
+        headline: z.string().min(1).describe("Main headline shown at the top of the message card."),
+        bodyHtml: z.string().min(1).describe("Message body. Inline HTML (e.g. <strong>, <a>, <br/>) is allowed."),
+        ctaText: z.string().optional().describe("Label for the CTA button. Required if 'ctaUrl' is set."),
+        ctaUrl: z.string().url().optional().describe("Target URL for the CTA button. Required if 'ctaText' is set."),
+        fromName: z.string().optional().describe("Display name for the From header. Defaults to 'Grahamy'."),
+        language: z.enum(["en", "he"]).optional().describe(
+          "Language for the email's fixed chrome (greeting, support line, copyright) and " +
+          "default text direction. 'he' renders the email RTL with Hebrew strings " +
+          "(שלום, זקוקים לסיוע..., כל הזכויות שמורות); 'en' is LTR English. " +
+          "Defaults to 'en'. Pick this based on the language of the recipient.",
+        ),
+      }),
+    },
+  );
+
+  const sendFinancialNewsNewsletter = tool(
+    async ({
+      subjectEmail,
+      cc,
+      bcc,
+      subject,
+      recipientName,
+      newsletterTitle,
+      newsletterHeadline,
+      intro,
+      issuedAt,
+      preview,
+      newsEvents,
+      ctaText,
+      ctaUrl,
+      fromName,
+      direction,
+    }) => {
+      if ((ctaText && !ctaUrl) || (ctaUrl && !ctaText)) {
+        return "Error sending financial newsletter: 'ctaText' and 'ctaUrl' must be provided together.";
+      }
+
+      const authz = await authorizeOrError(authorityAgentId, subjectEmail, "gmail.send");
+      if ("error" in authz) return authz.error;
+
+      try {
+        const recipients = await loadNewsletterRecipientEmails();
+        if (recipients.length === 0) {
+          return "Error sending financial newsletter: no valid emails found in newsletter_registrations.";
+        }
+
+        const normalizedNewsEvents = normalizeFinancialNewsEvents(newsEvents);
+
+        const html = financialNewsNewsletterTemplate({
+          recipientName,
+          newsletterTitle,
+          newsletterHeadline,
+          intro,
+          issuedAt,
+          preview: preview ?? subject,
+          newsEvents: normalizedNewsEvents,
+          ctaText,
+          ctaUrl,
+          direction,
+        });
+
+        const composer = new MailComposer({
+          from: `${fromName ?? "Grahamy Markets"} <${authz.email}>`,
+          to: recipients,
+          cc,
+          bcc,
+          subject,
+          html,
+        });
+        const mime = await composer.compile().build();
+        const raw = b64url(mime);
+        const res = await fetchAsSubject(
+          authz.email,
+          [GMAIL_SEND],
+          "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+          { method: "POST", body: JSON.stringify({ raw }) },
+        );
+        const json = (await res.json()) as { id?: string; threadId?: string };
+        return JSON.stringify({
+          ok: true,
+          id: json.id,
+          threadId: json.threadId,
+          newsEventCount: normalizedNewsEvents.length,
+          recipientCount: recipients.length,
+        });
+      } catch (err) {
+        logger.warn("googleTools send_financial_newsletter failed", {
+          authorityAgentId,
+          subjectEmail,
+          error: formatError(err),
+        });
+        return `Error sending financial newsletter: ${formatError(err)}`;
+      }
+    },
+    {
+      name: "google_send_financial_newsletter",
+      description:
+        "Send a Grahamy-branded global financial-news newsletter from another user's Gmail account. " +
+        "Requires a 'gmail.send' grant. This tool does not fetch news by itself: pass curated, recent " +
+        "financial news events in 'newsEvents', each with title, headline, plain-text content, and optional " +
+        "image/source metadata. Recipients are loaded automatically from the external database table " +
+        "'newsletter_registrations' (email column) and sent in one Gmail message. The 'From' address is " +
+        "always the subject user; only the display name is configurable via 'fromName'.",
+      schema: z.object({
+        subjectEmail: z.string().email().describe("Email of the user whose Gmail account sends the newsletter."),
+        cc: z.array(z.string().email()).optional(),
+        bcc: z.array(z.string().email()).optional(),
+        subject: z.string().min(1).describe("Email subject line."),
+        recipientName: z.string().optional().describe(
+          "Display name of the PERSON RECEIVING this email. If omitted, the newsletter uses a generic greeting.",
+        ),
+        newsletterTitle: z.string().optional().describe("Newsletter masthead. Defaults to 'Global Financial News'."),
+        newsletterHeadline: z.string().optional().describe(
+          "Top summary line under the masthead. Defaults to a recent global market-news headline.",
+        ),
+        intro: z.string().optional().describe("Optional plain-text introductory note shown before the news cards."),
+        issuedAt: z.string().optional().describe(
+          "Human-readable issue label, for example 'May 5, 2026' or 'Tuesday Market Brief'.",
+        ),
+        preview: z.string().optional().describe("Inbox preview text. Defaults to the email subject."),
+        newsEvents: z.array(financialNewsEventSchema).min(1).max(12).describe(
+          "Curated recent financial news events. The first item is rendered as the lead story.",
+        ),
+        ctaText: z.string().optional().describe("Optional CTA button label. Required if 'ctaUrl' is set."),
+        ctaUrl: z.string().url().optional().describe("Optional CTA button target URL. Required if 'ctaText' is set."),
+        fromName: z.string().optional().describe("Display name for the From header. Defaults to 'Grahamy Markets'."),
+        direction: z.enum(["ltr", "rtl"]).optional().describe("Layout direction. Defaults to 'ltr'."),
       }),
     },
   );
@@ -378,5 +655,6 @@ export function googleTools(authorityAgentId: string) {
     writeDriveTextFile,
     listGmailMessages,
     sendGmail,
+    sendFinancialNewsNewsletter,
   ];
 }

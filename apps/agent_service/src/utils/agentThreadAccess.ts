@@ -4,7 +4,7 @@ import type { AgentId } from "@scheduling-agent/types";
 /**
  * Authoritative "can this agent see this thread" check used by every
  * tool that exposes thread-scoped data — `get_thread_summary`,
- * `read_session_file`, `grep_session_file`, `list_my_threads`.
+ * `list_my_threads`.
  *
  * Resolution order:
  *   1. Direct ownership — `threads.agent_id === agentId`. Covers

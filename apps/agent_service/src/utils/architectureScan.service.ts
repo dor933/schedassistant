@@ -8,10 +8,8 @@
  * the organization has no Anthropic credential.
  *
  * Why a service-layer wrapper:
- *   - Both call sites (`repositories.service.generateArchitecture` for
- *     admin-triggered refreshes + `epicTaskUtils.generateArchitectureOverview`
- *     for epic-time auto-refresh) need identical vendor-resolution logic.
- *     Sharing the wrapper keeps the fallback rule in one place.
+ *   - `repositories.service.generateArchitecture` (admin-triggered refreshes)
+ *     needs vendor-resolution + fallback logic in one place.
  *   - The lower-level `runAnthropicScanCwd` / `runCodexScanCwd` helpers
  *     deliberately don't know about credentials — they accept the
  *     resolved values directly so they're testable and composable. The
@@ -46,6 +44,21 @@ export interface RunArchitectureScanOptions {
   prompt: string;
   /** Organization whose per-org credentials we authenticate against. */
   organizationId: string;
+  /**
+   * Vendor the scan should prefer when both credentials are available.
+   * Set this to the calling orchestrator agent's vendor so a Codex-vendor
+   * orchestrator gets a Codex scan (the orchestrator's model and the scan
+   * runtime stay in lockstep — no surprise cross-vendor calls that fail
+   * with a credential the calling agent isn't billed against).
+   *
+   * - `"openai"` → Codex first, Anthropic only as fallback.
+   * - `"anthropic"` (or omitted) → Anthropic first, Codex as fallback.
+   *
+   * Either path falls back to the OTHER vendor if the preferred vendor
+   * isn't credentialed. This option only changes which vendor wins when
+   * both have a usable credential.
+   */
+  preferredVendor?: "anthropic" | "openai";
 }
 
 /**
@@ -67,14 +80,20 @@ export async function runArchitectureScan(
     );
   }
 
-  // 1. Anthropic path (preferred). Requires an api_key OR oauth_token row
-  //    on `organization_vendor_api_keys` for the Anthropic vendor.
-  const anthropicCred = await resolveAnthropicCredentialForOrg(opts.organizationId);
-  if (anthropicCred) {
+  const codexFirst = opts.preferredVendor === "openai";
+
+  // Vendor-pinned ordering. The "preferred" vendor is tried first; if its
+  // credential is missing, fall back to the other. This is what keeps a
+  // Codex orchestrator from accidentally invoking the Anthropic SDK just
+  // because the org has an Anthropic key on file.
+  const tryAnthropic = async (): Promise<string | null> => {
+    const anthropicCred = await resolveAnthropicCredentialForOrg(opts.organizationId);
+    if (!anthropicCred) return null;
     logger.info("runArchitectureScan: using Anthropic SDK", {
       cwd: opts.cwd,
       organizationId: opts.organizationId,
       keyType: anthropicCred.keyType,
+      preferredVendor: opts.preferredVendor ?? "(default)",
     });
     const result = await runAnthropicScanCwd({
       credential: anthropicCred.credential,
@@ -91,20 +110,21 @@ export async function runArchitectureScan(
       );
     }
     return text;
-  }
+  };
 
-  // 2. Codex fallback. Requires an api_key OR an auth_object row for the
-  //    OpenAI vendor.
-  const codexCred = await resolveCodexCredentialForOrg(opts.organizationId);
-  if (codexCred) {
-    logger.info("runArchitectureScan: using Codex SDK fallback", {
+  const tryCodex = async (): Promise<string | null> => {
+    const codexCred = await resolveCodexCredentialForOrg(opts.organizationId);
+    if (!codexCred) return null;
+    logger.info("runArchitectureScan: using Codex SDK", {
       cwd: opts.cwd,
       organizationId: opts.organizationId,
       authPath: codexCred.authObject ? "auth_object" : "api_key",
+      preferredVendor: opts.preferredVendor ?? "(default)",
     });
     const result = await runCodexScanCwd({
       apiKey: codexCred.apiKey,
       authObject: codexCred.authObject,
+      authObjectOrganizationId: codexCred.authObjectOrganizationId,
       model: CODEX_SCAN_MODEL,
       systemPrompt: SCAN_SYSTEM_PROMPT,
       userPrompt: opts.prompt,
@@ -117,7 +137,16 @@ export async function runArchitectureScan(
       );
     }
     return text;
-  }
+  };
+
+  const [primary, fallback] = codexFirst
+    ? [tryCodex, tryAnthropic]
+    : [tryAnthropic, tryCodex];
+
+  const primaryResult = await primary();
+  if (primaryResult !== null) return primaryResult;
+  const fallbackResult = await fallback();
+  if (fallbackResult !== null) return fallbackResult;
 
   throw new Error(
     `Cannot run architecture scan: organization "${opts.organizationId}" has no ` +
@@ -140,6 +169,7 @@ interface AnthropicCred {
 interface CodexCred {
   apiKey: string | null;
   authObject: Record<string, unknown> | null;
+  authObjectOrganizationId: string | null;
 }
 
 /**
@@ -223,5 +253,6 @@ async function resolveCodexCredentialForOrg(
   return {
     apiKey: apiKeyRow?.apiKey ?? null,
     authObject: authObjectRow?.authObject ?? null,
+    authObjectOrganizationId: authObjectRow ? organizationId : null,
   };
 }

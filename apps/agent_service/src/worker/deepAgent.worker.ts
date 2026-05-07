@@ -35,6 +35,7 @@ import { googleTools } from "../tools/googleTools";
 import { ListSystemAgentsTool } from "../tools/listSystemAgentsTool";
 import { ListAgentsTool } from "../tools/listAgentsTool";
 import { TavilySearchTool } from "../tools/tavilySearchTool";
+import { UnsplashSearchPhotosTool } from "../tools/unsplashPhotoTool";
 import { SystemMessage, HumanMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { ChatGoogle } from "@langchain/google";
@@ -740,6 +741,7 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
               const has = (slug: string) => activeSlugs.has(slug);
               const configurableTools: any[] = [];
               if (has("query_database")) configurableTools.push(QueryDatabaseTool());
+              if (has("unsplash_search_photos")) configurableTools.push(UnsplashSearchPhotosTool());
               if (has("consult_agent"))
                 configurableTools.push(ConsultAgentTool(executorAgent.id, userId, groupId ?? null, singleChatId ?? null));
               if (has("list_agents")) configurableTools.push(ListAgentsTool(executorAgent.id));
@@ -790,7 +792,8 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                   `analyses, research dumps) inside this folder, not at the workspace root.** Writes here are ` +
                   `captured into the caller's session manifest, summarised when the thread closes, and indexed ` +
                   `for vector retrieval — so a future session can recover them via \`recall_episodic_memory\` → ` +
-                  `\`get_thread_summary\` → \`read_session_file\`. Writes elsewhere in the workspace are still ` +
+                  `\`get_thread_summary\` (which returns the manifest), then reading the listed paths ` +
+                  `with built-in file tools. Writes elsewhere in the workspace are still ` +
                   `saved but won't appear in the per-thread manifest.\n`
                 )
                 : "";
@@ -999,18 +1002,19 @@ export function startDeepAgentWorker(): DeepAgentWorkerHandle {
                         maxTurns: sdkMaxTurns,
                         source: "deep_agent_executor",
                         useAnthropicWebSearch,
-                        // SDK built-ins are enabled by the agent row's
-                        // `allow_sdk_builtins` flag. Migration 125 set
-                        // this to TRUE for every Anthropic-vendor agent
-                        // and flipped the column default to TRUE, so
-                        // executor agents get `Read`/`Write`/`Edit`/
-                        // `MultiEdit`/`Glob`/`Grep` automatically. The
-                        // PreToolUse hook in the runner enforces the
-                        // `.md`/`.txt` extension policy on every write;
-                        // the PostToolUse hook captures workspace writes
-                        // into the per-thread session manifest. Bash is
-                        // gated separately by `allow_sdk_bash` (default
-                        // false) — admins opt in per agent.
+                        // SDK built-ins (Read/Write/Edit/MultiEdit/Glob/
+                        // Grep) and Bash are gated by the executor agent's
+                        // attachments on the `agent_sdk_capabilities`
+                        // junction (slugs `filesystem` and `bash` in
+                        // `sdk_capabilities`). The runner reads these via
+                        // `getAgentSdkCapabilities(state.agentId)` — no
+                        // separate lookup needed here. Replaces the legacy
+                        // `agents.allow_sdk_builtins` / `allow_sdk_bash`
+                        // boolean columns (dropped in migration 145). The
+                        // PreToolUse hook still enforces the `.md`/`.txt`
+                        // extension policy on every write; PostToolUse
+                        // captures workspace writes into the per-thread
+                        // session manifest.
                         //
                         // cwd for the spawned Claude Code subprocess.
                         // SDK file tools (Read/Write/Edit/Glob/Grep)

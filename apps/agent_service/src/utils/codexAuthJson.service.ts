@@ -5,26 +5,26 @@
  * ---------------------
  * Looks up the per-org Codex auth.json blob (stored as a `key_type =
  * 'auth_object'` row on `organization_vendor_api_keys` for the OpenAI
- * vendor) and materialises it as a `~/.codex/auth.json` file inside a
- * per-turn temp $HOME directory. The Codex SDK runner sets `HOME` to
- * the temp dir for the spawned `codex` subprocess so the CLI reads our
- * per-org auth without touching any other org's file.
+ * vendor) and materialises it as a `~/.codex/auth.json` file. Normal
+ * Codex chat turns use a persistent per-org $HOME under the agent Codex
+ * volume so resume metadata survives across turns; stateless helpers can
+ * still use a per-turn temp $HOME.
  *
  * Why this design
  * ---------------
  *  - Codex CLI reads `$HOME/.codex/auth.json` directly on every spawn
  *    — there's no env-var equivalent for the structured ChatGPT-account
  *    login.
- *  - Multi-tenant safety: concurrent turns from different orgs MUST
- *    NOT race on a single `~/.codex/auth.json` file. Per-turn temp
- *    $HOME isolates each call.
+ *  - Multi-tenant safety: different orgs MUST NOT race on a single
+ *    `~/.codex/auth.json` file. Per-org homes isolate chat turns while
+ *    still preserving Codex resume state.
  *  - System-wide bootstrap (the prior `/home/agent/.codex/auth.json`
  *    on a non-existent volume mount) is gone — slice 14 explicitly
  *    killed it. Each org sets its own credential via the regular
  *    vendor-api-keys admin UI.
  *
- * The caller (the Codex SDK runner) is responsible for cleaning up
- * the temp dir after the turn completes — this module just writes.
+ * The caller is responsible for invoking `cleanup()`. For persistent
+ * per-org homes it is intentionally a no-op.
  */
 
 import fs from "node:fs";
@@ -41,6 +41,18 @@ import {
 import { logger } from "../logger";
 
 const OPENAI_VENDOR_SLUG = "openai";
+const AGENT_HOME = process.env.AGENT_HOME ?? "/home/agent";
+const CODEX_ORG_HOME_ROOT = path.join(AGENT_HOME, ".codex", "orgs");
+
+function safeOrgPathSegment(organizationId: string): string {
+  const trimmed = organizationId.trim();
+  if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+    throw new Error(
+      `Invalid organization id for Codex home path: ${organizationId}`,
+    );
+  }
+  return trimmed;
+}
 
 /**
  * Looks up the Codex auth.json blob configured for the given
@@ -78,20 +90,40 @@ export async function loadCodexAuthObjectForOrg(
 
 /**
  * Convenience: resolve the agent's organization id, then look up its
- * Codex auth_object. Throws if the agent is missing — caller treats
- * that as a hard error (no agent → no org → no credential).
+ * Codex auth_object. Returns null when the agent is missing or the org has
+ * no auth_object row.
  */
 export async function loadCodexAuthObjectForAgent(
   agentId: string | null | undefined,
 ): Promise<Record<string, unknown> | null> {
+  const resolved = await loadCodexAuthObjectForAgentWithOrg(agentId);
+  return resolved?.authObject ?? null;
+}
+
+export interface CodexAuthObjectForAgent {
+  organizationId: string | null;
+  authObject: Record<string, unknown> | null;
+}
+
+/**
+ * Same lookup as `loadCodexAuthObjectForAgent`, but preserves the org id so
+ * callers can materialise the auth blob under a persistent per-org Codex home.
+ */
+export async function loadCodexAuthObjectForAgentWithOrg(
+  agentId: string | null | undefined,
+): Promise<CodexAuthObjectForAgent | null> {
   if (!agentId) return null;
   try {
     const agent = await Agent.findByPk(agentId, {
       attributes: ["organizationId"],
     });
-    return loadCodexAuthObjectForOrg(agent?.organizationId ?? null);
+    const organizationId = agent?.organizationId ?? null;
+    return {
+      organizationId,
+      authObject: await loadCodexAuthObjectForOrg(organizationId),
+    };
   } catch (err) {
-    logger.warn("loadCodexAuthObjectForAgent failed", {
+    logger.warn("loadCodexAuthObjectForAgentWithOrg failed", {
       agentId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -100,36 +132,46 @@ export async function loadCodexAuthObjectForAgent(
 }
 
 export interface MaterialisedCodexHome {
-  /** Absolute path to the temp $HOME directory. Set HOME=this when
+  /** Absolute path to the $HOME directory. Set HOME=this when
    *  spawning Codex CLI so it reads `<this>/.codex/auth.json`. */
   homeDir: string;
-  /** Cleanup callback — `rm -rf` the temp dir. Idempotent; safe to
-   *  call multiple times (only the first call does work). */
+  /** Cleanup callback. Idempotent; no-op for persistent per-org homes. */
   cleanup: () => Promise<void>;
 }
 
+export interface MaterialiseCodexHomeOptions {
+  /**
+   * When supplied, use a persistent per-org home under the agent Codex
+   * volume instead of a per-turn /tmp directory. This lets Codex resume
+   * threads because its local rollout/session cache survives across turns.
+   */
+  organizationId?: string | null;
+}
+
 /**
- * Writes the supplied `auth.json` blob to a fresh temp $HOME directory
- * and returns the path + a cleanup callback. The directory layout
- * matches what Codex CLI expects:
+ * Writes the supplied `auth.json` blob to a Codex-compatible $HOME and
+ * returns the path + a cleanup callback. By default this uses a fresh temp
+ * $HOME. When `organizationId` is supplied, it uses a persistent per-org
+ * home under `/home/agent/.codex/orgs/<org_id>`, which keeps Codex's local
+ * rollout/session cache available for `resumeThread()`.
+ *
+ * The directory layout matches what Codex CLI expects:
  *
  *   <homeDir>/
  *     .codex/
  *       auth.json   (mode 0o600)
  *
- * Each call creates a NEW temp dir via `mkdtemp`, so concurrent turns
- * from different orgs cannot collide. The runner's `finally` block
- * invokes `cleanup` to remove the dir after the turn ends.
- *
- * Note: the dir lives under the OS tmpdir, which is typically a
- * tmpfs-backed volume that survives container life but not host
- * reboots. That's fine — the auth.json is sourced from the DB on every
- * turn, never from the temp dir.
+ * Without `organizationId`, each call creates a NEW temp dir via `mkdtemp`
+ * and `cleanup()` removes it after the turn. With `organizationId`, the
+ * directory is reused and `cleanup()` is intentionally a no-op.
  */
 export async function materialiseCodexHome(
   blob: Record<string, unknown>,
+  options: MaterialiseCodexHomeOptions = {},
 ): Promise<MaterialisedCodexHome> {
-  const homeDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codex-home-"));
+  const homeDir = options.organizationId
+    ? path.join(CODEX_ORG_HOME_ROOT, safeOrgPathSegment(options.organizationId))
+    : await fs.promises.mkdtemp(path.join(os.tmpdir(), "codex-home-"));
   const codexDir = path.join(homeDir, ".codex");
   await fs.promises.mkdir(codexDir, { recursive: true, mode: 0o700 });
   const authFile = path.join(codexDir, "auth.json");
@@ -147,6 +189,7 @@ export async function materialiseCodexHome(
 
   let cleanedUp = false;
   const cleanup = async () => {
+    if (options.organizationId) return;
     if (cleanedUp) return;
     cleanedUp = true;
     try {

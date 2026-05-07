@@ -41,10 +41,9 @@ import {
   ListMyRoundtablesTool,
   GetRoundtableOverviewTool,
 } from "../../../tools/roundtableRecallTools";
-import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
-import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
-import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
+import { ListProjectsTool, ListRepositoriesTool, GetRepositoryTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
+import { UnsplashSearchPhotosTool } from "../../../tools/unsplashPhotoTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { InvokeApplicationAgentTool } from "../../../tools/invokeApplicationAgentTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
@@ -54,12 +53,13 @@ import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
 import { runAnthropicAgentSdk, shouldUseAgentSdk } from "../../../chat/anthropic/agentSdkRunner";
 import { runOpenAiCodexSdk, shouldUseCodexSdk } from "../../../chat/codex/codexSdkRunner";
 import { buildSubAgentDefinitions } from "../../../utils/buildSubAgentDefinitions.service";
+import { observeToolCall } from "../../../langfuse";
 
 /** Max model↔tool round-trips per graph step (prevents runaway loops). */
 const MAX_TOOL_ROUNDS = 10;
 
 /** Max characters for a single tool result before truncation. */
-const MAX_TOOL_RESULT_CHARS = 10_000;
+const MAX_TOOL_RESULT_CHARS = 30_000;
 
 /**
  * Sanitizes a tool result before passing it back to the LLM:
@@ -310,11 +310,13 @@ export async function callModelNode(
     SaveEpisodicMemoryTool(agentId, state.userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
-    // Thread recall — non-vector entry point into the existing
-    // get_thread_summary → grep_session_file → read_session_file
-    // cascade. Lists single-chat / group threads where this agent is
-    // the owner (`threads.agent_id`). Roundtable threads are listed by
-    // ListMyRoundtablesTool below.
+    // Thread recall — non-vector entry point into past single-chat /
+    // group threads where this agent is the owner (`threads.agent_id`).
+    // After picking a thread, `get_thread_summary` returns the manifest
+    // and the agent reads files from `<workspacePath>/threads/<threadId>/`
+    // using its own filesystem tools (Read/Glob/Grep for SDK built-ins,
+    // read_text_file/search_files for filesystem MCP). Roundtable threads
+    // are listed by ListMyRoundtablesTool below.
     ListMyThreadsTool(agentId),
     // Roundtable recall — primary agents always get the listing + overview
     // tools so they can pull the topic + short_summary of past discussions
@@ -323,8 +325,6 @@ export async function callModelNode(
     // agentId actually belongs to.
     ListMyRoundtablesTool(agentId),
     GetRoundtableOverviewTool(agentId),
-    ReadSessionFileTool(agentId, threadId),
-    GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),
@@ -353,8 +353,12 @@ export async function callModelNode(
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))
     tools.push(ListRepositoriesTool());
+  if (has("get_repository"))
+    tools.push(GetRepositoryTool());
   if (has("query_database"))
     tools.push(QueryDatabaseTool());
+  if (has("unsplash_search_photos"))
+    tools.push(UnsplashSearchPhotosTool());
   if (has("send_file_to_user"))
     tools.push(SendFileToUserTool(agentId));
   if (has("invoke_application_agent"))
@@ -533,7 +537,14 @@ export async function callModelNode(
           content = `Error: unknown tool "${tc.name ?? ""}".`;
         } else {
           try {
-            const rawResult = await t.invoke(tc.args ?? {});
+            // Wrap in observeToolCall so the tool execution shows up in
+            // Langfuse as a child span of `agent_chat_turn` with the
+            // model's tool args as input and the tool's text output.
+            const rawResult = await observeToolCall(
+              tc.name ?? "unknown_tool",
+              tc.args ?? {},
+              () => t.invoke(tc.args ?? {}),
+            );
             if (typeof rawResult === "string") {
               content = rawResult;
             } else if (
@@ -594,10 +605,34 @@ export async function callModelNode(
       working = [...working, response, ...toolMsgs];
     }
 
-    logger.warn("Tool loop stopped after max rounds", { maxRounds: MAX_TOOL_ROUNDS });
+    // Soft-complete on max-rounds instead of erroring out. Returning `error`
+    // here was making every follow-up message to a chronically tool-heavy
+    // agent surface as a hard failure even though the partial work the
+    // model did is still useful and the next turn can pick up from it.
+    // Mirror the SDK runner's max-turns soft-success path: keep the
+    // accumulated AIMessage / ToolMessage pairs and append a soft notice
+    // so the UI shows a normal assistant reply rather than a red error.
+    logger.warn("Tool loop stopped after max rounds — soft-completing", {
+      maxRounds: MAX_TOOL_ROUNDS,
+      threadId,
+    });
+    newMessages.push(
+      new AIMessage({
+        content:
+          "I hit my per-turn tool-call budget while working on that. " +
+          "Some intermediate work above may have completed. Ask me to " +
+          "continue and I'll pick up from where I stopped.",
+        additional_kwargs: {
+          modelSlug,
+          vendorSlug: vendor.vendorSlug,
+          modelName: vendor.modelName,
+          hitMaxTurns: true,
+        },
+      }),
+    );
     const sessionFilesAtLimit = drainSessionFileLedger(threadId);
     return {
-      error: "The assistant requested too many tool calls in one turn. Please try again.",
+      messages: newMessages,
       ...(sessionFilesAtLimit.length > 0 ? { sessionFiles: sessionFilesAtLimit } : {}),
     };
   } catch (err) {

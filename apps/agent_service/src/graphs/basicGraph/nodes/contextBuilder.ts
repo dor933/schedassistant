@@ -941,7 +941,9 @@ function formatSystemPrompt(
   sections.push(
     "You have access to the user's registered projects and their repositories:\n" +
     "- **`list_projects`** — list all projects (name, ID, tech stack).\n" +
-    "- **`list_repositories`** — list repositories within a project (URL, local path, architecture overview).\n\n" +
+    "- **`list_repositories`** — index of repositories within a project (id, name, default branch only).\n" +
+    "- **`get_repository`** — full record for a single repo by ID (URL, local path, architecture overview, setup). " +
+    "Call this after `list_repositories` for repos you actually need detail on.\n\n" +
     "Use these tools when the user asks about projects, repos, codebases, or architecture. " +
     "Do NOT guess or say a project doesn't exist without calling `list_projects` first.\n\n" +
     "**Note:** The project named **\"grahamy\"** is the main project of the Grahamy company and our flagship product.",
@@ -976,67 +978,51 @@ function formatSystemPrompt(
     sections.push("");
   }
 
-  if (agentWorkspacePath && agentHasFilesystemMcp) {
+  if (agentWorkspacePath) {
     const sessionFolder = threadId
       ? `${agentWorkspacePath}/threads/${threadId}`
       : null;
     sections.push("## Workspace");
     sections.push(
       `Your persistent workspace lives at \`${agentWorkspacePath}\`. Files here survive across all ` +
-      `conversations. Use the **filesystem MCP** (server name \`filesystem\`, rooted at \`/app/data\`) ` +
-      `for every workspace action: \`list_directory\`, \`read_text_file\`, \`write_file\`, \`edit_file\`, ` +
-      `\`search_files\`, \`create_directory\`, \`move_file\`. Always use the absolute path above as the ` +
-      `prefix — never a relative path.\n\n` +
-      "**Reading files — what each tool gives you.** You have two tool families for reading. " +
-      "Pick whichever fits the task; nothing restricts you to one or the other.\n" +
-      "- `read_text_file` (filesystem MCP) — reads any file under `/app/data` (library, " +
-      "workspace root, session folder, anywhere). Supports `head` (first N lines) or `tail` " +
-      "(last N lines) for long files; cannot combine both, cannot take middle slices.\n" +
-      "- `search_files` (filesystem MCP) — finds files by **filename** glob across the " +
-      "filesystem. Not a content grep.\n" +
-      "- `read_session_file` — reads files **inside a per-thread session folder**. Adds " +
-      "`offset` + `limit` for arbitrary line ranges (middle slices), cross-thread access to " +
-      "any past thread you participated in (single-chat / group thread you own, or roundtable " +
-      "thread you joined), and a graceful fallback to the manifest summary when a file has " +
-      "been moved or deleted.\n" +
-      "- `grep_session_file` — content search with line numbers **inside a session-folder " +
-      "file**. Returns matching lines (with context windows) so you can jump straight to the " +
-      "right section. The filesystem MCP has no equivalent.\n\n" +
-      "Rule of thumb: for canonical reference docs (library, long-form briefs) you often want " +
-      "the whole file, so `read_text_file` is usually fine. For session files (user pastes, " +
-      "captured research, working memory) you usually want to *locate* the relevant section " +
-      "with `grep_session_file` + `read_session_file` rather than pull the whole body — but " +
-      "nothing stops you from doing a full read when that's what you actually need.\n\n" +
+      `conversations.\n\n` +
+      `**Use your built-in file tools** to read, write, and search inside the workspace:\n` +
+      `- Anthropic SDK: \`Read\`, \`Write\`, \`Edit\`, \`MultiEdit\`, \`Glob\`, \`Grep\` (rooted at the ` +
+      `workspace path — relative paths resolve under it).\n` +
+      `- Codex SDK: \`shell\` (use \`cat\`, \`rg\`, \`ls\`, \`sed -n\` against absolute paths under the ` +
+      `workspace).\n` +
+      `- If the filesystem MCP server is attached: \`read_text_file\`, \`write_file\`, \`edit_file\`, ` +
+      `\`search_files\`, \`list_directory\` (absolute paths under \`/app/data\`).\n\n` +
       "**Allowed file formats — writes are restricted to `.md` and `.txt` only.** " +
       "Any other extension (.json, .csv, .pdf, .xlsx, …) is rejected by the system before it touches " +
-      "disk. If you need to capture structured data, render it as Markdown (tables, fenced code blocks, " +
-      "front-matter) inside a `.md` file — the system handles format conversion later when sending " +
-      "files to users.\n\n" +
+      "disk. Render structured data as Markdown (tables, fenced code blocks, front-matter) inside a " +
+      "`.md` file when you need it.\n\n" +
       "Use your workspace for persistent documents, plans, research, templates, or any information " +
       "you want to retain and build upon over time.\n\n" +
       (sessionFolder
         ? (
             `**Per-thread session folder — write durable artifacts here, NOT at the workspace root.**\n` +
             `This conversation's session folder is **\`${sessionFolder}/\`** (already created — you can ` +
-            `\`list_directory\` it immediately). Every file you produce that contains content worth keeping ` +
-            `(captured library docs, plans, briefs, analyses, research dumps, anything you might want to ` +
-            `re-read later) **MUST be written under this exact absolute path**, e.g. ` +
-            `\`write_file("${sessionFolder}/library_capture.md", "...")\`. Writes here are automatically ` +
-            `captured into the session manifest, summarised when the thread closes, and indexed for vector ` +
-            `retrieval — so a future you can recover them via \`recall_episodic_memory\` → ` +
-            `\`get_thread_summary\` → \`read_session_file\`. Writes anywhere else under \`${agentWorkspacePath}\` ` +
-            `are still saved on disk but **will NOT appear in the per-thread manifest** and therefore won't ` +
-            `surface in future sessions. When the user asks you to "save X to your workspace", interpret ` +
-            `that as "save X under the per-thread session folder above" unless they explicitly name a ` +
-            `different path.\n\n`
+            `list it immediately with your file tools). Every file you produce that contains content ` +
+            `worth keeping (captured library docs, plans, briefs, analyses, research dumps, anything ` +
+            `you might want to re-read later) **MUST be written under this exact absolute path**. ` +
+            `Writes here are automatically captured into the session manifest, summarised when the ` +
+            `thread closes, and indexed for vector retrieval — so a future you can recover them via ` +
+            `\`recall_episodic_memory\` → \`get_thread_summary\` (which returns the manifest) and read ` +
+            `the listed paths directly with your built-in file tools. ` +
+            `**Do not invent filenames the manifest does not list — open only the paths the manifest ` +
+            `returns.** Writes anywhere else under \`${agentWorkspacePath}\` are still saved on disk ` +
+            `but **will NOT appear in the per-thread manifest** and therefore won't surface in future ` +
+            `sessions. When the user asks you to "save X to your workspace", interpret that as "save X ` +
+            `under the per-thread session folder above" unless they explicitly name a different path.\n\n`
           )
         : "") +
       "**Shared with executor/system agents you delegate to.** When you delegate a task via " +
       "`delegate_to_deep_agent` (or similar), the executor agent does not have its own workspace — it " +
       "writes into **this same directory** on your behalf, and its writes inside the per-thread folder " +
       "are captured the same way. After the delegation result comes back, check the `## Workspace writes` " +
-      "section at the end of the executor's reply to see what it changed, then `read_text_file` (or " +
-      "`read_session_file` for files inside the per-thread folder) to inspect them.",
+      "section at the end of the executor's reply to see what it changed, then read those paths with " +
+      "your built-in file tools.",
     );
     sections.push("");
   }
@@ -1138,12 +1124,13 @@ function formatSystemPrompt(
     "any of the trigger conditions below applies; do NOT fabricate past context from memory or " +
     "from the conversation log alone.\n\n" +
 
-    "**Two entry points — pick by what you have:**\n" +
+    "**Three entry points — pick by what you have:**\n" +
     "- `recall_episodic_memory` — vector search. Use when you can frame a clear semantic query " +
     "(\"prior decisions about session-folder persistence\", \"how the user prefers PR descriptions\").\n" +
-    "- `list_my_threads` — non-vector listing of single-chat / group threads you own, with title + " +
-    "summary preview. Use when the user references a past conversation but you don't have a " +
-    "precise enough query, or when no episodic chunk has matched.\n" +
+    "- `list_my_threads({query?, hasSummaryOnly?, startTime?, endTime?})` — non-vector listing of " +
+    "single-chat / group threads you own, with title + summary preview; optional ISO `startTime` / " +
+    "`endTime` filter rows by `threads.updated_at`. Use when the user references a past conversation " +
+    "but you don't have a precise enough query, or when no episodic chunk has matched.\n" +
     "- `list_my_roundtables` — same idea for roundtables you participated in (returns topic + " +
     "`hasShortSummary` flag).\n\n" +
 
@@ -1163,10 +1150,11 @@ function formatSystemPrompt(
 
     "**Cascade after you have a thread_id (from any of the entry points above):**\n" +
     "  1. `get_thread_summary(threadId)` — full saved summary + a manifest of every session file " +
-    "written.\n" +
-    "  2. If a manifest entry looks promising, `grep_session_file(threadId, path, pattern)` to " +
-    "locate the right line range, then `read_session_file(threadId, path, offset, limit)` to read " +
-    "that slice — or just `read_session_file` directly when the file is small.\n" +
+    "written. Each manifest entry's `path` is the file's location under " +
+    "`<workspacePath>/threads/<threadId>/`.\n" +
+    "  2. If a manifest entry looks promising, open the file directly with your built-in file tools " +
+    "(`Read`/`Grep`/`Glob` for Anthropic SDK, `shell` for Codex SDK) against that exact path — do " +
+    "NOT invent filenames the manifest doesn't list.\n" +
     "  3. For a roundtable, prefer `get_roundtable_overview(roundtableId)` instead — its " +
     "`shortSummary` (one paragraph) is usually enough; drop into the longer `summary` field only if " +
     "you need the full structured breakdown.\n\n" +

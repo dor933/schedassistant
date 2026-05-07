@@ -57,7 +57,7 @@ import type {
   TurnFailedEvent,
 } from "@openai/codex-sdk";
 
-import { Agent, Thread } from "@scheduling-agent/database";
+import { Thread } from "@scheduling-agent/database";
 
 import { loadCodexSdk } from "./codexSdkLoader";
 import {
@@ -74,6 +74,7 @@ import type { AgentState } from "../../state";
 import { logger } from "../../logger";
 import type { ResolvedOrgVendor } from "../../utils/resolveOrgVendor.service";
 import { drainSessionFileLedger } from "../../workspace/sessionWorkspace";
+import { getAgentSdkCapabilities } from "../../utils/sdkCapabilities.service";
 import {
   observeWithContext,
   recordSdkGeneration,
@@ -81,7 +82,7 @@ import {
   updateActiveObservation,
 } from "../../langfuse";
 import {
-  loadCodexAuthObjectForAgent,
+  loadCodexAuthObjectForAgentWithOrg,
   materialiseCodexHome,
 } from "../../utils/codexAuthJson.service";
 
@@ -641,39 +642,24 @@ async function runOpenAiCodexSdkImpl(
 
   // ── Sandbox / shell gating ─────────────────────────────────────────────
   // Codex SDK has no per-tool allowlist (its surface is mode-driven), so
-  // `allow_sdk_bash` translates to a sandbox-mode pick rather than a
-  // tool-name allowlist:
-  //   - allow_sdk_bash = true  → `danger-full-access` (full shell, no
-  //                              workspace constraint, no network limit).
-  //                              Matches the `--dangerously-bypass-
-  //                              approvals-and-sandbox` flag the
-  //                              `run_codex_cli` tool already passes.
-  //   - allow_sdk_bash = false → `workspace-write` (file ops within cwd
-  //                              only, network constrained, shell still
-  //                              technically reachable but bounded by the
-  //                              sandbox so a stray command can't leave
-  //                              the workspace). Closest analogue to
-  //                              Anthropic's "Bash off" — not strict tool
-  //                              removal, but the runtime envelope the
-  //                              Codex SDK exposes.
-  // Migration 126 flipped the column default to TRUE for both vendors,
-  // so the typical case is "full access" — admins opt OUT for restricted
-  // agents.
-  let allowBash = true;
-  if (agentId) {
-    try {
-      const agentRow = await Agent.findByPk(agentId, {
-        attributes: ["allowSdkBash"],
-      });
-      // Treat null as the column default (true post-migration-126).
-      allowBash = agentRow?.allowSdkBash !== false;
-    } catch (err) {
-      logger.warn("Failed to load allow_sdk_bash — defaulting to TRUE", {
-        agentId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  // the `bash` SDK capability translates to a sandbox-mode pick rather
+  // than a tool-name allowlist:
+  //   - bash attached → `danger-full-access` (full shell, no workspace
+  //                     constraint, no network limit). Matches the
+  //                     `--dangerously-bypass-approvals-and-sandbox` flag
+  //                     the `run_codex_cli` tool already passes.
+  //   - bash NOT attached → `workspace-write` (file ops within cwd only,
+  //                     network constrained, shell still technically
+  //                     reachable but bounded by the sandbox so a stray
+  //                     command can't leave the workspace). Closest
+  //                     analogue to Anthropic's "Bash off" — not strict
+  //                     tool removal, but the runtime envelope the Codex
+  //                     SDK exposes.
+  //
+  // Backfilled from the legacy `allow_sdk_bash` column by migration 145.
+  // Helper applies its own conservative deny-by-default on lookup failure.
+  const codexCaps = await getAgentSdkCapabilities(agentId ?? null);
+  const allowBash = codexCaps.hasBash;
   const sandboxMode: "workspace-write" | "danger-full-access" = allowBash
     ? "danger-full-access"
     : "workspace-write";
@@ -704,21 +690,22 @@ async function runOpenAiCodexSdkImpl(
     },
   });
 
-  // Per-turn Codex auth materialisation. Two paths:
+  // Codex auth materialisation. Two paths:
   //   - When the org has an `auth_object` row (ChatGPT-account login),
-  //     materialise the blob to a fresh temp $HOME's `.codex/auth.json`
-  //     and point the spawned CLI there via env.HOME. We do NOT set
-  //     OPENAI_API_KEY (the CLI's env-first lookup would otherwise win
-  //     over our auth.json).
+  //     materialise the blob to a persistent per-org $HOME's
+  //     `.codex/auth.json` and point the spawned CLI there via env.HOME.
+  //     We do NOT set OPENAI_API_KEY (the CLI's env-first lookup would
+  //     otherwise win over our auth.json). Keeping the $HOME stable per
+  //     org lets Codex resume the persisted `Thread.codexThreadId` because
+  //     its local rollout/session cache survives across turns.
   //   - When the org only has a plain `api_key`, point HOME at the
   //     default agent home and inject OPENAI_API_KEY normally.
-  //
-  // The temp dir is cleaned up in the outer `finally` block so each
-  // turn's auth.json is gone before the next one runs — multi-tenant
-  // safe under concurrent turns.
-  const codexAuthObject = await loadCodexAuthObjectForAgent(agentId);
+  const codexAuth = await loadCodexAuthObjectForAgentWithOrg(agentId);
+  const codexAuthObject = codexAuth?.authObject ?? null;
   const materialised = codexAuthObject
-    ? await materialiseCodexHome(codexAuthObject)
+    ? await materialiseCodexHome(codexAuthObject, {
+        organizationId: codexAuth?.organizationId ?? null,
+      })
     : null;
   // When using an auth_object, prefer it over the simple-string apiKey
   // (the auth_object path is the ChatGPT-account billing route the
@@ -756,7 +743,6 @@ async function runOpenAiCodexSdkImpl(
         apiKey: effectiveApiKey,
         homeDir: effectiveHome,
       }),
-      ...(process.env.MERIDIAN_URL ? { baseUrl: process.env.MERIDIAN_URL } : {}),
       config: {
         mcp_servers: {
           // Stdio MCP, not streamable_http. Codex 0.128's rmcp client
@@ -931,9 +917,8 @@ async function runOpenAiCodexSdkImpl(
     };
   } finally {
     releaseTools(registryId);
-    // Wipe the per-turn temp $HOME (with its materialised auth.json)
-    // before another turn can race in. Idempotent — `cleanup()` is
-    // safe to call repeatedly.
+    // Idempotent. For persistent per-org Codex homes this is a no-op; for
+    // temp homes used by other call paths it wipes the materialised auth.
     if (materialised) {
       try {
         await materialised.cleanup();

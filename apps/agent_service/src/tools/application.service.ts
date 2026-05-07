@@ -2,32 +2,14 @@ import type { CompiledStateGraph } from "@langchain/langgraph";
 import { Agent } from "@scheduling-agent/database";
 import type { ApplicationAgentState } from "../graphs/applicationGraph/state";
 import { resolveOrCreateApplicationAgentThread } from "../utils/applicationAgentThread.service";
-import {
-  resolveDefaultClientApplication,
-  resolveOrCreateClientUser,
-  type JitUserMetadata,
-} from "../utils/clientApplicationUser.service";
 import { observeWithContext } from "../langfuse";
 import { logger } from "../logger";
 
 export type InvokeApplicationAgentInput = {
   agentId: string;
   input: string;
-  /**
-   * The internal `users.id` representing the end user. For REST callers this
-   * is JIT-resolved from `externalUserId`; for primary-tool delegations this
-   * is the calling primary's `state.userId`.
-   */
+  /** Internal `users.id` of the calling primary's end user. */
   userId: number;
-};
-
-export type InvokeApplicationAgentForExternalUserInput = {
-  agentId: string;
-  input: string;
-  /** The upstream client app's user identifier (string; we accept any shape). */
-  externalUserId: string;
-  /** Optional cached profile fields refreshed each invocation. */
-  userMetadata?: JitUserMetadata;
 };
 
 export type InvokeApplicationAgentResult =
@@ -37,9 +19,8 @@ export type InvokeApplicationAgentResult =
 /**
  * Canonical invocation entry. Verifies the agent is of type 'application',
  * resolves a stable thread id for `(userId, agentId)`, and runs the
- * application graph. Used by both the REST controller (after JIT user
- * resolution) and by the `invoke_application_agent` tool that primary
- * agents call.
+ * application graph. Called in-process by `invoke_application_agent`, the
+ * tool that primary agents use to delegate to application agents.
  */
 export async function invokeApplicationAgent(
   graph: CompiledStateGraph<any, any, any>,
@@ -124,41 +105,4 @@ export async function invokeApplicationAgent(
     logger.error("Application agent invoke failed", { agentId, userId, error: message });
     return { ok: false, status: 500, error: message };
   }
-}
-
-/**
- * REST entry point. JIT-resolves the external user id to an internal
- * `users.id`, then defers to `invokeApplicationAgent`. The single shared
- * `APPLICATION_AGENT_API_TOKEN` already authenticated the request — this
- * function trusts that the controller has done the auth check.
- */
-export async function invokeApplicationAgentForExternalUser(
-  graph: CompiledStateGraph<any, any, any>,
-  { agentId, input, externalUserId, userMetadata }: InvokeApplicationAgentForExternalUserInput,
-): Promise<InvokeApplicationAgentResult> {
-  if (!externalUserId || typeof externalUserId !== "string") {
-    return { ok: false, status: 400, error: "externalUserId is required and must be a string." };
-  }
-
-  const clientApplication = await resolveDefaultClientApplication();
-  if (!clientApplication) {
-    return {
-      ok: false,
-      status: 500,
-      error:
-        "No default client application configured. Insert a row into `client_applications` and set `DEFAULT_CLIENT_APPLICATION_ID` to its uuid.",
-    };
-  }
-
-  const user = await resolveOrCreateClientUser({
-    clientApplication,
-    externalUserId,
-    metadata: userMetadata,
-  });
-
-  return invokeApplicationAgent(graph, {
-    agentId,
-    input,
-    userId: user.id,
-  });
 }

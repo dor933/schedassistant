@@ -20,7 +20,7 @@ const controller = new SystemController();
 // `/codex-auth-json` system-wide routes were removed in slice 14.
 // The Codex CLI auth.json is now stored per-org as `key_type='auth_object'`
 // on the `organization_vendor_api_keys` row for the OpenAI vendor.
-// `runOpenAiCodexSdk` materialises it to a per-turn temp $HOME at
+// `runOpenAiCodexSdk` materialises it into a per-org Codex home at
 // invocation time — no system-wide file, no shared admin endpoint.
 
 router.post("/codex-config-toml/render", controller.renderCodexConfigToml);

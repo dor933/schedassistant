@@ -13,7 +13,6 @@ import { roundtableRouter } from "./routes/roundtable.routes";
 import { libraryRouter } from "./routes/library.routes";
 import { attachmentsRouter } from "./routes/attachments.routes";
 import { systemRouter } from "./routes/system.routes";
-import { applicationRouter } from "./routes/application.routes";
 import { askGrahamyRouter } from "./routes/askGrahamy.routes";
 import { internalRouter } from "./routes/internal.routes";
 
@@ -45,7 +44,6 @@ export function createServer(deps: CreateServerDeps) {
   app.use("/api/library", libraryRouter);
   app.use("/api/attachments", attachmentsRouter);
   app.use("/api/system", systemRouter);
-  app.use("/api/application", applicationRouter);
   app.use("/api/ask-grahamy", askGrahamyRouter);
 
   // Service-to-service: mounted at /internal so it's distinct from every

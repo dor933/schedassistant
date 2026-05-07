@@ -46,6 +46,9 @@ export interface CodexInRepoOptions {
   /** Per-org Codex CLI auth.json blob (ChatGPT-account login). Mutually
    *  exclusive with `apiKey` in practice. */
   authObject?: Record<string, unknown> | null;
+  /** Organization id for authObject. When supplied, Codex uses the
+   *  persistent per-org home under the agent Codex volume. */
+  authObjectOrganizationId?: string | null;
   /** Codex model slug (e.g. `gpt-5`, `gpt-4o`, `o4-mini`). */
   model: string;
   /** System-side instructions — prepended to the user prompt as
@@ -113,7 +116,9 @@ export async function runCodexInRepo(
       const sdk = await loadCodexSdk();
 
       const materialised = useAuthObject
-        ? await materialiseCodexHome(opts.authObject as Record<string, unknown>)
+        ? await materialiseCodexHome(opts.authObject as Record<string, unknown>, {
+            organizationId: opts.authObjectOrganizationId ?? null,
+          })
         : null;
       try {
         const codexOptions: CodexOptions = {
@@ -122,7 +127,6 @@ export async function runCodexInRepo(
             apiKey: effectiveApiKey,
             homeDir: materialised ? materialised.homeDir : null,
           }),
-          ...(process.env.MERIDIAN_URL ? { baseUrl: process.env.MERIDIAN_URL } : {}),
         };
 
         const threadOptions: ThreadOptions = {

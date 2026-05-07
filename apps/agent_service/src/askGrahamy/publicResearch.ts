@@ -5,6 +5,8 @@ import type {
   SnapshotBundle,
   ToolOutputs,
   CachedResearchObject,
+  PgCapabilityViews,
+  PipelineOverlayViews,
 } from "./types";
 import {
   publicObjectViewFromCachedObject,
@@ -18,6 +20,8 @@ export function compilePublicResearchView(input: {
   snapshots: SnapshotBundle;
   toolOutputs: ToolOutputs;
   researchObjects?: CachedResearchObject[];
+  pgCapabilityViews?: PgCapabilityViews;
+  pipelineOverlayViews?: PipelineOverlayViews;
   warnings: string[];
 }): PublicResearchView {
   const { classification, snapshots, toolOutputs, warnings } = input;
@@ -42,6 +46,26 @@ export function compilePublicResearchView(input: {
   );
   const researchObjectKeys = researchObjects.map((item) => item.cacheKey);
   const researchObjectViews = researchObjects.map(publicObjectViewFromCachedObject);
+  const pgCapabilityViewNames = [
+    ...(input.pgCapabilityViews?.sectorLeaderboardView
+      ? ["sectorLeaderboardView"]
+      : []),
+    ...(input.pgCapabilityViews?.sectorDivergenceView
+      ? ["sectorDivergenceView"]
+      : []),
+    ...(input.pgCapabilityViews?.sectorDeltaView ? ["sectorDeltaView"] : []),
+    ...(input.pgCapabilityViews?.stockIdeaView ? ["stockIdeaView"] : []),
+    ...(input.pgCapabilityViews?.featureScreenView
+      ? ["featureScreenView"]
+      : []),
+    ...(input.pgCapabilityViews?.factorBacktestView
+      ? ["factorBacktestView"]
+      : []),
+    ...(input.pgCapabilityViews?.comparisonView ? ["comparisonView"] : []),
+    ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
+      ? ["regimeHistoricalPlaybookView"]
+      : []),
+  ];
 
   return {
     objectType,
@@ -66,6 +90,39 @@ export function compilePublicResearchView(input: {
     edgeEvidence: Object.fromEntries(
       researchObjectViews.map((item) => [item.cacheKey, item.edgeEvidence]),
     ),
+    ...(input.pgCapabilityViews?.sectorLeaderboardView
+      ? { sectorLeaderboardView: input.pgCapabilityViews.sectorLeaderboardView }
+      : {}),
+    ...(input.pgCapabilityViews?.sectorDivergenceView
+      ? { sectorDivergenceView: input.pgCapabilityViews.sectorDivergenceView }
+      : {}),
+    ...(input.pgCapabilityViews?.sectorDeltaView
+      ? { sectorDeltaView: input.pgCapabilityViews.sectorDeltaView }
+      : {}),
+    ...(input.pgCapabilityViews?.stockIdeaView
+      ? { stockIdeaView: input.pgCapabilityViews.stockIdeaView }
+      : {}),
+    ...(input.pgCapabilityViews?.featureScreenView
+      ? { featureScreenView: input.pgCapabilityViews.featureScreenView }
+      : {}),
+    ...(input.pgCapabilityViews?.factorBacktestView
+      ? { factorBacktestView: input.pgCapabilityViews.factorBacktestView }
+      : {}),
+    ...(input.pgCapabilityViews?.comparisonView
+      ? { comparisonView: input.pgCapabilityViews.comparisonView }
+      : {}),
+    ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
+      ? {
+          regimeHistoricalPlaybookView:
+            input.pgCapabilityViews.regimeHistoricalPlaybookView,
+        }
+      : {}),
+    ...(input.pipelineOverlayViews?.validatedEdgeEvidenceView
+      ? {
+          validatedEdgeEvidenceView:
+            input.pipelineOverlayViews.validatedEdgeEvidenceView,
+        }
+      : {}),
     evidence: {
       snapshotNames: ["daily_brief", "metadata", "clusters", "track_record", "transparency"].filter(
         (name) => !!snapshots[name as keyof SnapshotBundle],
@@ -81,6 +138,81 @@ export function compilePublicResearchView(input: {
         researchObjectViews.map((item) => [item.cacheKey, item.pathRisk.state]),
       ),
       researchObjectSources: Array.from(new Set(researchObjects.map((item) => item.source))),
+      ...(pgCapabilityViewNames.length
+        ? { pgCapabilityViews: pgCapabilityViewNames }
+        : {}),
+      ...(input.pgCapabilityViews?.sectorLeaderboardView
+        ? {
+            sectorLeaderboardState:
+              input.pgCapabilityViews.sectorLeaderboardView.state,
+            sectorLeaderboardRows:
+              input.pgCapabilityViews.sectorLeaderboardView.rows.length,
+          }
+        : {}),
+      ...(input.pgCapabilityViews?.sectorDivergenceView
+        ? {
+            sectorDivergenceState:
+              input.pgCapabilityViews.sectorDivergenceView.state,
+            sectorDivergenceRows:
+              input.pgCapabilityViews.sectorDivergenceView.rows.length,
+          }
+        : {}),
+      ...(input.pgCapabilityViews?.sectorDeltaView
+        ? {
+            sectorDeltaState: input.pgCapabilityViews.sectorDeltaView.state,
+            sectorDeltaRows: input.pgCapabilityViews.sectorDeltaView.rows.length,
+          }
+        : {}),
+      ...(input.pgCapabilityViews?.stockIdeaView
+        ? {
+            stockIdeaState: input.pgCapabilityViews.stockIdeaView.state,
+            stockIdeaRows: input.pgCapabilityViews.stockIdeaView.rows.length,
+          }
+        : {}),
+      ...(input.pgCapabilityViews?.featureScreenView
+        ? {
+            featureScreenState: input.pgCapabilityViews.featureScreenView.state,
+            featureScreenRows:
+              input.pgCapabilityViews.featureScreenView.rows.length,
+          }
+        : {}),
+      ...(input.pgCapabilityViews?.factorBacktestView
+        ? {
+            factorBacktestState:
+              input.pgCapabilityViews.factorBacktestView.state,
+            factorBacktestSampleSize:
+              input.pgCapabilityViews.factorBacktestView.sampleSize ?? 0,
+            factorBacktestHorizon:
+              input.pgCapabilityViews.factorBacktestView.horizon,
+          }
+        : {}),
+      ...(input.pgCapabilityViews?.comparisonView
+        ? {
+            comparisonState: input.pgCapabilityViews.comparisonView.state,
+            comparisonType:
+              input.pgCapabilityViews.comparisonView.comparisonType,
+            comparisonDeltas:
+              input.pgCapabilityViews.comparisonView.deltas.length,
+          }
+        : {}),
+      ...(input.pgCapabilityViews?.regimeHistoricalPlaybookView
+        ? {
+            regimeHistoricalPlaybookState:
+              input.pgCapabilityViews.regimeHistoricalPlaybookView.state,
+            regimeHistoricalPlaybookRows:
+              input.pgCapabilityViews.regimeHistoricalPlaybookView.rows.length,
+            regimeHistoricalPlaybookRisks:
+              input.pgCapabilityViews.regimeHistoricalPlaybookView.risks.length,
+          }
+        : {}),
+      ...(input.pipelineOverlayViews?.validatedEdgeEvidenceView
+        ? {
+            validatedEdgeEvidenceState:
+              input.pipelineOverlayViews.validatedEdgeEvidenceView.state,
+            validatedEdgeEvidenceAnchor:
+              input.pipelineOverlayViews.validatedEdgeEvidenceView.anchor,
+          }
+        : {}),
     },
     freshness: snapshots.freshness ?? {},
     warnings: [
@@ -98,6 +230,14 @@ export function compilePublicResearchView(input: {
 }
 
 function inferObjectType(classification: Classification): PublicResearchView["objectType"] {
+  if (classification.intent === "sector_conviction_leaderboard") return "sector";
+  if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
+  if (classification.intent === "week_over_week_sector_delta") return "sector";
+  if (classification.intent === "stock_idea_discovery") return "stock";
+  if (classification.intent === "feature_screen") return "stock";
+  if (classification.intent === "factor_conditioned_backtest") return "stock";
+  if (classification.intent === "comparison") return "mixed";
+  if (classification.intent === "market_regime_historical_playbook") return "regime";
   const hasStock = classification.symbols.length > 0;
   const hasSector = classification.sectors.length > 0;
   const hasRegime = classification.regimeRequested;

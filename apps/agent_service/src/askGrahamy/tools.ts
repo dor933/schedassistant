@@ -1,3 +1,4 @@
+import { observeToolCall } from "../langfuse";
 import { isRecord, numberValue, stringValue } from "./snapshotClient";
 import type {
   Classification,
@@ -18,22 +19,32 @@ export async function executeSnapshotTools(
   const outputs: ToolOutputs = {};
   for (const tool of tools) {
     if (tool === "get_market_context") {
-      outputs.get_market_context = getMarketContext(snapshots);
+      outputs.get_market_context = await observeToolCall(
+        "get_market_context",
+        {},
+        async () => getMarketContext(snapshots),
+      );
     }
     if (tool === "get_stock_snapshot_context") {
-      outputs.get_stock_snapshot_context = getStockSnapshotContext(
-        snapshots,
-        classification.symbols,
+      outputs.get_stock_snapshot_context = await observeToolCall(
+        "get_stock_snapshot_context",
+        { symbols: classification.symbols },
+        async () => getStockSnapshotContext(snapshots, classification.symbols),
       );
     }
     if (tool === "get_sector_snapshot_context") {
-      outputs.get_sector_snapshot_context = getSectorSnapshotContext(
-        snapshots,
-        classification.sectors,
+      outputs.get_sector_snapshot_context = await observeToolCall(
+        "get_sector_snapshot_context",
+        { sectors: classification.sectors },
+        async () => getSectorSnapshotContext(snapshots, classification.sectors),
       );
     }
     if (tool === "get_homepage_focus_context") {
-      outputs.get_homepage_focus_context = getHomepageFocusContext(snapshots);
+      outputs.get_homepage_focus_context = await observeToolCall(
+        "get_homepage_focus_context",
+        {},
+        async () => getHomepageFocusContext(snapshots),
+      );
     }
   }
   return outputs;

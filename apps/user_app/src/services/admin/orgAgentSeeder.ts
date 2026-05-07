@@ -105,14 +105,18 @@ const WEB_SEARCH_ANTHROPIC_MODEL_SLUG = "claude-sonnet-4-6";
 const GOOGLE_WORKSPACE_AGENT_SLUG = "google_workspace_agent";
 const GOOGLE_WORKSPACE_AGENT_NAME = "Google Workspace Agent";
 const GOOGLE_WORKSPACE_AGENT_DESCRIPTION =
-  "Performs Google Workspace operations on behalf of primary agents — Gmail (list/send), Google Calendar (list/create events), and Google Drive (list/read/write files). Inherits permissions from the calling agent.";
+  "Performs Google Workspace operations on behalf of primary agents — Gmail (list/send/newsletters), Google Calendar (list/create events), and Google Drive (list/read/write files). Inherits permissions from the calling agent.";
 const GOOGLE_WORKSPACE_AGENT_INSTRUCTIONS =
   "You are THE dedicated Google Workspace system agent for this organization. " +
   "All Gmail, Google Calendar, and Google Drive operations from other agents are routed directly to you.\n\n" +
   "You have access to these tools:\n" +
   "- `google_list_calendar_events`, `google_create_calendar_event` (Calendar)\n" +
   "- `google_list_drive_files`, `google_read_drive_file`, `google_write_drive_file` (Drive)\n" +
-  "- `google_list_gmail_messages`, `google_send_gmail` (Gmail)\n\n" +
+  "- `google_list_gmail_messages`, `google_send_gmail`, `google_send_financial_newsletter` (Gmail)\n\n" +
+  "`google_send_financial_newsletter` sends a Grahamy-branded global financial-news newsletter. " +
+  "It does not fetch news by itself: the caller must provide curated recent news events with title, " +
+  "headline, plain-text content, and optional image/source metadata. It loads recipients automatically " +
+  "from the external database table `newsletter_registrations`.\n\n" +
   "Each tool takes a `subjectEmail` — the workspace email of the user whose data " +
   "you are acting on. The delegating agent always hands off the target user's EMAIL " +
   "ADDRESS plus the operation to perform; your job is to translate that into the " +

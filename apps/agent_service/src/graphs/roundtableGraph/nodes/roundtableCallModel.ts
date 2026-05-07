@@ -36,16 +36,16 @@ import {
   ListMyRoundtablesTool,
   GetRoundtableOverviewTool,
 } from "../../../tools/roundtableRecallTools";
-import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
-import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
-import { ListProjectsTool, ListRepositoriesTool } from "../../../tools/epicTaskTools";
+import { ListProjectsTool, ListRepositoriesTool, GetRepositoryTool } from "../../../tools/epicTaskTools";
 import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
+import { UnsplashSearchPhotosTool } from "../../../tools/unsplashPhotoTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
 import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
 import { runAnthropicAgentSdk, shouldUseAgentSdk } from "../../../chat/anthropic/agentSdkRunner";
 import { runOpenAiCodexSdk, shouldUseCodexSdk } from "../../../chat/codex/codexSdkRunner";
+import { observeToolCall } from "../../../langfuse";
 
 const MAX_TOOL_ROUNDS = 15;
 
@@ -239,8 +239,6 @@ export async function roundtableCallModelNode(
     // roundtable_agents for the row in question).
     ListMyRoundtablesTool(agentId),
     GetRoundtableOverviewTool(agentId),
-    ReadSessionFileTool(agentId, threadId),
-    GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),
@@ -266,8 +264,12 @@ export async function roundtableCallModelNode(
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))
     tools.push(ListRepositoriesTool());
+  if (has("get_repository"))
+    tools.push(GetRepositoryTool());
   if (has("query_database"))
     tools.push(QueryDatabaseTool());
+  if (has("unsplash_search_photos"))
+    tools.push(UnsplashSearchPhotosTool());
 
   // Vendor-conditional auto-bind for Claude Agent SDK's `Task` discovery
   // (slice 19). The roundtable runner doesn't pass sub-agent bundles to
@@ -559,7 +561,14 @@ export async function roundtableCallModelNode(
           content = `Error: unknown tool "${tc.name ?? ""}".`;
         } else {
           try {
-            const rawResult = await t.invoke(tc.args ?? {});
+            // Wrap in Langfuse so each turn's tool calls (recall_,
+            // list_my_, get_thread_summary, etc.) appear as child spans
+            // of the parent `roundtable_turn` observation.
+            const rawResult = await observeToolCall(
+              tc.name ?? "unknown_tool",
+              tc.args ?? {},
+              () => t.invoke(tc.args ?? {}),
+            );
             if (typeof rawResult === "string") {
               content = rawResult;
             } else if (

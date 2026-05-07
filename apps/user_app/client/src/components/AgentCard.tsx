@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AdminAgent, AdminMcpServer, AdminSkill, AdminTool, ConversationModelInfo, type AgentMcpServerLink, type AgentSkillLink, type AgentToolLink } from "../api";
+import { AdminAgent, AdminMcpServer, AdminSdkCapability, AdminSkill, AdminTool, ConversationModelInfo, type AgentMcpServerLink, type AgentSkillLink, type AgentToolLink } from "../api";
 import { Box } from "@mui/material";
 import { Loader2, Save, X, Pencil, Sparkles, Plug, Power, PowerOff, Lock, Plus, ShieldCheck } from "lucide-react";
 import { admin } from "../api";
@@ -17,6 +17,7 @@ export default function AgentCard({
     allSkills,
     allTools,
     allMcpServers,
+    allSdkCapabilities,
     onSaved,
   }: {
     agent: AdminAgent;
@@ -26,6 +27,7 @@ export default function AgentCard({
     allSkills: AdminSkill[];
     allTools: AdminTool[];
     allMcpServers: AdminMcpServer[];
+    allSdkCapabilities: AdminSdkCapability[];
     onSaved: () => void;
   }) {
     const { toast } = useToast();
@@ -56,6 +58,9 @@ export default function AgentCard({
     const [tlLinks, setTlLinks] = useState<AgentToolLink[]>(
       agent.toolLinks ?? [],
     );
+    const [sdkCapIds, setSdkCapIds] = useState<number[]>(
+      agent.sdkCapabilityIds ?? [],
+    );
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
@@ -68,6 +73,7 @@ export default function AgentCard({
       setMcpLinks(agent.mcpServerLinks ?? []);
       setSkLinks(agent.skillLinks ?? []);
       setTlLinks(agent.toolLinks ?? []);
+      setSdkCapIds(agent.sdkCapabilityIds ?? []);
     }, [agent, allModels]);
 
     function isSkillLocked(id: number) {
@@ -163,6 +169,7 @@ export default function AgentCard({
           mcpServerLinks: mcpLinks,
           skillLinks: skLinks,
           toolLinks: tlLinks,
+          sdkCapabilityIds: sdkCapIds,
         });
         setEditing(false);
         onSaved();
@@ -363,6 +370,51 @@ export default function AgentCard({
                   </div>
                 );
               })()}
+            </div>
+            )}
+
+            {/* SDK Capabilities (filesystem / bash). Distinct from MCP
+                servers above: these are SDK-native tools the runtime
+                injects based on attachment, not external subprocesses.
+                Toggle = full attach/detach (no inactive state — the row
+                is either present or absent on the junction). */}
+            {allSdkCapabilities.length > 0 && (
+            <div>
+              <label className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                <Plug className="h-3 w-3" />
+                SDK Capabilities
+              </label>
+              <div className="flex flex-wrap gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 p-2.5 min-h-[42px]">
+                {allSdkCapabilities.map((c) => {
+                  const selected = sdkCapIds.includes(c.id);
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      title={c.description ?? undefined}
+                      onClick={() =>
+                        setSdkCapIds((prev) =>
+                          selected ? prev.filter((id) => id !== c.id) : [...prev, c.id],
+                        )
+                      }
+                      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-150 ${
+                        selected
+                          ? "bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-800 ring-1 ring-emerald-200/80 shadow-sm"
+                          : "bg-white text-gray-400 ring-1 ring-gray-200 hover:bg-emerald-50 hover:text-emerald-600 hover:ring-emerald-200"
+                      }`}
+                    >
+                      {selected ? <Power className="h-3 w-3 text-emerald-500" /> : <Plus className="h-3 w-3" />}
+                      {c.name}
+                      {selected && <X className="h-3 w-3" />}
+                    </button>
+                  );
+                })}
+              </div>
+              {sdkCapIds.length > 0 && (
+                <p className="mt-1 text-[10px] text-gray-400">
+                  {sdkCapIds.length} attached
+                </p>
+              )}
             </div>
             )}
 
@@ -591,6 +643,7 @@ export default function AgentCard({
                   setSelectedModel(agent.modelId ? allModels.find((m) => m.id === agent.modelId) ?? null : null);
                   setMcpLinks(agent.mcpServerLinks ?? []);
                   setSkLinks(agent.skillLinks ?? []);
+                  setSdkCapIds(agent.sdkCapabilityIds ?? []);
                 }}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-200"
               >

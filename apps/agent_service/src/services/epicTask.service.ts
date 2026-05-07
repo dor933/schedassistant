@@ -67,7 +67,9 @@ export class EpicTaskService {
 
     // Find completed tasks in this stage — these are the ones that produced the PR
     const tasks = (stage as any).tasks as AgentTask[];
-    const completedTasks = tasks.filter((t) => t.status === "completed");
+    const completedTasks = tasks
+      .filter((t) => t.status === "completed")
+      .sort((a, b) => a.sortOrder - b.sortOrder);
     if (completedTasks.length === 0) {
       throw new Error(`No completed tasks found in stage "${stage.title}" to retry`);
     }
@@ -89,9 +91,13 @@ export class EpicTaskService {
     }
     const feedback = feedbackParts.join("\n\n") || "Changes requested on the PR. Please review and fix.";
 
-    // Reset each completed task and store feedback on the latest execution
+    // Sequential-within-stage rule (also applies to retries): only the
+    // lowest-sortOrder completed task flips back to `ready`; the rest go
+    // back to `pending` and are promoted one-by-one by
+    // `advanceNextTaskInStage` as each retry task completes.
     const retryTaskIds: string[] = [];
-    for (const task of completedTasks) {
+    for (let i = 0; i < completedTasks.length; i++) {
+      const task = completedTasks[i];
       // Store feedback on the latest execution for context
       const lastExec = await TaskExecution.findOne({
         where: { agentTaskId: task.id },
@@ -101,9 +107,10 @@ export class EpicTaskService {
         await lastExec.update({ feedback });
       }
 
-      // Reset task to ready so the orchestrator picks it up for retry
+      // First retry task is `ready` so the orchestrator picks it up; the
+      // rest stay `pending` and surface one-by-one as each completes.
       await task.update({
-        status: "ready" as AgentTaskStatus,
+        status: (i === 0 ? "ready" : "pending") as AgentTaskStatus,
         completedAt: null,
       });
       retryTaskIds.push(task.id);

@@ -236,19 +236,17 @@ export class PlatformCatalogService {
   ) {
     const skill = await Skill.findByPk(id);
     if (!skill) throw Object.assign(new Error("Skill not found."), { status: 404 });
-    if (skill.locked) {
-      // Locked skills are shipped-and-wired by the platform (see
-      // 20240101000049-add-locked-to-skills-and-seed-epic-task-workflow.js).
-      // Platform admins can still view them, but editing would break the
-      // seed guarantees that downstream migrations depend on.
-      throw Object.assign(
-        new Error("This skill is locked and cannot be edited."),
-        { status: 403 },
-      );
-    }
+    // Locked skills are seed-managed (see migration
+    // 20240101000049-add-locked-to-skills-and-seed-epic-task-workflow.js) and
+    // referenced by downstream code via `slug`. Platform admins can edit
+    // body fields (name, description, skillText) — slug stays immutable on
+    // locked rows so the seed-by-slug invariant the rest of the system
+    // depends on is preserved.
     const patch: Record<string, unknown> = {};
     if (data.name !== undefined) patch.name = data.name.trim();
-    if (data.slug !== undefined) patch.slug = data.slug?.trim() || null;
+    if (data.slug !== undefined && !skill.locked) {
+      patch.slug = data.slug?.trim() || null;
+    }
     if (data.description !== undefined) patch.description = data.description?.trim() || null;
     if (data.skillText !== undefined) patch.skillText = data.skillText;
     try {

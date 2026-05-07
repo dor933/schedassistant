@@ -2,12 +2,12 @@ import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { Agent } from "@scheduling-agent/database";
 import { getApplicationGraph } from "../deps";
-import { invokeApplicationAgent } from "../services/application.service";
+import { invokeApplicationAgent } from "./application.service";
 import { logger } from "../logger";
 
 /**
  * Synchronous tool that lets a primary agent invoke an application agent
- * in-process (the same code path the REST endpoint uses).
+ * in-process.
  *
  * Application agents are stateless deep-agent runs — each call is one-shot,
  * uses its own MemorySaver thread, and returns the final assistant text.
@@ -58,9 +58,8 @@ export function InvokeApplicationAgentTool(callerAgentId: string, userId: number
         callerAgent.id;
 
       // Prefix the request so the application agent can tell that the
-      // message originated from a primary delegation rather than a direct
-      // REST call from the end-user. Mirrors how `consult_agent` labels
-      // cross-agent requests.
+      // message originated from a primary delegation. Mirrors how
+      // `consult_agent` labels cross-agent requests.
       const prefixedRequest = `[Delegated from primary agent "${callerLabel}"]\n\n${request}`;
 
       logger.info("InvokeApplicationAgent: starting", {

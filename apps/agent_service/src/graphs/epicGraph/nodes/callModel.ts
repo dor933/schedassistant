@@ -44,13 +44,11 @@ import {
   ListMyRoundtablesTool,
   GetRoundtableOverviewTool,
 } from "../../../tools/roundtableRecallTools";
-import { ReadSessionFileTool } from "../../../tools/readSessionFileTool";
-import { GrepSessionFileTool } from "../../../tools/grepSessionFileTool";
 import {
   ListProjectsTool,
   ListRepositoriesTool,
+  GetRepositoryTool,
   CreateEpicPlanTool,
-  StartEpicTaskTool,
   PlanEpicTaskCodexTool,
   StartEpicTaskCodexTool,
   CompleteEpicTaskTool,
@@ -65,8 +63,10 @@ import {
   SearchEpicTasksByDateTool,
   GetEpicTaskStagesAndTasksTool,
   parseContinuationMarker,
+  StartAnthropicEpicTaskTool,
 } from "../../../tools/epicTaskTools";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
+import { UnsplashSearchPhotosTool } from "../../../tools/unsplashPhotoTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
@@ -74,6 +74,7 @@ import { drainSessionFileLedger } from "../../../workspace/sessionWorkspace";
 import { runAnthropicAgentSdk, shouldUseAgentSdk } from "../../../chat/anthropic/agentSdkRunner";
 import { runOpenAiCodexSdk, shouldUseCodexSdk } from "../../../chat/codex/codexSdkRunner";
 import { buildSubAgentDefinitions } from "../../../utils/buildSubAgentDefinitions.service";
+import { observeToolCall } from "../../../langfuse";
 
 // Cap the orchestrator's tool-call chain per chat turn. This is the EPIC
 // orchestrator, which legitimately chains many tool calls: setup checks
@@ -201,10 +202,12 @@ export async function epicCallModelNode(
     SaveEpisodicMemoryTool(agentId, userId, threadId),
     RecallEpisodicMemoryTool(agentId),
     GetThreadSummaryTool(agentId),
-    // Thread recall — same reason as basicGraph: gives the epic
-    // orchestrator a non-vector entry point to past single-chat / group
-    // conversations it owned, before the existing get_thread_summary →
-    // grep_session_file → read_session_file cascade.
+    // Thread recall — non-vector entry point into past single-chat /
+    // group conversations the epic orchestrator owned. After picking a
+    // thread, `get_thread_summary` returns the manifest and the agent
+    // reads files from `<workspacePath>/threads/<threadId>/` using its
+    // own filesystem tools (Read/Glob/Grep SDK built-ins or
+    // read_text_file/search_files via filesystem MCP).
     ListMyThreadsTool(agentId),
     // Roundtable recall — the epic orchestrator can pull short summaries
     // of past roundtables it participated in to inform planning. Same
@@ -212,8 +215,6 @@ export async function epicCallModelNode(
     // roundtable_agents for the row in question).
     ListMyRoundtablesTool(agentId),
     GetRoundtableOverviewTool(agentId),
-    ReadSessionFileTool(agentId, threadId),
-    GrepSessionFileTool(agentId, threadId),
     ListCronJobsTool(agentId),
     ListGoogleWorkspaceGrantsTool(agentId),
     ...agentSkillTools(agentId),
@@ -227,19 +228,29 @@ export async function epicCallModelNode(
     CreateEpicPlanTool(state.userId, agentId),
     // Vendor-conditional task-execution surface (slices 20 + 23):
     //   - Anthropic vendor: `start_epic_task` declares a sub-agent slice
-    //     plan, the orchestrator then fans out via `Task("<slug>", ...)`
+    //     plan, the orchestrator then fans out via `Task("<id>", ...)`
     //     calls in parallel.
     //   - OpenAI / Codex vendor: optional `plan_epic_task` (read-only
-    //     scout) + `start_epic_task_codex` (workspace-write execute).
+    //     scout) + `start_epic_task_codex` (detached workspace-write execute).
     //     One Codex session does the whole task end-to-end inside its
     //     own loop — no sub-agent fan-out (Codex SDK doesn't have a
     //     parallel-Task equivalent and concurrent codex sessions on
-    //     one repo race on the git index).
-    // `complete_epic_task` is shared — same lifecycle finalize for both.
+    //     one repo race on the git index). Codex auto-finalizes server-side;
+    //     poll `get_epic_status` — do not pair with `complete_epic_task`.
+    // `complete_epic_task` finalizes the Anthropic (`start_epic_task`) path only.
     ...(vendor.vendorSlug === "anthropic"
-      ? [StartEpicTaskTool(agentId)]
+      ? [StartAnthropicEpicTaskTool(agentId)]
       : vendor.vendorSlug === "openai"
-        ? [PlanEpicTaskCodexTool(agentId), StartEpicTaskCodexTool(agentId)]
+        ? [
+            PlanEpicTaskCodexTool(agentId),
+            StartEpicTaskCodexTool(agentId, {
+              threadId,
+              sessionWorkspacePath: state.sessionWorkspacePath ?? null,
+              userId,
+              groupId: state.groupId,
+              singleChatId: state.singleChatId,
+            }),
+          ]
         : []),
     CompleteEpicTaskTool({
       threadId,
@@ -271,8 +282,12 @@ export async function epicCallModelNode(
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))
     tools.push(ListRepositoriesTool());
+  if (has("get_repository"))
+    tools.push(GetRepositoryTool());
   if (has("send_file_to_user"))
     tools.push(SendFileToUserTool(agentId));
+  if (has("unsplash_search_photos"))
+    tools.push(UnsplashSearchPhotosTool());
   if (has("search_epic_tasks_by_date"))
     tools.push(SearchEpicTasksByDateTool());
   if (has("get_epic_task_stages_and_tasks"))
@@ -289,7 +304,7 @@ export async function epicCallModelNode(
   // ─── Anthropic Agent SDK runtime branch ────────────────────────────────────
   //
   // Same as basicGraph, plus an `onToolResult` observer that watches for the
-  // `[EPIC_CONTINUATION]` marker emitted by `ExecuteEpicTaskTool`. When seen,
+  // `[EPIC_CONTINUATION]` marker emitted by `start_epic_task`. When seen,
   // we capture the parsed continuation so the worker can auto-enqueue the next
   // task — exactly the same signal the legacy loop returned via
   // `state.epicContinuation`.
@@ -301,9 +316,9 @@ export async function epicCallModelNode(
   // the marker. We just need to flag the continuation; no second invoke needed.
   if (shouldUseAgentSdk(vendor.vendorSlug)) {
     // Same sub-agent fan-out as basicGraph — epic orchestrator can also call
-    // Task("<system-agent-slug>", ...) to delegate research / inspection work
+    // Task("<sub-agent id>", ...) to delegate research / inspection work
     // to specialists. Code-change execution still flows through the epic task
-    // tools (`ExecuteEpicTaskTool` etc.), unchanged.
+    // tools (`start_epic_task` etc.), unchanged.
     const subAgents = await buildSubAgentDefinitions({
       primaryAgentId: agentId,
       userId,
@@ -462,7 +477,16 @@ export async function epicCallModelNode(
           content = `Error: unknown tool "${tc.name ?? ""}".`;
         } else {
           try {
-            const rawResult = await t.invoke(tc.args ?? {});
+            // Tool execution surfaces in Langfuse as a child span of
+            // `agent_chat_turn` (or whichever parent observation is
+            // active) so retry-loop tool calls — list_skills,
+            // get_skill, get_epic_status, etc. — show up alongside the
+            // generation spans in the trace.
+            const rawResult = await observeToolCall(
+              tc.name ?? "unknown_tool",
+              tc.args ?? {},
+              () => t.invoke(tc.args ?? {}),
+            );
             if (typeof rawResult === "string") {
               content = rawResult;
             } else if (Array.isArray(rawResult) && rawResult.length > 0 && typeof rawResult[0] === "string") {

@@ -24,9 +24,9 @@ export class SystemController {
   //
   // System-wide `/codex-auth-json` endpoints removed in slice 14:
   // the auth.json is now stored per-org on `organization_vendor_api_keys`
-  // (key_type='auth_object'). The runner materialises it to a per-turn
-  // temp $HOME at invocation time. No system-wide file, no admin
-  // endpoint here.
+  // (key_type='auth_object'). The runner materialises it into a per-org
+  // Codex home at invocation time. No system-wide file, no admin endpoint
+  // here.
 
   /** Re-render /home/agent/.codex/config.toml from the mcp_servers table. */
   renderCodexConfigToml = async (_req: Request, res: Response) => {

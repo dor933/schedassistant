@@ -25,8 +25,6 @@ type AgentCreationAttributes = Optional<
   | "isLocked"
   | "organizationId"
   | "owningPrimaryAgentId"
-  | "allowSdkBuiltins"
-  | "allowSdkBash"
 >;
 
 class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements AgentAttributes {
@@ -50,8 +48,6 @@ class Agent extends Model<AgentAttributes, AgentCreationAttributes> implements A
   declare isLocked: boolean;
   declare organizationId: string;
   declare owningPrimaryAgentId: string | null;
-  declare allowSdkBuiltins: boolean;
-  declare allowSdkBash: boolean;
   declare createdAt: Date;
   declare updatedAt: Date;
 }
@@ -167,18 +163,6 @@ Agent.init(
       references: { model: "agents", key: "id" },
       onUpdate: "CASCADE",
       onDelete: "SET NULL",
-    },
-    allowSdkBuiltins: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false,
-      field: "allow_sdk_builtins",
-    },
-    allowSdkBash: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false,
-      field: "allow_sdk_bash",
     },
     createdAt: {
       type: DataTypes.DATE,

@@ -1,8 +1,21 @@
 import { z } from "zod";
+import type {
+  AnalystBrief,
+  EvidencePack,
+  WorkflowExecutionResult,
+} from "./analystTypes";
 
 export const INTENTS = [
   "stock",
   "sector",
+  "sector_conviction_leaderboard",
+  "sector_momentum_vs_conviction_divergence",
+  "week_over_week_sector_delta",
+  "stock_idea_discovery",
+  "feature_screen",
+  "factor_conditioned_backtest",
+  "comparison",
+  "market_regime_historical_playbook",
   "regime",
   "stock_sector",
   "stock_regime",
@@ -52,6 +65,14 @@ export const askGrahamyRequestSchema = z.object({
    * supply. Absent or empty → every classified key is built from scratch.
    */
   priorResearchObjects: z.array(passthroughRecord).optional(),
+  /**
+   * Optional. Existing pgCapability views the caller has cached for the
+   * classified intent (sector_conviction_leaderboard, sector_divergence,
+   * week_over_week_sector_delta, stock_idea_discovery, stock_vs_sector_comparison).
+   * agent_service skips the corresponding SQL when `cache_key` matches.
+   * Mirrors `priorResearchObjects` for the non-`stock_sector_regime` intents.
+   */
+  priorCapabilityViews: z.array(passthroughRecord).optional(),
 });
 
 export type AskGrahamyRequest = z.infer<typeof askGrahamyRequestSchema>;
@@ -89,6 +110,48 @@ export type Intent = (typeof INTENTS)[number];
 export type AnswerType = (typeof ANSWER_TYPES)[number];
 export type Confidence = "high" | "medium" | "low";
 export type ToolName = (typeof TOOL_NAMES)[number];
+export type ClassificationFocus = "risk" | "validated_evidence";
+export type FeatureScreenFactor =
+  | "valuation"
+  | "quality"
+  | "momentum"
+  | "growth"
+  | "leverage"
+  | "sector"
+  | "risk";
+
+export type FeatureScreenCriterion = {
+  factor: FeatureScreenFactor;
+  bucket: string;
+};
+
+export type FactorBacktestFactor =
+  | "valuation"
+  | "quality"
+  | "momentum"
+  | "growth"
+  | "leverage"
+  | "sector";
+
+export type FactorBacktestHorizon =
+  | "20-day"
+  | "40-day"
+  | "60-day"
+  | "120-day"
+  | "252-day";
+
+export type FactorBacktestCriterion = {
+  factor: FactorBacktestFactor;
+  bucket: string;
+};
+
+export type FactorBacktestClassification = {
+  criteria: FactorBacktestCriterion[];
+  horizon?: FactorBacktestHorizon;
+  unsupportedHorizon?: string;
+  unsupportedCriteria?: string[];
+  notes?: string[];
+};
 
 export type Classification = {
   intent: Intent;
@@ -96,10 +159,47 @@ export type Classification = {
   sectors: string[];
   regimeRequested: boolean;
   isFollowUp: boolean;
+  focus?: ClassificationFocus;
+  featureCriteria?: FeatureScreenCriterion[];
+  factorBacktest?: FactorBacktestClassification;
+  comparison?: ComparisonClassification;
   requiresTools: ToolName[];
   confidence: Confidence;
   warnings: string[];
 };
+
+export type ComparisonAnchor =
+  | {
+      type: "stock";
+      symbol: string;
+    }
+  | {
+      type: "sector";
+      sector?: string;
+    }
+  | {
+      type: "implicit_stock_sector";
+      sector?: string;
+    };
+
+export type ComparisonClassification =
+  | {
+      comparisonType: "stock_vs_sector";
+      left: Extract<ComparisonAnchor, { type: "stock" }>;
+      right:
+        | Extract<ComparisonAnchor, { type: "sector" }>
+        | Extract<ComparisonAnchor, { type: "implicit_stock_sector" }>;
+    }
+  | {
+      comparisonType: "sector_vs_sector";
+      left: Extract<ComparisonAnchor, { type: "sector" }>;
+      right: Extract<ComparisonAnchor, { type: "sector" }>;
+    }
+  | {
+      comparisonType: "symbol_vs_symbol";
+      left: Extract<ComparisonAnchor, { type: "stock" }>;
+      right: Extract<ComparisonAnchor, { type: "stock" }>;
+    };
 
 export type SnapshotName =
   | "daily_brief"
@@ -121,6 +221,12 @@ export type FreshnessMetadata = {
   dataFreshness?: string;
   stale?: boolean;
   staleReason?: string;
+};
+
+export type PublicFreshnessView = {
+  dataThrough?: string;
+  state?: "fresh" | "stale" | "unknown";
+  warning?: string;
 };
 
 export type ConversationContext = {
@@ -277,6 +383,333 @@ export type PathRiskView = {
   notes: string[];
 };
 
+export type SectorLeaderboardRowView = {
+  sector: string;
+  rank: number;
+  convictionScorePct?: number;
+  convictionBucket?: string;
+  evidenceStrength?: string;
+  medianForwardReturnPct?: number;
+  hitRatePct?: number;
+  momentumBucket?: string;
+  priceMomentumSeparation?: string;
+  defensiveCyclicalLabel?: string;
+};
+
+export type SectorLeaderboardView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source:
+    | "pg_sector_peer_daily"
+    | "pg_sector_regime_forward_agg"
+    | "pg_sector_analog_bucket";
+  period: "latest" | "this_week";
+  rankingBasis: "conviction" | "historical_forward" | "divergence";
+  asOfDate?: string;
+  rows: SectorLeaderboardRowView[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
+export type SectorDivergenceRowView = {
+  sector: string;
+  rank: number;
+  convictionScorePct?: number;
+  convictionBucket?: string;
+  momentumScorePct?: number;
+  momentumBucket?: string;
+  divergenceType?: string;
+  hitRatePct?: number;
+  medianForwardReturnPct?: number;
+  evidenceStrength?: string;
+  interpretationBullets: string[];
+};
+
+export type SectorDivergenceView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_sector_peer_daily";
+  period: "latest";
+  asOfDate?: string;
+  evaluatedSectorCount?: number;
+  clearDivergenceCount?: number;
+  rows: SectorDivergenceRowView[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
+export type SectorDeltaRankingBasis =
+  | "conviction_delta"
+  | "momentum_delta"
+  | "deterioration"
+  | "overall_change";
+
+export type SectorDeltaDirection = "improved" | "deteriorated" | "flat";
+
+export type SectorDeltaRowView = {
+  sector: string;
+  rank: number;
+  currentConvictionScorePct?: number;
+  priorConvictionScorePct?: number;
+  convictionDeltaPct?: number;
+  currentConvictionBucket?: string;
+  priorConvictionBucket?: string;
+  currentMomentumBucket?: string;
+  priorMomentumBucket?: string;
+  momentumDeltaPct?: number;
+  direction: SectorDeltaDirection;
+  interpretationBullets: string[];
+};
+
+export type SectorDeltaView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_sector_weekly_history";
+  period: "week_over_week";
+  currentAsOfDate?: string;
+  priorAsOfDate?: string;
+  rankingBasis: SectorDeltaRankingBasis;
+  rows: SectorDeltaRowView[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
+export type StockIdeaRowView = {
+  symbol: string;
+  companyName?: string;
+  sector?: string;
+  rank: number;
+  convictionScorePct?: number;
+  convictionBucket?: string;
+  evidenceStrength?: string;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  p25ReturnPct?: number;
+  p75ReturnPct?: number;
+  momentumBucket?: string;
+  qualityBucket?: string;
+  valuationBucket?: string;
+  pathRiskBucket?: string;
+  p10MaxDrawdownPct?: number;
+  recoveredByHorizonRatePct?: number;
+  reasonBullets: string[];
+};
+
+export type StockIdeaView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_features_daily";
+  asOfDate?: string;
+  rankingBasis:
+    | "setup_quality"
+    | "conviction"
+    | "historical_forward"
+    | "risk_adjusted";
+  rows: StockIdeaRowView[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
+export type FeatureScreenRowView = {
+  symbol: string;
+  companyName?: string;
+  sector?: string;
+  rank: number;
+  valuationBucket?: string;
+  qualityBucket?: string;
+  momentumBucket?: string;
+  growthBucket?: string;
+  leverageBucket?: string;
+  convictionBucket?: string;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  reasonBullets: string[];
+};
+
+export type FeatureScreenView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_current_features";
+  asOfDate?: string;
+  screenCriteria: FeatureScreenCriterion[];
+  rows: FeatureScreenRowView[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
+export type FactorBacktestView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_factor_history";
+  horizon: FactorBacktestHorizon;
+  criteria: FactorBacktestCriterion[];
+  sampleSize?: number;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  p25ReturnPct?: number;
+  p75ReturnPct?: number;
+  sampleAdequacy?: "ROBUST" | "ADEQUATE" | "THIN" | "UNKNOWN";
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
+export type ComparisonSideMetrics = {
+  convictionScorePct?: number;
+  convictionBucket?: string;
+  valuationBucket?: string;
+  momentumBucket?: string;
+  qualityBucket?: string;
+  growthBucket?: string;
+  leverageBucket?: string;
+  hitRatePct?: number;
+  medianReturnPct?: number;
+  pathRiskBucket?: string;
+};
+
+export type ComparisonSideView = {
+  type: "stock" | "sector";
+  label: string;
+  symbol?: string;
+  sector?: string;
+  metrics: ComparisonSideMetrics;
+};
+
+export type ComparisonDeltaMetric =
+  | "conviction"
+  | "valuation"
+  | "momentum"
+  | "quality"
+  | "growth"
+  | "leverage"
+  | "historical_forward"
+  | "path_risk";
+
+export type ComparisonDeltaView = {
+  metric: ComparisonDeltaMetric;
+  leftValue?: number | string;
+  rightValue?: number | string;
+  delta?: number;
+  interpretationBucket: "left_stronger" | "right_stronger" | "similar" | "mixed";
+  explanation: string;
+};
+
+export type ComparisonView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  comparisonType: "stock_vs_sector" | "sector_vs_sector" | "symbol_vs_symbol";
+  source: "pg_current_features" | "pg_sector_peer_daily";
+  asOfDate?: string;
+  left: ComparisonSideView;
+  right: ComparisonSideView;
+  deltas: ComparisonDeltaView[];
+  summaryBullets: string[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
+export type RegimeHistoricalPlaybookRole = "leader" | "laggard" | "mixed";
+
+export type RegimeHistoricalPlaybookRowView = {
+  sector: string;
+  rank: number;
+  role: RegimeHistoricalPlaybookRole;
+  hitRatePct?: number;
+  medianForwardReturnPct?: number;
+  evidenceStrength?: string;
+  interpretationBullets: string[];
+};
+
+export type RegimeHistoricalPlaybookRiskView = {
+  riskLabel: string;
+  riskBucket?: string;
+  interpretation: string;
+};
+
+export type RegimeHistoricalPlaybookView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "pg_regime_history";
+  regime?: string;
+  asOfDate?: string;
+  rows: RegimeHistoricalPlaybookRowView[];
+  risks: RegimeHistoricalPlaybookRiskView[];
+  summaryBullets: string[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
+export type ValidatedEdgeEvidenceState =
+  | "edge_evidence_strong"
+  | "edge_evidence_present"
+  | "mixed"
+  | "insufficient_data"
+  | "unavailable";
+
+export type LiveConfirmationBucket =
+  | "confirmed"
+  | "mixed"
+  | "not_confirmed"
+  | "deteriorating"
+  | "insufficient_live_data";
+
+export type DecayRiskBucket =
+  | "no_recent_decay_warning"
+  | "watch"
+  | "decay_elevated"
+  | "insufficient_decay_data";
+
+export type ValidatedEdgeEvidenceAnchorView = {
+  type: "stock" | "sector" | "regime" | "comparison";
+  symbol?: string;
+  sector?: string;
+  regime?: string;
+  label?: string;
+};
+
+export type ValidatedEdgeEvidenceHorizonView = {
+  horizon: string;
+  hitRatePct?: number;
+  alphaBucket?: string;
+  evidenceStrength?: string;
+};
+
+export type ValidatedEdgeEvidenceView = {
+  viewSchemaVersion: number;
+  state: EvidenceState;
+  source: "client_api_research_object";
+  anchor: ValidatedEdgeEvidenceAnchorView;
+  evidenceState?: ValidatedEdgeEvidenceState;
+  edgeCountBucket?: string;
+  eventSampleBucket?: string;
+  horizonEvidence?: ValidatedEdgeEvidenceHorizonView[];
+  baseRateSummary?: {
+    sampleAdequacy?: string;
+    hitRatePct?: number;
+    medianReturnPct?: number;
+  };
+  pipelineRiskBand?: string;
+  liveConfirmationBucket?: LiveConfirmationBucket;
+  decayRiskBucket?: DecayRiskBucket;
+  interpretationBullets: string[];
+  freshness: PublicFreshnessView;
+  warnings: string[];
+};
+
+export type PgCapabilityViews = {
+  sectorLeaderboardView?: SectorLeaderboardView;
+  sectorDivergenceView?: SectorDivergenceView;
+  sectorDeltaView?: SectorDeltaView;
+  stockIdeaView?: StockIdeaView;
+  featureScreenView?: FeatureScreenView;
+  factorBacktestView?: FactorBacktestView;
+  comparisonView?: ComparisonView;
+  regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
+};
+
+export type PipelineOverlayViews = {
+  validatedEdgeEvidenceView?: ValidatedEdgeEvidenceView;
+};
+
 export type FiveQuestionCoverage = {
   whatMattersNow: string[];
   whyNow?: string;
@@ -314,6 +747,13 @@ export type CachedResearchObject = {
   warnings: string[];
 };
 
+/**
+ * Re-export of the pgCapability cache shape so consumers (graph state,
+ * response meta, upstream caller types) live in one place. Definition
+ * itself sits next to the registry that produces it.
+ */
+export type { CachedCapabilityView } from "./pgCapabilities/types";
+
 export type PublicResearchView = {
   objectType: "stock" | "sector" | "regime" | "mixed";
   headline: Record<string, unknown>;
@@ -325,6 +765,15 @@ export type PublicResearchView = {
   probabilisticEvidence: Record<string, ProbabilisticEvidenceView>;
   pathRisk: Record<string, PathRiskView>;
   edgeEvidence: Record<string, EdgeEvidenceView>;
+  sectorLeaderboardView?: SectorLeaderboardView;
+  sectorDivergenceView?: SectorDivergenceView;
+  sectorDeltaView?: SectorDeltaView;
+  stockIdeaView?: StockIdeaView;
+  featureScreenView?: FeatureScreenView;
+  factorBacktestView?: FactorBacktestView;
+  comparisonView?: ComparisonView;
+  regimeHistoricalPlaybookView?: RegimeHistoricalPlaybookView;
+  validatedEdgeEvidenceView?: ValidatedEdgeEvidenceView;
   evidence: Record<string, unknown>;
   freshness: FreshnessMetadata;
   warnings: string[];
@@ -342,6 +791,29 @@ export type UiHints = {
   cards: unknown[];
   tables: unknown[];
   suggestedFollowups: string[];
+};
+
+export type CompoundResearchWorkflowName =
+  | "regime_to_stock_screen"
+  | "sector_delta_to_stock_screen"
+  | "sector_divergence_to_stock_screen"
+  | "feature_screen_plus_backtest"
+  | "stock_deep_dive_stack"
+  | "idea_to_compare_and_risk";
+
+export type CompoundResearchContext = {
+  workflowName: CompoundResearchWorkflowName;
+  /**
+   * Backward-compatible marker for the first shipped compound path. Internal
+   * only; never serialized into public research_view/history.
+   */
+  planType?: "regime_sector_to_stock_screen" | "approved_multi_step_workflow";
+  leadingSectors?: string[];
+  selectedSectors?: string[];
+  selectedSymbol?: string;
+  featureScreenCriteria?: FeatureScreenCriterion[];
+  candidatePipelineLabels?: Record<string, string>;
+  warnings: string[];
 };
 
 export type ResponseMeta = {
@@ -364,6 +836,20 @@ export type ResponseMeta = {
    * cache hit.
    */
   researchObjectsUpdated?: CachedResearchObject[];
+  /** Cache-key listing for this turn's pgCapability view (max one per turn). */
+  capabilityViewKeys?: string[];
+  capabilityViewCache?: {
+    hits: number;
+    misses: number;
+    writes: number;
+  };
+  /**
+   * Subset of capability views freshly built this turn (cache miss). The
+   * upstream client persists them in its `cached_capability_views` table for
+   * reuse on future turns within the same `as_of_date`. Empty when the
+   * intent had no capability or the call was a cache hit.
+   */
+  capabilityViewsUpdated?: import("./pgCapabilities/types").CachedCapabilityView[];
   upstreamLatency?: Partial<Record<SnapshotName, number>>;
   moatGuardResult?: "clean" | "cleaned" | "failed";
 };
@@ -395,6 +881,44 @@ export type AskGrahamyState = {
    * (used as-is from priorResearchObjects) are NOT included. */
   researchObjectsUpdated?: CachedResearchObject[];
   researchObjectCacheStats?: {
+    hits: number;
+    misses: number;
+    writes: number;
+  };
+  /**
+   * pgCapability views supplied by the upstream caller (StocksScanner), each
+   * keyed by `cache_key`. Used as the cache-hit lookup inside
+   * `executePgCapabilitiesWithCache` exactly the way `priorResearchObjects`
+   * is used by `buildResearchObjects`.
+   */
+  priorCapabilityViews?: import("./pgCapabilities/types").CachedCapabilityView[];
+  pgCapabilityViews?: PgCapabilityViews;
+  pipelineOverlayViews?: PipelineOverlayViews;
+  /**
+   * Internal public-safe summary for compound research answer synthesis.
+   * It is not part of AskGrahamyResponse and must not be persisted as
+   * research_view. It contains no ResearchPlan, raw rows, SQL, or internals.
+   */
+  compoundResearchContext?: CompoundResearchContext;
+  /**
+   * Internal normalized result from approved multi-step workflow execution.
+   * Built only from public-safe views and never serialized to browser/history.
+   */
+  workflowExecutionResult?: WorkflowExecutionResult;
+  /**
+   * Internal analyst orchestration layer. Built only from public-safe views
+   * and used to guide answer synthesis; not exposed as a customer payload in
+   * Phase 1.
+   */
+  evidencePack?: EvidencePack;
+  analystBrief?: AnalystBrief;
+  /**
+   * Subset of capability views freshly built this turn (cache miss). The
+   * upstream caller persists them after receiving the response. Empty when
+   * the intent had no matching capability or the call was a cache hit.
+   */
+  capabilityViewsUpdated?: import("./pgCapabilities/types").CachedCapabilityView[];
+  capabilityViewCacheStats?: {
     hits: number;
     misses: number;
     writes: number;

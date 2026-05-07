@@ -11,12 +11,12 @@
     RUN npm run build --workspace=@scheduling-agent/database
     RUN npm run build --workspace=agent_service
 
-    # TypeScript compiles only .ts → dist/. The askGrahamy v6 SQL files are
-    # loaded at runtime via fs.readFileSync from `__dirname/queries`, which
-    # resolves to `dist/askGrahamy/queries` in prod. Copy them across so the
-    # research-object builder can find them.
-    RUN cp -r apps/agent_service/src/askGrahamy/queries \
-              apps/agent_service/dist/askGrahamy/queries
+    # TypeScript compiles only .ts → dist/. Ask Grahamy SQL files are loaded
+    # at runtime via fs.readFileSync from `__dirname/pgCapabilities/queries`
+    # (both the v6 Research Object queries and PG-native capability queries).
+    # Copy the runtime asset folder into dist.
+    RUN cp -r apps/agent_service/src/askGrahamy/pgCapabilities/queries \
+              apps/agent_service/dist/askGrahamy/pgCapabilities/queries
     
     # --- Stage 2: Production ---
     FROM node:22-alpine AS runner
