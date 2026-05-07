@@ -160,6 +160,74 @@ sector_base_rate AS (
   FROM regime_valuation_matrix
 ),
 
+sector_path_entries AS (
+  SELECT
+    h.symbol,
+    h.as_of_date AS entry_date,
+    h.price::numeric AS entry_price
+  FROM md_historical_features_daily h
+  WHERE h.sector = (SELECT target_sector FROM config)
+    AND h.as_of_date = (SELECT target_date FROM config)
+    AND h.is_delisted = false
+    AND h.price > 0
+),
+sector_path_days AS (
+  SELECT
+    e.symbol,
+    e.entry_date,
+    e.entry_price,
+    p.price::numeric AS path_price,
+    p.as_of_date AS path_date,
+    ROW_NUMBER() OVER (PARTITION BY e.symbol, e.entry_date ORDER BY p.as_of_date) - 1 AS path_day
+  FROM sector_path_entries e
+  JOIN LATERAL (
+    SELECT h2.as_of_date, h2.price
+    FROM md_historical_features_daily h2
+    WHERE h2.symbol = e.symbol
+      AND h2.as_of_date >= e.entry_date
+      AND h2.as_of_date <= e.entry_date + INTERVAL '120 days'
+      AND h2.price > 0
+    ORDER BY h2.as_of_date
+    LIMIT 61
+  ) p ON true
+),
+sector_path_stats AS (
+  SELECT
+    symbol,
+    entry_date,
+    entry_price,
+    COUNT(*) AS observed_days,
+    MIN((path_price - entry_price) / NULLIF(entry_price, 0)) AS max_drawdown,
+    MAX(path_day) AS last_day,
+    MAX(CASE WHEN path_day = 60 THEN path_price ELSE NULL END) AS price_at_60,
+    MAX(CASE WHEN (path_price - entry_price) / NULLIF(entry_price, 0) >= 0 THEN 1 ELSE 0 END) AS recovered
+  FROM sector_path_days
+  GROUP BY symbol, entry_date, entry_price
+),
+sector_path_risk AS (
+  SELECT
+    COUNT(*) FILTER (WHERE observed_days >= 40) AS path_n,
+    AVG(CASE WHEN (price_at_60 - entry_price) / NULLIF(entry_price, 0) < 0 THEN 1.0 ELSE 0.0 END) * 100 AS loss_rate_h60_pct,
+    AVG(CASE WHEN (price_at_60 - entry_price) / NULLIF(entry_price, 0) <= -0.10 THEN 1.0 ELSE 0.0 END) * 100 AS severe_loss_rate_h60_pct,
+    PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY max_drawdown DESC) * 100 AS p10_max_drawdown_pct,
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY max_drawdown DESC) * 100 AS p25_max_drawdown_pct,
+    MIN(max_drawdown) * 100 AS worst_max_drawdown_pct,
+    AVG(CASE WHEN max_drawdown <= -0.05 THEN 1.0 ELSE 0.0 END) * 100 AS prob_drawdown_gt_5_pct,
+    AVG(CASE WHEN max_drawdown <= -0.10 THEN 1.0 ELSE 0.0 END) * 100 AS prob_drawdown_gt_10_pct,
+    AVG(CASE WHEN max_drawdown <= -0.15 THEN 1.0 ELSE 0.0 END) * 100 AS prob_drawdown_gt_15_pct,
+    AVG(CASE WHEN max_drawdown <= -0.20 THEN 1.0 ELSE 0.0 END) * 100 AS prob_drawdown_gt_20_pct,
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY CASE WHEN recovered = 1 THEN observed_days::float ELSE NULL END) AS median_recovery_days,
+    AVG(CASE WHEN recovered = 1 THEN 1.0 ELSE 0.0 END) * 100 AS recovered_by_horizon_rate_pct,
+    CASE
+      WHEN COUNT(*) FILTER (WHERE observed_days >= 40) < 30  THEN 'INSUFFICIENT'
+      WHEN COUNT(*) FILTER (WHERE observed_days >= 40) < 100 THEN 'WEAK'
+      WHEN COUNT(*) FILTER (WHERE observed_days >= 40) < 500 THEN 'ADEQUATE'
+      ELSE 'ROBUST'
+    END AS sample_adequacy
+  FROM sector_path_stats
+  WHERE observed_days >= 40
+),
+
 assembled AS (
   SELECT
     cfg.target_sector,
@@ -344,6 +412,24 @@ SELECT
                      || 'decay posture must be resolved by application layer via SQLite. '
                      || 'Sector RSI / valuation crowding signals and analyst tilt available in deep mode (V5.2).'
       )
+    ),
+
+    'path_risk_base', JSONB_BUILD_OBJECT(
+      'source',                        'pg_daily_price_path',
+      'horizon',                       '60-day',
+      'n',                             (SELECT path_n FROM sector_path_risk),
+      'loss_rate_h60_pct',             (SELECT ROUND(loss_rate_h60_pct::numeric, 2) FROM sector_path_risk),
+      'severe_loss_rate_h60_pct',      (SELECT ROUND(severe_loss_rate_h60_pct::numeric, 2) FROM sector_path_risk),
+      'p10_max_drawdown_pct',          (SELECT ROUND(p10_max_drawdown_pct::numeric, 2) FROM sector_path_risk),
+      'p25_max_drawdown_pct',          (SELECT ROUND(p25_max_drawdown_pct::numeric, 2) FROM sector_path_risk),
+      'worst_max_drawdown_pct',        (SELECT ROUND(worst_max_drawdown_pct::numeric, 2) FROM sector_path_risk),
+      'prob_drawdown_gt_5_pct',        (SELECT ROUND(prob_drawdown_gt_5_pct::numeric, 2) FROM sector_path_risk),
+      'prob_drawdown_gt_10_pct',       (SELECT ROUND(prob_drawdown_gt_10_pct::numeric, 2) FROM sector_path_risk),
+      'prob_drawdown_gt_15_pct',       (SELECT ROUND(prob_drawdown_gt_15_pct::numeric, 2) FROM sector_path_risk),
+      'prob_drawdown_gt_20_pct',       (SELECT ROUND(prob_drawdown_gt_20_pct::numeric, 2) FROM sector_path_risk),
+      'median_recovery_days',          (SELECT ROUND(median_recovery_days::numeric, 1) FROM sector_path_risk),
+      'recovered_by_horizon_rate_pct', (SELECT ROUND(recovered_by_horizon_rate_pct::numeric, 2) FROM sector_path_risk),
+      'sample_adequacy',               (SELECT sample_adequacy FROM sector_path_risk)
     ),
 
     'compliance', JSONB_BUILD_OBJECT(
