@@ -131,6 +131,28 @@ regime_base_rate AS (
   FROM sector_valuation_matrix
 ),
 
+-- feeds: deriveForwardPerformance
+-- Weighted percentile approximation of h60 forward returns across all
+-- (sector, valuation_bucket) cells in this regime. Uses each cell's median_h60
+-- weighted by n_with_h60 via generate_series repetition to produce p25/p50/p75.
+-- This is an approximation (median-of-cell-medians weighted by count), not
+-- a true row-level percentile — identical limitation applies to sector query.
+regime_forward_pct AS (
+  SELECT
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY median_h60) AS p25_h60,
+    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY median_h60) AS median_h60,
+    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY median_h60) AS p75_h60
+  FROM (
+    SELECT
+      s.median_h60
+    FROM sector_valuation_matrix s
+    -- Weight each cell's median by its observation count (capped at 50 reps
+    -- to avoid runaway expansion; preserves rank ordering for percentiles).
+    JOIN LATERAL generate_series(1, LEAST(s.n_with_h60, 50)) ON true
+    WHERE s.median_h60 IS NOT NULL
+  ) weighted_cells
+),
+
 -- Rollups (by sector, by valuation)
 sector_rollup AS (
   SELECT
@@ -192,6 +214,11 @@ assembled AS (
     rbr.wins_h252                                           AS base_wins_h252,
     rbr.total_h252                                          AS base_total_h252,
 
+    -- feeds: deriveForwardPerformance
+    rfp.p25_h60                                             AS base_p25_h60,
+    rfp.median_h60                                          AS base_median_h60,
+    rfp.p75_h60                                             AS base_p75_h60,
+
     (SELECT JSONB_AGG(JSONB_BUILD_OBJECT(
         'sector',           sector,
         'n',                n_with_h60,
@@ -237,6 +264,7 @@ assembled AS (
   LEFT JOIN benchmark_tnx bt      ON true
   LEFT JOIN universe_census uc    ON true
   LEFT JOIN regime_base_rate rbr  ON true
+  LEFT JOIN regime_forward_pct rfp ON true
 )
 
 SELECT
@@ -289,18 +317,37 @@ SELECT
       'top_leaders_today',       COALESCE(a.top_leaders_json, '[]'::jsonb)
     ),
 
+    -- feeds: deriveForwardPerformance, deriveProbabilisticEvidence
     -- Base-rate framing (MV-only). Deep mode (V5.2) provides onset-specific
     -- forward returns computed from SP500 at each episode's start date.
+    -- n_observations and sample_adequacy feed probabilisticEvidence state check.
+    -- h60_p25_pct / h60_median_pct / h60_p75_pct feed deriveForwardPerformance
+    -- distribution output (weighted approximation from per-cell medians).
     'historical_base_rate', JSONB_BUILD_OBJECT(
       'n_observations',          a.base_n,
       'h60_avg_pct',             ROUND((COALESCE(a.base_avg_h60,0) * 100)::numeric, 2),
       'h60_hit_rate',            ROUND((a.base_wins_h60::numeric / NULLIF(a.base_total_h60, 0) * 100), 1),
+      'h60_median_pct',          ROUND((COALESCE(a.base_median_h60,0) * 100)::numeric, 2),
+      'h60_p25_pct',             ROUND((COALESCE(a.base_p25_h60,0) * 100)::numeric, 2),
+      'h60_p75_pct',             ROUND((COALESCE(a.base_p75_h60,0) * 100)::numeric, 2),
       'h252_hit_rate',           ROUND((a.base_wins_h252::numeric / NULLIF(a.base_total_h252, 0) * 100), 1),
+      -- feeds: deriveProbabilisticEvidence (state: 'partial' -> 'complete' when ADEQUATE+)
+      'sample_adequacy',
+        CASE
+          WHEN COALESCE(a.base_n, 0) < 200  THEN 'INSUFFICIENT'
+          WHEN a.base_n < 500               THEN 'WEAK'
+          WHEN a.base_n < 2000              THEN 'ADEQUATE'
+          ELSE                                   'ROBUST'
+        END,
       'framing_note',            'Unconditional Monday-sampled forward-return aggregate '
                               || 'across ALL historical observations where regime matched. '
                               || 'For episode-onset-specific returns, use deep mode (V5.2).'
     ),
 
+    -- feeds: deriveRegimeInvalidationSignals, deriveRegimeActiveSignals
+    -- sector_rollup: per-sector hit_rate_h60 and n allow TypeScript to flag
+    -- sectors with WEAK hit-rate in this regime (invalidation signal) and
+    -- sectors with STRONG breadth (active signal).
     'under_which_conditions', JSONB_BUILD_OBJECT(
       'sector_rollup',           COALESCE(a.sector_rollup_json, '[]'::jsonb),
       'valuation_rollup',        COALESCE(a.valuation_rollup_json, '[]'::jsonb),
@@ -331,7 +378,11 @@ SELECT
     'current_market_regime',   a.current_market_regime,
     'raw_vix_close',           a.vix_close,
     'raw_sp500_perf_4w',       a.sp500_perf_4w,
-    'raw_base_avg_h60',        a.base_avg_h60
+    'raw_base_avg_h60',        a.base_avg_h60,
+    'raw_base_median_h60',     a.base_median_h60,
+    'raw_base_p25_h60',        a.base_p25_h60,
+    'raw_base_p75_h60',        a.base_p75_h60,
+    'raw_base_n',              a.base_n
   ) AS debug_payload
 
 FROM assembled a;
