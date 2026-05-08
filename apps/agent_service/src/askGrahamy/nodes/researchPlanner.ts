@@ -131,8 +131,14 @@ async function maybeRunResearchPlanner(
     state.researchObjectsUpdated = execution.researchObjectsUpdated ?? [];
     state.researchObjectCacheStats =
       execution.researchObjectCacheStats ?? { hits: 0, misses: 0, writes: 0 };
-    state.capabilityViewsUpdated = [];
-    state.capabilityViewCacheStats = { hits: 0, misses: 0, writes: 0 };
+    // Compound-research executors thread freshly built capability views
+    // through `execution.capabilityViewsUpdated` so SS can persist them
+    // into `cached_capability_views`. Previously this was hard-coded to
+    // [] which meant compound-flow capability views (e.g. feature_screen
+    // built inside a sector-to-screen workflow) were never persisted.
+    state.capabilityViewsUpdated = execution.capabilityViewsUpdated ?? [];
+    state.capabilityViewCacheStats =
+      execution.capabilityViewCacheStats ?? { hits: 0, misses: 0, writes: 0 };
     state.workflowExecutionResult = execution.workflowExecutionResult;
     state.compoundResearchContext = execution.compoundResearchContext;
     state.warnings.push(...execution.warnings);

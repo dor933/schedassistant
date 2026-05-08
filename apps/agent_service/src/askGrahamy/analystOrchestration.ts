@@ -832,20 +832,24 @@ function detectMissingEvidence(input: {
     bullets.push("Path-risk evidence is partial.");
   }
 
+  // Validated pipeline edge evidence is a BONUS layer on top of the PG
+  // Research Object stack — its absence is the common case and must not be
+  // surfaced as a "missing evidence" hedge in user-facing answers. Only flag
+  // it when the user explicitly asked for validated-pipeline-evidence (in
+  // which case the absence really is the answer).
   if (
-    ["stock_opinion", "sector_analysis", "regime_analysis", "validated_pipeline_evidence"].includes(
-      input.questionType,
-    ) &&
+    input.questionType === "validated_pipeline_evidence" &&
     !input.pipelineEvidence
   ) {
-    bullets.push("Pipeline validated evidence was not loaded for this answer.");
+    bullets.push("Pipeline validated evidence is unavailable for this anchor.");
   }
 
-  if (input.freshness?.state === "stale") {
-    bullets.push(input.freshness.warning ?? "Freshness is stale.");
-  } else if (input.freshness?.state === "unknown") {
-    bullets.push("Freshness is unknown; do not call the data current.");
-  }
+  // Pipeline-snapshot freshness ("daily_brief"/snapshots.freshness) is
+  // supplemental, not canonical. Postgres per-view `asOfDate` /
+  // `freshness.dataThrough` is what the model anchors on. Do NOT surface
+  // pipeline-snapshot freshness state as a "data limitations" bullet — that
+  // produces phrases like "רמת הטריות מסומנת כלא ידועה" which contradict
+  // the actual evidence layer the answer is built from.
 
   const factor = input.pgViews?.factorBacktestView;
   if (factor?.sampleAdequacy === "THIN" || (factor?.sampleSize ?? 100) < 30) {
@@ -865,13 +869,10 @@ function detectMissingEvidence(input: {
   ) {
     bullets.push("Factor backtest evidence is unavailable.");
   }
-  const pipeline = input.pipelineViews?.validatedEdgeEvidenceView;
-  if (pipeline && !pipeline.liveConfirmationBucket) {
-    bullets.push("Live confirmation bucket is unavailable.");
-  }
-  if (pipeline && !pipeline.decayRiskBucket) {
-    bullets.push("Decay/caution bucket is unavailable.");
-  }
+  // Pipeline overlay sub-buckets (live confirmation, decay/caution) are
+  // optional aggregate-context fields. Their absence is not "missing
+  // evidence" — it just means the overlay was not produced this turn. Do
+  // not push them into missingEvidence.
   return [...new Set(bullets)].slice(0, 8);
 }
 

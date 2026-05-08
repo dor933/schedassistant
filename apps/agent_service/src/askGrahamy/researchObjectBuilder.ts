@@ -1,6 +1,7 @@
 import { logger } from "../logger";
 import { isRecord, stringValue } from "./snapshotClient";
 import { runResearchQuery } from "./researchQueryClient";
+import { queryExternalReadonly } from "../utils/externalReadonlyDb";
 import { PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION } from "./types";
 import type {
   CachedResearchObject,
@@ -150,8 +151,11 @@ export async function buildResearchObjects(input: {
     }
   }
 
-  if (classification.regimeRequested) {
-    const regime = inferRegime(toolOutputs.get_market_context, objects);
+  // The regime Research Object is loaded for every turn — it is the canonical
+  // source of the current market regime label that the system prompt and the
+  // analyst layer reason from. Pipeline `daily_brief` is only supplemental.
+  {
+    const regime = await resolveCurrentRegime(toolOutputs.get_market_context, objects);
     if (regime) {
       const cacheKey = buildResearchObjectCacheKey("REGIME", "MARKET", asOfDate);
       const prior = priorIndex.get(cacheKey);
@@ -2510,16 +2514,47 @@ function buildWhyNowText(input: {
   return fragments.join(" ") + ".";
 }
 
-function inferRegime(
+/**
+ * Resolve the current market-regime label so the regime Research Object can
+ * be built unconditionally. Order of preference:
+ *   1. Already-loaded research objects (stock/sector ROs carry the regime
+ *      label inside their core data).
+ *   2. The pipeline `get_market_context` tool output (snapshot fallback).
+ *   3. A direct Postgres lookup against `md_historical_features_daily` for
+ *      SPY's `market_regime` — the same table the regime SQL itself reads.
+ *
+ * The PG lookup is intentional: the snapshot is "supplemental" per project
+ * direction; PG is canonical. A single one-row indexed lookup is cheap and
+ * lets the regime RO load even when the classifier never set
+ * `regimeRequested` and no stock context is in flight.
+ */
+async function resolveCurrentRegime(
   marketContext: MarketContext | undefined,
   objects: CachedResearchObject[],
-): string | undefined {
-  if (marketContext?.regime) return marketContext.regime;
+): Promise<string | undefined> {
   for (const object of objects) {
     const regime = stringFrom(object.publicSummary.regime);
     if (regime) return regime;
   }
-  return undefined;
+  if (marketContext?.regime) return marketContext.regime;
+  if (!isResearchDbConfigured()) return undefined;
+  try {
+    const rows = await queryExternalReadonly<{ market_regime?: unknown }>(
+      `SELECT market_regime
+         FROM md_historical_features_daily
+        WHERE symbol = 'SPY'
+          AND is_delisted = false
+        ORDER BY as_of_date DESC
+        LIMIT 1`,
+    );
+    const value = stringValue(rows[0]?.market_regime);
+    return value ? value.toUpperCase() : undefined;
+  } catch (err) {
+    logger.warn("Ask Grahamy resolveCurrentRegime PG fallback failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
 }
 
 function researchObjectDate(freshness: FreshnessMetadata | undefined): string {

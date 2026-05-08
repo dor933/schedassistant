@@ -32,6 +32,7 @@ import { executePipelineOverlays } from "./pipelineOverlays/registry";
 import { buildWorkflowExecutionResult } from "./workflowExecution";
 import type { WorkflowExecutionResult } from "./analystTypes";
 import type {
+  CachedCapabilityView,
   PgCapabilityRunInput,
   PgCapabilityRunResult,
 } from "./pgCapabilities/types";
@@ -168,6 +169,13 @@ export type ResearchPlanExecutionResult = {
   researchObjectsUpdated?: CachedResearchObject[];
   researchObjectCacheStats?: { hits: number; misses: number; writes: number };
   pgCapabilityViews?: PgCapabilityViews;
+  // Capability views built/refreshed during this turn that need persistence
+  // by SS into `cached_capability_views`. Compound (planner-handled) flows
+  // run their PG capabilities through `executePgCapabilitiesWithCache` just
+  // like the standard path — the freshly built views must be threaded back
+  // here so SS persists them. Empty array means "nothing new this turn".
+  capabilityViewsUpdated?: CachedCapabilityView[];
+  capabilityViewCacheStats?: { hits: number; misses: number; writes: number };
   pipelineOverlayViews?: PipelineOverlayViews;
   workflowExecutionResult?: WorkflowExecutionResult;
   compoundResearchContext?: CompoundResearchContext;
@@ -1352,11 +1360,17 @@ async function executeRegimeToStockScreen(
   workflow: ResearchWorkflowMatch,
 ): Promise<ResearchPlanExecutionResult> {
   const warnings: string[] = [];
+  const capabilityViewsUpdated: CachedCapabilityView[] = [];
+  const cacheStats = { hits: 0, misses: 0, writes: 0 };
   const regimeResult = await runPlannerPgCapability(input, capabilityClassification(
     input.classification,
     "market_regime_historical_playbook",
   ));
   warnings.push(...regimeResult.warnings);
+  capabilityViewsUpdated.push(...regimeResult.viewsUpdated);
+  cacheStats.hits += regimeResult.cacheStats.hits;
+  cacheStats.misses += regimeResult.cacheStats.misses;
+  cacheStats.writes += regimeResult.cacheStats.writes;
   const regimeView = regimeResult.views.regimeHistoricalPlaybookView;
   const sectors = extractLeaderSectors(regimeView);
   if (!regimeView || regimeView.state === "unavailable" || !sectors.length) {
@@ -1374,6 +1388,8 @@ async function executeRegimeToStockScreen(
       screenView,
       pipelineLabels: {},
       warnings,
+      capabilityViewsUpdated,
+      capabilityViewCacheStats: cacheStats,
     });
   }
   const screenResults = await runSectorFeatureScreens(
@@ -1382,6 +1398,10 @@ async function executeRegimeToStockScreen(
     "The screen is constrained to sectors that historically led in the current regime playbook.",
   );
   warnings.push(...screenResults.warnings);
+  capabilityViewsUpdated.push(...screenResults.capabilityViewsUpdated);
+  cacheStats.hits += screenResults.capabilityViewCacheStats.hits;
+  cacheStats.misses += screenResults.capabilityViewCacheStats.misses;
+  cacheStats.writes += screenResults.capabilityViewCacheStats.writes;
   const pipelineLabels = hasOptionalPipelineStep(workflow)
     ? await runOptionalCandidatePipelineLabels(input, screenResults.view.rows)
     : { labels: {}, warnings: [] };
@@ -1396,6 +1416,8 @@ async function executeRegimeToStockScreen(
     screenView: screenResults.view,
     pipelineLabels: pipelineLabels.labels,
     warnings,
+    capabilityViewsUpdated,
+    capabilityViewCacheStats: cacheStats,
   });
 }
 
@@ -1404,11 +1426,17 @@ async function executeSectorDeltaToStockScreen(
   workflow: ResearchWorkflowMatch,
 ): Promise<ResearchPlanExecutionResult> {
   const warnings: string[] = [];
+  const capabilityViewsUpdated: CachedCapabilityView[] = [];
+  const cacheStats = { hits: 0, misses: 0, writes: 0 };
   const deltaResult = await runPlannerPgCapability(input, capabilityClassification(
     input.classification,
     "week_over_week_sector_delta",
   ));
   warnings.push(...deltaResult.warnings);
+  capabilityViewsUpdated.push(...deltaResult.viewsUpdated);
+  cacheStats.hits += deltaResult.cacheStats.hits;
+  cacheStats.misses += deltaResult.cacheStats.misses;
+  cacheStats.writes += deltaResult.cacheStats.writes;
   const deltaView = deltaResult.views.sectorDeltaView;
   const sectors = extractImprovedSectors(deltaView);
   if (!deltaView || deltaView.state === "unavailable" || !sectors.length) {
@@ -1426,6 +1454,8 @@ async function executeSectorDeltaToStockScreen(
       screenView,
       pipelineLabels: {},
       warnings,
+      capabilityViewsUpdated,
+      capabilityViewCacheStats: cacheStats,
     });
   }
   const screenResults = await runSectorFeatureScreens(
@@ -1434,6 +1464,10 @@ async function executeSectorDeltaToStockScreen(
     "The screen is constrained to sectors that improved in the weekly public sector delta view.",
   );
   warnings.push(...screenResults.warnings);
+  capabilityViewsUpdated.push(...screenResults.capabilityViewsUpdated);
+  cacheStats.hits += screenResults.capabilityViewCacheStats.hits;
+  cacheStats.misses += screenResults.capabilityViewCacheStats.misses;
+  cacheStats.writes += screenResults.capabilityViewCacheStats.writes;
   const pipelineLabels = hasOptionalPipelineStep(workflow)
     ? await runOptionalCandidatePipelineLabels(input, screenResults.view.rows)
     : { labels: {}, warnings: [] };
@@ -1445,6 +1479,8 @@ async function executeSectorDeltaToStockScreen(
     screenView: screenResults.view,
     pipelineLabels: pipelineLabels.labels,
     warnings,
+    capabilityViewsUpdated,
+    capabilityViewCacheStats: cacheStats,
   });
 }
 
@@ -1453,11 +1489,17 @@ async function executeSectorDivergenceToStockScreen(
   workflow: ResearchWorkflowMatch,
 ): Promise<ResearchPlanExecutionResult> {
   const warnings: string[] = [];
+  const capabilityViewsUpdated: CachedCapabilityView[] = [];
+  const cacheStats = { hits: 0, misses: 0, writes: 0 };
   const divergenceResult = await runPlannerPgCapability(input, capabilityClassification(
     input.classification,
     "sector_momentum_vs_conviction_divergence",
   ));
   warnings.push(...divergenceResult.warnings);
+  capabilityViewsUpdated.push(...divergenceResult.viewsUpdated);
+  cacheStats.hits += divergenceResult.cacheStats.hits;
+  cacheStats.misses += divergenceResult.cacheStats.misses;
+  cacheStats.writes += divergenceResult.cacheStats.writes;
   const divergenceView = divergenceResult.views.sectorDivergenceView;
   const sectors = extractDivergenceSectors(divergenceView);
   if (!divergenceView || divergenceView.state === "unavailable" || !sectors.length) {
@@ -1475,6 +1517,8 @@ async function executeSectorDivergenceToStockScreen(
       screenView,
       pipelineLabels: {},
       warnings,
+      capabilityViewsUpdated,
+      capabilityViewCacheStats: cacheStats,
     });
   }
   const screenResults = await runSectorFeatureScreens(
@@ -1483,6 +1527,10 @@ async function executeSectorDivergenceToStockScreen(
     "The screen is constrained to sectors with public conviction-versus-price divergence.",
   );
   warnings.push(...screenResults.warnings);
+  capabilityViewsUpdated.push(...screenResults.capabilityViewsUpdated);
+  cacheStats.hits += screenResults.capabilityViewCacheStats.hits;
+  cacheStats.misses += screenResults.capabilityViewCacheStats.misses;
+  cacheStats.writes += screenResults.capabilityViewCacheStats.writes;
   const pipelineLabels = hasOptionalPipelineStep(workflow)
     ? await runOptionalCandidatePipelineLabels(input, screenResults.view.rows)
     : { labels: {}, warnings: [] };
@@ -1497,6 +1545,8 @@ async function executeSectorDivergenceToStockScreen(
     screenView: screenResults.view,
     pipelineLabels: pipelineLabels.labels,
     warnings,
+    capabilityViewsUpdated,
+    capabilityViewCacheStats: cacheStats,
   });
 }
 
@@ -1509,11 +1559,17 @@ async function executeFeatureScreenPlusBacktest(
   const criteria = normalizeFeatureCriteriaParam(
     arrayParam(featureStep?.params.criteria),
   );
+  const capabilityViewsUpdated: CachedCapabilityView[] = [];
+  const cacheStats = { hits: 0, misses: 0, writes: 0 };
   const screenResult = await runPlannerPgCapability(input, {
     ...capabilityClassification(input.classification, "feature_screen"),
     featureCriteria: criteria,
   });
   warnings.push(...screenResult.warnings);
+  capabilityViewsUpdated.push(...screenResult.viewsUpdated);
+  cacheStats.hits += screenResult.cacheStats.hits;
+  cacheStats.misses += screenResult.cacheStats.misses;
+  cacheStats.writes += screenResult.cacheStats.writes;
   const featureScreenView = screenResult.views.featureScreenView;
   const backtestCriteria = featureCriteriaToBacktestCriteria(
     featureScreenView?.screenCriteria?.length ? featureScreenView.screenCriteria : criteria,
@@ -1527,12 +1583,18 @@ async function executeFeatureScreenPlusBacktest(
     factorBacktest: { criteria: backtestCriteria, horizon },
   });
   warnings.push(...backtestResult.warnings);
+  capabilityViewsUpdated.push(...backtestResult.viewsUpdated);
+  cacheStats.hits += backtestResult.cacheStats.hits;
+  cacheStats.misses += backtestResult.cacheStats.misses;
+  cacheStats.writes += backtestResult.cacheStats.writes;
   return {
     handled: true,
     pgCapabilityViews: {
       ...(featureScreenView ? { featureScreenView } : {}),
       ...backtestResult.views,
     },
+    capabilityViewsUpdated,
+    capabilityViewCacheStats: cacheStats,
     workflowExecutionResult: buildWorkflowExecutionResult({
       workflowName: workflow.workflowName,
       publicViews: {
@@ -1638,11 +1700,17 @@ async function executeIdeaToCompareAndRisk(
   workflow: ResearchWorkflowMatch,
 ): Promise<ResearchPlanExecutionResult> {
   const warnings: string[] = [];
+  const capabilityViewsUpdated: CachedCapabilityView[] = [];
+  const cacheStats = { hits: 0, misses: 0, writes: 0 };
   const ideaResult = await runPlannerPgCapability(input, capabilityClassification(
     input.classification,
     "stock_idea_discovery",
   ));
   warnings.push(...ideaResult.warnings);
+  capabilityViewsUpdated.push(...ideaResult.viewsUpdated);
+  cacheStats.hits += ideaResult.cacheStats.hits;
+  cacheStats.misses += ideaResult.cacheStats.misses;
+  cacheStats.writes += ideaResult.cacheStats.writes;
   const ideaView = ideaResult.views.stockIdeaView;
   const symbol = topStockIdeaSymbol(ideaView);
   if (!symbol) {
@@ -1650,6 +1718,8 @@ async function executeIdeaToCompareAndRisk(
     return {
       handled: true,
       pgCapabilityViews: ideaResult.views,
+      capabilityViewsUpdated,
+      capabilityViewCacheStats: cacheStats,
       workflowExecutionResult: buildWorkflowExecutionResult({
         workflowName: workflow.workflowName,
         publicViews: {
@@ -1694,6 +1764,8 @@ async function executeIdeaToCompareAndRisk(
     pgCapabilityViews: {
       stockIdeaView: ideaView,
     },
+    capabilityViewsUpdated,
+    capabilityViewCacheStats: cacheStats,
     workflowExecutionResult: buildWorkflowExecutionResult({
       workflowName: workflow.workflowName,
       publicViews: {
@@ -1728,7 +1800,12 @@ async function executeIdeaToCompareAndRisk(
 async function runPlannerPgCapability(
   input: ResearchPlanExecutionInput,
   classification: Classification,
-): Promise<PgCapabilityRunResult> {
+): Promise<
+  PgCapabilityRunResult & {
+    viewsUpdated: CachedCapabilityView[];
+    cacheStats: { hits: number; misses: number; writes: number };
+  }
+> {
   const result = await executePgCapabilitiesWithCache(
     {
       classification,
@@ -1739,7 +1816,12 @@ async function runPlannerPgCapability(
     [],
     input.pgCapabilityRunner,
   );
-  return { views: result.views, warnings: result.warnings };
+  return {
+    views: result.views,
+    warnings: result.warnings,
+    viewsUpdated: result.viewsUpdated ?? [],
+    cacheStats: result.cacheStats ?? { hits: 0, misses: 0, writes: 0 },
+  };
 }
 
 async function runPlannerResearchObjects(
@@ -1790,10 +1872,15 @@ function sectorScreenResult(input: {
   screenView: FeatureScreenView;
   pipelineLabels: Record<string, string>;
   warnings: string[];
+  capabilityViewsUpdated?: CachedCapabilityView[];
+  capabilityViewCacheStats?: { hits: number; misses: number; writes: number };
 }): ResearchPlanExecutionResult {
   return {
     handled: true,
     pgCapabilityViews: input.pgCapabilityViews,
+    capabilityViewsUpdated: input.capabilityViewsUpdated ?? [],
+    capabilityViewCacheStats:
+      input.capabilityViewCacheStats ?? { hits: 0, misses: 0, writes: 0 },
     workflowExecutionResult: buildWorkflowExecutionResult({
       workflowName: input.workflowName,
       publicViews: { pgCapabilityViews: input.pgCapabilityViews },
@@ -1859,9 +1946,16 @@ async function runSectorFeatureScreens(
   input: ResearchPlanExecutionInput,
   sectors: string[],
   constraintWarning: string,
-): Promise<{ view: FeatureScreenView; warnings: string[] }> {
+): Promise<{
+  view: FeatureScreenView;
+  warnings: string[];
+  capabilityViewsUpdated: CachedCapabilityView[];
+  capabilityViewCacheStats: { hits: number; misses: number; writes: number };
+}> {
   const warnings: string[] = [];
   const views: FeatureScreenView[] = [];
+  const capabilityViewsUpdated: CachedCapabilityView[] = [];
+  const cacheStats = { hits: 0, misses: 0, writes: 0 };
   for (const sector of sectors.slice(0, MAX_SECTOR_CONSTRAINTS)) {
     const criteria: FeatureScreenCriterion[] = [{ factor: "sector", bucket: sector }];
     try {
@@ -1876,6 +1970,10 @@ async function runSectorFeatureScreens(
         focus: undefined,
       });
       warnings.push(...result.warnings);
+      capabilityViewsUpdated.push(...result.viewsUpdated);
+      cacheStats.hits += result.cacheStats.hits;
+      cacheStats.misses += result.cacheStats.misses;
+      cacheStats.writes += result.cacheStats.writes;
       if (result.views.featureScreenView) {
         views.push(result.views.featureScreenView);
       } else {
@@ -1892,6 +1990,8 @@ async function runSectorFeatureScreens(
   return {
     view: mergeFeatureScreenViews(sectors, views, constraintWarning),
     warnings: unique(warnings),
+    capabilityViewsUpdated,
+    capabilityViewCacheStats: cacheStats,
   };
 }
 

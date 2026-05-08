@@ -204,6 +204,40 @@ sector_path_stats AS (
   FROM sector_path_days
   GROUP BY symbol, entry_date, entry_price
 ),
+-- Unconditional sector forward 60-day percentiles. Same Monday-sample / PIT
+-- contract used by V6a core (self_analog_summary) and own_history_base.
+-- Bounded to 2010+ to keep the scan tight; respects survivorship (is_delisted)
+-- and drops the lookback past target_date - 60d so every row has a settled h60.
+sector_forward_pct AS (
+  SELECT
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY fr.h60_return) AS p25_h60,
+    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY fr.h60_return) AS median_h60,
+    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY fr.h60_return) AS p75_h60
+  FROM md_historical_features_daily h
+  JOIN md_forward_returns fr
+    ON fr.symbol = h.symbol AND fr.as_of_date = h.as_of_date
+  WHERE h.sector = (SELECT target_sector FROM config)
+    AND h.as_of_date >= DATE '2010-01-01'
+    AND h.as_of_date <= (SELECT target_date FROM config) - INTERVAL '60 days'
+    AND h.is_delisted = false
+    AND EXTRACT(DOW FROM h.as_of_date) = 1
+    AND fr.h60_return IS NOT NULL
+),
+
+-- Sector earnings density today: fraction of live sector constituents with
+-- next earnings inside the 14-day window. Already a 0-100 percentage so the
+-- assembled SELECT can pass it through without scaling.
+sector_event_context AS (
+  SELECT
+    100.0
+      * COUNT(*) FILTER (WHERE h.days_to_earnings BETWEEN 0 AND 14)
+      / NULLIF(COUNT(*), 0) AS pct_constituents_earnings_within_2w
+  FROM md_historical_features_daily h
+  WHERE h.sector = (SELECT target_sector FROM config)
+    AND h.as_of_date = (SELECT target_date FROM config)
+    AND h.is_delisted = false
+),
+
 sector_path_risk AS (
   SELECT
     COUNT(*) FILTER (WHERE observed_days >= 40) AS path_n,
