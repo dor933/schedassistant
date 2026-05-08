@@ -1,17 +1,132 @@
 # Ask Grahamy — Request Flow
 
-End-to-end trace of one `POST /api/ask-grahamy` turn, from the moment the
-client-app hits the route through to the JSON envelope returned to the
-caller. Every numbered step lists the file/symbol that owns it so you can
-jump straight to the source.
+End-to-end trace of one Ask Grahamy turn, from the moment the client-app
+hits the route through to the JSON envelope returned to the caller. Every
+numbered step lists the file/symbol that owns it so you can jump straight
+to the source.
 
 ---
 
-## 0. Network → Express router
+## Two-request handshake
+
+A single user turn is **two HTTP calls** from the upstream caller
+(StocksScanner). They share a router, an auth middleware, and a service
+file, but trace independently:
+
+1. `POST /api/ask-grahamy/classify` — classifier-only. Returns
+   `{ conversationId, classification }`. No graph, no snapshots, no LLM
+   beyond the classifier itself.
+2. `POST /api/ask-grahamy` — full graph turn. The caller bundles the
+   classification from step 1 (plus any `priorResearchObjects` /
+   `priorCapabilityViews` it has cached for the classified anchors) and
+   sends it as the request body. The graph requires the supplied
+   classification — it will not classify on its own.
+
+Why split: between the two calls, StocksScanner reads the classified
+`symbols` / `sectors` / `regimeRequested`, looks up its own
+`research_objects` and `cached_capability_views` tables for matching
+keys, and forwards anything it already has. Cache hits skip v6 SQL on
+the agent side; cache misses come back in `meta.researchObjectsUpdated`
+/ `meta.capabilityViewsUpdated` so SS can persist them. This keeps the
+Research Object cache authoritative on the StocksScanner side rather
+than duplicated inside agent_service.
+
+§A walks through the classify request. §0–§6 walk through the main
+graph request. The classify request is fully self-contained — it never
+runs §1–§5 of the graph turn.
+
+---
+
+## A. `POST /api/ask-grahamy/classify`
+
+### A.0 Network → Express router
+
+Inbound request: `POST /api/ask-grahamy/classify` with header
+`x-application-agent-token` and body
+`{ userId, conversationId?, message, previousContext? }`.
+
+1. `routes/askGrahamy.routes.ts` mounts `POST /classify` ahead of
+   `POST /` on the router so the classify path doesn't fall through to
+   the main controller.
+2. `requireApplicationToken` middleware runs (same as the main route —
+   see §0a).
+3. Dispatches to `AskGrahamyController.classify`.
+
+### A.1 `AskGrahamyController.classify` (controllers/askGrahamy.controller.ts)
+
+- `askGrahamyClassifyRequestSchema.safeParse(req.body)`. On invalid
+  body: `400 { ok: false, error: "userId and non-empty message are required..." }`.
+  Note: this is a **plain error envelope**, not a full
+  `AskGrahamyResponse` — the classify endpoint has its own response
+  shape and does not reuse `buildSafeErrorEnvelope`.
+- On valid body: calls `classifyAskGrahamy(parsed.data)`.
+- On `result.ok === true`: `200 { ok: true, conversationId, classification }`.
+- On `result.ok === false`: `result.status { ok: false, error }`.
+- On any thrown error: `500 { ok: false, error }`.
+
+### A.2 `classifyAskGrahamy` (services/askGrahamy.service.ts)
+
+1. **Resolve the singleton client_application** via
+   `resolveDefaultClientApplication()` (same as the main service — see
+   §1.1). Missing → `{ ok: false, status: 500 }`.
+2. **JIT-resolve the upstream user → internal users.id** via
+   `resolveOrCreateClientUser({...})` (same shape as the main service).
+3. **Stamp `conversationId`** — `request.conversationId ||= crypto.randomUUID()`.
+   Even though no graph runs, the caller gets a stable id back so the
+   subsequent `/api/ask-grahamy` call can pass it back in.
+4. **Build `previousContext`** when the caller supplied one. SS extracts
+   the prior assistant turn's anchors (`lastSymbols`, `lastSectors`,
+   `lastIntent`) from its own `ask_messages` table and passes them so
+   pure follow-ups like "why?" / "compare to peers" / "מה לגבי המתחרים"
+   classify against the prior anchors instead of returning `unknown`.
+   Without `previousContext`, anchor-less follow-ups fall through to
+   `unknown` (correct: the agent doesn't have its own conversation
+   memory yet at this stage; PostgresSaver memory is per-graph-turn,
+   not per-classify).
+5. **Run the classifier** via
+   `classifyMessage(request.message, previousContext)`
+   (askGrahamy/classification.ts). This calls a single LLM
+   (`gpt-4o`-class structured-output) and returns `Classification`.
+6. **Logged twice** — once on entry (with truncated message preview)
+   and once with the result (intent / symbols / sectors / confidence /
+   isFollowUp) for observability.
+7. **Return** `{ ok: true, response: { conversationId, classification } }`.
+
+### A.3 Response shape
+
+```
+{
+  ok: true,
+  conversationId,
+  classification: {
+    intent,                   // "stock" | "sector" | ... (see types.ts INTENTS)
+    symbols, sectors, regimeRequested, isFollowUp,
+    focus?, featureCriteria?, factorBacktest?,
+    requiresTools, confidence, warnings
+  }
+}
+```
+
+This is **not** an `AskGrahamyResponse`. The shape is deliberately small
+because the caller only needs the anchors to look up its caches and the
+intent to validate before calling §0.
+
+After this returns, the caller:
+- Reads `classification.symbols` / `sectors` and looks them up in its
+  `research_objects` table for the current `as_of_date`.
+- Reads its `cached_capability_views` table for any view rows whose
+  `(capability_name, cache_key)` matches the classification's intent
+  shape.
+- Builds the `/api/ask-grahamy` body with both: `priorResearchObjects`
+  and `priorCapabilityViews` for cache reuse.
+
+---
+
+## 0. Network → Express router (main `/api/ask-grahamy` request)
 
 Inbound request: `POST /api/ask-grahamy` with header
 `x-application-agent-token` and body
-`{ userId, conversationId?, message, classification }`.
+`{ userId, conversationId?, message, classification, priorResearchObjects?, priorCapabilityViews? }`.
 
 1. `server.ts` mounts the router at `/api/ask-grahamy`.
 2. `routes/askGrahamy.routes.ts` applies `requireApplicationToken`
@@ -147,10 +262,15 @@ START
 
 ### 3.1 `requireClassificationNode` (nodes/requireClassification.ts)
 
-Requires `state.classification` to already be populated by
-`/api/ask-grahamy/classify`. If it is missing, the node returns an error and
-the graph routes to `safeErrorResponse`; the graph does not call
-`classifyMessage`.
+Requires `state.classification` to already be populated by the upstream
+caller — produced by §A. If it is missing, the node returns an error
+and the graph routes to `safeErrorResponse`; the graph does not call
+`classifyMessage`. This is the only enforcement point for the
+two-request handshake; the controller's Zod schema (§0b) also
+requires the field, so a missing classification fails fast with `400`
+before reaching the graph in normal traffic. This node catches the
+narrow case of a malformed classification that passed Zod but has no
+usable shape.
 
 The supplied classification contains:
 - `intent` — one of the 30+ enum values (sector_conviction_leaderboard,
@@ -255,13 +375,41 @@ This is the conditional fork.
 
 - Calls `executePgCapabilitiesWithCache(input, priorCapabilityViews,
   runner)` (pgCapabilities/registry.ts). Wrapped in
-  `observeToolCall("execute_pg_capabilities", ...)`.
+  `observeToolCall("execute_pg_capabilities", ...)`. The input includes
+  `priorResearchObjects` (any RO already on `state` from the standard
+  loader, plus the upstream caller's prior ROs) so the capability fan-out
+  reuses the same shared cache.
 - The registry decides which capability SQL views to run based on
   intent + message — sector_leaderboard, sector_divergence,
   sector_delta, stock_idea, feature_screen, factor_backtest,
-  comparison, regime_historical_playbook.
+  regime_historical_playbook. Comparison-style turns no longer have a
+  dedicated capability — they're handled by the standard research-object
+  fan-out for the multiple anchors the classifier emits.
+- **Discovery → research-object fan-out** (gold-standard depth): every
+  per-row capability picks its anchors via SQL (rank, ranking score,
+  divergence type, etc.) and then calls
+  `buildResearchObjectsForAnchors(...)` for those exact anchors. The
+  returned ROs feed two places:
+  1. Each row gets a `researchObjectKey` stamp (and the view a
+     `researchObjectKeys: string[]`); `regime_historical_playbook` also
+     stamps a `regimeResearchObjectKey`; `factor_conditioned_backtest`
+     stamps `contributingResearchObjectKeys` for its top-N contributing
+     sample stocks.
+  2. The capability returns the resolved/built ROs as `researchObjects`
+     and any cache misses as `researchObjectsUpdated`. The graph node
+     merges them into `state.researchObjects` (deduped by cache_key) and
+     `state.researchObjectsUpdated`, and sums `researchObjectCacheStats`.
+- **Cache-hit path** (capability view already cached for the day): the
+  registry's cache reader extracts the RO keys from the persisted view
+  (`anchorsFromCachedView`) and re-resolves them via `priorResearchObjects`,
+  so the deep payload is available even when the SQL is skipped.
 - Sets `state.pgCapabilityViews`, `capabilityViewsUpdated`,
-  `capabilityViewCacheStats`. Pushes warnings.
+  `capabilityViewCacheStats`, plus the merged `state.researchObjects` /
+  `researchObjectsUpdated` / `researchObjectCacheStats`. Pushes warnings.
+- The single-source-of-truth contract: discovery rows and anchored
+  answers resolve to the SAME `CachedResearchObject` for the same
+  `(kind, anchor, asOfDate)` triple — there is no "discovery POV" vs.
+  "research POV" divergence.
 
 #### 3.6c `loadPipelineOverlaysNode` (nodes/loadPipelineOverlays.ts)
 
@@ -340,14 +488,17 @@ Two answer paths depending on whether the planner ran:
 
 Calls `buildMeta(...)` (also exported from this file) which assembles
 `ResponseMeta`:
-- `sourcesUsed` — `researchObjects.cacheKey` entries plus per-pg-capability
-  and pipeline-overlay names. Snapshots are deliberately *not* listed
-  here (they're scaffolding, not citations).
+- `sourcesUsed` — `researchObjects.cacheKey` entries (including those
+  produced by capability fan-out) plus per-pg-capability and
+  pipeline-overlay names. Snapshots are deliberately *not* listed here
+  (they're scaffolding, not citations).
 - `freshness` — copied from `snapshots.freshness`.
 - `warnings` — deduped union of `state.warnings`,
   `classification.warnings`, and snapshot fetch errors.
 - `toolsUsed` — the snapshot tool list.
-- `researchObjectKeys`, `researchObjectCache`, `researchObjectsUpdated`.
+- `researchObjectKeys`, `researchObjectCache`, `researchObjectsUpdated` —
+  combined view of the standard-path and capability-fan-out ROs (the
+  graph node merged them into `state.researchObjects` upstream).
 - `capabilityViewKeys`, `capabilityViewCache`, `capabilityViewsUpdated`.
 - `upstreamLatency` — `snapshots.latencyMs`.
 
@@ -458,9 +609,17 @@ The response shape returned to the client is always a full
   natural memory recall.
 - **Research-object caching** is in-DB; `priorResearchObjects` from the
   request are treated as cache hits. Updates flow back via
-  `researchObjectsUpdated` so the upstream caller can persist them.
+  `researchObjectsUpdated` so the upstream caller can persist them. Two
+  populators contribute: the standard `loadResearchObjectsNode` (anchors
+  from the classifier) and each anchorless capability's research-object
+  fan-out (anchors picked by SQL). Both write to the same
+  `(kind, anchor, asOfDate)` keyed cache.
 - **Capability-view caching** mirrors the same pattern via
-  `priorCapabilityViews` / `capabilityViewsUpdated`.
+  `priorCapabilityViews` / `capabilityViewsUpdated`. The persisted
+  capability views carry `researchObjectKeys` (and, for the regime
+  playbook, `regimeResearchObjectKey`; for factor backtest,
+  `contributingResearchObjectKeys`) so a same-day cache hit can resolve
+  the deep payload without re-running the SQL.
 
 ### Observability (Langfuse)
 
