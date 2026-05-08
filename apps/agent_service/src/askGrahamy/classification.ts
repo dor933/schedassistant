@@ -63,7 +63,7 @@ const FACTOR_BACKTEST_HORIZONS = [
 ] as const;
 
 const CLASSIFIER_MODEL =
-  process.env.ASK_GRAHAMY_CLASSIFIER_MODEL ?? "gpt-4o";
+  process.env.ASK_GRAHAMY_CLASSIFIER_MODEL ?? "gpt-5";
 
 // Ask Grahamy is a public, unauthenticated endpoint — there's no per-user
 // agent/org to bill against. We pin a single platform org whose Anthropic key
