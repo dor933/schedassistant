@@ -1,6 +1,8 @@
 import { ChatOpenAI } from "@langchain/openai";
+import type { RunnableConfig } from "@langchain/core/runnables";
 import { z } from "zod";
 import { logger } from "../logger";
+import { getLangfuseCallbackHandler } from "../langfuse";
 import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import {
   INTENTS,
@@ -112,14 +114,25 @@ const classifierOutputSchema = z.object({
 
 export type ClassifierOutput = z.infer<typeof classifierOutputSchema>;
 
+export type ClassifierTraceContext = {
+  userId?: string | number;
+  metadata?: Record<string, unknown>;
+};
+
 type ClassifierInvoker = (input: {
   message: string;
   previousContext?: ConversationContext;
+  traceContext?: ClassifierTraceContext;
 }) => Promise<ClassifierOutput>;
 
 export type ClassifyOptions = {
   // Stub seam for tests. Default is the lazy Haiku-backed invoker below.
   classifier?: ClassifierInvoker;
+  // Optional Langfuse trace context — when provided, the default invoker
+  // attaches a LangChain CallbackHandler to the LLM call so the
+  // classification shows up as a generation span under the active
+  // observation.
+  traceContext?: ClassifierTraceContext;
 };
 
 const SYSTEM_PROMPT = `You classify user messages for a public stock-research assistant.
@@ -366,7 +379,10 @@ function buildUserPrompt(
 // when the org rotates its credential. Keeping the LangChain wrapper intact
 // across calls avoids re-paying its construction cost on every classification.
 type StructuredRunnable = {
-  invoke: (msgs: Array<{ role: string; content: string }>) => Promise<unknown>;
+  invoke: (
+    msgs: Array<{ role: string; content: string }>,
+    config?: RunnableConfig,
+  ) => Promise<unknown>;
 };
 let cachedStructured: { apiKey: string; runnable: StructuredRunnable } | null = null;
 
@@ -382,7 +398,11 @@ function buildStructuredRunnable(apiKey: string): StructuredRunnable {
   });
 }
 
-const defaultInvoker: ClassifierInvoker = async ({ message, previousContext }) => {
+const defaultInvoker: ClassifierInvoker = async ({
+  message,
+  previousContext,
+  traceContext,
+}) => {
   const vendor = await resolveOrgVendorByOrg(CLASSIFIER_MODEL, ASK_GRAHAMY_ORG_ID);
   if (!vendor) {
     throw new Error(
@@ -405,10 +425,26 @@ const defaultInvoker: ClassifierInvoker = async ({ message, previousContext }) =
       runnable: buildStructuredRunnable(vendor.apiKey),
     };
   }
-  const raw = await cachedStructured.runnable.invoke([
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: buildUserPrompt(message, previousContext) },
-  ]);
+  const handler = getLangfuseCallbackHandler(
+    traceContext?.userId != null
+      ? (traceContext.userId as unknown as undefined)
+      : undefined,
+    {
+      source: "ask_grahamy_classifier",
+      model: CLASSIFIER_MODEL,
+      ...(traceContext?.metadata ?? {}),
+    },
+  );
+  const invokeConfig: RunnableConfig | undefined = handler
+    ? { callbacks: [handler] as RunnableConfig["callbacks"] }
+    : undefined;
+  const raw = await cachedStructured.runnable.invoke(
+    [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: buildUserPrompt(message, previousContext) },
+    ],
+    invokeConfig,
+  );
   return classifierOutputSchema.parse(raw);
 };
 
@@ -420,7 +456,11 @@ export async function classifyMessage(
   const invoker = options.classifier ?? defaultInvoker;
   let raw: ClassifierOutput;
   try {
-    raw = await invoker({ message, previousContext });
+    raw = await invoker({
+      message,
+      previousContext,
+      traceContext: options.traceContext,
+    });
   } catch (err) {
     logger.error("Ask Grahamy classifier LLM call failed", {
       error: err instanceof Error ? err.message : String(err),

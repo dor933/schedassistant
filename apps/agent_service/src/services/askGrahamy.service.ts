@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { logger } from "../logger";
+import { observeWithContext } from "../langfuse";
 import {
   resolveDefaultClientApplication,
   resolveOrCreateClientUser,
@@ -131,7 +132,29 @@ export async function classifyAskGrahamy(
       previousContextSymbols: previousContext?.lastSymbols ?? [],
       previousContextSectors: previousContext?.lastSectors ?? [],
     });
-    const classification = await classifyMessage(request.message, previousContext);
+    const classification = await observeWithContext(
+      "ask_grahamy_classify",
+      async () =>
+        classifyMessage(request.message, previousContext, {
+          traceContext: {
+            userId: user.id,
+            metadata: {
+              service: "ask_grahamy_classify",
+              conversationId,
+              previousContextSupplied: !!previousContext,
+              previousContextSymbols: previousContext?.lastSymbols ?? [],
+              previousContextSectors: previousContext?.lastSectors ?? [],
+            },
+          },
+        }),
+      {
+        message: request.message,
+        conversationId,
+        userId: user.id,
+        previousContextSymbols: previousContext?.lastSymbols ?? [],
+        previousContextSectors: previousContext?.lastSectors ?? [],
+      },
+    );
     logger.info("Ask Grahamy classify result", {
       conversationId,
       intent: classification.intent,
