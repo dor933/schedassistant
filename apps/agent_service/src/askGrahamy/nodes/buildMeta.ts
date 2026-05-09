@@ -78,7 +78,16 @@ export function buildMeta(
     });
   }
   if (pgCapabilityViews?.stockIdeaView) {
-    capabilitySources.push({ type: "research", name: "stock_idea_discovery" });
+    // The same view slot is filled by both stock_idea_discovery (org-wide)
+    // and sector_leaders (sector-internal). The intent disambiguates which
+    // capability produced it.
+    capabilitySources.push({
+      type: "research",
+      name:
+        classification.intent === "sector_leaders"
+          ? "sector_leaders"
+          : "stock_idea_discovery",
+    });
   }
   if (pgCapabilityViews?.featureScreenView) {
     capabilitySources.push({ type: "research", name: "feature_screen" });

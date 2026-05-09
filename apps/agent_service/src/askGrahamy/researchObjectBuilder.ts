@@ -21,7 +21,7 @@ import type {
 } from "./types";
 
 export function buildResearchObjectCacheKey(
-  objectType: "STOCK" | "SECTOR" | "REGIME",
+  objectType: "STOCK" | "SECTOR" | "INDUSTRY" | "REGIME",
   anchor: string,
   asOfDate: string,
 ): string {
@@ -151,6 +151,43 @@ export async function buildResearchObjects(input: {
     }
   }
 
+  for (const industry of classification.industries) {
+    const cacheKey = buildResearchObjectCacheKey("INDUSTRY", industry, asOfDate);
+    const prior = priorIndex.get(cacheKey);
+    if (prior) {
+      const hydrated = hydrateCachedResearchObjectView(prior);
+      if (hydrated) {
+        stats.hits += 1;
+        objects.push(hydrated.object);
+        if (hydrated.updated) {
+          objectsUpdated.push(hydrated.object);
+          stats.writes += 1;
+        }
+        continue;
+      }
+      warnings.push(`Cached Research Object for industry ${industry} is stale and cannot be safely hydrated; rebuilding.`);
+    }
+
+    stats.misses += 1;
+    try {
+      const industryObject = await buildIndustryResearchObject({
+        industry,
+        asOfDate,
+        freshness: snapshots.freshness ?? {},
+      });
+      objects.push(industryObject);
+      objectsUpdated.push(industryObject);
+      stats.writes += 1;
+    } catch (err) {
+      const message = `Industry Research Object query failed for ${industry}.`;
+      warnings.push(message);
+      logger.warn("Ask Grahamy industry Research Object build failed", {
+        industry,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   // The regime Research Object is loaded for every turn — it is the canonical
   // source of the current market regime label that the system prompt and the
   // analyst layer reason from. Pipeline `daily_brief` is only supplemental.
@@ -223,6 +260,7 @@ export async function buildResearchObjects(input: {
 export type BuildForAnchorsInput = {
   symbols?: string[];
   sectors?: string[];
+  industries?: string[];
   regimeRequested?: boolean;
   snapshots: SnapshotBundle;
   toolOutputs?: ToolOutputs;
@@ -234,9 +272,10 @@ export async function buildResearchObjectsForAnchors(
 ): Promise<ResearchObjectBuildResult> {
   const symbols = uniqueUpperList(input.symbols).slice(0, 25);
   const sectors = uniqueList(input.sectors).slice(0, 15);
+  const industries = uniqueList(input.industries).slice(0, 15);
   const regimeRequested = input.regimeRequested === true;
 
-  if (!symbols.length && !sectors.length && !regimeRequested) {
+  if (!symbols.length && !sectors.length && !industries.length && !regimeRequested) {
     return {
       objects: [],
       objectsUpdated: [],
@@ -249,6 +288,7 @@ export async function buildResearchObjectsForAnchors(
     intent: "stock",
     symbols,
     sectors,
+    industries,
     regimeRequested,
     isFollowUp: false,
     requiresTools: [],
@@ -334,6 +374,18 @@ export function sectorContextFromResearchObjects(
       (sector) => !sectorObjects.some((item) => item.anchor === sector),
     ),
   };
+}
+
+/**
+ * Industry counterpart to {@link sectorContextFromResearchObjects}. Producing
+ * a richer `IndustryLandscape` type can wait until the agent surface needs it
+ * (Phase 5 — tool registration); for now the helper just exposes the
+ * industry research objects in a shape the prompt can iterate.
+ */
+export function industryResearchObjects(
+  objects: CachedResearchObject[],
+): CachedResearchObject[] {
+  return objects.filter((item) => item.objectType === "industry");
 }
 
 async function buildStockResearchObject(input: {
@@ -480,6 +532,58 @@ async function buildSectorResearchObject(input: {
       pathRisk: view.pathRisk,
     },
     parts: { sector: sanitizeResearchPart(researchObject), snapshot: snapshotSector },
+    view,
+    freshness: input.freshness,
+    warnings: [],
+  };
+}
+
+async function buildIndustryResearchObject(input: {
+  industry: string;
+  asOfDate: string;
+  freshness: FreshnessMetadata;
+}): Promise<CachedResearchObject> {
+  const row = await runResearchQuery<{ research_object?: unknown }>(
+    "query_v6a_industry_live",
+    { INDUSTRY: input.industry },
+  );
+  const researchObject = asRecord(row?.research_object);
+  if (!Object.keys(researchObject).length) {
+    throw new Error(
+      `No industry Research Object row returned for ${input.industry}.`,
+    );
+  }
+  const cacheKey = buildResearchObjectCacheKey(
+    "INDUSTRY",
+    input.industry,
+    input.asOfDate,
+  );
+  const asOfDate =
+    stringValue(asRecord(researchObject.meta).as_of_date) ?? input.asOfDate;
+  const publicSummary = buildIndustrySummary(researchObject);
+  const view = buildIndustryPublicResearchObjectView({
+    cacheKey,
+    industry: input.industry,
+    asOfDate,
+    freshness: input.freshness,
+    publicSummary,
+    researchObject,
+  });
+
+  return {
+    cacheKey,
+    objectType: "industry",
+    anchor: input.industry,
+    asOfDate,
+    generatedAt: new Date().toISOString(),
+    source: "database",
+    publicSummary: {
+      ...publicSummary,
+      edgeEvidence: view.edgeEvidence,
+      probabilisticEvidence: view.probabilisticEvidence,
+      pathRisk: view.pathRisk,
+    },
+    parts: { industry: sanitizeResearchPart(researchObject) },
     view,
     freshness: input.freshness,
     warnings: [],
@@ -679,6 +783,17 @@ export function publicObjectViewFromCachedObject(
     });
   }
 
+  if (item.objectType === "industry") {
+    return buildIndustryPublicResearchObjectView({
+      cacheKey: item.cacheKey,
+      industry: item.anchor,
+      asOfDate: item.asOfDate,
+      freshness: item.freshness,
+      publicSummary: item.publicSummary,
+      researchObject: asRecord(item.parts.industry),
+    });
+  }
+
   return buildRegimePublicResearchObjectView({
     cacheKey: item.cacheKey,
     asOfDate: item.asOfDate,
@@ -725,6 +840,7 @@ function hasHydratableParts(item: CachedResearchObject): boolean {
   const parts = asRecord(item.parts);
   if (item.objectType === "stock") return Object.keys(asRecord(parts.core)).length > 0;
   if (item.objectType === "sector") return Object.keys(asRecord(parts.sector)).length > 0;
+  if (item.objectType === "industry") return Object.keys(asRecord(parts.industry)).length > 0;
   if (item.objectType === "regime") return Object.keys(asRecord(parts.regime)).length > 0;
   return false;
 }
@@ -780,6 +896,60 @@ function buildStockPublicResearchObjectView(input: {
     pathRisk,
     freshness: input.freshness,
     warnings: Array.from(new Set([...input.warnings, ...edgeEvidence.warnings])),
+  };
+}
+
+function buildIndustryPublicResearchObjectView(input: {
+  cacheKey: string;
+  industry: string;
+  asOfDate: string;
+  freshness: FreshnessMetadata;
+  publicSummary: Record<string, unknown>;
+  researchObject: Record<string, unknown>;
+}): PublicResearchObjectView {
+  const historicalBaseRate = asRecord(input.researchObject.historical_base_rate);
+  const probabilisticEvidence = deriveAggregateProbabilisticEvidence(
+    historicalBaseRate,
+    "60-day",
+  );
+  // The industry SQL produces the same `path_risk_base` shape as the sector
+  // SQL, so reuse the sector path-risk derivation rather than fork a near-
+  // duplicate helper. (The shape is what the helper consumes; the anchor
+  // labelling is governed by `objectType` on the view.)
+  const pathRisk = deriveSectorPathRisk(asRecord(input.researchObject));
+  const edgeEvidence = unavailableEdgeEvidence(
+    "Validated edge evidence is not yet bridged for industry Research Objects in Ask Grahamy.",
+  );
+
+  const invalidationBullets: string[] = [];
+  const conditionsBullets: string[] = [];
+  const conditions = asRecord(input.researchObject.under_which_conditions);
+  if (typeof conditions._unavailable_note === "string") {
+    conditionsBullets.push(conditions._unavailable_note as string);
+  }
+
+  return {
+    viewSchemaVersion: PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION,
+    cacheKey: input.cacheKey,
+    objectType: "industry",
+    anchor: input.industry,
+    asOfDate: input.asOfDate,
+    title: input.industry,
+    fiveQuestion: {
+      whatMattersNow: buildIndustryWhatMattersNow(input.publicSummary),
+      whyNow: stringValue(input.publicSummary.whyNow),
+      historicalAnalogs: buildHistoricalAnalogBullets(
+        probabilisticEvidence,
+        "industry base rate",
+      ),
+      underWhichConditions: conditionsBullets,
+      invalidation: invalidationBullets,
+    },
+    edgeEvidence,
+    probabilisticEvidence,
+    pathRisk,
+    freshness: input.freshness,
+    warnings: edgeEvidence.warnings,
   };
 }
 
@@ -1420,6 +1590,30 @@ function buildStockWhatMattersNow(summary: Record<string, unknown>): string[] {
   }
   const regimeFit = stringValue(summary.regimeFit);
   if (regimeFit) lines.push(`Current regime fit is ${regimeFit}.`);
+  return lines;
+}
+
+function buildIndustryWhatMattersNow(summary: Record<string, unknown>): string[] {
+  const lines: string[] = [
+    numberFrom(summary.symbolsCovered) != null
+      ? `${numberFrom(summary.symbolsCovered)} symbols are represented in the industry evidence set.`
+      : undefined,
+    stringValue(summary.parentSector)
+      ? `Industry sits under the ${stringValue(summary.parentSector)} sector.`
+      : undefined,
+    numberFrom(summary.industryPeToday) != null
+      ? `Industry-level PE today is ${numberFrom(summary.industryPeToday)?.toFixed(1)}.`
+      : undefined,
+    numberFrom(summary.industryAvgChangeTodayPct) != null
+      ? `Industry average change today is ${numberFrom(summary.industryAvgChangeTodayPct)?.toFixed(2)}%.`
+      : undefined,
+    stringValue(summary.unconditionalHitRateBucket)
+      ? `Unconditional historical hit-rate is bucketed ${stringValue(summary.unconditionalHitRateBucket)}.`
+      : undefined,
+    stringValue(summary.sampleAdequacy)
+      ? `Sample adequacy is ${stringValue(summary.sampleAdequacy)}.`
+      : undefined,
+  ].filter((item): item is string => !!item);
   return lines;
 }
 
@@ -2167,6 +2361,113 @@ function deriveInvalidationSignals(input: {
   }
 
   return signals;
+}
+
+function buildIndustrySummary(
+  researchObject: Record<string, unknown>,
+): Record<string, unknown> {
+  const meta = asRecord(researchObject.meta);
+  const whyNow = asRecord(researchObject.why_now);
+  const whatMatters = asRecord(researchObject.what_matters);
+  const historicalBaseRate = asRecord(researchObject.historical_base_rate);
+
+  const industry =
+    stringValue(meta.industry) ?? stringValue(whatMatters.industry);
+  const parentSector =
+    stringValue(meta.parent_sector) ?? stringValue(whatMatters.parent_sector);
+  const regime =
+    stringValue(meta.current_market_regime) ??
+    stringValue(whyNow.current_regime);
+
+  const symbolsCovered = numberFrom(whatMatters.symbols);
+  const symbolsWithValuation = numberFrom(whatMatters.symbols_with_valuation_data);
+  const industryPeToday = numberFrom(whatMatters.industry_pe_today);
+  const industryAvgChangeTodayPct = numberFrom(
+    whatMatters.industry_avg_change_today_pct,
+  );
+  const recentPerf = asRecord(whatMatters.recent_perf);
+  const meanWeekPct = numberFrom(recentPerf.mean_week_pct);
+  const meanMonthPct = numberFrom(recentPerf.mean_month_pct);
+
+  const peDistribution = asRecord(whatMatters.industry_pe_percentile_distribution);
+  const topMembers = Array.isArray(whatMatters.top_members_by_market_cap)
+    ? whatMatters.top_members_by_market_cap.filter(isRecord)
+    : [];
+  const exampleSymbols = topMembers
+    .map((row) => stringValue(row.symbol))
+    .filter((symbol): symbol is string => !!symbol)
+    .slice(0, 5);
+
+  const baseHitRate = numberFrom(historicalBaseRate.h60_hit_rate);
+  const baseMedianPct = numberFrom(historicalBaseRate.h60_median_pct);
+  const baseAvgPct = numberFrom(historicalBaseRate.h60_avg_pct);
+  const baseSample = numberFrom(historicalBaseRate.n_observations);
+
+  return {
+    industry,
+    parentSector,
+    asOfDate: stringValue(meta.as_of_date),
+
+    regime,
+    vixBand: stringValue(whyNow.vix_band),
+    sp500PerfBand: stringValue(whyNow.sp500_perf_4w_band),
+
+    symbolsCovered,
+    symbolsWithValuation,
+    industryPeToday,
+    industryAvgChangeTodayPct,
+    meanWeekPct,
+    meanMonthPct,
+    pePercentileDistribution: {
+      p25: numberFrom(peDistribution.p25),
+      median: numberFrom(peDistribution.median),
+      p75: numberFrom(peDistribution.p75),
+    },
+    exampleSymbols,
+    topMembers,
+
+    unconditionalHitRateBucket: bucketHitRatePct(baseHitRate),
+    unconditionalOutcomeBucket: bucketMedianOutcomePct(
+      baseMedianPct ?? baseAvgPct,
+    ),
+    sampleAdequacy: bucketSampleAdequacy(baseSample),
+
+    // Match the field name the generic prompt path reads on sector ROs so
+    // a downstream "stocksInFocus / exampleSymbols" reader works for
+    // industries too without bespoke branching.
+    stocksInFocus: symbolsCovered,
+    historicalEvidence: bucketSampleAdequacy(baseSample),
+
+    whyNow: buildIndustryWhyNow({
+      industry,
+      parentSector,
+      regime,
+      vixBand: stringValue(whyNow.vix_band),
+      sp500PerfBand: stringValue(whyNow.sp500_perf_4w_band),
+    }),
+  };
+}
+
+function buildIndustryWhyNow(input: {
+  industry: string | undefined;
+  parentSector: string | undefined;
+  regime: string | undefined;
+  vixBand: string | undefined;
+  sp500PerfBand: string | undefined;
+}): string | undefined {
+  const parts: string[] = [];
+  if (input.industry) {
+    parts.push(
+      input.parentSector
+        ? `${input.industry} (under ${input.parentSector})`
+        : input.industry,
+    );
+  }
+  if (input.regime) parts.push(`current regime ${input.regime}`);
+  if (input.vixBand) parts.push(`VIX band ${input.vixBand}`);
+  if (input.sp500PerfBand) parts.push(`SP500 4w band ${input.sp500PerfBand}`);
+  if (!parts.length) return undefined;
+  return `${parts.join("; ")}.`;
 }
 
 function buildSectorSummary(

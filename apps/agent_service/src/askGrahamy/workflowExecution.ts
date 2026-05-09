@@ -1,18 +1,12 @@
 import type {
   AnalystWorkflowName,
   WorkflowCandidateRow,
-  WorkflowComparisonRow,
-  WorkflowExecutedStep,
   WorkflowExecutionResult,
   WorkflowPublicViews,
 } from "./analystTypes";
 import type {
-  EvidenceState,
   FeatureScreenRowView,
-  PgCapabilityViews,
-  PipelineOverlayViews,
   PublicFreshnessView,
-  PublicResearchObjectView,
   StockIdeaRowView,
 } from "./types";
 
@@ -33,140 +27,31 @@ const PIPELINE_LABELS = new Set([
   "לא זמין בתור הזה",
 ]);
 
-const WORKFLOW_STEPS: Record<AnalystWorkflowName, string[]> = {
-  regime_to_stock_screen: [
-    "market_regime_historical_playbook",
-    "feature_screen",
-    "validated_edge_evidence",
-  ],
-  sector_delta_to_stock_screen: [
-    "week_over_week_sector_delta",
-    "feature_screen",
-    "validated_edge_evidence",
-  ],
-  sector_divergence_to_stock_screen: [
-    "sector_momentum_vs_conviction_divergence",
-    "feature_screen",
-    "validated_edge_evidence",
-  ],
-  feature_screen_plus_backtest: [
-    "feature_screen",
-    "factor_conditioned_backtest",
-  ],
-  stock_deep_dive_stack: [
-    "stock_research_object",
-    "risk_path",
-    "validated_edge_evidence",
-  ],
-  idea_to_compare_and_risk: [
-    "stock_idea_discovery",
-    "risk_path",
-    "validated_edge_evidence",
-  ],
-};
-
 export function buildWorkflowExecutionResult(
   input: BuildWorkflowExecutionResultInput,
 ): WorkflowExecutionResult {
   const pipelineLabels = sanitizePipelineLabels(input.pipelineLabels ?? {});
   const candidateRows = buildCandidateRows(input.publicViews, pipelineLabels);
-  const comparisonRows = buildComparisonRows(input.publicViews.pgCapabilityViews);
   const freshness = inferWorkflowFreshness(input.publicViews);
   const missingEvidence = unique([
     ...deriveMissingEvidence(input.workflowName, input.publicViews, candidateRows, pipelineLabels),
     ...(input.missingEvidence ?? []),
   ]);
   const contradictions = unique([
-    ...deriveContradictions(candidateRows, comparisonRows, pipelineLabels),
+    ...deriveContradictions(candidateRows, pipelineLabels),
     ...(input.contradictions ?? []),
   ]);
 
   return {
     workflowName: input.workflowName,
-    executedSteps: buildExecutedSteps(input.workflowName, input.publicViews),
     publicViews: input.publicViews,
     ...(candidateRows.length ? { candidateRows } : {}),
-    ...(comparisonRows.length ? { comparisonRows } : {}),
     ...(Object.keys(pipelineLabels).length ? { pipelineLabels } : {}),
     missingEvidence,
     contradictions,
     ...(freshness ? { freshness } : {}),
     warnings: unique(input.warnings ?? []),
   };
-}
-
-export function workflowResultHasForbiddenInternals(
-  result: WorkflowExecutionResult,
-): boolean {
-  return forbiddenPattern().test(JSON.stringify(result));
-}
-
-function buildExecutedSteps(
-  workflowName: AnalystWorkflowName,
-  views: WorkflowPublicViews,
-): WorkflowExecutedStep[] {
-  return WORKFLOW_STEPS[workflowName].map((capability) => ({
-    id: capability,
-    capability,
-    state: capabilityState(capability, views),
-    warnings: capabilityWarnings(capability, views),
-  }));
-}
-
-function capabilityState(
-  capability: string,
-  views: WorkflowPublicViews,
-): EvidenceState | "skipped" {
-  const pg = views.pgCapabilityViews;
-  const pipeline = views.pipelineOverlayViews;
-  const ros = views.researchObjectViews ?? [];
-  switch (capability) {
-    case "market_regime_historical_playbook":
-      return pg?.regimeHistoricalPlaybookView?.state ?? "unavailable";
-    case "week_over_week_sector_delta":
-      return pg?.sectorDeltaView?.state ?? "unavailable";
-    case "sector_momentum_vs_conviction_divergence":
-      return pg?.sectorDivergenceView?.state ?? "unavailable";
-    case "feature_screen":
-      return pg?.featureScreenView?.state ?? "unavailable";
-    case "factor_conditioned_backtest":
-      return pg?.factorBacktestView?.state ?? "unavailable";
-    case "stock_idea_discovery":
-      return pg?.stockIdeaView?.state ?? "unavailable";
-    case "validated_edge_evidence":
-      return pipeline?.validatedEdgeEvidenceView?.state ?? "skipped";
-    case "stock_research_object":
-    case "risk_path":
-      return ros.length ? "complete" : "unavailable";
-    default:
-      return "skipped";
-  }
-}
-
-function capabilityWarnings(capability: string, views: WorkflowPublicViews): string[] {
-  const pg = views.pgCapabilityViews;
-  const pipeline = views.pipelineOverlayViews;
-  switch (capability) {
-    case "market_regime_historical_playbook":
-      return pg?.regimeHistoricalPlaybookView?.warnings ?? [];
-    case "week_over_week_sector_delta":
-      return pg?.sectorDeltaView?.warnings ?? [];
-    case "sector_momentum_vs_conviction_divergence":
-      return pg?.sectorDivergenceView?.warnings ?? [];
-    case "feature_screen":
-      return pg?.featureScreenView?.warnings ?? [];
-    case "factor_conditioned_backtest":
-      return pg?.factorBacktestView?.warnings ?? [];
-    case "stock_idea_discovery":
-      return pg?.stockIdeaView?.warnings ?? [];
-    case "validated_edge_evidence":
-      return pipeline?.validatedEdgeEvidenceView?.warnings ?? [];
-    case "stock_research_object":
-    case "risk_path":
-      return (views.researchObjectViews ?? []).flatMap((view) => view.warnings);
-    default:
-      return [];
-  }
 }
 
 function buildCandidateRows(
@@ -229,18 +114,6 @@ function fromStockIdeaRow(
   };
 }
 
-/**
- * After the v6 refactor, comparison-style turns no longer fire a dedicated
- * SQL view; the agent derives deltas itself from the per-anchor research
- * objects. We keep the function for shape compatibility but it always
- * returns no rows.
- */
-function buildComparisonRows(
-  _pgViews: PgCapabilityViews | undefined,
-): WorkflowComparisonRow[] {
-  return [];
-}
-
 function deriveMissingEvidence(
   workflowName: AnalystWorkflowName,
   views: WorkflowPublicViews,
@@ -270,7 +143,6 @@ function deriveMissingEvidence(
 
 function deriveContradictions(
   candidates: WorkflowCandidateRow[],
-  comparisonRows: WorkflowComparisonRow[],
   pipelineLabels: Record<string, string>,
 ): string[] {
   const contradictions: string[] = [];
@@ -287,9 +159,6 @@ function deriveContradictions(
   if (Object.values(pipelineLabels).some((label) => label === "ראיה מעורבת")) {
     contradictions.push("At least one candidate has mixed public Pipeline validation.");
   }
-  if (comparisonRows.some((row) => row.interpretation === "mixed")) {
-    contradictions.push("The public comparison evidence is mixed across dimensions.");
-  }
   return contradictions;
 }
 
@@ -297,8 +166,12 @@ function inferWorkflowFreshness(
   views: WorkflowPublicViews,
 ): PublicFreshnessView | undefined {
   const pg = views.pgCapabilityViews;
-  const pipeline = views.pipelineOverlayViews;
   const ros = views.researchObjectViews ?? [];
+  // PG capability views and Research Object asOfDate are the canonical
+  // sources for the workflow's data-through date. We do NOT consult the
+  // pipeline overlay's freshness or the upstream snapshot freshness here —
+  // those describe the lineage of an optional bonus overlay, not the data
+  // the workflow's answer is grounded in.
   const candidates: Array<PublicFreshnessView | undefined> = [
     pg?.featureScreenView?.freshness,
     pg?.factorBacktestView?.freshness,
@@ -306,9 +179,8 @@ function inferWorkflowFreshness(
     pg?.regimeHistoricalPlaybookView?.freshness,
     pg?.sectorDeltaView?.freshness,
     pg?.sectorDivergenceView?.freshness,
-    pipeline?.validatedEdgeEvidenceView?.freshness,
     ...ros.map((view) => ({
-      dataThrough: view.freshness.dataThrough ?? view.asOfDate,
+      dataThrough: view.asOfDate,
       state: "unknown" as const,
       warning: view.freshness.staleReason,
     })),
@@ -329,8 +201,4 @@ function sanitizePipelineLabels(labels: Record<string, string>): Record<string, 
 
 function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
-}
-
-function forbiddenPattern(): RegExp {
-  return /(ResearchPlan|compoundResearchContext|paramsFromPreviousSteps|raw_sql|raw_rows|edge_id|hypothesis_id|gates|thresholds|feature_rules|pipeline_state|md_features_daily|md_historical_features_daily|sweep_universe|grahamy_discovery|sqlite)/i;
 }

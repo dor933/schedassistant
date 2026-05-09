@@ -4,9 +4,11 @@ import { z } from "zod";
 import { logger } from "../logger";
 import { getLangfuseCallbackHandler } from "../langfuse";
 import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
+import { queryExternalReadonly } from "../utils/externalReadonlyDb";
 import {
   INTENTS,
   type Classification,
+  type CompoundResearchWorkflowName,
   type ConversationContext,
   type FactorBacktestClassification,
   type FactorBacktestCriterion,
@@ -18,24 +20,159 @@ import {
   type ToolName,
 } from "./types";
 
+const COMPOUND_RESEARCH_WORKFLOWS = [
+  "regime_to_stock_screen",
+  "sector_delta_to_stock_screen",
+  "sector_divergence_to_stock_screen",
+  "feature_screen_plus_backtest",
+  "stock_deep_dive_stack",
+  "idea_to_compare_and_risk",
+] as const satisfies readonly CompoundResearchWorkflowName[];
+
 // Canonical sector labels the downstream tools / Research Objects expect.
-// Matches the Yahoo-style sector names that appear on `daily_brief.stocks[].sector`,
-// plus the "Semiconductors" sub-sector which the pipeline already treats as a
-// first-class label even though Yahoo classifies it under Technology.
-const CANONICAL_SECTORS = [
-  "Technology",
-  "Healthcare",
+// Sourced from the external read-only `md_sectors` table on first use and
+// cached for the process lifetime. The hardcoded fallback below mirrors that
+// table at the snapshot we know about — used only if the DB call fails so the
+// public Ask Grahamy endpoint keeps classifying instead of going dark.
+const HARDCODED_SECTOR_FALLBACK = [
+  "Basic Materials",
+  "Communication Services",
+  "Consumer Cyclical",
+  "Consumer Defensive",
   "Energy",
   "Financial Services",
+  "Healthcare",
   "Industrials",
-  "Basic Materials",
-  "Utilities",
-  "Consumer Defensive",
-  "Consumer Cyclical",
-  "Communication Services",
   "Real Estate",
-  "Semiconductors",
+  "Technology",
+  "Utilities",
 ] as const;
+
+let cachedSectors: readonly string[] | null = null;
+let sectorsLoadPromise: Promise<readonly string[]> | null = null;
+
+async function loadCanonicalSectors(): Promise<readonly string[]> {
+  if (cachedSectors) return cachedSectors;
+  if (sectorsLoadPromise) return sectorsLoadPromise;
+  sectorsLoadPromise = (async () => {
+    try {
+      const rows = await queryExternalReadonly<{ name: string }>(
+        "SELECT name FROM md_sectors ORDER BY name",
+      );
+      const names = rows
+        .map((r) => (typeof r.name === "string" ? r.name.trim() : ""))
+        .filter((n) => n.length > 0);
+      cachedSectors = names.length > 0 ? names : [...HARDCODED_SECTOR_FALLBACK];
+    } catch (err) {
+      logger.warn(
+        "Ask Grahamy classifier: failed to load md_sectors, using hardcoded fallback",
+        { error: err instanceof Error ? err.message : String(err) },
+      );
+      cachedSectors = [...HARDCODED_SECTOR_FALLBACK];
+    }
+    return cachedSectors;
+  })();
+  try {
+    return await sectorsLoadPromise;
+  } finally {
+    sectorsLoadPromise = null;
+  }
+}
+
+function getCanonicalSectors(): readonly string[] {
+  return cachedSectors ?? HARDCODED_SECTOR_FALLBACK;
+}
+
+// Canonical industries are sourced from the external read-only `md_industries`
+// dimension table on first use and cached for the process lifetime. Unlike
+// sectors there is NO hardcoded fallback — the table has ~200-500 entries that
+// drift over time and a frozen list would silently misclassify. If the DB call
+// fails the classifier degrades gracefully: the industries field stays empty,
+// helpers behave as no-ops, and the existing stock/sector flow is unaffected.
+let cachedIndustries: readonly string[] | null = null;
+let industriesLoadPromise: Promise<readonly string[]> | null = null;
+
+async function loadCanonicalIndustries(): Promise<readonly string[]> {
+  if (cachedIndustries) return cachedIndustries;
+  if (industriesLoadPromise) return industriesLoadPromise;
+  industriesLoadPromise = (async () => {
+    try {
+      const rows = await queryExternalReadonly<{ name: string }>(
+        "SELECT name FROM md_industries ORDER BY name",
+      );
+      const names = rows
+        .map((r) => (typeof r.name === "string" ? r.name.trim() : ""))
+        .filter((n) => n.length > 0);
+      cachedIndustries = names;
+    } catch (err) {
+      logger.warn(
+        "Ask Grahamy classifier: failed to load md_industries, industry classification disabled until next load",
+        { error: err instanceof Error ? err.message : String(err) },
+      );
+      cachedIndustries = [];
+    }
+    return cachedIndustries;
+  })();
+  try {
+    return await industriesLoadPromise;
+  } finally {
+    industriesLoadPromise = null;
+  }
+}
+
+function getCanonicalIndustries(): readonly string[] {
+  return cachedIndustries ?? [];
+}
+
+// Compiled-once alternation regex over the canonical industry list. Rebuilt
+// when the cache pointer changes (i.e. after the initial DB load resolves).
+let industryMentionRegexCache:
+  | { sourceList: readonly string[]; pattern: RegExp | null }
+  | null = null;
+
+function getIndustryMentionRegex(): RegExp | null {
+  const list = getCanonicalIndustries();
+  if (industryMentionRegexCache?.sourceList === list) {
+    return industryMentionRegexCache.pattern;
+  }
+  if (list.length === 0) {
+    industryMentionRegexCache = { sourceList: list, pattern: null };
+    return null;
+  }
+  // Longest-first so multi-word industries match before any prefix substring.
+  const escaped = [...list]
+    .sort((a, b) => b.length - a.length)
+    .map((name) => escapeRegExp(name).replace(/\\s+/g, "\\\\s+"));
+  const pattern = new RegExp(`\\b(${escaped.join("|")})\\b`, "gi");
+  industryMentionRegexCache = { sourceList: list, pattern };
+  return pattern;
+}
+
+function findIndustryMentions(message: string): Array<{ label: string; index: number }> {
+  const regex = getIndustryMentionRegex();
+  if (!regex) return [];
+  const list = getCanonicalIndustries();
+  const lowerToCanonical = new Map<string, string>(
+    list.map((name) => [name.toLowerCase(), name]),
+  );
+  const mentions: Array<{ label: string; index: number }> = [];
+  // Reset lastIndex because the regex is /g
+  regex.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(message))) {
+    const canonical = lowerToCanonical.get(match[1].toLowerCase());
+    if (canonical) mentions.push({ label: canonical, index: match.index });
+  }
+  return mentions;
+}
+
+function canonicalIndustryLabel(value: string): string | undefined {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return getCanonicalIndustries().find(
+    (industry) =>
+      industry.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === normalized,
+  );
+}
 
 const FEATURE_SCREEN_FACTORS = [
   "valuation",
@@ -75,44 +212,65 @@ const CLASSIFIER_MODEL =
 const ASK_GRAHAMY_ORG_ID =
   process.env.ASK_GRAHAMY_ORG_ID ?? "acf0cbab-3aed-42cf-872d-63cba24e61c3";
 
-const classifierOutputSchema = z.object({
-  intent: z.enum(INTENTS),
-  symbols: z.array(z.string()).max(5),
-  sectors: z.array(z.enum(CANONICAL_SECTORS)).max(5),
-  regimeRequested: z.boolean(),
-  isFollowUp: z.boolean(),
-  focus: z.enum(["risk", "validated_evidence"]).nullable().optional(),
-  featureCriteria: z
-    .array(
-      z.object({
-        factor: z.enum(FEATURE_SCREEN_FACTORS),
-        bucket: z.string(),
-      }),
-    )
-    .max(7)
-    .nullable()
-    .optional(),
-  factorBacktest: z
-    .object({
-      criteria: z
-        .array(
-          z.object({
-            factor: z.enum(FACTOR_BACKTEST_FACTORS),
-            bucket: z.string(),
-          }),
-        )
-        .max(6),
-      horizon: z.enum(FACTOR_BACKTEST_HORIZONS).nullable().optional(),
-      unsupportedHorizon: z.string().nullable().optional(),
-      unsupportedCriteria: z.array(z.string()).max(5).nullable().optional(),
-      notes: z.array(z.string()).max(5).nullable().optional(),
-    })
-    .nullable()
-    .optional(),
-  confidence: z.enum(["high", "medium", "low"]),
-});
+function buildClassifierOutputSchema(sectors: readonly string[]) {
+  const sectorTuple = [...sectors] as [string, ...string[]];
+  return z.object({
+    intent: z.enum(INTENTS),
+    symbols: z.array(z.string()).max(5),
+    sectors: z.array(z.enum(sectorTuple)).max(5),
+    // Industries are accepted as free strings (the canonical set is too large
+    // — ~200-500 entries — to enumerate as a Zod enum or in the system
+    // prompt). Post-parse, classifyMessage validates each emitted industry
+    // against md_industries.name and drops unknowns.
+    industries: z.array(z.string()).max(5).default([]),
+    regimeRequested: z.boolean(),
+    isFollowUp: z.boolean(),
+    focus: z.enum(["risk", "validated_evidence"]).nullable().optional(),
+    featureCriteria: z
+      .array(
+        z.object({
+          factor: z.enum(FEATURE_SCREEN_FACTORS),
+          bucket: z.string(),
+        }),
+      )
+      .max(7)
+      .nullable()
+      .optional(),
+    factorBacktest: z
+      .object({
+        criteria: z
+          .array(
+            z.object({
+              factor: z.enum(FACTOR_BACKTEST_FACTORS),
+              bucket: z.string(),
+            }),
+          )
+          .max(6),
+        horizon: z.enum(FACTOR_BACKTEST_HORIZONS).nullable().optional(),
+        unsupportedHorizon: z.string().nullable().optional(),
+        unsupportedCriteria: z.array(z.string()).max(5).nullable().optional(),
+        notes: z.array(z.string()).max(5).nullable().optional(),
+      })
+      .nullable()
+      .optional(),
+    compoundWorkflow: z
+      .enum(COMPOUND_RESEARCH_WORKFLOWS)
+      .nullable()
+      .optional(),
+    confidence: z.enum(["high", "medium", "low"]),
+  });
+}
 
-export type ClassifierOutput = z.infer<typeof classifierOutputSchema>;
+type ClassifierOutputSchema = ReturnType<typeof buildClassifierOutputSchema>;
+export type ClassifierOutput = z.infer<ClassifierOutputSchema>;
+
+let cachedSchema: ClassifierOutputSchema | null = null;
+function getClassifierOutputSchema(
+  sectors: readonly string[],
+): ClassifierOutputSchema {
+  if (!cachedSchema) cachedSchema = buildClassifierOutputSchema(sectors);
+  return cachedSchema;
+}
 
 export type ClassifierTraceContext = {
   userId?: string | number;
@@ -135,17 +293,35 @@ export type ClassifyOptions = {
   traceContext?: ClassifierTraceContext;
 };
 
-const SYSTEM_PROMPT = `You classify user messages for a public stock-research assistant.
+let cachedSystemPrompt: string | null = null;
+function getSystemPrompt(sectors: readonly string[]): string {
+  if (!cachedSystemPrompt) cachedSystemPrompt = buildSystemPrompt(sectors);
+  return cachedSystemPrompt;
+}
+
+function buildSystemPrompt(sectors: readonly string[]): string {
+  return `You classify user messages for a public stock-research assistant.
 The downstream system can answer when the message is anchored to one or more of:
   • a public US stock — output as an UPPERCASE ticker (e.g. NVDA, MSFT, BRK.B). Resolve company
     names to their primary US ticker when you are at least medium-confidence (e.g. "nvidia" → NVDA,
     "apple" → AAPL, "jp morgan" → JPM). Omit symbols you cannot confidently resolve.
-  • a sector — must be exactly one of: ${CANONICAL_SECTORS.join(", ")}.
+  • a sector — must be exactly one of: ${sectors.join(", ")}.
+  • an industry — a finer Yahoo classification UNDER a sector (e.g. "Semiconductors",
+    "Biotechnology", "Homebuilders", "Airlines", "Banks—Diversified", "Oil & Gas E&P",
+    "Software—Application"). Output industries under the "industries" array using the
+    canonical Yahoo industry name. NEVER put an industry into "sectors" — those are the
+    11 broad sector labels above. If unsure whether a term is a sector or an industry,
+    it is almost always an industry; the only valid sectors are the 11 listed.
   • the current market regime / setup / VIX / macro state.
   • an anchorless sector leaderboard / sector conviction ranking request.
   • an anchorless sector momentum-vs-conviction divergence request.
   • an anchorless week-over-week sector change / sector delta request.
   • an anchorless stock idea / best setups / top conviction names discovery request.
+  • a sector-internal leading-stocks request — the user names ONE sector and wants the
+    leading / top / best / strongest stocks within that sector (no other feature criteria).
+  • an industry-internal leading-stocks request — same shape but the user names ONE
+    industry instead of a sector (e.g. "top stocks in Semiconductors", "leading
+    Biotechnology names", "best Airlines"). Use intent="industry_leaders".
   • an anchorless bounded stock screen request with user-specified current feature buckets.
   • an anchorless historical factor-combination backtest / forward-profile request.
   • an anchorless current-regime historical playbook request.
@@ -185,10 +361,32 @@ Without prior context:
   • "and the risks?"                   → intent="unknown" (no anchor anywhere)
   • "what is the probability of losing more than 10%?" → intent="unknown" (no anchor anywhere)
 
-intent must be exactly one of: stock, sector, regime, stock_sector, stock_regime, sector_regime,
-stock_sector_regime, sector_conviction_leaderboard, sector_momentum_vs_conviction_divergence,
-week_over_week_sector_delta, stock_idea_discovery, market_regime_historical_playbook,
-feature_screen, factor_conditioned_backtest, follow_up, unknown.
+intent must be exactly one of: stock, sector, industry, regime, stock_sector, stock_regime,
+sector_regime, stock_sector_regime, sector_conviction_leaderboard,
+sector_momentum_vs_conviction_divergence, week_over_week_sector_delta, stock_idea_discovery,
+sector_leaders, industry_leaders, market_regime_historical_playbook, feature_screen,
+factor_conditioned_backtest, follow_up, unknown.
+
+Use intent = "industry" when the user asks about a single industry without naming a stock,
+sector, or regime AND without asking for "leading stocks in <industry>" (which is
+industry_leaders). Examples:
+  • "How does the Semiconductors industry look?"      → intent="industry", industries=["Semiconductors"]
+  • "Tell me about Biotechnology"                     → intent="industry", industries=["Biotechnology"]
+  • "What's going on with Homebuilders?"              → intent="industry", industries=["Homebuilders"]
+For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+
+Use intent = "industry_leaders" when the user names exactly ONE industry and asks for the
+leading / top / best / strongest stocks within that industry, with no other feature criteria.
+Put the industry in industries=[<industry>]. Examples:
+  • "Top stocks in Semiconductors"                    → intent="industry_leaders", industries=["Semiconductors"]
+  • "Leading Biotechnology names right now"           → intent="industry_leaders", industries=["Biotechnology"]
+  • "Best Airlines stocks"                            → intent="industry_leaders", industries=["Airlines"]
+For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+
+When the user names BOTH a stock AND an industry (e.g. "compare NVDA with the Semiconductors
+industry"), keep intent="stock" and put NVDA in symbols and Semiconductors in industries —
+industries ride alongside other anchors as a tag, the intent stays driven by the primary
+question shape.
 
 Use intent = "sector_conviction_leaderboard" when the user asks for a sector-wide ranking without
 naming a specific sector. Examples:
@@ -229,6 +427,20 @@ ticker AND without specifying concrete screening criteria. Examples:
   • "What should I look at today?"
   • "Which names have the best setup right now?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
+
+Use intent = "sector_leaders" when the user names exactly ONE sector and asks for the
+leading / top / best / strongest stocks within that sector, with no other feature criteria
+(no valuation / quality / momentum / growth / leverage / risk filter). Put the sector in
+sectors=[<sector>]. Examples:
+  • "Which stocks are leading in Technology?"
+  • "Top names in Healthcare right now"
+  • "Best stocks in Energy"
+  • "Strongest tickers in Industrials this week"
+  • "Show me the leaders in Financial Services"
+If the user combines a sector with a feature criterion (e.g. "high-quality stocks in
+Industrials"), use feature_screen instead. If the user asks for leading SECTORS rather
+than leading stocks, use sector_conviction_leaderboard.
+For this intent, symbols=[], sectors=[<one canonical sector>], regimeRequested=false.
 
 Use intent = "feature_screen" when the user asks to find/screen/list stocks using specific
 current public feature criteria such as valuation, quality, momentum, growth, leverage, sector,
@@ -351,12 +563,77 @@ to any stock / sector / regime EVEN AFTER inheritance from prior context.
 
 symbols, sectors, and regimeRequested must be consistent with the chosen intent.
 
+COMPOUND WORKFLOW (compoundWorkflow):
+A compound workflow is when the question NEEDS the output of one PG capability to be used as a
+PARAMETER for the next capability. Single-capability questions do NOT need this — leave it
+unset / null. Set compoundWorkflow ONLY when the user is explicitly asking for a chain like
+"X-from-view-A, then Y-using-X". Most turns will leave this empty.
+
+The intent you pick stays based on the primary question shape; compoundWorkflow is an additional
+tag that tells the downstream system to run a multi-step cascade. When set, you should still
+populate symbols / sectors / regimeRequested as anchors when the user named any.
+
+The six allowed compoundWorkflow values are:
+
+  • "regime_to_stock_screen" — user wants leading sectors in the current regime AND wants
+    current stock candidates inside those leading sectors. Triggers when the message names
+    BOTH the current regime / market backdrop AND the desire for stocks/candidates restricted
+    to the regime's leading sectors. Examples:
+      - "Given the current regime, which sectors historically lead and which stocks should
+         I look at in those sectors?"
+      - "What works in this regime, and find me names in those sectors"
+      - "במשטר הנוכחי איזה סקטורים חזקים היסטורית ומאיזה מניות לבחור בהם?"
+
+  • "sector_delta_to_stock_screen" — user wants sectors that improved this week AND wants
+    current stock candidates inside those improved sectors. Examples:
+      - "Which sectors improved this week and what stocks should I look at in them?"
+      - "Show me names in the sectors that strengthened this week"
+      - "סקטורים שהתחזקו השבוע, ומניות מעניינות בהם"
+
+  • "sector_divergence_to_stock_screen" — user wants sectors with conviction-versus-price
+    divergence AND wants current stock candidates inside those sectors. Examples:
+      - "Sectors where the data is strong but price hasn't moved — give me stocks in them"
+      - "Where is there divergence between conviction and momentum, and what names are there?"
+      - "סקטורים עם פער בין ראיות למחיר, ומניות בתוכם"
+
+  • "feature_screen_plus_backtest" — user wants a current feature screen AND the historical
+    forward profile of those same criteria. Triggers when both "find/show stocks with X
+    properties" AND "did this work historically / backtest" appear in the SAME message.
+    Examples:
+      - "Find cheap quality stocks and tell me whether that combination worked historically"
+      - "Show stocks with attractive valuation and strong momentum, plus the 60-day backtest"
+      - "מצא לי מניות זולות ואיכותיות ובדוק האם השילוב עבד בעבר"
+
+  • "stock_deep_dive_stack" — user wants a full deep dive on a specific stock that includes
+    risk AND comparison to its sector. Triggers when the user names ONE stock and asks for
+    a full analysis covering both risk and the sector context. Examples:
+      - "Full analysis of NVDA including risk and how it compares to its sector"
+      - "Deep dive on AAPL with the downside risk and sector comparison"
+      - "ניתוח מלא ל-NVDA כולל סיכון והשוואה לסקטור"
+    Do NOT set this for risk-only questions, sector-comparison-only questions, or "what
+    do you think about X" without an explicit risk + sector ask.
+
+  • "idea_to_compare_and_risk" — user wants a stock idea / interesting name AND the sibling
+    sector context AND the risk on that idea, in a single ask. Examples:
+      - "Give me an interesting stock idea, compare it to its sector, and add the risk"
+      - "Stock idea with sector comparison and downside risk"
+      - "תן לי רעיון למניה, השוואה לסקטור, וסיכון"
+
+When the message hits one of those patterns, set compoundWorkflow to the matching name.
+Otherwise leave compoundWorkflow null / omitted. Do NOT set compoundWorkflow on simple
+single-aspect questions, generic follow-ups, or risk-only / comparison-only / screen-only
+questions that don't combine outputs into inputs.
+
+Do NOT set compoundWorkflow when focus="validated_evidence" — those answers come from a
+different evidence layer entirely.
+
 confidence:
   • "high"   — a clear ticker / sector / regime is named.
   • "medium" — inferred from a company name OR inherited from prior context.
   • "low"    — best guess; the caller may treat as unknown.
 
 Return ONLY the structured object — no prose.`;
+}
 
 function buildUserPrompt(
   message: string,
@@ -368,6 +645,7 @@ function buildUserPrompt(
     lines.push("Prior turn context:");
     lines.push(`  lastSymbols: [${ctx.lastSymbols.join(", ")}]`);
     lines.push(`  lastSectors: [${ctx.lastSectors.join(", ")}]`);
+    lines.push(`  lastIndustries: [${ctx.lastIndustries.join(", ")}]`);
     if (ctx.lastIntent) lines.push(`  lastIntent: ${ctx.lastIntent}`);
   } else {
     lines.push("Prior turn context: (none — this is the first turn)");
@@ -386,14 +664,17 @@ type StructuredRunnable = {
 };
 let cachedStructured: { apiKey: string; runnable: StructuredRunnable } | null = null;
 
-function buildStructuredRunnable(apiKey: string): StructuredRunnable {
+function buildStructuredRunnable(
+  apiKey: string,
+  schema: ClassifierOutputSchema,
+): StructuredRunnable {
   const llm = new ChatOpenAI({ modelName: CLASSIFIER_MODEL, apiKey });
   return (llm as unknown as {
     withStructuredOutput: (
-      schema: typeof classifierOutputSchema,
+      schema: ClassifierOutputSchema,
       opts: { name: string },
     ) => StructuredRunnable;
-  }).withStructuredOutput(classifierOutputSchema, {
+  }).withStructuredOutput(schema, {
     name: "ask_grahamy_classification",
   });
 }
@@ -403,6 +684,12 @@ const defaultInvoker: ClassifierInvoker = async ({
   previousContext,
   traceContext,
 }) => {
+  const [sectors] = await Promise.all([
+    loadCanonicalSectors(),
+    loadCanonicalIndustries(),
+  ]);
+  const schema = getClassifierOutputSchema(sectors);
+  const systemPrompt = getSystemPrompt(sectors);
   const vendor = await resolveOrgVendorByOrg(CLASSIFIER_MODEL, ASK_GRAHAMY_ORG_ID);
   if (!vendor) {
     throw new Error(
@@ -422,7 +709,7 @@ const defaultInvoker: ClassifierInvoker = async ({
   if (!cachedStructured || cachedStructured.apiKey !== vendor.apiKey) {
     cachedStructured = {
       apiKey: vendor.apiKey,
-      runnable: buildStructuredRunnable(vendor.apiKey),
+      runnable: buildStructuredRunnable(vendor.apiKey, schema),
     };
   }
   const handler = getLangfuseCallbackHandler(
@@ -440,12 +727,12 @@ const defaultInvoker: ClassifierInvoker = async ({
     : undefined;
   const raw = await cachedStructured.runnable.invoke(
     [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: buildUserPrompt(message, previousContext) },
     ],
     invokeConfig,
   );
-  return classifierOutputSchema.parse(raw);
+  return schema.parse(raw);
 };
 
 export async function classifyMessage(
@@ -453,6 +740,11 @@ export async function classifyMessage(
   previousContext?: ConversationContext,
   options: ClassifyOptions = {},
 ): Promise<Classification> {
+  // Warm the sector + industry caches before any sync helper runs — keeps
+  // findSectorMentions / canonicalSectorLabel / findIndustryMentions /
+  // canonicalIndustryLabel / looksLikeFeatureScreenRequest operating on the
+  // DB-sourced lists rather than fallbacks.
+  await Promise.all([loadCanonicalSectors(), loadCanonicalIndustries()]);
   const invoker = options.classifier ?? defaultInvoker;
   let raw: ClassifierOutput;
   try {
@@ -469,6 +761,7 @@ export async function classifyMessage(
       intent: "unknown",
       symbols: [],
       sectors: [],
+      industries: [],
       regimeRequested: false,
       isFollowUp: false,
       requiresTools: [],
@@ -480,19 +773,36 @@ export async function classifyMessage(
   const focus = normalizeFocus(raw.focus) ?? inferFocusFromMessage(message);
   let symbols = uniqueUpper(raw.symbols).slice(0, 5);
   let sectors: string[] = unique(raw.sectors).slice(0, 5);
+  // Validate LLM-emitted industry strings against the canonical
+  // md_industries.name set (dropping anything we don't recognise) and add a
+  // regex backstop pass over the message so we don't miss industries the LLM
+  // failed to emit. The canonical list is the authoritative spelling.
+  let industries: string[] = unique(
+    (raw.industries ?? [])
+      .map((name) => canonicalIndustryLabel(name))
+      .filter((name): name is string => !!name),
+  ).slice(0, 5);
+  for (const mention of findIndustryMentions(message)) {
+    if (industries.includes(mention.label)) continue;
+    industries.push(mention.label);
+    if (industries.length >= 5) break;
+  }
   let regimeRequested = raw.regimeRequested;
   if (
     focus === "risk" &&
     !symbols.length &&
     !sectors.length &&
+    !industries.length &&
     !regimeRequested &&
     shouldInheritRiskAnchor(raw, previousContext)
   ) {
     symbols = uniqueUpper(previousContext?.lastSymbols ?? []).slice(0, 5);
     sectors = unique(previousContext?.lastSectors ?? []).slice(0, 5);
+    industries = unique(previousContext?.lastIndustries ?? []).slice(0, 5);
     regimeRequested =
       !symbols.length &&
       !sectors.length &&
+      !industries.length &&
       typeof previousContext?.lastIntent === "string" &&
       previousContext.lastIntent.includes("regime");
   }
@@ -500,14 +810,17 @@ export async function classifyMessage(
     focus === "validated_evidence" &&
     !symbols.length &&
     !sectors.length &&
+    !industries.length &&
     !regimeRequested &&
     shouldInheritValidatedEvidenceAnchor(raw, previousContext)
   ) {
     symbols = uniqueUpper(previousContext?.lastSymbols ?? []).slice(0, 5);
     sectors = unique(previousContext?.lastSectors ?? []).slice(0, 5);
+    industries = unique(previousContext?.lastIndustries ?? []).slice(0, 5);
     regimeRequested =
       !symbols.length &&
       !sectors.length &&
+      !industries.length &&
       typeof previousContext?.lastIntent === "string" &&
       previousContext.lastIntent.includes("regime");
   }
@@ -532,6 +845,28 @@ export async function classifyMessage(
     inferFactorBacktestFromMessage(message);
   const featureCriteria = normalizeFeatureCriteria(raw.featureCriteria) ??
     inferFeatureScreenCriteriaFromMessage(message);
+  // Sector-leaders backstop: catches "leading stocks in <sector>" style turns
+  // even when the LLM mislabels them as `sector` or `feature_screen` (sector
+  // criterion only). Also fills in `sectors[0]` when the LLM emitted
+  // `sector_leaders` but forgot to populate it.
+  const inferredSectorLeaders = inferSectorLeadersFromMessage(message);
+  if (inferredSectorLeaders) {
+    const canonical = canonicalSectorLabel(inferredSectorLeaders.sector);
+    if (canonical && !sectors.includes(canonical)) {
+      sectors = unique([canonical, ...sectors]).slice(0, 5);
+    }
+  } else if (raw.intent === "sector_leaders" && sectors.length === 0) {
+    // LLM picked the intent but missed the sector. Fall through to "unknown"
+    // by leaving sectors empty — handled by the dispatch below.
+  }
+
+  // Industry-leaders backstop: same shape as sector-leaders but matched
+  // against the canonical industry list. Runs only when an industry mention
+  // is present (so plain sector questions aren't accidentally rerouted).
+  const inferredIndustryLeaders = inferIndustryLeadersFromMessage(
+    message,
+    industries,
+  );
 
   // Slimmed classifier — the deep agent's PostgresSaver thread carries
   // conversation memory now, so we no longer need the follow-up self-
@@ -540,42 +875,90 @@ export async function classifyMessage(
   // the user explicitly named THIS turn. Pure follow-ups like "why?" with
   // no anchors flow through with empty arrays — the downstream agent
   // resolves them via thread memory.
-  const inferred = inferIntent(symbols, sectors, regimeRequested, raw.isFollowUp);
-  const hasRiskAnchor = focus === "risk" && (symbols.length > 0 || sectors.length > 0 || regimeRequested);
+  const inferred = inferIntent(
+    symbols,
+    sectors,
+    industries,
+    regimeRequested,
+    raw.isFollowUp,
+  );
+  const hasRiskAnchor =
+    focus === "risk" &&
+    (symbols.length > 0 ||
+      sectors.length > 0 ||
+      industries.length > 0 ||
+      regimeRequested);
   const hasValidatedEvidenceAnchor =
     focus === "validated_evidence" &&
-    (symbols.length > 0 || sectors.length > 0 || regimeRequested);
+    (symbols.length > 0 ||
+      sectors.length > 0 ||
+      industries.length > 0 ||
+      regimeRequested);
   // Trust the LLM's "unknown" verdict; otherwise re-derive intent from the
-  // resolved (symbols, sectors, regime) tuple so requiresTools and intent
-  // stay consistent even if the model returned a mismatched label.
+  // resolved (symbols, sectors, industries, regime) tuple so requiresTools
+  // and intent stay consistent even if the model returned a mismatched label.
+  const sectorLeadersDispatchable =
+    (inferredSectorLeaders ||
+      (raw.intent === "sector_leaders" && sectors.length > 0)) &&
+    sectors.length > 0 &&
+    !factorBacktest &&
+    // Only route to sector_leaders when the inference did NOT also produce
+    // non-sector feature criteria — those mean the user wants a feature
+    // screen scoped to a sector, which feature_screen handles natively.
+    !featureCriteria.some((c) => c.factor !== "sector");
+  // Industry_leaders takes precedence over sector_leaders when an industry
+  // anchor is present — "Top stocks in Semiconductors" is industry_leaders,
+  // not sector_leaders, since Semiconductors isn't a canonical sector.
+  const industryLeadersDispatchable =
+    (inferredIndustryLeaders ||
+      (raw.intent === "industry_leaders" && industries.length > 0)) &&
+    industries.length > 0 &&
+    !factorBacktest &&
+    !featureCriteria.length;
   const intent: Intent = factorBacktest
     ? "factor_conditioned_backtest"
-    : featureCriteria.length
-      ? "feature_screen"
-      : inferredAnchorlessCapability
-        ? inferredAnchorlessCapability
-        : focus === "risk" && !hasRiskAnchor
-          ? "unknown"
-          : focus === "validated_evidence" && !hasValidatedEvidenceAnchor
-            ? "unknown"
-            : hasRiskAnchor
-              ? inferred
-              : hasValidatedEvidenceAnchor
-                ? inferred
-                : raw.intent === "unknown"
-                  ? "unknown"
-                  : isAnchorlessCapabilityIntent(raw.intent)
-                    ? raw.intent
-                    : inferredAnchorlessCapability ?? inferred;
+    : industryLeadersDispatchable
+      ? "industry_leaders"
+      : sectorLeadersDispatchable
+        ? "sector_leaders"
+        : featureCriteria.length
+          ? "feature_screen"
+          : inferredAnchorlessCapability
+            ? inferredAnchorlessCapability
+            : focus === "risk" && !hasRiskAnchor
+              ? "unknown"
+              : focus === "validated_evidence" && !hasValidatedEvidenceAnchor
+                ? "unknown"
+                : hasRiskAnchor
+                  ? inferred
+                  : hasValidatedEvidenceAnchor
+                    ? inferred
+                    : raw.intent === "unknown"
+                      ? "unknown"
+                      : isAnchorlessCapabilityIntent(raw.intent)
+                        ? raw.intent
+                        : inferredAnchorlessCapability ?? inferred;
   const includeFocus =
     (focus === "risk" || focus === "validated_evidence") &&
     intent !== "unknown" &&
     !isAnchorlessCapabilityIntent(intent);
 
+  // compoundWorkflow is dropped when:
+  //   - intent is unknown (no anchor / nothing to chain)
+  //   - focus is validated_evidence (answers come from a separate overlay)
+  //   - the LLM returned null/undefined (the common case)
+  const compoundWorkflow =
+    raw.compoundWorkflow &&
+    intent !== "unknown" &&
+    focus !== "validated_evidence"
+      ? raw.compoundWorkflow
+      : undefined;
+
   return {
     intent,
     symbols,
     sectors,
+    industries,
     regimeRequested,
     isFollowUp: raw.isFollowUp,
     ...(includeFocus ? { focus } : {}),
@@ -583,11 +966,14 @@ export async function classifyMessage(
     ...(intent === "factor_conditioned_backtest" && factorBacktest
       ? { factorBacktest }
       : {}),
+    ...(compoundWorkflow ? { compoundWorkflow } : {}),
     requiresTools: toolsForIntent(intent),
     confidence: raw.confidence,
     warnings:
       intent === "unknown"
-        ? ["Could not classify the message into stock, sector, or regime context."]
+        ? [
+            "Could not classify the message into stock, sector, industry, or regime context.",
+          ]
         : [],
   };
 }
@@ -620,6 +1006,7 @@ function shouldInheritRiskAnchor(
   return (
     previousContext.lastSymbols.length > 0 ||
     previousContext.lastSectors.length > 0 ||
+    previousContext.lastIndustries.length > 0 ||
     (typeof previousContext.lastIntent === "string" &&
       previousContext.lastIntent.includes("regime"))
   );
@@ -634,6 +1021,7 @@ function shouldInheritValidatedEvidenceAnchor(
   return (
     previousContext.lastSymbols.length > 0 ||
     previousContext.lastSectors.length > 0 ||
+    previousContext.lastIndustries.length > 0 ||
     (typeof previousContext.lastIntent === "string" &&
       previousContext.lastIntent.includes("regime"))
   );
@@ -647,12 +1035,17 @@ export function toolsForIntent(intent: Intent): ToolName[] {
     case "sector":
     case "sector_regime":
       return ["get_sector_snapshot_context", "get_market_context"];
+    case "industry":
+      return ["get_industry_snapshot_context", "get_market_context"];
+    case "industry_leaders":
+      return ["get_industry_snapshot_context", "get_market_context"];
     case "regime":
       return ["get_market_context"];
     case "sector_conviction_leaderboard":
     case "sector_momentum_vs_conviction_divergence":
     case "week_over_week_sector_delta":
     case "stock_idea_discovery":
+    case "sector_leaders":
     case "feature_screen":
     case "factor_conditioned_backtest":
     case "market_regime_historical_playbook":
@@ -680,6 +1073,68 @@ function isAnchorlessCapabilityIntent(intent: Intent): boolean {
     intent === "factor_conditioned_backtest" ||
     intent === "market_regime_historical_playbook"
   );
+}
+
+/**
+ * Detects "leading / top / best stocks in <sector>" turns. Returns the
+ * matched sector when the message has both a leadership cue and exactly one
+ * canonical sector mention, and is NOT mixing in a feature criterion (which
+ * belongs to feature_screen). The classifyMessage dispatch uses this as the
+ * deterministic backstop alongside the LLM-emitted `sector_leaders` intent.
+ */
+function inferSectorLeadersFromMessage(
+  message: string,
+): { sector: string } | undefined {
+  const leadershipCue =
+    /\b(leading|leaders?|top|best|strongest|outperform(?:ers?|ing)?|winners?|standouts?)\b/i.test(
+      message,
+    );
+  if (!leadershipCue) return undefined;
+  const stocksCue = /\b(stocks?|names?|tickers?|companies?)\b/i.test(message);
+  if (!stocksCue) return undefined;
+  const featureCue =
+    /\b(cheap|value|undervalued|attractive|expensive|rich|overvalued|fair(?:ly)?|quality|momentum|growth|leverage|risk|elevated|stressed|low\s+leverage|weak\s+growth|strong\s+growth|insider)\b/i.test(
+      message,
+    );
+  if (featureCue) return undefined;
+  // "Which sectors are leading" is a sector-leaderboard ask, not sector_leaders.
+  if (/\b(sectors?\s+(?:are\s+)?leading|leading\s+sectors?)\b/i.test(message)) {
+    return undefined;
+  }
+  const sectorMentions = findSectorMentions(message);
+  if (sectorMentions.length !== 1) return undefined;
+  return { sector: sectorMentions[0].label };
+}
+
+/**
+ * Detects "leading / top / best stocks in <industry>" turns. Mirrors the
+ * sector-leaders backstop but matches against the canonical industry list.
+ * Caller passes the resolved industries array so we don't re-scan the
+ * message for industries the LLM may have already emitted.
+ */
+function inferIndustryLeadersFromMessage(
+  message: string,
+  industries: string[],
+): { industry: string } | undefined {
+  if (industries.length !== 1) return undefined;
+  const leadershipCue =
+    /\b(leading|leaders?|top|best|strongest|outperform(?:ers?|ing)?|winners?|standouts?)\b/i.test(
+      message,
+    );
+  if (!leadershipCue) return undefined;
+  const stocksCue = /\b(stocks?|names?|tickers?|companies?)\b/i.test(message);
+  if (!stocksCue) return undefined;
+  const featureCue =
+    /\b(cheap|value|undervalued|attractive|expensive|rich|overvalued|fair(?:ly)?|quality|momentum|growth|leverage|risk|elevated|stressed|low\s+leverage|weak\s+growth|strong\s+growth|insider)\b/i.test(
+      message,
+    );
+  if (featureCue) return undefined;
+  // "Which industries are leading" would be an industry-leaderboard ask
+  // (not built yet) — never industry_leaders.
+  if (/\b(industries\s+(?:are\s+)?leading|leading\s+industries)\b/i.test(message)) {
+    return undefined;
+  }
+  return { industry: industries[0] };
 }
 
 function inferAnchorlessCapabilityFromMessage(
@@ -922,11 +1377,12 @@ function looksLikeFeatureScreenRequest(message: string): boolean {
       message,
     );
   const hasScreenNoun = /\bstocks?\b/i.test(message);
-  const hasCriteria =
-    /\b(cheap|value|undervalued|attractive|valuation|expensive|rich|quality|momentum|growth|leverage|balance\s+sheet|risk|Industrials|Technology|Healthcare|Energy|Utilities|Financial Services|Basic Materials|Consumer Defensive|Consumer Cyclical|Communication Services|Real Estate|Semiconductors)\b/i.test(
-      message,
-    );
-  return (hasScreenVerb || hasScreenNoun) && hasCriteria;
+  const sectorAlternation = getCanonicalSectors().map(escapeRegExp).join("|");
+  const criteriaPattern = new RegExp(
+    `\\b(cheap|value|undervalued|attractive|valuation|expensive|rich|quality|momentum|growth|leverage|balance\\s+sheet|risk${sectorAlternation ? `|${sectorAlternation}` : ""})\\b`,
+    "i",
+  );
+  return (hasScreenVerb || hasScreenNoun) && criteriaPattern.test(message);
 }
 
 function normalizeFeatureCriterion(
@@ -1142,7 +1598,7 @@ function extractTickerLikeTokens(message: string): string[] {
 
 function findSectorMentions(message: string): Array<{ label: string; index: number }> {
   const mentions: Array<{ label: string; index: number }> = [];
-  for (const sector of CANONICAL_SECTORS) {
+  for (const sector of getCanonicalSectors()) {
     const pattern = new RegExp(`\\b${escapeRegExp(sector).replace(/\\s+/g, "\\\\s+")}\\b`, "i");
     const match = message.match(pattern);
     if (match?.index != null) mentions.push({ label: sector, index: match.index });
@@ -1152,7 +1608,7 @@ function findSectorMentions(message: string): Array<{ label: string; index: numb
 
 function canonicalSectorLabel(value: string): string | undefined {
   const normalized = value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  return CANONICAL_SECTORS.find(
+  return getCanonicalSectors().find(
     (sector) =>
       sector.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === normalized,
   );
@@ -1165,15 +1621,22 @@ function escapeRegExp(value: string): string {
 function inferIntent(
   symbols: string[],
   sectors: string[],
+  industries: string[],
   regimeRequested: boolean,
   wasFollowUp: boolean,
 ): Intent {
+  // Industries ride alongside the existing stock/sector/regime matrix as a
+  // tag — the intent stays driven by the broader anchor when present, and
+  // industry becomes the primary intent only when nothing else anchors the
+  // turn. This matches the "minimal industry anchor" decision: no new
+  // combinatorial intents (no stock_industry / industry_regime / etc).
   if (symbols.length && sectors.length && regimeRequested) return "stock_sector_regime";
   if (symbols.length && sectors.length) return "stock_sector";
   if (symbols.length && regimeRequested) return "stock_regime";
   if (sectors.length && regimeRequested) return "sector_regime";
   if (symbols.length) return "stock";
   if (sectors.length) return "sector";
+  if (industries.length) return "industry";
   if (regimeRequested) return "regime";
   return wasFollowUp ? "follow_up" : "unknown";
 }

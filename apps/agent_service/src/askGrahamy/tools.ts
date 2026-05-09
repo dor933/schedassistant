@@ -3,6 +3,7 @@ import { isRecord, numberValue, stringValue } from "./snapshotClient";
 import type {
   Classification,
   HomepageFocusContext,
+  IndustryLandscape,
   MarketContext,
   SectorLandscape,
   SnapshotBundle,
@@ -37,6 +38,14 @@ export async function executeSnapshotTools(
         "get_sector_snapshot_context",
         { sectors: classification.sectors },
         async () => getSectorSnapshotContext(snapshots, classification.sectors),
+      );
+    }
+    if (tool === "get_industry_snapshot_context") {
+      outputs.get_industry_snapshot_context = await observeToolCall(
+        "get_industry_snapshot_context",
+        { industries: classification.industries },
+        async () =>
+          getIndustrySnapshotContext(snapshots, classification.industries),
       );
     }
     if (tool === "get_homepage_focus_context") {
@@ -171,6 +180,30 @@ export function getSectorSnapshotContext(
   }
 
   return landscape;
+}
+
+/**
+ * Industry snapshot tool. Unlike the sector snapshot — which can lean on
+ * `daily_brief.stocks[].sector` for example symbols + win-rate buckets —
+ * the daily brief does not attribute stocks to industries, so this tool
+ * returns a thin pre-RO summary. The substantive industry payload (member
+ * counts, today's industry PE, top members, historical base rate, path
+ * risk) lives on the industry research object built from
+ * `query_v6a_industry_live.sql`. We flag `researchObjectAttached: true`
+ * for every requested industry so the agent prompt knows the deep payload
+ * is available alongside this thin context.
+ */
+export function getIndustrySnapshotContext(
+  _snapshots: SnapshotBundle,
+  industries: string[],
+): IndustryLandscape {
+  return {
+    industries: industries.map((industry) => ({
+      industry,
+      researchObjectAttached: true,
+    })),
+    missingIndustries: [],
+  };
 }
 
 export function getHomepageFocusContext(snapshots: SnapshotBundle): HomepageFocusContext {

@@ -6,14 +6,11 @@ import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import { getLangfuseCallbackHandler, flushLangfuse } from "../langfuse";
 import { stringValue } from "./snapshotClient";
 import type {
-  AnalystBrief,
   EvidencePack,
 } from "./analystTypes";
 import {
-  buildAnalystBriefContract,
   buildEvidencePack,
-  formatAnalystBriefContractForPrompt,
-  formatEvidencePackForPrompt,
+  formatEvidencePackSynthesisForPrompt,
 } from "./analystOrchestration";
 import type {
   AskGrahamyState,
@@ -255,35 +252,103 @@ function humanizeJsonValue(value: unknown, key?: string): unknown {
   return value;
 }
 
+/**
+ * "No validated edge evidence" is the *default* state for stocks — validated
+ * pipeline evidence is a bonus overlay, not a required layer. Carrying that
+ * warning in the rendered RO trains the model to apologise for a missing
+ * thing that was never expected. Strip it unless the user explicitly asked
+ * about validated/pipeline evidence (focus = validated_evidence).
+ */
+function isEdgeAbsenceWarning(warning: string): boolean {
+  return /\b(?:no\s+validated\s+edge|validated\s+edge\s+evidence\s+is\s+not\s+yet\s+bridged)\b/i.test(
+    warning,
+  );
+}
+
+function stripEdgeAbsence(
+  warnings: string[] | undefined,
+  focus?: ClassificationFocus,
+): string[] {
+  if (!warnings) return [];
+  if (focus === "validated_evidence") return warnings;
+  return warnings.filter((w) => !isEdgeAbsenceWarning(w));
+}
+
+function shapeViewForPrompt(
+  view: NonNullable<CachedResearchObject["view"]>,
+  focus?: ClassificationFocus,
+) {
+  // The RO carries two date families that get conflated in prose:
+  //   - `asOfDate`              → canonical date for the data ("today")
+  //   - `freshness.dataThrough` → pipeline-snapshot lineage date
+  // Rename the lineage block so the model can't misread it as the canonical
+  // date. The MOAT rule already says "the only valid date is `view.asOfDate`",
+  // and now the data shape backs that rule visibly.
+  const pipelineSnapshotLineage = view.freshness
+    ? {
+        dataThrough: view.freshness.dataThrough,
+        generatedAt: view.freshness.generatedAt,
+        pipelineStatus: view.freshness.pipelineStatus,
+        ...(view.freshness.staleReason
+          ? { staleReason: view.freshness.staleReason }
+          : {}),
+        note: "Pipeline-snapshot lineage only — NOT the canonical date for this evidence. Cite `asOfDate`, never this block.",
+      }
+    : undefined;
+
+  const cleanedWarnings = stripEdgeAbsence(view.warnings, focus);
+  const cleanedEdgeEvidence =
+    focus === "validated_evidence"
+      ? view.edgeEvidence
+      : view.edgeEvidence
+        ? {
+            ...view.edgeEvidence,
+            warnings: stripEdgeAbsence(view.edgeEvidence.warnings, focus),
+          }
+        : view.edgeEvidence;
+
+  if (focus === "risk") {
+    return {
+      viewSchemaVersion: view.viewSchemaVersion,
+      cacheKey: view.cacheKey,
+      objectType: view.objectType,
+      anchor: view.anchor,
+      asOfDate: view.asOfDate,
+      title: view.title,
+      probabilisticEvidence: view.probabilisticEvidence,
+      pathRisk: view.pathRisk,
+      ...(pipelineSnapshotLineage ? { pipelineSnapshotLineage } : {}),
+      warnings: cleanedWarnings,
+    };
+  }
+  return {
+    viewSchemaVersion: view.viewSchemaVersion,
+    cacheKey: view.cacheKey,
+    objectType: view.objectType,
+    anchor: view.anchor,
+    asOfDate: view.asOfDate,
+    title: view.title,
+    fiveQuestion: view.fiveQuestion,
+    edgeEvidence: cleanedEdgeEvidence,
+    probabilisticEvidence: view.probabilisticEvidence,
+    pathRisk: view.pathRisk,
+    ...(pipelineSnapshotLineage ? { pipelineSnapshotLineage } : {}),
+    warnings: cleanedWarnings,
+  };
+}
+
 function formatResearchObjectForPrompt(
   ro: CachedResearchObject,
   focus?: ClassificationFocus,
 ): string {
   const header = `## ${ro.objectType.toUpperCase()} — ${ro.anchor} (as of ${ro.asOfDate})`;
   const publicResearchObjectView = ro.view
-    ? focus === "risk"
-      ? {
-          viewSchemaVersion: ro.view.viewSchemaVersion,
-          cacheKey: ro.view.cacheKey,
-          objectType: ro.view.objectType,
-          anchor: ro.view.anchor,
-          asOfDate: ro.view.asOfDate,
-          title: ro.view.title,
-          probabilisticEvidence: ro.view.probabilisticEvidence,
-          pathRisk: ro.view.pathRisk,
-          freshness: ro.view.freshness,
-          warnings: ro.view.warnings,
-        }
-      : { ...ro.view, publicSummary: undefined }
+    ? shapeViewForPrompt(ro.view, focus)
     : undefined;
   // Humanize all enum-shaped string values before serializing so the agent
   // receives "rich" / "high quintile" / "strongly underperforming" instead of
   // "RICH" / "HIGH_QUINTILE" / "STRONG_UNDERPERFORM".
-  const humanized = humanizeJsonValue({
-    publicResearchObjectView,
-    freshness: ro.freshness,
-    warnings: ro.warnings,
-  });
+  const humanized = humanizeJsonValue(publicResearchObjectView);
   const body = JSON.stringify(humanized, null, 2);
   return `${header}\n\`\`\`json\n${body}\n\`\`\``;
 }
@@ -405,8 +470,6 @@ export function buildSystemPrompt(state: AskGrahamyState): string {
     stringValue((regimeRO?.view as Record<string, unknown> | undefined)?.title);
   const evidencePack: EvidencePack =
     state.evidencePack ?? buildEvidencePack(state);
-  const analystBrief: AnalystBrief =
-    state.analystBrief ?? buildAnalystBriefContract(evidencePack);
 
   const evidenceBlocks =
     classification?.focus === "validated_evidence"
@@ -478,9 +541,11 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - For a question asking the probability of losing more than 10%, use only \`pathRisk.probDrawdownGt10Pct\` when \`pathRisk.state = complete\`, \`pathRisk.source = pg_daily_price_path\`, and the field is explicitly present. If absent, say that numeric threshold probability is unavailable.
 - Never substitute \`p25ReturnPct\`, \`medianReturnPct\`, \`hitRatePct\`, h60/final forward returns, or any horizon return for drawdown or temporary downside probability.
 - Do not give stop-loss, position sizing, investment recommendation, or trade recommendation language in risk-focused answers.
-- If classification focus is \`validated_evidence\`, answer only from \`validatedEdgeEvidenceView\`, freshness, and warnings. Do not use Research Object thesis sections, PG capability views, or memory to make validated Pipeline claims.
-- For \`validatedEdgeEvidenceView\`, say "pipeline-validated evidence" only when \`evidenceState\` is \`edge_evidence_strong\` or \`edge_evidence_present\`. If \`evidenceState\` is \`mixed\`, \`insufficient_data\`, or \`unavailable\`, state that clearly.
-- Mention \`validatedEdgeEvidenceView.freshness.dataThrough\` when present. If freshness is stale or unknown, include the public caveat.
+- Validated edge evidence (\`edgeEvidence\` on the Research Object, \`validatedEdgeEvidenceView\` on the pipeline overlay) is an OPTIONAL BONUS layer on top of the PG Research Object stack. Its absence is the common case for most stocks and sectors — it is NOT "missing evidence" and must NOT be flagged, apologised for, or framed as a limitation in stock/sector/regime/comparison answers. Do not write sentences like "no validated edge evidence is available", "ראיה מאומתת לא קיימת", "missing validated overlay", or anything analogous when the user did not ask for validated evidence. Treat absence as silence.
+- The ONLY time you discuss validated edge evidence at all (present OR absent) is when classification focus is \`validated_evidence\`, OR when \`edgeEvidence.state\` / \`validatedEdgeEvidenceView.evidenceState\` is \`edge_evidence_strong\` / \`edge_evidence_present\` (and you are using it as supporting evidence for the user's actual question). In every other case, do not mention it.
+- If classification focus is \`validated_evidence\`, answer only from \`validatedEdgeEvidenceView\`, its own freshness, and warnings. Do not use Research Object thesis sections, PG capability views, or memory to make validated Pipeline claims. In this focus, if \`evidenceState\` is \`mixed\`, \`insufficient_data\`, or \`unavailable\`, state that clearly — because the user asked for it.
+- For \`validatedEdgeEvidenceView\`, say "pipeline-validated evidence" only when \`evidenceState\` is \`edge_evidence_strong\` or \`edge_evidence_present\`.
+- Mention \`validatedEdgeEvidenceView.freshness.dataThrough\` when present and you are using the overlay. Otherwise do not.
 - Distinguish PG historical evidence, Pipeline validated evidence, Pipeline risk band, and PG daily drawdown risk. \`pipelineRiskBand\` is not daily drawdown risk and must not be used for drawdown probability claims.
 - Treat \`liveConfirmationBucket\` as aggregate live tracking confirmation context only. It is not trade advice, not a trade signal, and must not change \`evidenceState\`.
 - Treat \`decayRiskBucket\` as an aggregate caution signal only. It is not proof that validated evidence is invalid, and must not change \`evidenceState\`.
@@ -507,6 +572,7 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Explain each stock idea only with \`reasonBullets\` and explicit public fields in the row.
 - Treat \`stockIdeaView\` as PG current/historical evidence. Do NOT call it a validated live edge, Sentinel signal, Coroner result, Daily Decision, trade card, accepted hypothesis, or recommendation.
 - If \`stockIdeaView.rows\` is empty or the view state is unavailable, say stock discovery data is unavailable instead of naming tickers.
+- For "leading / top / best stocks in <sector>" questions (intent \`sector_leaders\`), \`stockIdeaView.rows\` is sector-internally ranked within the user's named sector. Frame the rows as leading research candidates within that sector specifically, and reference the sector by name. Do NOT generalise to other sectors and do NOT introduce tickers from outside the rows. If the rows are empty or the view is unavailable, say leading-stock data for that sector is unavailable.
 - For current-feature stock screen questions, use only \`featureScreenView.rows\` and \`featureScreenView.screenCriteria\`. Rank stocks only from those rows; if you cite a date, cite \`featureScreenView.asOfDate\` only. Do not invent tickers, buckets, hit rates, or return metrics.
 - Call \`featureScreenView.rows\` "screen results" or "research candidates", never investment recommendations or trade instructions.
 - Explain each screen result only with \`reasonBullets\` and explicit public bucket fields in the row. Do not expose thresholds, formulas, SQL, raw rows, table names, feature rules, IDs, gates, or scoring internals.
@@ -542,26 +608,30 @@ The follow-ups MUST be specific to what you just discussed (not generic). 3-4 qu
 - Do not invent sector leadership, underperformance, risk buckets, hit rates, or return metrics for \`regimeHistoricalPlaybookView\`.
 - If \`regimeHistoricalPlaybookView.state = partial\`, explain the public missing area from \`warnings\`. If unavailable, say the regime historical playbook is unavailable.
 - Do not expose table names, SQL, raw rows, raw VIX/SPY values, feature rules, thresholds, formulas, IDs, gates, refresh internals, or operational source details for \`regimeHistoricalPlaybookView\`.
-- For questions using "today", "this week", "latest", or "right now": the ONLY valid date is \`view.asOfDate\` — the per-Research-Object as-of date inside the \`view\` block (or \`asOfDate\` on a PG capability view like \`featureScreenView.asOfDate\`). Do NOT cite the date inside \`cacheKey\` (it can be a stale cache-stamp), do NOT cite pipeline-snapshot freshness, and do NOT cite the outer \`freshness.dataThrough\` if it disagrees with \`view.asOfDate\`. Mention a date only when the user asked about timing.
+- DATE DISCIPLINE — strict. Each Research Object / PG capability view in the Evidence section carries TWO date families that must NEVER be conflated:
+  1. \`asOfDate\` — the canonical date for the data in that block. THIS is the only date you may cite when the user says "today", "this week", "latest", or "right now".
+  2. \`pipelineSnapshotLineage\` (or \`freshness\` on PG capability views) — the pipeline-snapshot lineage block. This describes WHEN the upstream snapshot ran, NOT the date of the data. Treat it as opaque metadata. Do NOT cite \`pipelineSnapshotLineage.dataThrough\`, \`pipelineSnapshotLineage.generatedAt\`, or \`freshness.dataThrough\` to the user. Do NOT use it to override \`asOfDate\` even if the two disagree.
+  Also do NOT cite the date inside \`cacheKey\` (it can be a stale cache-stamp). Mention a date only when the user asked about timing.
 - Never expose table names, refresh views, run IDs, pipeline stages, refresh logs, or operational diagnostics.
 - DO NOT mention internal terms: \`signal_sql\`, \`raw_alpha\`, edge IDs, methodology details, internal model names, or pipeline mechanics.
 - If forward-return analog evidence has fewer than 30 observations, label it explicitly as low-confidence / small sample.
 
 # Today's market backdrop
 ${todayRegime ? `Current regime: ${todayRegime}` : "Current regime: not available"}
-(Sourced from the current-regime Research Object in Postgres. The ONLY valid "today" date is \`view.asOfDate\` on the specific Research Object or PG capability view you are citing. Ignore pipeline-snapshot dates entirely; ignore \`cacheKey\` suffixes — those are cache-stamps, not data dates.)
+(Sourced from the current-regime Research Object in Postgres. The ONLY valid "today" date is \`asOfDate\` on the specific Research Object or PG capability view you are citing — never \`pipelineSnapshotLineage\`/\`freshness.dataThrough\` (lineage of the upstream snapshot, not the data date), and never \`cacheKey\` suffixes (cache-stamps, not data dates).)
 
 # Classification for this turn
 ${classifiedLine}
 
-# Evidence Pack (public-only analyst synthesis)
+# Analyst synthesis (meta-analysis only — NOT a duplicate of the evidence)
+This block is the analyst-side meta on top of the raw evidence below: which
+evidence layers loaded, the contradictions/missing-evidence/confidence the
+orchestrator detected, and the freshness anchor. The actual numbers and
+buckets the model must reason from live in the \`# Evidence\` section that
+follows. Do NOT treat \`evidenceLayers[*].interpretation\` as a finished
+answer — it is an availability marker, not a thesis.
 \`\`\`json
-${formatEvidencePackForPrompt(humanizeJsonValue(evidencePack) as EvidencePack)}
-\`\`\`
-
-# AnalystBrief contract (internal structure to follow)
-\`\`\`json
-${formatAnalystBriefContractForPrompt(humanizeJsonValue(analystBrief) as AnalystBrief)}
+${formatEvidencePackSynthesisForPrompt(humanizeJsonValue(evidencePack) as EvidencePack)}
 \`\`\`
 
 # Evidence

@@ -14,6 +14,10 @@ import {
   stockContextFromResearchObjects,
 } from "./researchObjectBuilder";
 
+
+
+//this function probably do its job poorly- and need to be reworked.
+
 export function compilePublicResearchView(input: {
   classification: Classification;
   previousContext?: ConversationContext;
@@ -221,6 +225,7 @@ function inferObjectType(classification: Classification): PublicResearchView["ob
   if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";
   if (classification.intent === "week_over_week_sector_delta") return "sector";
   if (classification.intent === "stock_idea_discovery") return "stock";
+  if (classification.intent === "sector_leaders") return "stock";
   if (classification.intent === "feature_screen") return "stock";
   if (classification.intent === "factor_conditioned_backtest") return "stock";
   if (classification.intent === "market_regime_historical_playbook") return "regime";

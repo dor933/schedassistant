@@ -117,6 +117,7 @@ export async function classifyAskGrahamy(
           userId: user.id,
           lastSymbols: request.previousContext.lastSymbols ?? [],
           lastSectors: request.previousContext.lastSectors ?? [],
+          lastIndustries: request.previousContext.lastIndustries ?? [],
           lastIntent: request.previousContext.lastIntent as
             | undefined
             | import("../askGrahamy/types").Intent,
@@ -131,6 +132,7 @@ export async function classifyAskGrahamy(
       previousContextSupplied: !!previousContext,
       previousContextSymbols: previousContext?.lastSymbols ?? [],
       previousContextSectors: previousContext?.lastSectors ?? [],
+      previousContextIndustries: previousContext?.lastIndustries ?? [],
     });
     const classification = await observeWithContext(
       "ask_grahamy_classify",
@@ -144,6 +146,7 @@ export async function classifyAskGrahamy(
               previousContextSupplied: !!previousContext,
               previousContextSymbols: previousContext?.lastSymbols ?? [],
               previousContextSectors: previousContext?.lastSectors ?? [],
+              previousContextIndustries: previousContext?.lastIndustries ?? [],
             },
           },
         }),
@@ -153,6 +156,7 @@ export async function classifyAskGrahamy(
         userId: user.id,
         previousContextSymbols: previousContext?.lastSymbols ?? [],
         previousContextSectors: previousContext?.lastSectors ?? [],
+        previousContextIndustries: previousContext?.lastIndustries ?? [],
       },
     );
     logger.info("Ask Grahamy classify result", {

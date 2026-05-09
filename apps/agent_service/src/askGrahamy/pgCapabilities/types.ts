@@ -22,6 +22,8 @@ export type PgCapabilityIntent =
   | "sector_momentum_vs_conviction_divergence"
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
+  | "sector_leaders"
+  | "industry_leaders"
   | "feature_screen"
   | "factor_conditioned_backtest"
   | "market_regime_historical_playbook";
@@ -31,6 +33,8 @@ export type PgCapabilityName =
   | "sector_momentum_vs_conviction_divergence"
   | "week_over_week_sector_delta"
   | "stock_idea_discovery"
+  | "sector_leaders"
+  | "industry_leaders"
   | "feature_screen"
   | "factor_conditioned_backtest"
   | "market_regime_historical_playbook";
@@ -40,6 +44,8 @@ export type PgCapabilityQueryName =
   | "query_sector_divergence"
   | "query_sector_delta"
   | "query_stock_idea_discovery"
+  | "query_sector_leaders"
+  | "query_industry_leaders"
   | "query_feature_screen"
   | "query_factor_conditioned_backtest"
   | "query_regime_historical_playbook";
@@ -132,7 +138,7 @@ export type PgCapabilityRegistryEntry = {
    */
   cacheAnchors?: (
     input: PgCapabilityRunInput,
-  ) => { anchorSymbol?: string; anchorSector?: string };
+  ) => { anchorSymbol?: string; anchorSector?: string; anchorIndustry?: string };
 };
 
 /**
@@ -152,6 +158,8 @@ export type CachedCapabilityView = {
   anchorSymbol?: string;
   /** Reserved for capabilities anchored to a single sector; currently unused. */
   anchorSector?: string;
+  /** Reserved for capabilities anchored to a single industry (industry_leaders). */
+  anchorIndustry?: string;
   view:
     | import("../types").SectorLeaderboardView
     | import("../types").SectorDivergenceView

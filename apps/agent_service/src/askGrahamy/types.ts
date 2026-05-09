@@ -8,10 +8,13 @@ import type {
 export const INTENTS = [
   "stock",
   "sector",
+  "industry",
   "sector_conviction_leaderboard",
   "sector_momentum_vs_conviction_divergence",
   "week_over_week_sector_delta",
   "stock_idea_discovery",
+  "sector_leaders",
+  "industry_leaders",
   "feature_screen",
   "factor_conditioned_backtest",
   "market_regime_historical_playbook",
@@ -38,6 +41,7 @@ export const TOOL_NAMES = [
   "get_market_context",
   "get_stock_snapshot_context",
   "get_sector_snapshot_context",
+  "get_industry_snapshot_context",
   "get_homepage_focus_context",
 ] as const;
 
@@ -49,6 +53,10 @@ const classificationRecord = z
     intent: z.enum(INTENTS),
     symbols: z.array(z.string()),
     sectors: z.array(z.string()),
+    // Optional for back-compat — older StocksScanner clients haven't yet
+    // started persisting industries on the classification envelope. Defaults
+    // to [] so downstream code can read it unconditionally.
+    industries: z.array(z.string()).default([]),
     regimeRequested: z.boolean(),
     isFollowUp: z.boolean(),
     requiresTools: z.array(z.enum(TOOL_NAMES)),
@@ -102,6 +110,7 @@ export const askGrahamyClassifyRequestSchema = z.object({
     .object({
       lastSymbols: z.array(z.string()).default([]),
       lastSectors: z.array(z.string()).default([]),
+      lastIndustries: z.array(z.string()).default([]),
       lastRegimeRequested: z.boolean().optional(),
       lastIntent: z.string().optional(),
     })
@@ -166,11 +175,24 @@ export type Classification = {
   intent: Intent;
   symbols: string[];
   sectors: string[];
+  industries: string[];
   regimeRequested: boolean;
   isFollowUp: boolean;
   focus?: ClassificationFocus;
   featureCriteria?: FeatureScreenCriterion[];
   factorBacktest?: FactorBacktestClassification;
+  /**
+   * Names a compound multi-step research workflow when the user is asking a
+   * question that needs the output of one PG capability fed as a parameter
+   * into the next (e.g. "leading sectors in the current regime → screen the
+   * stocks IN those sectors"). When set, the research planner skips its own
+   * LLM plan-proposal and runs the named workflow directly. Most turns leave
+   * this undefined — single-capability questions don't need a workflow.
+   *
+   * Replaces the old keyword-regex `detectResearchWorkflowIntent` + planner
+   * LLM call with a single classifier-side decision.
+   */
+  compoundWorkflow?: CompoundResearchWorkflowName;
   requiresTools: ToolName[];
   confidence: Confidence;
   warnings: string[];
@@ -214,6 +236,7 @@ export type ConversationContext = {
   userId: number;
   lastSymbols: string[];
   lastSectors: string[];
+  lastIndustries: string[];
   lastIntent?: Intent;
   lastPublicResearchSummary?: string;
   lastSuggestedFollowups: string[];
@@ -264,6 +287,25 @@ export type SectorLandscape = {
   missingSectors: string[];
 };
 
+/**
+ * Lightweight pre-RO snapshot for industries. The daily_brief snapshot
+ * doesn't attribute stocks to industries (only sectors), so the snapshot
+ * tool here returns mostly the requested industry list with whatever sector
+ * mapping it can derive — substantive industry detail (member counts, PE,
+ * forward base rates, top members) lives on the industry research object
+ * built from `query_v6a_industry_live.sql`.
+ */
+export type IndustryLandscape = {
+  industries: Array<{
+    industry: string;
+    /** Optional parent sector when known from prior context or the RO. */
+    parentSector?: string;
+    /** Whether the industry RO has been (or will be) attached this turn. */
+    researchObjectAttached: boolean;
+  }>;
+  missingIndustries: string[];
+};
+
 export type HomepageFocusContext = {
   focusSymbols: string[];
   focusSectors: string[];
@@ -273,6 +315,7 @@ export type ToolOutputs = Partial<{
   get_market_context: MarketContext;
   get_stock_snapshot_context: StockResearchContext;
   get_sector_snapshot_context: SectorLandscape;
+  get_industry_snapshot_context: IndustryLandscape;
   get_homepage_focus_context: HomepageFocusContext;
 }>;
 
@@ -666,7 +709,7 @@ export type FiveQuestionCoverage = {
 export type PublicResearchObjectView = {
   viewSchemaVersion: number;
   cacheKey: string;
-  objectType: "stock" | "sector" | "regime";
+  objectType: "stock" | "sector" | "industry" | "regime";
   anchor: string;
   asOfDate: string;
   title?: string;
@@ -680,7 +723,7 @@ export type PublicResearchObjectView = {
 
 export type CachedResearchObject = {
   cacheKey: string;
-  objectType: "stock" | "sector" | "regime";
+  objectType: "stock" | "sector" | "industry" | "regime";
   anchor: string;
   asOfDate: string;
   generatedAt: string;
@@ -700,7 +743,7 @@ export type CachedResearchObject = {
 export type { CachedCapabilityView } from "./pgCapabilities/types";
 
 export type PublicResearchView = {
-  objectType: "stock" | "sector" | "regime" | "mixed";
+  objectType: "stock" | "sector" | "industry" | "regime" | "mixed";
   headline: Record<string, unknown>;
   marketContext: MarketContext;
   stockContext: StockResearchContext;
@@ -891,6 +934,7 @@ export const EMPTY_CLASSIFICATION: Classification = {
   intent: "unknown",
   symbols: [],
   sectors: [],
+  industries: [],
   regimeRequested: false,
   isFollowUp: false,
   requiresTools: [],

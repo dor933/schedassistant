@@ -8,6 +8,7 @@ export const RESEARCH_QUERY_NAMES = [
   "query_v6c_financial_quality",
   "query_v6a_regime_live",
   "query_v6a_sector_live",
+  "query_v6a_industry_live",
 ] as const;
 
 export type ResearchQueryName = (typeof RESEARCH_QUERY_NAMES)[number];
@@ -18,6 +19,7 @@ const QUERY_FILES: Record<ResearchQueryName, string> = {
   query_v6c_financial_quality: "query_v6c_financial_quality.sql",
   query_v6a_regime_live: "query_v6a_regime_live.sql",
   query_v6a_sector_live: "query_v6a_sector_live.sql",
+  query_v6a_industry_live: "query_v6a_industry_live.sql",
 };
 
 /**

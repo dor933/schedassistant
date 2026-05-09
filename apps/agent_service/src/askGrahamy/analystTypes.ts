@@ -37,9 +37,17 @@ export type EvidenceLayer = {
 };
 
 export type AnalystAnchor = {
-  type: "stock" | "sector" | "regime" | "comparison" | "screen" | "unknown";
+  type:
+    | "stock"
+    | "sector"
+    | "industry"
+    | "regime"
+    | "comparison"
+    | "screen"
+    | "unknown";
   symbol?: string;
   sector?: string;
+  industry?: string;
   regime?: string;
   label?: string;
 };
@@ -63,14 +71,6 @@ export type AnalystWorkflowName =
   | "stock_deep_dive_stack"
   | "idea_to_compare_and_risk";
 
-export type WorkflowExecutedStep = {
-  id: string;
-  capability: string;
-  state: EvidenceState | "skipped";
-  elapsedMs?: number;
-  warnings: string[];
-};
-
 export type WorkflowCandidateRow = {
   symbol: string;
   companyName?: string;
@@ -90,14 +90,6 @@ export type WorkflowCandidateRow = {
   sourceView: "featureScreenView" | "stockIdeaView";
 };
 
-export type WorkflowComparisonRow = {
-  metric: string;
-  leftValue?: number | string;
-  rightValue?: number | string;
-  interpretation: string;
-  explanation?: string;
-};
-
 export type WorkflowPublicViews = {
   researchObjectViews?: PublicResearchObjectView[];
   pgCapabilityViews?: PgCapabilityViews;
@@ -106,10 +98,8 @@ export type WorkflowPublicViews = {
 
 export type WorkflowExecutionResult = {
   workflowName: AnalystWorkflowName;
-  executedSteps: WorkflowExecutedStep[];
   publicViews: WorkflowPublicViews;
   candidateRows?: WorkflowCandidateRow[];
-  comparisonRows?: WorkflowComparisonRow[];
   pipelineLabels?: Record<string, string>;
   missingEvidence: string[];
   contradictions: string[];
@@ -128,7 +118,6 @@ export type EvidencePack = {
   relativeComparison?: EvidenceLayer;
   pipelineEvidence?: EvidenceLayer;
   candidateTable?: WorkflowCandidateRow[];
-  comparisonTable?: WorkflowComparisonRow[];
   freshness?: PublicFreshnessView;
   contradictions: string[];
   missingEvidence: string[];

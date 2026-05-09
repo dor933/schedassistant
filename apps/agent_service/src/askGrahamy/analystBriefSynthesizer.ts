@@ -214,7 +214,6 @@ function forbiddenPattern(): RegExp {
 function buildFallbackAnalystBrief(message: string, pack: EvidencePack): AnalystBrief {
   const hebrew = /[\u0590-\u05ff]/.test(message);
   const candidates = pack.candidateTable ?? [];
-  const comparisons = pack.comparisonTable ?? [];
   const tables: AnalystBriefTable[] = [];
   if (candidates.length) {
     tables.push({
@@ -223,20 +222,6 @@ function buildFallbackAnalystBrief(message: string, pack: EvidencePack): Analyst
         ? ["מניה", "סקטור", "למה עלתה", "ראיה היסטורית", "Pipeline"]
         : ["Symbol", "Sector", "Why it appeared", "Historical evidence", "Pipeline"],
       rows: candidates.slice(0, 10).map((row) => candidateTableRow(row, hebrew)),
-    });
-  }
-  if (comparisons.length) {
-    tables.push({
-      type: "comparison",
-      columns: hebrew
-        ? ["מדד", "צד שמאל", "צד ימין", "פירוש"]
-        : ["Metric", "Left", "Right", "Interpretation"],
-      rows: comparisons.slice(0, 8).map((row) => [
-        row.metric,
-        String(row.leftValue ?? ""),
-        String(row.rightValue ?? ""),
-        row.explanation ? `${row.interpretation}: ${row.explanation}` : row.interpretation,
-      ]),
     });
   }
 
@@ -299,11 +284,6 @@ function fallbackBottomLine(pack: EvidencePack, hebrew: boolean): string {
     return hebrew
       ? `לפי שכבות הראיה הציבוריות, נמצאו ${candidateCount} מועמדי מחקר נוכחיים; יש לבחון את הראיה ההיסטורית, הסיכון והחוסרים לפני הסתמכות.`
       : `The public evidence stack produced ${candidateCount} current research candidates; historical evidence, risk, and missing layers still need review.`;
-  }
-  if (pack.comparisonTable?.length) {
-    return hebrew
-      ? "לפי ההשוואה הציבורית, התמונה תלויה במדדים הספציפיים שנבדקו ולא מספיקה כהכרעה יחידה."
-      : "The public comparison evidence is dimension-specific and should not be treated as a standalone conclusion.";
   }
   return hebrew
     ? "הראיה הציבורית הזמינה חלקית, ולכן המסקנה צריכה להישאר זהירה."

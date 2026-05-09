@@ -92,6 +92,7 @@ export function mapQuestionType(classification?: Classification): AnalystQuestio
     case "sector_conviction_leaderboard":
       return "leaderboard";
     case "stock_idea_discovery":
+    case "sector_leaders":
       return "idea_discovery";
     case "feature_screen":
       return "feature_screen";
@@ -288,6 +289,59 @@ export function formatAnalystBriefContractForPrompt(brief: AnalystBrief): string
   return JSON.stringify(brief, null, 2);
 }
 
+/**
+ * Slim Evidence Pack rendering for the deep-agent system prompt. Drops the
+ * per-layer `keyData` arrays — those are lossy prose summaries of the raw
+ * Research Object that the model already has verbatim in the `# Evidence`
+ * section. Keeps only the *synthesis* fields the model can't derive itself
+ * (analyst-side meta-analysis): question type, anchor, horizon, the catalog
+ * of evidence layers that loaded (with state + strength), contradictions,
+ * missing evidence, confidence, and follow-up monitor list.
+ */
+export function formatEvidencePackSynthesisForPrompt(pack: EvidencePack): string {
+  const layerSummary = (label: string, l?: EvidenceLayer) =>
+    l
+      ? {
+          label,
+          sourceView: l.sourceView,
+          state: l.state,
+          strength: l.strength,
+          interpretation: l.interpretation,
+          ...(l.warnings.length ? { warnings: l.warnings } : {}),
+        }
+      : undefined;
+  const layers = [
+    layerSummary("currentSetup", pack.currentSetup),
+    layerSummary("historicalBaseRate", pack.historicalBaseRate),
+    layerSummary("pathRisk", pack.pathRisk),
+    layerSummary("relativeComparison", pack.relativeComparison),
+    layerSummary("pipelineEvidence", pack.pipelineEvidence),
+  ].filter(Boolean);
+  // NOTE: we deliberately do NOT include a top-level `freshness` here.
+  // `inferFreshness` falls through PG views, RO freshness, and the pipeline
+  // snapshot, picking whichever is non-empty — that conflates pipeline-side
+  // and PG-side dates into one ambiguous field. The canonical date the model
+  // must cite is `view.asOfDate` on each Research Object / PG capability
+  // view, which is rendered in the `# Evidence` section directly.
+  const synthesis = {
+    questionType: pack.questionType,
+    ...(pack.workflowName ? { workflowName: pack.workflowName } : {}),
+    ...(pack.anchor ? { anchor: pack.anchor } : {}),
+    ...(pack.timeHorizon ? { timeHorizon: pack.timeHorizon } : {}),
+    evidenceLayers: layers,
+    contradictions: pack.contradictions,
+    missingEvidence: pack.missingEvidence,
+    confidence: pack.confidence,
+    monitorNext: pack.monitorNext,
+    sourceViews: pack.sourceViews,
+  };
+  return JSON.stringify(synthesis, null, 2);
+}
+
+function isEdgeEvidenceWarning(warning: string): boolean {
+  return /\b(?:validated\s+edge|edge\s+evidence|pipeline)\b/i.test(warning);
+}
+
 function pgViewsFromPublicResearchView(view: PublicResearchView): PgCapabilityViews {
   return {
     ...(view.sectorLeaderboardView
@@ -339,6 +393,7 @@ function inferAnchor(
   if (ro) {
     if (ro.objectType === "stock") return { type: "stock", symbol: ro.anchor, label: ro.title ?? ro.anchor };
     if (ro.objectType === "sector") return { type: "sector", sector: ro.anchor, label: ro.title ?? ro.anchor };
+    if (ro.objectType === "industry") return { type: "industry", industry: ro.anchor, label: ro.title ?? ro.anchor };
     return { type: "regime", regime: ro.anchor, label: ro.title ?? ro.anchor };
   }
   if (classification?.symbols[0]) {
@@ -346,6 +401,9 @@ function inferAnchor(
   }
   if (classification?.sectors[0]) {
     return { type: "sector", sector: classification.sectors[0], label: classification.sectors[0] };
+  }
+  if (classification?.industries[0]) {
+    return { type: "industry", industry: classification.industries[0], label: classification.industries[0] };
   }
   if (pgViews?.featureScreenView) return { type: "screen", label: "Feature screen" };
   return undefined;
@@ -371,7 +429,12 @@ function buildCurrentSetupLayer(
       interpretation:
         "Current public Research Object evidence is available for the anchor.",
       strength: strengthFromState("complete", keyData),
-      warnings: ro.warnings,
+      // Filter cross-layer warnings: the RO's top-level warnings array
+      // aggregates edge-evidence warnings ("No validated edge evidence
+      // returned for this anchor.") into every layer that reads it. Edge
+      // evidence is its own layer; its absence belongs there, not on the
+      // current-setup layer.
+      warnings: ro.warnings.filter((w) => !isEdgeEvidenceWarning(w)),
       sourceView: "publicResearchObjectView",
     });
   }
@@ -489,7 +552,10 @@ function buildHistoricalBaseRateLayer(
         evidence.sampleAdequacy,
         evidence.state,
       ),
-      warnings: evidence.notes,
+      // `notes` are explanatory commentary about the layer (where the data
+      // came from), not turn-specific warnings. Surfacing them as warnings
+      // makes the model hedge unnecessarily.
+      warnings: [],
       sourceView: "publicResearchObjectView.probabilisticEvidence",
     });
   }
@@ -521,7 +587,12 @@ function buildPathRiskLayer(
         ? "This is the primary evidence layer for the risk-focused answer."
         : "Daily drawdown-risk evidence is available as a risk layer.",
     strength: strengthFromSample(risk.sampleSize, risk.sampleAdequacy, risk.state),
-    warnings: [...(risk.warnings ?? []), ...risk.notes],
+    // `notes` describe the layer's lineage ("computed from PG daily price
+    // paths..."); they are not warnings. Mixing them into warnings makes the
+    // model treat normal commentary as caveats and pushes it to mention
+    // pipeline-overlay machinery (Sentinel, Coroner, edge-specific path
+    // risk) even when none is loaded for this turn.
+    warnings: risk.warnings ?? [],
     sourceView: "publicResearchObjectView.pathRisk",
   });
 }

@@ -5,7 +5,6 @@ import type {
   AnalystBriefSynthesisResult,
 } from "./analystBriefSynthesizer";
 import type {
-  ResearchPlan,
   ResearchPlanExecutor,
 } from "./researchPlanner";
 import type {
@@ -42,7 +41,6 @@ export type RunAskGrahamyGraphOptions = {
     input: PipelineOverlayRunInput,
   ) => Promise<PipelineOverlayRunResult>;
 
-  researchPlanProposer?: (message: string) => Promise<ResearchPlan>;
   researchPlanExecutor?: ResearchPlanExecutor;
 
   analystBriefSynthesizer?: (

@@ -17,6 +17,14 @@ import {
   sectorConvictionLeaderboardCacheKeyParams,
 } from "./sectorConvictionLeaderboard";
 import {
+  buildSectorLeadersView,
+  sectorLeadersCacheKeyParams,
+} from "./sectorLeaders";
+import {
+  buildIndustryLeadersView,
+  industryLeadersCacheKeyParams,
+} from "./industryLeaders";
+import {
   buildSectorDeltaView,
   sectorDeltaCacheKeyParams,
 } from "./sectorDelta";
@@ -100,6 +108,45 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     run: buildStockIdeaDiscoveryView,
     viewSlot: "stockIdeaView",
     cacheKeyParams: stockIdeaDiscoveryCacheKeyParams,
+  },
+  {
+    name: "sector_leaders",
+    intent: "sector_leaders",
+    requiredParams: ["sectors[0]"],
+    queryName: "query_sector_leaders",
+    source: "pg_features_daily",
+    freshnessSources: [
+      "md_features_daily",
+      "md_research_sector_peer_daily",
+      "md_forward_returns",
+    ],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildSectorLeadersView,
+    viewSlot: "stockIdeaView",
+    cacheKeyParams: sectorLeadersCacheKeyParams,
+    cacheAnchors: (input) => ({
+      anchorSector: input.classification.sectors[0],
+    }),
+  },
+  {
+    name: "industry_leaders",
+    intent: "industry_leaders",
+    requiredParams: ["industries[0]"],
+    queryName: "query_industry_leaders",
+    source: "pg_features_daily",
+    // No dedicated industry-level peer MV exists; the SQL falls back to the
+    // sector-level peer for the conviction signal. Freshness watches the
+    // features table primarily (peer MV is informational here).
+    freshnessSources: ["md_features_daily", "md_forward_returns"],
+    fallback: "unavailable_empty_rows",
+    sanitizer: "public_safe_capability_view",
+    run: buildIndustryLeadersView,
+    viewSlot: "stockIdeaView",
+    cacheKeyParams: industryLeadersCacheKeyParams,
+    cacheAnchors: (input) => ({
+      anchorIndustry: input.classification.industries[0],
+    }),
   },
   {
     name: "feature_screen",
@@ -275,6 +322,7 @@ export async function executePgCapabilitiesWithCache(
         priorAsOfDate: extractPriorAsOfDate(view),
         anchorSymbol: anchors.anchorSymbol,
         anchorSector: anchors.anchorSector,
+        anchorIndustry: anchors.anchorIndustry,
         view: view as CachedCapabilityView["view"],
         generatedAt: new Date().toISOString(),
       },

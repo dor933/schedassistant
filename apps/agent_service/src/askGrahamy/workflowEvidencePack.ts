@@ -37,9 +37,6 @@ export function buildEvidencePackFromWorkflowExecution(
     ...(result.candidateRows?.length
       ? { candidateTable: result.candidateRows.slice(0, 10) }
       : {}),
-    ...(result.comparisonRows?.length
-      ? { comparisonTable: result.comparisonRows.slice(0, 8) }
-      : {}),
     ...(result.freshness ? { freshness: result.freshness } : {}),
     contradictions,
     missingEvidence,
@@ -47,12 +44,6 @@ export function buildEvidencePackFromWorkflowExecution(
     monitorNext: buildWorkflowMonitorNext(result, missingEvidence, contradictions),
     sourceViews: workflowSourceViews(result),
   };
-}
-
-export function evidencePackHasForbiddenInternals(pack: EvidencePack): boolean {
-  return /(ResearchPlan|compoundResearchContext|paramsFromPreviousSteps|raw_sql|raw_rows|edge_id|hypothesis_id|gates|thresholds|feature_rules|pipeline_state|grahamy_discovery|sqlite|md_features_daily|md_historical_features_daily|sweep_universe)/i.test(
-    JSON.stringify(pack),
-  );
 }
 
 function buildWorkflowCurrentSetup(
@@ -141,7 +132,9 @@ function buildWorkflowHistoricalBaseRate(
       ],
       interpretation: "Historical analog evidence is available for the anchor.",
       strength: "moderate",
-      warnings: ro.probabilisticEvidence.notes,
+      // `notes` are layer-lineage commentary, not warnings. See
+      // analystOrchestration.buildHistoricalBaseRateLayer.
+      warnings: [],
     });
   }
   return undefined;
@@ -167,7 +160,9 @@ function buildWorkflowPathRisk(
     ],
     interpretation: "Public drawdown-risk evidence is available.",
     strength: ro.pathRisk.sampleAdequacy === "ROBUST" ? "strong" : "moderate",
-    warnings: [...(ro.pathRisk.warnings ?? []), ...(ro.pathRisk.notes ?? [])],
+    // `notes` are layer-lineage commentary (where the data came from), not
+    // turn-specific warnings. See analystOrchestration.buildPathRiskLayer.
+    warnings: ro.pathRisk.warnings ?? [],
   });
 }
 
@@ -228,6 +223,7 @@ function inferWorkflowAnchor(result: WorkflowExecutionResult): EvidencePack["anc
       label: ro.title ?? ro.anchor,
       symbol: ro.objectType === "stock" ? ro.anchor : undefined,
       sector: ro.objectType === "sector" ? ro.anchor : undefined,
+      industry: ro.objectType === "industry" ? ro.anchor : undefined,
     };
   }
   if (result.candidateRows?.length) return { type: "screen", label: "Current candidate screen" };
