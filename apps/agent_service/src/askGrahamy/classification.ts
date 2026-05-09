@@ -152,18 +152,22 @@ export async function loadIndustriesBySector(): Promise<ReadonlyMap<string, read
   if (industriesBySectorLoadPromise) return industriesBySectorLoadPromise;
   industriesBySectorLoadPromise = (async () => {
     try {
+      // md_symbols carries sector / industry as FKs (sector_id, industry_id)
+      // referencing md_sectors(id, name) and md_industries(id, name) — not as
+      // denormalised columns. Join through to get the names, group by (sector
+      // name, industry name), count symbols.
       const rows = await queryExternalReadonly<{
         sector?: unknown;
         industry?: unknown;
         symbol_count?: unknown;
       }>(
-        `SELECT sector, industry, COUNT(*) AS symbol_count
-           FROM md_symbols
-          WHERE sector IS NOT NULL
-            AND industry IS NOT NULL
-            AND TRIM(sector) <> ''
-            AND TRIM(industry) <> ''
-          GROUP BY sector, industry`,
+        `SELECT s.name AS sector, i.name AS industry, COUNT(*) AS symbol_count
+           FROM md_symbols sym
+           JOIN md_sectors    s ON sym.sector_id   = s.id
+           JOIN md_industries i ON sym.industry_id = i.id
+          WHERE sym.sector_id   IS NOT NULL
+            AND sym.industry_id IS NOT NULL
+          GROUP BY s.name, i.name`,
       );
 
       // Phase 1: aggregate per-industry counts and pick the dominant sector.
