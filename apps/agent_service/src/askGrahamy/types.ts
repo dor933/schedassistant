@@ -368,20 +368,38 @@ export type ResearchObjectSource = "redis" | "database" | "snapshot";
 
 export type EvidenceState = "complete" | "partial" | "unavailable";
 
-// Bumped 2 → 3 to invalidate cached Research Objects produced before the
-// PG/pipeline-snapshot separation (removed `publicSummary.exampleSymbols`,
-// removed `publicSummary.evidenceCount` / `convergence` on stocks, dropped
+// Bumped 4 → 5 to consolidate ALL pipeline-derived data on the persisted
+// Research Object into a single dedicated `pipeline` block:
+//   • Top-level `CachedResearchObject.freshness` (pipeline-snapshot
+//     lineage) → `pipeline.freshness`
+//   • `parts.pipelineSnapshot` (per-anchor `daily_brief` snapshot data)
+//     → `pipeline.snapshot`
+// After v5, `parts` is PG-only by shape, and every pipeline-derived field
+// lives under `pipeline`. The view stays PG-only (`view.freshness` was
+// already dropped in v4 and is now removed from the type).
+//
+// Earlier bump (3 → 4) dropped the deprecated pipeline-flavored fields
+// from the view itself: `view.freshness` was the pipeline-snapshot
+// lineage block embedded under the view; we no longer emit it.
+// `view.warnings` no longer carries the cross-layer "No validated edge
+// evidence returned for this anchor." string — edge-absence is the
+// default state and surfaces as `view.edgeEvidence.state = "unavailable"`
+// only.
+//
+// Earlier bump (2 → 3) handled the PG/pipeline-snapshot separation:
+// removed `publicSummary.exampleSymbols`, removed
+// `publicSummary.evidenceCount` / `convergence` on stocks, dropped
 // snapshot fallbacks for `symbol`/`company`/`sector`/`stocksInFocus`,
 // renamed `parts.snapshot` → `parts.pipelineSnapshot`, and stopped
-// fabricating `view.edgeEvidence` from snapshot proxies).
+// fabricating `view.edgeEvidence` from snapshot proxies.
 //
 // `hydrateCachedResearchObjectView` rejects priors whose `viewSchemaVersion`
 // doesn't match this constant, so every old cache entry becomes a miss
-// after this bump — agent_service rebuilds with the new shape, SS persists
+// after a bump — agent_service rebuilds with the new shape, SS persists
 // the new version, and after one round of traffic the old shape is gone
 // from the cache organically. Bump again whenever publicSummary / view /
 // parts shape changes in a way that downstream consumers must observe.
-export const PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION = 3;
+export const PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION = 5;
 
 export type ProbabilisticReferenceSet =
   | "self_analogs"
@@ -789,8 +807,31 @@ export type PublicResearchObjectView = {
   edgeEvidence: EdgeEvidenceView;
   probabilisticEvidence: ProbabilisticEvidenceView;
   pathRisk: PathRiskView;
-  freshness: FreshnessMetadata;
   warnings: string[];
+};
+
+/**
+ * Single dedicated home for all pipeline-derived data on a Research
+ * Object. Everything else on `CachedResearchObject` (publicSummary,
+ * parts, view) is PG-sourced by shape; the `pipeline` block carries the
+ * StocksScanner pipeline `daily_brief` lineage and per-anchor snapshot
+ * context — kept for traceability but never read into the agent-facing
+ * publicSummary or view.
+ */
+export type CachedResearchObjectPipelineBlock = {
+  /**
+   * Lineage of the upstream pipeline snapshot used to build this RO —
+   * NOT the canonical date for the data. The canonical date lives on
+   * `CachedResearchObject.asOfDate` and on each `view.asOfDate`.
+   */
+  freshness: FreshnessMetadata;
+  /**
+   * Per-anchor slice of the pipeline `daily_brief` snapshot (e.g.
+   * `daily_brief.symbols[symbol]` for stocks, `daily_brief.sectors[sector]`
+   * for sectors). Optional because industry / regime ROs do not carry a
+   * pipeline snapshot.
+   */
+  snapshot?: Record<string, unknown>;
 };
 
 export type CachedResearchObject = {
@@ -800,10 +841,24 @@ export type CachedResearchObject = {
   asOfDate: string;
   generatedAt: string;
   source: ResearchObjectSource;
+  /** PG-derived public summary. */
   publicSummary: Record<string, unknown>;
+  /** PG-derived parts: `core` / `sectorAggregates` / `financialQuality`
+   * (stock), `sector`, `industry`, `regime`. v5: no longer carries
+   * `pipelineSnapshot` — that moved to `pipeline.snapshot`. */
   parts: Record<string, unknown>;
+  /** PG-derived public view (no pipeline fields by shape). */
   view?: PublicResearchObjectView;
-  freshness: FreshnessMetadata;
+  /** Pipeline-derived data: snapshot lineage + per-anchor snapshot
+   * context. Optional only because old (pre-v5) persisted records may
+   * not have it; new builders always populate it. */
+  pipeline?: CachedResearchObjectPipelineBlock;
+  /**
+   * @deprecated v5 superseded this top-level field with `pipeline.freshness`.
+   * Kept optional on the type so old persisted records still parse during
+   * the cache-invalidation rollover. New builders do not emit it.
+   */
+  freshness?: FreshnessMetadata;
   warnings: string[];
 };
 

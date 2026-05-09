@@ -179,10 +179,11 @@ function inferWorkflowFreshness(
     pg?.regimeHistoricalPlaybookView?.freshness,
     pg?.sectorDeltaView?.freshness,
     pg?.sectorDivergenceView?.freshness,
+    // v4: view.freshness was dropped; we use only the view's canonical
+    // PG-aligned `asOfDate` as the freshness signal here.
     ...ros.map((view) => ({
       dataThrough: view.asOfDate,
       state: "unknown" as const,
-      warning: view.freshness.staleReason,
     })),
   ];
   return candidates.find((item) => item?.dataThrough || item?.state);

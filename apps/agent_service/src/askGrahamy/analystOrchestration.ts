@@ -760,10 +760,14 @@ function inferFreshness(
     pgViews?.sectorDivergenceView?.freshness,
     pgViews?.sectorDeltaView?.freshness,
     pgViews?.regimeHistoricalPlaybookView?.freshness,
+    // v4: view.freshness was dropped; we use the view's canonical
+    // `asOfDate` (PG-aligned) as the freshness signal instead. The
+    // pipeline-snapshot lineage lives only on the top-level RO via
+    // `CachedResearchObject.freshness` and is intentionally not consulted
+    // for the prompt-side freshness pick.
     ...ros.map((ro) => ({
-      dataThrough: ro.freshness.dataThrough ?? ro.asOfDate,
+      dataThrough: ro.asOfDate,
       state: "unknown" as const,
-      warning: ro.freshness.staleReason,
     })),
     publicResearchView?.freshness?.dataThrough
       ? {

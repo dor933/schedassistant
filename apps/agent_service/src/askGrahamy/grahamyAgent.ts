@@ -283,23 +283,29 @@ function stripEdgeAbsence(
 
 function shapeViewForPrompt(
   view: NonNullable<CachedResearchObject["view"]>,
+  pipelineBlock: CachedResearchObject["pipeline"],
   focus?: ClassificationFocus,
 ) {
   // The RO carries two date families that get conflated in prose:
-  //   - `asOfDate`              → canonical date for the data ("today")
-  //   - `freshness.dataThrough` → pipeline-snapshot lineage date
-  // Rename the lineage block so the model can't misread it as the canonical
-  // date. The MOAT rule already says "the only valid date is `view.asOfDate`",
-  // and now the data shape backs that rule visibly.
-  const pipelineSnapshotLineage = view.freshness
+  //   - `asOfDate`                        → canonical date for the data ("today")
+  //   - `pipeline.freshness.dataThrough`  → pipeline-snapshot lineage date
+  // The persisted RO keeps these in two clearly separated places: PG-derived
+  // fields (`asOfDate`, `view`, `parts`, `publicSummary`) vs the pipeline
+  // block (`pipeline.freshness` and `pipeline.snapshot`). Pass the pipeline
+  // freshness through to the prompt as-is so the model sees the same
+  // separation. The MOAT rule still holds: cite `asOfDate`, never the
+  // pipeline lineage.
+  const pipelineForPrompt = pipelineBlock?.freshness
     ? {
-        dataThrough: view.freshness.dataThrough,
-        generatedAt: view.freshness.generatedAt,
-        pipelineStatus: view.freshness.pipelineStatus,
-        ...(view.freshness.staleReason
-          ? { staleReason: view.freshness.staleReason }
-          : {}),
-        note: "Pipeline-snapshot lineage only — NOT the canonical date for this evidence. Cite `asOfDate`, never this block.",
+        freshness: {
+          dataThrough: pipelineBlock.freshness.dataThrough,
+          generatedAt: pipelineBlock.freshness.generatedAt,
+          pipelineStatus: pipelineBlock.freshness.pipelineStatus,
+          ...(pipelineBlock.freshness.staleReason
+            ? { staleReason: pipelineBlock.freshness.staleReason }
+            : {}),
+        },
+        note: "Pipeline-snapshot lineage only — NOT the canonical date for this evidence. Cite `asOfDate`, never `pipeline.freshness`.",
       }
     : undefined;
 
@@ -326,7 +332,7 @@ function shapeViewForPrompt(
       ...(view.industry ? { industry: view.industry } : {}),
       probabilisticEvidence: view.probabilisticEvidence,
       pathRisk: view.pathRisk,
-      ...(pipelineSnapshotLineage ? { pipelineSnapshotLineage } : {}),
+      ...(pipelineForPrompt ? { pipeline: pipelineForPrompt } : {}),
       warnings: cleanedWarnings,
     };
   }
@@ -343,7 +349,7 @@ function shapeViewForPrompt(
     edgeEvidence: cleanedEdgeEvidence,
     probabilisticEvidence: view.probabilisticEvidence,
     pathRisk: view.pathRisk,
-    ...(pipelineSnapshotLineage ? { pipelineSnapshotLineage } : {}),
+    ...(pipelineForPrompt ? { pipeline: pipelineForPrompt } : {}),
     warnings: cleanedWarnings,
   };
 }
@@ -354,7 +360,7 @@ function formatResearchObjectForPrompt(
 ): string {
   const header = `## ${ro.objectType.toUpperCase()} — ${ro.anchor} (as of ${ro.asOfDate})`;
   const publicResearchObjectView = ro.view
-    ? shapeViewForPrompt(ro.view, focus)
+    ? shapeViewForPrompt(ro.view, ro.pipeline, focus)
     : undefined;
   // Humanize all enum-shaped string values before serializing so the agent
   // receives "rich" / "high quintile" / "strongly underperforming" instead of
@@ -626,7 +632,7 @@ When the anchor is a single stock and the Research Object exposes \`sector\` and
 - Do not expose table names, SQL, raw rows, raw VIX/SPY values, feature rules, thresholds, formulas, IDs, gates, refresh internals, or operational source details for \`regimeHistoricalPlaybookView\`.
 - DATE DISCIPLINE — strict. Each Research Object / PG capability view in the Evidence section carries TWO date families that must NEVER be conflated:
   1. \`asOfDate\` — the canonical date for the data in that block. THIS is the only date you may cite when the user says "today", "this week", "latest", or "right now".
-  2. \`pipelineSnapshotLineage\` (or \`freshness\` on PG capability views) — the pipeline-snapshot lineage block. This describes WHEN the upstream snapshot ran, NOT the date of the data. Treat it as opaque metadata. Do NOT cite \`pipelineSnapshotLineage.dataThrough\`, \`pipelineSnapshotLineage.generatedAt\`, or \`freshness.dataThrough\` to the user. Do NOT use it to override \`asOfDate\` even if the two disagree.
+  2. \`pipeline.freshness\` (on Research Objects) or \`freshness\` (on PG capability views) — the pipeline-snapshot lineage block. This describes WHEN the upstream snapshot ran, NOT the date of the data. Treat it as opaque metadata. Do NOT cite \`pipeline.freshness.dataThrough\`, \`pipeline.freshness.generatedAt\`, or \`freshness.dataThrough\` to the user. Do NOT use it to override \`asOfDate\` even if the two disagree.
   Also do NOT cite the date inside \`cacheKey\` (it can be a stale cache-stamp). Mention a date only when the user asked about timing.
 - Never expose table names, refresh views, run IDs, pipeline stages, refresh logs, or operational diagnostics.
 - DO NOT mention internal terms: \`signal_sql\`, \`raw_alpha\`, edge IDs, methodology details, internal model names, or pipeline mechanics.
@@ -634,7 +640,7 @@ When the anchor is a single stock and the Research Object exposes \`sector\` and
 
 # Today's market backdrop
 ${todayRegime ? `Current regime: ${todayRegime}` : "Current regime: not available"}
-(Sourced from the current-regime Research Object in Postgres. The ONLY valid "today" date is \`asOfDate\` on the specific Research Object or PG capability view you are citing — never \`pipelineSnapshotLineage\`/\`freshness.dataThrough\` (lineage of the upstream snapshot, not the data date), and never \`cacheKey\` suffixes (cache-stamps, not data dates).)
+(Sourced from the current-regime Research Object in Postgres. The ONLY valid "today" date is \`asOfDate\` on the specific Research Object or PG capability view you are citing — never \`pipeline.freshness\`/\`freshness.dataThrough\` (lineage of the upstream snapshot, not the data date), and never \`cacheKey\` suffixes (cache-stamps, not data dates).)
 
 # Classification for this turn
 ${classifiedLine}

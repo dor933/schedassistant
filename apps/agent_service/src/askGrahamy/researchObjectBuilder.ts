@@ -444,7 +444,6 @@ async function buildStockResearchObject(input: {
     cacheKey,
     symbol,
     asOfDate: stringValue(asRecord(core.meta).as_of_date) ?? input.asOfDate,
-    freshness: input.freshness,
     publicSummary,
     core,
     sectorAggregates,
@@ -466,20 +465,21 @@ async function buildStockResearchObject(input: {
       probabilisticEvidence: view.probabilisticEvidence,
       pathRisk: view.pathRisk,
     },
+    // PG-only by shape. v5 moved `pipelineSnapshot` out of `parts` and
+    // into the dedicated `pipeline` block below.
     parts: {
       core: sanitizeResearchPart(core),
       sectorAggregates: sanitizeResearchPart(sectorAggregates),
       financialQuality: sanitizeResearchPart(quality),
-      // Renamed from `snapshot` so the lineage is unambiguous in the
-      // persisted RO. This block carries the StocksScanner pipeline
-      // `daily_brief` snapshot's per-symbol context — NOT PG. It's
-      // persisted for completeness but never read into the agent-facing
-      // `publicSummary` or `view`. Anything inside is pipeline lineage
-      // only and must not be rendered as canonical evidence.
-      pipelineSnapshot: snapshotStock,
     },
     view,
-    freshness: input.freshness,
+    // All pipeline-derived data lives here in one named block: lineage of
+    // the upstream snapshot plus the per-symbol slice of `daily_brief`.
+    // Persisted for traceability but never read into publicSummary/view.
+    pipeline: {
+      freshness: input.freshness,
+      ...(snapshotStock ? { snapshot: snapshotStock as Record<string, unknown> } : {}),
+    },
     warnings: [],
   };
 }
@@ -536,7 +536,6 @@ async function buildSectorResearchObject(input: {
     cacheKey,
     sector: input.sector,
     asOfDate,
-    freshness: input.freshness,
     publicSummary,
     researchObject,
   });
@@ -554,15 +553,17 @@ async function buildSectorResearchObject(input: {
       probabilisticEvidence: view.probabilisticEvidence,
       pathRisk: view.pathRisk,
     },
-    // `pipelineSnapshot` (renamed from `snapshot`) carries the StocksScanner
-    // pipeline `daily_brief` snapshot's per-sector context — pipeline
-    // lineage only, never read into the agent-facing publicSummary or view.
+    // PG-only by shape (v5).
     parts: {
       sector: sanitizeResearchPart(researchObject),
-      pipelineSnapshot: snapshotSector,
     },
     view,
-    freshness: input.freshness,
+    // All pipeline-derived data: lineage + per-sector slice of
+    // `daily_brief`. Persisted for traceability only.
+    pipeline: {
+      freshness: input.freshness,
+      ...(snapshotSector ? { snapshot: snapshotSector as Record<string, unknown> } : {}),
+    },
     warnings: [],
   };
 }
@@ -594,7 +595,6 @@ async function buildIndustryResearchObject(input: {
     cacheKey,
     industry: input.industry,
     asOfDate,
-    freshness: input.freshness,
     publicSummary,
     researchObject,
   });
@@ -614,7 +614,9 @@ async function buildIndustryResearchObject(input: {
     },
     parts: { industry: sanitizeResearchPart(researchObject) },
     view,
-    freshness: input.freshness,
+    // Industry RO has no per-anchor pipeline snapshot — only the lineage
+    // of the upstream pipeline run.
+    pipeline: { freshness: input.freshness },
     warnings: [],
   };
 }
@@ -638,7 +640,6 @@ async function buildRegimeResearchObject(input: {
   const view = buildRegimePublicResearchObjectView({
     cacheKey,
     asOfDate,
-    freshness: input.freshness,
     publicSummary,
     researchObject,
   });
@@ -658,7 +659,8 @@ async function buildRegimeResearchObject(input: {
     },
     parts: { regime: sanitizeResearchPart(researchObject) },
     view,
-    freshness: input.freshness,
+    // Regime RO has no per-anchor pipeline snapshot.
+    pipeline: { freshness: input.freshness },
     warnings: [],
   };
 }
@@ -688,7 +690,7 @@ function buildStockSummary(
   // PG-only — the previous `?? snapshotStock?.symbol` fallback silently
   // mixed pipeline-snapshot data into the publicSummary. publicSummary
   // and view must be PG-derived for clean lineage; pipeline snapshot
-  // data lives separately under `parts.pipelineSnapshot`.
+  // data lives separately under `pipeline.snapshot` (v5).
   const symbol = stringValue(meta.symbol);
   const regime = stringValue(regimeContext.current_regime);
   const eventUrgency =
@@ -754,7 +756,7 @@ function buildStockSummary(
     // lineage). Previous `evidenceCount` / `convergence` fields were
     // SOURCED from the pipeline snapshot only and have been dropped
     // from publicSummary; if a downstream caller needs them they can
-    // read `parts.pipelineSnapshot` explicitly.
+    // read `pipeline.snapshot` explicitly (v5).
     evidenceBadge: "RESEARCH_OBJECT_BACKED",
 
     // Peer rank ONLY as a percentile bucket — peer symbols are intentionally
@@ -799,7 +801,6 @@ export function publicObjectViewFromCachedObject(
       cacheKey: item.cacheKey,
       symbol: item.anchor,
       asOfDate: item.asOfDate,
-      freshness: item.freshness,
       publicSummary: item.publicSummary,
       core: asRecord(item.parts.core),
       sectorAggregates: asRecord(item.parts.sectorAggregates),
@@ -815,7 +816,6 @@ export function publicObjectViewFromCachedObject(
       cacheKey: item.cacheKey,
       sector: item.anchor,
       asOfDate: item.asOfDate,
-      freshness: item.freshness,
       publicSummary: item.publicSummary,
       researchObject: asRecord(item.parts.sector),
     });
@@ -826,7 +826,6 @@ export function publicObjectViewFromCachedObject(
       cacheKey: item.cacheKey,
       industry: item.anchor,
       asOfDate: item.asOfDate,
-      freshness: item.freshness,
       publicSummary: item.publicSummary,
       researchObject: asRecord(item.parts.industry),
     });
@@ -835,7 +834,6 @@ export function publicObjectViewFromCachedObject(
   return buildRegimePublicResearchObjectView({
     cacheKey: item.cacheKey,
     asOfDate: item.asOfDate,
-    freshness: item.freshness,
     publicSummary: item.publicSummary,
     researchObject: asRecord(item.parts.regime),
   });
@@ -887,7 +885,6 @@ function buildStockPublicResearchObjectView(input: {
   cacheKey: string;
   symbol: string;
   asOfDate: string;
-  freshness: FreshnessMetadata;
   publicSummary: Record<string, unknown>;
   core: Record<string, unknown>;
   sectorAggregates: Record<string, unknown>;
@@ -935,8 +932,12 @@ function buildStockPublicResearchObjectView(input: {
     edgeEvidence,
     probabilisticEvidence,
     pathRisk,
-    freshness: input.freshness,
-    warnings: Array.from(new Set([...input.warnings, ...edgeEvidence.warnings])),
+    // v4: view.freshness dropped (pipeline lineage lives only on the
+    // top-level RO). view.warnings is the caller-supplied warnings only —
+    // the edge-absence string from edgeEvidence.warnings is no longer
+    // promoted to view-level; consumers that want it read it directly
+    // from view.edgeEvidence.warnings.
+    warnings: input.warnings,
   };
 }
 
@@ -944,7 +945,6 @@ function buildIndustryPublicResearchObjectView(input: {
   cacheKey: string;
   industry: string;
   asOfDate: string;
-  freshness: FreshnessMetadata;
   publicSummary: Record<string, unknown>;
   researchObject: Record<string, unknown>;
 }): PublicResearchObjectView {
@@ -989,8 +989,9 @@ function buildIndustryPublicResearchObjectView(input: {
     edgeEvidence,
     probabilisticEvidence,
     pathRisk,
-    freshness: input.freshness,
-    warnings: edgeEvidence.warnings,
+    // v4: view.freshness dropped; view.warnings empty (edge absence
+    // surfaces only via view.edgeEvidence.state).
+    warnings: [],
   };
 }
 
@@ -998,7 +999,6 @@ function buildSectorPublicResearchObjectView(input: {
   cacheKey: string;
   sector: string;
   asOfDate: string;
-  freshness: FreshnessMetadata;
   publicSummary: Record<string, unknown>;
   researchObject: Record<string, unknown>;
 }): PublicResearchObjectView {
@@ -1046,15 +1046,14 @@ function buildSectorPublicResearchObjectView(input: {
     edgeEvidence,
     probabilisticEvidence,
     pathRisk,
-    freshness: input.freshness,
-    warnings: edgeEvidence.warnings,
+    // v4: view.freshness dropped; view.warnings empty.
+    warnings: [],
   };
 }
 
 function buildRegimePublicResearchObjectView(input: {
   cacheKey: string;
   asOfDate: string;
-  freshness: FreshnessMetadata;
   publicSummary: Record<string, unknown>;
   researchObject: Record<string, unknown>;
 }): PublicResearchObjectView {
@@ -1098,8 +1097,8 @@ function buildRegimePublicResearchObjectView(input: {
     edgeEvidence,
     probabilisticEvidence,
     pathRisk,
-    freshness: input.freshness,
-    warnings: edgeEvidence.warnings,
+    // v4: view.freshness dropped; view.warnings empty.
+    warnings: [],
   };
 }
 
@@ -2508,7 +2507,7 @@ function buildSectorSummary(
   // PG-only — the previous `?? snapshotSector?.sector` fallback silently
   // mixed pipeline-snapshot data into the publicSummary. publicSummary
   // and view must be PG-derived for clean lineage; pipeline snapshot
-  // data lives separately under `parts.pipelineSnapshot`.
+  // data lives separately under `pipeline.snapshot` (v5).
   const sector = stringValue(meta.sector);
   const regime =
     stringValue(meta.current_market_regime) ??

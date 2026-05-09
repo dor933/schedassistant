@@ -489,6 +489,35 @@ Examples (with prior context lastSymbols=["NVDA"]):
                                           is known to be Technology and prior lastSectors had it. If
                                           unsure of sector, inherit symbols only.
 
+INTENT SHIFT FOR SCOPE-CHANGING FOLLOW-UPS (important):
+When an anchor-less follow-up changes the question's SUBJECT from the prior stock to the
+prior stock's sector or industry, the prior stock anchor is the SOURCE of "its sector" /
+"its industry" — it is NOT the subject of the new question. DROP the prior stock from
+symbols and shift the intent accordingly:
+
+  - "promising / leading / top / best / strongest / interesting stocks in its sector"
+    "המניות המבטיחות / המובילות / החזקות / הכי טובות בסקטור שלה / באותו סקטור / בסקטור הזה"
+    → intent="sector_leaders", symbols=[], sectors=[<resolved prior sector>], industries=[]
+    (NOT intent="stock_sector"; do NOT retain the prior stock in symbols.)
+
+  - Same shape for industry:
+    "leading stocks in its industry" / "top names in this industry"
+    "המניות המובילות באותו ענף / בענף שלה"
+    → intent="industry_leaders", symbols=[], sectors=[], industries=[<resolved prior industry>]
+
+  - But if the question is genuinely a comparison ("how does X compare to its sector?",
+    "is X stronger than its sector?", "מה אמזון לעומת הסקטור שלה?"), keep the stock and
+    use intent="stock" (sibling sector auto-loads downstream — no need to populate
+    sectors[] explicitly) — this preserves the existing comparison behavior.
+
+Examples (with prior context lastSymbols=["AMZN"]):
+  • "show me the leading stocks in its sector"      → intent="sector_leaders",   symbols=[], sectors=["Consumer Cyclical"], industries=[]
+  • "promising stocks in this sector?"               → intent="sector_leaders",   symbols=[], sectors=["Consumer Cyclical"], industries=[]
+  • "תראה לי את המניות המובילות באותו סקטור"        → intent="sector_leaders",   symbols=[], sectors=["Consumer Cyclical"], industries=[]
+  • "best names in its industry?"                    → intent="industry_leaders", symbols=[], sectors=[], industries=["Specialty Retail"]
+  • "how does it compare to its sector?"             → intent="stock", symbols=["AMZN"], sectors=[], industries=[] (sibling sector auto-loads)
+  • "what about its sector overall?"                 → intent="sector",          symbols=[], sectors=["Consumer Cyclical"], industries=[]
+
 Without prior context:
   • "what about jp morgan?"            → symbols=["JPM"], sectors=[], regimeRequested=false
   • "and the risks?"                   → intent="unknown" (no anchor anywhere)
@@ -508,12 +537,20 @@ industry_leaders). Examples:
   • "What's going on with Homebuilders?"              → intent="industry", industries=["Homebuilders"]
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
-Use intent = "industry_leaders" when the user names exactly ONE industry and asks for the
-leading / top / best / strongest stocks within that industry, with no other feature criteria.
+Use intent = "industry_leaders" when the user is asking for the leading / top / best /
+strongest / promising / interesting stocks within ONE industry, with no other feature
+criteria. The industry can come from EITHER source:
+  (a) named explicitly this turn, OR
+  (b) inherited from prior context as "its industry" / "this industry" / "the same industry" /
+      "באותו ענף" / "בענף שלה" — the SCOPE-CHANGING follow-up rule above governs this case,
+      the prior stock is dropped from symbols and the prior stock's industry becomes
+      industries=[<industry>].
 Put the industry in industries=[<industry>]. Examples:
-  • "Top stocks in Semiconductors"                    → intent="industry_leaders", industries=["Semiconductors"]
-  • "Leading Biotechnology names right now"           → intent="industry_leaders", industries=["Biotechnology"]
-  • "Best Airlines stocks"                            → intent="industry_leaders", industries=["Airlines"]
+  • "Top stocks in Semiconductors"                    → industries=["Semiconductors"]
+  • "Leading Biotechnology names right now"           → industries=["Biotechnology"]
+  • "Best Airlines stocks"                            → industries=["Airlines"]
+  • (prior lastSymbols=["AMZN"]) "promising names in its industry"
+                                                       → industries=["Specialty Retail"], symbols=[]
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
 When the user names BOTH a stock AND an industry (e.g. "compare NVDA with the Semiconductors
@@ -561,15 +598,23 @@ ticker AND without specifying concrete screening criteria. Examples:
   • "Which names have the best setup right now?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
-Use intent = "sector_leaders" when the user names exactly ONE sector and asks for the
-leading / top / best / strongest stocks within that sector, with no other feature criteria
-(no valuation / quality / momentum / growth / leverage / risk filter). Put the sector in
-sectors=[<sector>]. Examples:
-  • "Which stocks are leading in Technology?"
-  • "Top names in Healthcare right now"
-  • "Best stocks in Energy"
-  • "Strongest tickers in Industrials this week"
-  • "Show me the leaders in Financial Services"
+Use intent = "sector_leaders" when the user is asking for the leading / top / best /
+strongest / promising / interesting stocks within ONE sector, with no other feature
+criteria (no valuation / quality / momentum / growth / leverage / risk filter). The sector
+can come from EITHER source:
+  (a) named explicitly this turn ("top stocks in Technology"), OR
+  (b) inherited from prior context as "its sector" / "this sector" / "the same sector" /
+      "באותו סקטור" / "בסקטור שלה" / "בסקטור הזה" (anchor-less follow-up after a stock
+      turn — the SCOPE-CHANGING follow-up rule above governs this case, the prior stock
+      is dropped from symbols and the prior stock's sector becomes sectors=[<sector>]).
+Put the sector in sectors=[<sector>]. Examples:
+  • "Which stocks are leading in Technology?"        → sectors=["Technology"]
+  • "Top names in Healthcare right now"              → sectors=["Healthcare"]
+  • "Best stocks in Energy"                          → sectors=["Energy"]
+  • "Strongest tickers in Industrials this week"     → sectors=["Industrials"]
+  • "Show me the leaders in Financial Services"      → sectors=["Financial Services"]
+  • (prior lastSymbols=["AMZN"]) "promising stocks in its sector"
+                                                       → sectors=["Consumer Cyclical"], symbols=[]
 If the user combines a sector with a feature criterion (e.g. "high-quality stocks in
 Industrials"), use feature_screen instead. If the user asks for leading SECTORS rather
 than leading stocks, use sector_conviction_leaderboard.
