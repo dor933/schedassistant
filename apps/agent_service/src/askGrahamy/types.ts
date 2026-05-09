@@ -368,7 +368,20 @@ export type ResearchObjectSource = "redis" | "database" | "snapshot";
 
 export type EvidenceState = "complete" | "partial" | "unavailable";
 
-export const PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION = 2;
+// Bumped 2 → 3 to invalidate cached Research Objects produced before the
+// PG/pipeline-snapshot separation (removed `publicSummary.exampleSymbols`,
+// removed `publicSummary.evidenceCount` / `convergence` on stocks, dropped
+// snapshot fallbacks for `symbol`/`company`/`sector`/`stocksInFocus`,
+// renamed `parts.snapshot` → `parts.pipelineSnapshot`, and stopped
+// fabricating `view.edgeEvidence` from snapshot proxies).
+//
+// `hydrateCachedResearchObjectView` rejects priors whose `viewSchemaVersion`
+// doesn't match this constant, so every old cache entry becomes a miss
+// after this bump — agent_service rebuilds with the new shape, SS persists
+// the new version, and after one round of traffic the old shape is gone
+// from the cache organically. Bump again whenever publicSummary / view /
+// parts shape changes in a way that downstream consumers must observe.
+export const PUBLIC_RESEARCH_VIEW_SCHEMA_VERSION = 3;
 
 export type ProbabilisticReferenceSet =
   | "self_analogs"
