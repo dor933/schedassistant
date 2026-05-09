@@ -114,9 +114,13 @@ export function mapQuestionType(classification?: Classification): AnalystQuestio
 function isComparisonClassification(classification: Classification): boolean {
   const symbolCount = classification.symbols.length;
   const sectorCount = classification.sectors.length;
+  const industryCount = classification.industries.length;
   if (symbolCount >= 2) return true;
   if (sectorCount >= 2) return true;
+  if (industryCount >= 2) return true;
   if (symbolCount >= 1 && sectorCount >= 1) return true;
+  if (symbolCount >= 1 && industryCount >= 1) return true;
+  if (sectorCount >= 1 && industryCount >= 1) return true;
   return false;
 }
 

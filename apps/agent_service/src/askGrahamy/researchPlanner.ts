@@ -672,10 +672,12 @@ async function executeStockDeepDiveStack(
   };
   const stockResearchObjects = await runPlannerResearchObjects(input, stockClassification);
   warnings.push(...stockResearchObjects.warnings);
-  // Pull a sibling sector research object so the agent can do the
-  // stock-vs-sector comparison directly from research objects. The sector
-  // is inferred from the stock's research object when available.
+  // Pull sibling sector AND sibling industry research objects so the agent
+  // can do stock-vs-sector AND stock-vs-industry comparisons directly from
+  // the research-object set. Both are inferred from the stock RO when the
+  // user didn't name them explicitly.
   const sectorAnchor = inferSectorFromResearchObjects(stockResearchObjects.objects);
+  const industryAnchor = inferIndustryFromResearchObjects(stockResearchObjects.objects);
   const allObjects = [...stockResearchObjects.objects];
   if (sectorAnchor) {
     const sectorResearchObjects = await runPlannerResearchObjects(input, {
@@ -684,6 +686,14 @@ async function executeStockDeepDiveStack(
     });
     warnings.push(...sectorResearchObjects.warnings);
     allObjects.push(...sectorResearchObjects.objects);
+  }
+  if (industryAnchor) {
+    const industryResearchObjects = await runPlannerResearchObjects(input, {
+      ...capabilityClassification(input.classification, "industry"),
+      industries: [industryAnchor],
+    });
+    warnings.push(...industryResearchObjects.warnings);
+    allObjects.push(...industryResearchObjects.objects);
   }
   const pipelineLabels = hasOptionalPipelineStep(workflow)
     ? await runOptionalSymbolsPipelineLabels(input, [symbol])
@@ -718,7 +728,15 @@ async function executeStockDeepDiveStack(
   };
 }
 
-function inferSectorFromResearchObjects(
+/**
+ * Pull the first stock RO's `publicSummary.sector` so the caller can load
+ * the matching sibling sector RO. Used when the user asks a stock question
+ * that needs sector context — either via the stock_deep_dive_stack workflow
+ * or via the standard loader's auto-sibling pass — but didn't name the
+ * sector explicitly. Exported for reuse across the planner and the
+ * standard `loadResearchObjects` node.
+ */
+export function inferSectorFromResearchObjects(
   objects: CachedResearchObject[],
 ): string | undefined {
   for (const object of objects) {
@@ -726,6 +744,26 @@ function inferSectorFromResearchObjects(
     const summary = object.publicSummary as { sector?: unknown } | undefined;
     if (typeof summary?.sector === "string" && summary.sector.trim().length) {
       return summary.sector.trim();
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Mirror of `inferSectorFromResearchObjects` for industry. Reads
+ * `publicSummary.industry` (which `buildStockSummary` populates from the
+ * core SQL's `meta.industry`). Lets the caller load the sibling industry
+ * RO whenever the user asks a "compare to its industry / peers" question
+ * without naming the industry explicitly.
+ */
+export function inferIndustryFromResearchObjects(
+  objects: CachedResearchObject[],
+): string | undefined {
+  for (const object of objects) {
+    if (object.objectType !== "stock") continue;
+    const summary = object.publicSummary as { industry?: unknown } | undefined;
+    if (typeof summary?.industry === "string" && summary.industry.trim().length) {
+      return summary.industry.trim();
     }
   }
   return undefined;

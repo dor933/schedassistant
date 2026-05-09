@@ -131,31 +131,103 @@ function getCanonicalIndustries(): readonly string[] {
 // use. Used by the platform_help node when the user asks "what industries
 // are available?" — listing 200-500 industries flat is unreadable, so we
 // emit them grouped under each canonical sector.
+//
+// Yahoo's published taxonomy is 1:N (each industry has exactly one parent
+// sector), but the data in `md_symbols` carries a small N:M tail because
+// reclassifications, ADRs/ETFs, and ingestion glitches occasionally place
+// the same industry name under two different sector names. We collapse
+// those to a clean 1:N by picking each industry's DOMINANT sector — the
+// sector it appears under most often by symbol count — so each industry
+// appears exactly once in the rendered help answer. A warning is logged
+// when the dominant sector's share falls below 60% of an industry's total
+// appearances, since that flags genuine taxonomy ambiguity worth review.
 let cachedIndustriesBySector: ReadonlyMap<string, readonly string[]> | null = null;
 let industriesBySectorLoadPromise: Promise<ReadonlyMap<string, readonly string[]>> | null =
   null;
+
+const AMBIGUOUS_INDUSTRY_DOMINANCE_THRESHOLD = 0.6;
 
 export async function loadIndustriesBySector(): Promise<ReadonlyMap<string, readonly string[]>> {
   if (cachedIndustriesBySector) return cachedIndustriesBySector;
   if (industriesBySectorLoadPromise) return industriesBySectorLoadPromise;
   industriesBySectorLoadPromise = (async () => {
     try {
-      const rows = await queryExternalReadonly<{ sector?: unknown; industry?: unknown }>(
-        `SELECT DISTINCT sector, industry
+      const rows = await queryExternalReadonly<{
+        sector?: unknown;
+        industry?: unknown;
+        symbol_count?: unknown;
+      }>(
+        `SELECT sector, industry, COUNT(*) AS symbol_count
            FROM md_symbols
           WHERE sector IS NOT NULL
             AND industry IS NOT NULL
             AND TRIM(sector) <> ''
             AND TRIM(industry) <> ''
-          ORDER BY sector, industry`,
+          GROUP BY sector, industry`,
       );
-      const grouped = new Map<string, string[]>();
+
+      // Phase 1: aggregate per-industry counts and pick the dominant sector.
+      // For each industry, track every (sector, count) pair so we can:
+      //   (a) pick the sector with the largest count as canonical,
+      //   (b) compute the dominance ratio for the ambiguity warning,
+      //   (c) discard the stragglers under the non-dominant sector(s).
+      type SectorCount = { sector: string; count: number };
+      const perIndustry = new Map<string, SectorCount[]>();
       for (const row of rows) {
         const sector = typeof row.sector === "string" ? row.sector.trim() : "";
         const industry = typeof row.industry === "string" ? row.industry.trim() : "";
-        if (!sector || !industry) continue;
+        const count =
+          typeof row.symbol_count === "number"
+            ? row.symbol_count
+            : typeof row.symbol_count === "string"
+              ? Number.parseInt(row.symbol_count, 10) || 0
+              : 0;
+        if (!sector || !industry || count <= 0) continue;
+        const bucket = perIndustry.get(industry) ?? [];
+        bucket.push({ sector, count });
+        perIndustry.set(industry, bucket);
+      }
+
+      // Phase 2: pick the dominant sector per industry; warn on ambiguity.
+      const dominantBy = new Map<string, string>();
+      const ambiguous: Array<{ industry: string; dominantShare: number; spread: SectorCount[] }> = [];
+      for (const [industry, sectorCounts] of perIndustry) {
+        sectorCounts.sort((a, b) => b.count - a.count);
+        const dominant = sectorCounts[0];
+        if (!dominant) continue;
+        dominantBy.set(industry, dominant.sector);
+        if (sectorCounts.length > 1) {
+          const total = sectorCounts.reduce((sum, item) => sum + item.count, 0);
+          const share = total > 0 ? dominant.count / total : 1;
+          if (share < AMBIGUOUS_INDUSTRY_DOMINANCE_THRESHOLD) {
+            ambiguous.push({
+              industry,
+              dominantShare: share,
+              spread: sectorCounts,
+            });
+          }
+        }
+      }
+      if (ambiguous.length) {
+        logger.warn(
+          "Ask Grahamy: industries with ambiguous parent sector — dominant share below threshold",
+          {
+            threshold: AMBIGUOUS_INDUSTRY_DOMINANCE_THRESHOLD,
+            count: ambiguous.length,
+            sample: ambiguous.slice(0, 5).map((item) => ({
+              industry: item.industry,
+              dominantShare: Number(item.dominantShare.toFixed(2)),
+              spread: item.spread.map((sc) => `${sc.sector}:${sc.count}`),
+            })),
+          },
+        );
+      }
+
+      // Phase 3: invert into Map<sector, industry[]>, sorted alphabetically.
+      const grouped = new Map<string, string[]>();
+      for (const [industry, sector] of dominantBy) {
         const list = grouped.get(sector) ?? [];
-        if (!list.includes(industry)) list.push(industry);
+        list.push(industry);
         grouped.set(sector, list);
       }
       cachedIndustriesBySector = new Map(
@@ -565,24 +637,34 @@ leads, underperforms, or matters in the current market regime. This is different
   • "What does a neutral regime usually favor?"
 For this intent, symbols=[], sectors=[], regimeRequested=false is valid.
 
-Comparison-style requests (stock-vs-stock, stock-vs-sector, sector-vs-sector) do NOT have
-their own intent. Instead, list EVERY entity the user mentioned in symbols / sectors and set
-regimeRequested=true if regime/market context is part of the comparison. The downstream
-system builds one research object per stock/sector and one regime research object, then the
-agent reads those objects and performs the comparison itself — no specialised comparison
+Comparison-style requests (stock-vs-stock, stock-vs-sector, stock-vs-industry, sector-vs-sector, sector-vs-industry, industry-vs-industry) do NOT have
+their own intent. Instead, list EVERY entity the user mentioned in symbols / sectors / industries
+and set regimeRequested=true if regime/market context is part of the comparison. The downstream
+system builds one research object per stock/sector/industry and one regime research object, then
+the agent reads those objects and performs the comparison itself — no specialised comparison
 query exists. Apply the natural intent based on which kinds of anchors appear:
-  • two or more stocks, no sector mentioned → intent="stock"
+  • two or more stocks, no sector/industry mentioned → intent="stock"
   • stock + sector → intent="stock_sector"
   • stock + sector + regime context → intent="stock_sector_regime"
   • two sectors → intent="sector"
   • two sectors + regime context → intent="sector_regime"
+  • stock + industry → intent="stock" (industry rides as a tag)
+  • two industries → intent="industry" (industries[] holds both)
+
+When the user asks "compare X to its sector" / "compare X to its industry" / "how does X compare
+to its peers?" — name X in symbols and leave sectors/industries empty. The downstream loader
+auto-derives X's sibling sector and sibling industry from X's stock research object and loads
+them alongside, so the agent has peer evidence even though the user didn't name the sector or
+industry explicitly.
 
 Examples:
-  • "Compare AMZN and NVDA"                              → symbols=["AMZN","NVDA"], sectors=[], regimeRequested=false, intent="stock"
+  • "Compare AMZN and NVDA"                              → symbols=["AMZN","NVDA"], sectors=[], industries=[], regimeRequested=false, intent="stock"
   • "Compare AMZN and NVDA in the context of the market regime and the tech sector"
                                                          → symbols=["AMZN","NVDA"], sectors=["Technology"], regimeRequested=true, intent="stock_sector_regime"
-  • "Compare GSL to its sector"                          → symbols=["GSL"], sectors=[], regimeRequested=false, intent="stock"  (the implicit "its sector" stays implicit; downstream resolves it from the stock research object)
+  • "Compare GSL to its sector"                          → symbols=["GSL"], sectors=[], industries=[], regimeRequested=false, intent="stock"  (sibling sector auto-loads downstream)
+  • "Compare GSL to its industry"                        → symbols=["GSL"], sectors=[], industries=[], regimeRequested=false, intent="stock"  (sibling industry auto-loads downstream)
   • "How does GSL look versus Financial Services?"        → symbols=["GSL"], sectors=["Financial Services"], regimeRequested=false, intent="stock_sector"
+  • "How does NVDA compare to other stocks in Semiconductors?" → symbols=["NVDA"], sectors=[], industries=["Semiconductors"], regimeRequested=false, intent="stock"
   • "Compare Technology vs Industrials"                   → symbols=[], sectors=["Technology","Industrials"], regimeRequested=false, intent="sector"
   • "Which is stronger, AMZN or NVDA, given the regime?"  → symbols=["AMZN","NVDA"], sectors=[], regimeRequested=true, intent="stock_regime"
 
