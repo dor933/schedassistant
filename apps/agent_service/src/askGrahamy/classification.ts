@@ -6,6 +6,7 @@ import { getLangfuseCallbackHandler } from "../langfuse";
 import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
 import { queryExternalReadonly } from "../utils/externalReadonlyDb";
 import {
+  HELP_TOPICS,
   INTENTS,
   type Classification,
   type CompoundResearchWorkflowName,
@@ -16,6 +17,7 @@ import {
   type FactorBacktestHorizon,
   type FeatureScreenCriterion,
   type FeatureScreenFactor,
+  type HelpTopic,
   type Intent,
   type ToolName,
 } from "./types";
@@ -51,7 +53,7 @@ const HARDCODED_SECTOR_FALLBACK = [
 let cachedSectors: readonly string[] | null = null;
 let sectorsLoadPromise: Promise<readonly string[]> | null = null;
 
-async function loadCanonicalSectors(): Promise<readonly string[]> {
+export async function loadCanonicalSectors(): Promise<readonly string[]> {
   if (cachedSectors) return cachedSectors;
   if (sectorsLoadPromise) return sectorsLoadPromise;
   sectorsLoadPromise = (async () => {
@@ -122,6 +124,60 @@ async function loadCanonicalIndustries(): Promise<readonly string[]> {
 
 function getCanonicalIndustries(): readonly string[] {
   return cachedIndustries ?? [];
+}
+
+// Industries grouped by their parent sector — derived from md_symbols
+// (the only place we know carries both columns linked together) on first
+// use. Used by the platform_help node when the user asks "what industries
+// are available?" — listing 200-500 industries flat is unreadable, so we
+// emit them grouped under each canonical sector.
+let cachedIndustriesBySector: ReadonlyMap<string, readonly string[]> | null = null;
+let industriesBySectorLoadPromise: Promise<ReadonlyMap<string, readonly string[]>> | null =
+  null;
+
+export async function loadIndustriesBySector(): Promise<ReadonlyMap<string, readonly string[]>> {
+  if (cachedIndustriesBySector) return cachedIndustriesBySector;
+  if (industriesBySectorLoadPromise) return industriesBySectorLoadPromise;
+  industriesBySectorLoadPromise = (async () => {
+    try {
+      const rows = await queryExternalReadonly<{ sector?: unknown; industry?: unknown }>(
+        `SELECT DISTINCT sector, industry
+           FROM md_symbols
+          WHERE sector IS NOT NULL
+            AND industry IS NOT NULL
+            AND TRIM(sector) <> ''
+            AND TRIM(industry) <> ''
+          ORDER BY sector, industry`,
+      );
+      const grouped = new Map<string, string[]>();
+      for (const row of rows) {
+        const sector = typeof row.sector === "string" ? row.sector.trim() : "";
+        const industry = typeof row.industry === "string" ? row.industry.trim() : "";
+        if (!sector || !industry) continue;
+        const list = grouped.get(sector) ?? [];
+        if (!list.includes(industry)) list.push(industry);
+        grouped.set(sector, list);
+      }
+      cachedIndustriesBySector = new Map(
+        Array.from(grouped.entries(), ([sector, industries]) => [
+          sector,
+          industries.slice().sort((a, b) => a.localeCompare(b)),
+        ]),
+      );
+    } catch (err) {
+      logger.warn(
+        "Ask Grahamy: failed to load industries-by-sector mapping; platform_help industries topic will degrade",
+        { error: err instanceof Error ? err.message : String(err) },
+      );
+      cachedIndustriesBySector = new Map();
+    }
+    return cachedIndustriesBySector;
+  })();
+  try {
+    return await industriesBySectorLoadPromise;
+  } finally {
+    industriesBySectorLoadPromise = null;
+  }
 }
 
 // Compiled-once alternation regex over the canonical industry list. Rebuilt
@@ -257,6 +313,7 @@ function buildClassifierOutputSchema(sectors: readonly string[]) {
       .enum(COMPOUND_RESEARCH_WORKFLOWS)
       .nullable()
       .optional(),
+    helpTopic: z.enum(HELP_TOPICS).nullable().optional(),
     confidence: z.enum(["high", "medium", "low"]),
   });
 }
@@ -365,7 +422,7 @@ intent must be exactly one of: stock, sector, industry, regime, stock_sector, st
 sector_regime, stock_sector_regime, sector_conviction_leaderboard,
 sector_momentum_vs_conviction_divergence, week_over_week_sector_delta, stock_idea_discovery,
 sector_leaders, industry_leaders, market_regime_historical_playbook, feature_screen,
-factor_conditioned_backtest, follow_up, unknown.
+factor_conditioned_backtest, platform_help, follow_up, unknown.
 
 Use intent = "industry" when the user asks about a single industry without naming a stock,
 sector, or regime AND without asking for "leading stocks in <industry>" (which is
@@ -558,8 +615,27 @@ intent. Examples:
   • Without prior context, "Is this setup supported by the pipeline?"
     → intent="unknown", symbols=[], sectors=[], focus="validated_evidence"
 
+Use intent = "platform_help" when the user is asking a META-question about the platform itself
+rather than about a specific stock / sector / industry / regime — e.g. asking which sectors or
+industries are available, what kinds of analysis the platform can do, or how the assistant works.
+Set the optional helpTopic field to the closest match. helpTopic options:
+  • "sectors"       — "Which sectors do you cover?", "What sectors are available?",
+                      "List the sectors you support", "אילו סקטורים יש לכם?"
+  • "industries"    — "What industries are available?", "Which industries do you cover?",
+                      "List industries by sector", "אילו תעשיות יש לכם?"
+  • "capabilities"  — "What can you analyze about a stock?", "What kinds of questions can I ask?",
+                      "What features does Ask Grahamy have?", "מה אתה יודע לעשות?"
+  • "overview"      — "How does Ask Grahamy work?", "What is this assistant for?",
+                      "Tell me about the platform", "מה האפליקציה הזאת?"
+For platform_help, symbols=[], sectors=[], industries=[], regimeRequested=false. Do NOT set
+focus, featureCriteria, factorBacktest, or compoundWorkflow on platform_help turns. If the user
+clearly wants platform_help but it isn't obvious which topic, default to helpTopic="overview".
+DO NOT use platform_help when the user names a specific stock/sector/industry/regime even
+if they ask "what can you tell me about <X>?" — that's the regular intent for <X>.
+
 Use intent = "unknown" only when the message is nonsensical, off-topic, or impossible to anchor
-to any stock / sector / regime EVEN AFTER inheritance from prior context.
+to any stock / sector / regime EVEN AFTER inheritance from prior context AND it is not a
+meta-platform question (those are platform_help, not unknown).
 
 symbols, sectors, and regimeRequested must be consistent with the chosen intent.
 
@@ -954,23 +1030,41 @@ export async function classifyMessage(
       ? raw.compoundWorkflow
       : undefined;
 
+  // platform_help also lets the LLM pick the special intent on its own. If
+  // the LLM emitted platform_help but we re-derived to something else (e.g.
+  // because an anchor was inferred via regex), prefer the LLM's verdict —
+  // platform_help is a meta-question, not an anchor question.
+  let finalIntent: Intent = intent;
+  let helpTopic: HelpTopic | undefined;
+  if (raw.intent === "platform_help") {
+    finalIntent = "platform_help";
+    const rawTopic = raw.helpTopic;
+    helpTopic =
+      rawTopic && (HELP_TOPICS as readonly string[]).includes(rawTopic)
+        ? (rawTopic as HelpTopic)
+        : "overview";
+  }
+
   return {
-    intent,
-    symbols,
-    sectors,
-    industries,
-    regimeRequested,
+    intent: finalIntent,
+    symbols: finalIntent === "platform_help" ? [] : symbols,
+    sectors: finalIntent === "platform_help" ? [] : sectors,
+    industries: finalIntent === "platform_help" ? [] : industries,
+    regimeRequested: finalIntent === "platform_help" ? false : regimeRequested,
     isFollowUp: raw.isFollowUp,
-    ...(includeFocus ? { focus } : {}),
-    ...(intent === "feature_screen" ? { featureCriteria } : {}),
-    ...(intent === "factor_conditioned_backtest" && factorBacktest
+    ...(finalIntent !== "platform_help" && includeFocus ? { focus } : {}),
+    ...(finalIntent === "feature_screen" ? { featureCriteria } : {}),
+    ...(finalIntent === "factor_conditioned_backtest" && factorBacktest
       ? { factorBacktest }
       : {}),
-    ...(compoundWorkflow ? { compoundWorkflow } : {}),
-    requiresTools: toolsForIntent(intent),
+    ...(finalIntent !== "platform_help" && compoundWorkflow
+      ? { compoundWorkflow }
+      : {}),
+    ...(helpTopic ? { helpTopic } : {}),
+    requiresTools: toolsForIntent(finalIntent),
     confidence: raw.confidence,
     warnings:
-      intent === "unknown"
+      finalIntent === "unknown"
         ? [
             "Could not classify the message into stock, sector, industry, or regime context.",
           ]
@@ -1057,6 +1151,7 @@ export function toolsForIntent(intent: Intent): ToolName[] {
         "get_sector_snapshot_context",
         "get_market_context",
       ];
+    case "platform_help":
     case "follow_up":
     case "unknown":
       return [];

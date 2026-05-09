@@ -20,7 +20,10 @@ export async function loadResearchObjectsNode(
 }
 
 async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
-  if (state.classification?.focus === "validated_evidence") {
+  if (
+    state.classification?.focus === "validated_evidence" ||
+    state.classification?.intent === "platform_help"
+  ) {
     state.researchObjects = [];
     state.researchObjectsUpdated = [];
     state.researchObjectCacheStats = { hits: 0, misses: 0, writes: 0 };

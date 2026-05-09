@@ -117,6 +117,7 @@ export async function finalizeSafeGraphError(
 function inferAnswerType(
   classification: Classification,
 ): AskGrahamyResponse["answerType"] {
+  if (classification.intent === "platform_help") return "help";
   if (classification.intent === "unknown") return "unknown";
   if (classification.intent === "sector_conviction_leaderboard") return "sector";
   if (classification.intent === "sector_momentum_vs_conviction_divergence") return "sector";

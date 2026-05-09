@@ -23,9 +23,24 @@ export const INTENTS = [
   "stock_regime",
   "sector_regime",
   "stock_sector_regime",
+  "platform_help",
   "follow_up",
   "unknown",
 ] as const;
+
+/**
+ * Sub-discriminator on `platform_help` turns. Tells the help node which
+ * deterministic answer to render — full sector list, full industry list
+ * grouped by sector, capability inventory, or platform overview. Free-form
+ * help questions without a clear sub-target default to "overview".
+ */
+export const HELP_TOPICS = [
+  "sectors",
+  "industries",
+  "capabilities",
+  "overview",
+] as const;
+export type HelpTopic = (typeof HELP_TOPICS)[number];
 
 export const ANSWER_TYPES = [
   "stock",
@@ -34,6 +49,7 @@ export const ANSWER_TYPES = [
   "mixed",
   "clarification",
   "error",
+  "help",
   "unknown",
 ] as const;
 
@@ -193,6 +209,12 @@ export type Classification = {
    * LLM call with a single classifier-side decision.
    */
   compoundWorkflow?: CompoundResearchWorkflowName;
+  /**
+   * Set ONLY when `intent === "platform_help"`. Discriminates between the
+   * four deterministic help-topic responses the platform_help node renders.
+   * Defaults to "overview" if the LLM picks platform_help without a topic.
+   */
+  helpTopic?: HelpTopic;
   requiresTools: ToolName[];
   confidence: Confidence;
   warnings: string[];
