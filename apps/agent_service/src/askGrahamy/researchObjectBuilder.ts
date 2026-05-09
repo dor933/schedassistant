@@ -470,7 +470,13 @@ async function buildStockResearchObject(input: {
       core: sanitizeResearchPart(core),
       sectorAggregates: sanitizeResearchPart(sectorAggregates),
       financialQuality: sanitizeResearchPart(quality),
-      snapshot: snapshotStock,
+      // Renamed from `snapshot` so the lineage is unambiguous in the
+      // persisted RO. This block carries the StocksScanner pipeline
+      // `daily_brief` snapshot's per-symbol context — NOT PG. It's
+      // persisted for completeness but never read into the agent-facing
+      // `publicSummary` or `view`. Anything inside is pipeline lineage
+      // only and must not be rendered as canonical evidence.
+      pipelineSnapshot: snapshotStock,
     },
     view,
     freshness: input.freshness,
@@ -548,7 +554,13 @@ async function buildSectorResearchObject(input: {
       probabilisticEvidence: view.probabilisticEvidence,
       pathRisk: view.pathRisk,
     },
-    parts: { sector: sanitizeResearchPart(researchObject), snapshot: snapshotSector },
+    // `pipelineSnapshot` (renamed from `snapshot`) carries the StocksScanner
+    // pipeline `daily_brief` snapshot's per-sector context — pipeline
+    // lineage only, never read into the agent-facing publicSummary or view.
+    parts: {
+      sector: sanitizeResearchPart(researchObject),
+      pipelineSnapshot: snapshotSector,
+    },
     view,
     freshness: input.freshness,
     warnings: [],
@@ -673,7 +685,11 @@ function buildStockSummary(
   const capitalAllocation = asRecord(quality.capital_allocation);
   const peerRelativePerf = asRecord(quality.peer_relative_perf);
 
-  const symbol = stringValue(meta.symbol) ?? snapshotStock?.symbol;
+  // PG-only — the previous `?? snapshotStock?.symbol` fallback silently
+  // mixed pipeline-snapshot data into the publicSummary. publicSummary
+  // and view must be PG-derived for clean lineage; pipeline snapshot
+  // data lives separately under `parts.pipelineSnapshot`.
+  const symbol = stringValue(meta.symbol);
   const regime = stringValue(regimeContext.current_regime);
   const eventUrgency =
     stringValue(forwardCatalysts.next_earnings_window) ??
@@ -690,7 +706,7 @@ function buildStockSummary(
     asRecord(sectorAggregates.analog_evidence_sector),
     fullResearchObject,
   );
-  const edgeEvidence = deriveEdgeEvidence(fullResearchObject, snapshotStock);
+  const edgeEvidence = deriveEdgeEvidence(fullResearchObject);
   const signals = deriveActiveSignals({
     trajectory,
     growthCompound,
@@ -717,9 +733,11 @@ function buildStockSummary(
   });
 
   return {
+    // PG-only fields (clean lineage). Previous snapshot fallbacks for
+    // company/sector were dropped for the same reason as `symbol` above.
     symbol,
-    company: stringValue(meta.company_name) ?? snapshotStock?.company,
-    sector: stringValue(meta.sector) ?? snapshotStock?.sector,
+    company: stringValue(meta.company_name),
+    sector: stringValue(meta.sector),
     industry: stringValue(meta.industry),
     asOfDate: stringValue(meta.as_of_date),
 
@@ -732,10 +750,12 @@ function buildStockSummary(
     // Catalyst urgency
     eventUrgency,                           // e.g. WITHIN_5_DAYS
 
-    // Provenance
+    // Provenance — `evidenceBadge` is a constant marker (PG-derived
+    // lineage). Previous `evidenceCount` / `convergence` fields were
+    // SOURCED from the pipeline snapshot only and have been dropped
+    // from publicSummary; if a downstream caller needs them they can
+    // read `parts.pipelineSnapshot` explicitly.
     evidenceBadge: "RESEARCH_OBJECT_BACKED",
-    evidenceCount: snapshotStock?.evidenceCount,
-    convergence: snapshotStock?.convergenceScore,
 
     // Peer rank ONLY as a percentile bucket — peer symbols are intentionally
     // hidden per MOAT policy.
@@ -878,10 +898,7 @@ function buildStockPublicResearchObjectView(input: {
 }): PublicResearchObjectView {
   const analogSelf = asRecord(asRecord(input.core.analog_evidence_self).self_history);
   const analogSector = asRecord(input.sectorAggregates.analog_evidence_sector);
-  const edgeEvidence = deriveEdgeEvidence(
-    input.fullResearchObject,
-    input.snapshotStock,
-  );
+  const edgeEvidence = deriveEdgeEvidence(input.fullResearchObject);
   const probabilisticEvidence = deriveProbabilisticEvidence(
     analogSelf,
     analogSector,
@@ -1086,9 +1103,18 @@ function buildRegimePublicResearchObjectView(input: {
   };
 }
 
+/**
+ * Derive the stock RO's `edgeEvidence` from PG-side validated edge data
+ * only. Previously this function also fell back to the pipeline snapshot's
+ * `confluenceLevel` / `convergenceScore` when PG had no edge claims —
+ * surfacing it as `state: "partial", source: "snapshot_proxy"`. That mixed
+ * pipeline lineage into the agent-facing edgeEvidence layer, contradicting
+ * the "validated edge evidence is a separate optional bonus overlay" rule
+ * the system prompt now enforces. Absence is treated as silent (the
+ * unavailable path), per design.
+ */
 function deriveEdgeEvidence(
   fullResearchObject: Record<string, unknown> | undefined,
-  snapshotStock: StockResearchContext["symbols"][number] | undefined,
 ): EdgeEvidenceView {
   const fullEdge = asRecord(fullResearchObject?.edge_evidence);
   const fullClaims = Array.isArray(fullEdge.claims)
@@ -1137,31 +1163,6 @@ function deriveEdgeEvidence(
       decayState: decay?.classification ?? decay?.text,
       sectorSignalDensity: density?.classification ?? density?.text,
       warnings: [],
-    };
-  }
-
-  if (snapshotStock?.confluenceLevel || snapshotStock?.convergenceScore != null) {
-    return {
-      state: "partial",
-      source: "snapshot_proxy",
-      claims: [
-        {
-          text: "Published snapshot context shows a convergence read for this name, but the validated edge bridge did not return full edge evidence.",
-          classification: snapshotStock.confluenceLevel,
-          source: "snapshot_proxy",
-        },
-      ],
-      convergence: {
-        label: snapshotStock.confluenceLevel,
-        familyCountBucket:
-          snapshotStock.convergenceScore == null
-            ? undefined
-            : bucketConvergenceCount(snapshotStock.convergenceScore),
-      },
-      rollingForwardValidation: [],
-      warnings: [
-        "Validated edge evidence bridge unavailable; using snapshot convergence proxy.",
-      ],
     };
   }
 
@@ -2504,7 +2505,11 @@ function buildSectorSummary(
   const historicalBaseRate = asRecord(researchObject.historical_base_rate);
   const conditions = asRecord(researchObject.under_which_conditions);
 
-  const sector = stringValue(meta.sector) ?? snapshotSector?.sector;
+  // PG-only — the previous `?? snapshotSector?.sector` fallback silently
+  // mixed pipeline-snapshot data into the publicSummary. publicSummary
+  // and view must be PG-derived for clean lineage; pipeline snapshot
+  // data lives separately under `parts.pipelineSnapshot`.
+  const sector = stringValue(meta.sector);
   const regime =
     stringValue(meta.current_market_regime) ??
     stringValue(whyNow.current_regime);
@@ -2578,9 +2583,14 @@ function buildSectorSummary(
     invalidationSignals,
     upcomingEvents,
 
-    // Backwards-compat fields used by the generic answer fallback path
-    stocksInFocus: numberFrom(whatMatters.stocks_in_focus) ?? snapshotSector?.stocksInFocus,
-    exampleSymbols: snapshotSector?.exampleSymbols ?? [],
+    // PG-only. Previous `?? snapshotSector?.stocksInFocus` fallback +
+    // snapshot-only `exampleSymbols` mixed pipeline lineage into the
+    // publicSummary. `exampleSymbols` is dropped entirely (no PG source
+    // exists today; the field would be re-added if/when the v6 sector
+    // SQL exposes a peer-symbol list). `stocksInFocus` is now PG-only —
+    // returns undefined when missing, which downstream consumers
+    // already guard with `?? 0`.
+    stocksInFocus: numberFrom(whatMatters.stocks_in_focus),
     historicalEvidence: bucketSampleAdequacy(baseSample),
 
     whyNow: buildSectorWhyNow({
