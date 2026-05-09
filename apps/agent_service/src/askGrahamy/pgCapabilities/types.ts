@@ -64,6 +64,16 @@ export type PgCapabilityRunInput = {
    */
   priorResearchObjects?: CachedResearchObject[];
   /**
+   * Canonical PG `as_of_date` (YYYY-MM-DD) — used as the cache-key date for
+   * capability views AND for any child Research Objects the capability fans
+   * out via `buildResearchObjectsForAnchors`. Without this, both the
+   * capability cache key and child-RO cache keys fall back to the pipeline
+   * `daily_brief` snapshot's `dataThrough`, which can lag the actual PG
+   * data date and produce silent cache-key mismatches with the SS-side
+   * cache (which keys by PG date). Optional for back-compat.
+   */
+  asOfDate?: string;
+  /**
    * Test seam — overrides the default research-object builder. Capabilities
    * fall back to `buildResearchObjectsForAnchors` from `researchObjectBuilder`
    * when this is omitted.
@@ -71,10 +81,12 @@ export type PgCapabilityRunInput = {
   researchObjectBuilder?: (input: {
     symbols?: string[];
     sectors?: string[];
+    industries?: string[];
     regimeRequested?: boolean;
     snapshots: SnapshotBundle;
     toolOutputs?: ToolOutputs;
     priorResearchObjects?: CachedResearchObject[];
+    asOfDate?: string;
   }) => Promise<ResearchObjectBuildResult>;
 };
 

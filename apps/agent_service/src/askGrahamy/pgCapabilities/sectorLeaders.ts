@@ -134,6 +134,7 @@ async function fanOutStockResearchObjects(
     snapshots: input.snapshots,
     toolOutputs: input.toolOutputs,
     priorResearchObjects: input.priorResearchObjects,
+    ...(input.asOfDate ? { asOfDate: input.asOfDate } : {}),
   });
   const keyBySymbol = new Map<string, string>();
   for (const obj of result.objects) {

@@ -111,6 +111,7 @@ async function fanOutSectorResearchObjects(
     snapshots: input.snapshots,
     toolOutputs: input.toolOutputs,
     priorResearchObjects: input.priorResearchObjects,
+    ...(input.asOfDate ? { asOfDate: input.asOfDate } : {}),
   });
   const keyBySector = new Map<string, string>();
   for (const obj of result.objects) {

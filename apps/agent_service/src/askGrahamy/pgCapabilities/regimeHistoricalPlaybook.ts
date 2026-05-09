@@ -261,6 +261,7 @@ async function fanOutRegimeResearchObjects(
     snapshots: input.snapshots,
     toolOutputs: input.toolOutputs,
     priorResearchObjects: input.priorResearchObjects,
+    ...(input.asOfDate ? { asOfDate: input.asOfDate } : {}),
   });
   const keyBySector = new Map<string, string>();
   let regimeResearchObjectKey = draft.regimeResearchObjectKey;

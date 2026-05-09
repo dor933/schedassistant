@@ -39,6 +39,11 @@ async function loadPgCapabilities(
       state.priorResearchObjects ?? [],
       state.researchObjects ?? [],
     ),
+    // Forward the canonical PG asOfDate so capability cache keys + every
+    // child RO the capability fans out land on the SAME date the SS-side
+    // cache used. Without this, the capability path silently falls back
+    // to pipeline freshness and SS priors miss.
+    ...(state.asOfDate ? { asOfDate: state.asOfDate } : {}),
   };
   const result = await observeToolCall(
     "execute_pg_capabilities",

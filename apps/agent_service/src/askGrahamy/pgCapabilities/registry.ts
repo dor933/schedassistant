@@ -268,7 +268,14 @@ export async function executePgCapabilitiesWithCache(
     };
   }
 
-  const asOfDate = input.snapshots?.freshness?.dataThrough;
+  // Prefer the explicit PG `as_of_date` supplied by the caller (SS resolves
+  // it via `MAX(as_of_date)` and forwards it on every turn). Fall back to
+  // the pipeline `daily_brief` snapshot's `dataThrough` only when missing —
+  // older callers, freshly-bootstrapped tests. The pipeline date can lag PG
+  // (e.g. snapshot=2026-04-28 while PG already has 2026-05-08), so using it
+  // for the cache key produces silent mismatches with SS-side priors.
+  const asOfDate =
+    input.asOfDate ?? input.snapshots?.freshness?.dataThrough;
   const cacheKey = asOfDate
     ? buildCapabilityCacheKey(entry.name, entry.cacheKeyParams(input), asOfDate)
     : undefined;
@@ -377,6 +384,7 @@ async function fanOutResearchObjectsForCachedView(
     snapshots: input.snapshots,
     toolOutputs: input.toolOutputs,
     priorResearchObjects: input.priorResearchObjects,
+    ...(input.asOfDate ? { asOfDate: input.asOfDate } : {}),
   });
   return {
     researchObjects: result.objects,
