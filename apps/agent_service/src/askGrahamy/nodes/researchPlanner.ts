@@ -61,6 +61,7 @@ async function maybeRunResearchPlanner(
           snapshots: state.snapshots ?? {},
           toolOutputs: state.toolOutputs ?? {},
           priorResearchObjects: state.priorResearchObjects ?? [],
+          ...(state.asOfDate ? { asOfDate: state.asOfDate } : {}),
           researchObjectBuilder: options.researchObjectBuilder,
           pgCapabilityRunner: options.pgCapabilityRunner,
           pipelineOverlayRunner: options.pipelineOverlayRunner,

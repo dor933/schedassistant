@@ -54,6 +54,7 @@ async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
         snapshots: state.snapshots ?? {},
         toolOutputs: state.toolOutputs ?? {},
         priorResearchObjects: state.priorResearchObjects ?? [],
+        ...(state.asOfDate ? { asOfDate: state.asOfDate } : {}),
       }),
   );
 
@@ -78,6 +79,7 @@ async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
       state.priorResearchObjects ?? [],
       state.snapshots ?? {},
       state.toolOutputs ?? {},
+      state.asOfDate,
     );
     objects.push(...sibling.objects);
     objectsUpdated.push(...sibling.objectsUpdated);
@@ -105,6 +107,7 @@ async function loadSiblingSectorAndIndustry(
   priorResearchObjects: CachedResearchObject[],
   snapshots: AskGrahamyState["snapshots"],
   toolOutputs: AskGrahamyState["toolOutputs"],
+  asOfDate: string | undefined,
 ): Promise<{
   objects: CachedResearchObject[];
   objectsUpdated: CachedResearchObject[];
@@ -140,6 +143,7 @@ async function loadSiblingSectorAndIndustry(
     snapshots: snapshots ?? {},
     toolOutputs: toolOutputs ?? {},
     priorResearchObjects,
+    ...(asOfDate ? { asOfDate } : {}),
   });
   return {
     objects: sibling.objects,

@@ -106,6 +106,29 @@ export const askGrahamyRequestSchema = z.object({
    * Mirrors `priorResearchObjects` for the non-`stock_sector_regime` intents.
    */
   priorCapabilityViews: z.array(passthroughRecord).optional(),
+  /**
+   * Optional. The canonical PG `as_of_date` the caller (StocksScanner) used
+   * when keying its `priorResearchObjects` / `priorCapabilityViews` cache
+   * lookups. When present, agent_service uses it as the cache-key date for
+   * every Research Object / capability view it builds this turn — so a
+   * Research Object built here keys with the SAME date that SS will use to
+   * look it up later, and SS's pre-fetched priors hit agent_service's
+   * cache lookup instead of falsely missing.
+   *
+   * Without this, agent_service falls back to the pipeline `daily_brief`
+   * snapshot's `dataThrough`, which usually lags the actual PG data date
+   * (e.g. snapshot says 2026-04-28 while md_features_daily already has
+   * 2026-05-08). That lag causes cache-key drift between SS (PG-aligned)
+   * and agent_service (pipeline-aligned), producing silent rebuilds.
+   *
+   * Format: `YYYY-MM-DD`. Optional for back-compat; older callers continue
+   * to work via the pipeline-snapshot fallback.
+   */
+  asOfDate: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, "asOfDate must be a YYYY-MM-DD string")
+    .optional(),
 });
 
 export type AskGrahamyRequest = z.infer<typeof askGrahamyRequestSchema>;
@@ -891,6 +914,15 @@ export type AskGrahamyState = {
   snapshots?: SnapshotBundle;
   selectedTools?: ToolName[];
   toolOutputs?: ToolOutputs;
+  /**
+   * Canonical PG `as_of_date` (YYYY-MM-DD) the caller resolved before
+   * pre-fetching `priorResearchObjects` / `priorCapabilityViews`. Used as
+   * the cache-key date for every Research Object / capability view built
+   * this turn so SS-side and agent_service-side cache lookups agree.
+   * Falls back to the pipeline snapshot's freshness when missing (older
+   * callers; freshly-bootstrapped tests).
+   */
+  asOfDate?: string;
   /**
    * Research objects supplied by the upstream caller (StocksScanner), one
    * per anchor it already had in its `research_objects` table for the

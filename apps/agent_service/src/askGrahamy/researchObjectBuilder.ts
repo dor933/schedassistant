@@ -61,6 +61,16 @@ export async function buildResearchObjects(input: {
   /** Research objects the upstream caller already had cached for the
    * current asOfDate — skip the v6 SQL build for any cache_key found here. */
   priorResearchObjects?: CachedResearchObject[];
+  /**
+   * Canonical PG `as_of_date` (YYYY-MM-DD) — used as the cache-key date for
+   * every Research Object built here. Prefer this over the pipeline
+   * snapshot's `dataThrough`: SS keys its `priorResearchObjects` cache
+   * lookups by the PG date, and if agent_service computes a different one
+   * the priors silently miss and we rebuild every turn. Optional for
+   * back-compat; falls back to the pipeline snapshot freshness, which can
+   * lag the actual PG data date.
+   */
+  asOfDate?: string;
 }): Promise<ResearchObjectBuildResult> {
   const { classification, snapshots, toolOutputs, priorResearchObjects } = input;
   const stats = { hits: 0, misses: 0, writes: 0 };
@@ -73,7 +83,7 @@ export async function buildResearchObjects(input: {
     return { objects, objectsUpdated, stats, warnings };
   }
 
-  const asOfDate = researchObjectDate(snapshots.freshness);
+  const asOfDate = input.asOfDate ?? researchObjectDate(snapshots.freshness);
 
   for (const symbol of classification.symbols) {
     const cacheKey = buildResearchObjectCacheKey("STOCK", symbol, asOfDate);
@@ -265,6 +275,12 @@ export type BuildForAnchorsInput = {
   snapshots: SnapshotBundle;
   toolOutputs?: ToolOutputs;
   priorResearchObjects?: CachedResearchObject[];
+  /**
+   * Canonical PG `as_of_date` to use for cache keys. See
+   * `buildResearchObjects.asOfDate` for the full rationale — passed
+   * through unchanged.
+   */
+  asOfDate?: string;
 };
 
 export async function buildResearchObjectsForAnchors(
@@ -300,6 +316,7 @@ export async function buildResearchObjectsForAnchors(
     snapshots: input.snapshots,
     toolOutputs: input.toolOutputs ?? {},
     priorResearchObjects: input.priorResearchObjects,
+    ...(input.asOfDate ? { asOfDate: input.asOfDate } : {}),
   });
 }
 

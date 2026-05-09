@@ -103,6 +103,10 @@ export const AskGrahamyGraphAnnotation = Annotation.Root({
     reducer: replaceStateValue,
     default: () => undefined,
   }),
+  asOfDate: Annotation<AskGrahamyState["asOfDate"]>({
+    reducer: replaceStateValue,
+    default: () => undefined,
+  }),
   priorResearchObjects: Annotation<AskGrahamyState["priorResearchObjects"]>({
     reducer: replaceStateValue,
     default: () => undefined,

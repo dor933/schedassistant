@@ -41,8 +41,15 @@ const ASK_GRAHAMY_ORG_ID =
 const ASK_GRAHAMY_ANSWER_MODEL =
   process.env.ASK_GRAHAMY_ANSWER_MODEL ?? "gpt-5.5";
 
+// Hard cap on a single Grahamy deep-agent invocation. MUST stay BELOW the
+// upstream SS axios timeout (`SCHEDASSISTANT_ASK_GRAHAMY_TIMEOUT_MS`,
+// default 150s) so when this fires SS still has time to receive the clean
+// error response we emit. 60s was too tight for compound workflows or
+// cold-cache turns where the deep agent can legitimately reason for
+// 60-90 seconds — the user saw a generic "research assistant
+// unavailable" error while Langfuse showed the trace was still active.
 const GRAHAMY_TIMEOUT_MS = Number(
-  process.env.ASK_GRAHAMY_AGENT_TIMEOUT_MS ?? 60_000,
+  process.env.ASK_GRAHAMY_AGENT_TIMEOUT_MS ?? 120_000,
 );
 
 const GRAHAMY_RECURSION_LIMIT = Number(

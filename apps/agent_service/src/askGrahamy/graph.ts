@@ -142,6 +142,8 @@ export async function runAskGrahamyGraph(
   const suppliedPriorCapabilityViews =
     (request as { priorCapabilityViews?: CachedCapabilityView[] })
       .priorCapabilityViews;
+  const suppliedAsOfDate =
+    (request as { asOfDate?: string }).asOfDate?.trim() || undefined;
 
   const state: AskGrahamyState = {
     internalUserId,
@@ -151,6 +153,7 @@ export async function runAskGrahamyGraph(
     classification: request.classification,
     priorResearchObjects: suppliedPriorObjects,
     priorCapabilityViews: suppliedPriorCapabilityViews,
+    ...(suppliedAsOfDate ? { asOfDate: suppliedAsOfDate } : {}),
   };
 
   // Ensure we have a conversationId — the deep agent uses it as PostgresSaver

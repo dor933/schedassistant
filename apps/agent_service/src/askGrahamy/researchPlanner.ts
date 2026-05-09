@@ -106,11 +106,19 @@ export type ResearchPlanExecutionInput = {
   snapshots: SnapshotBundle;
   toolOutputs: ToolOutputs;
   priorResearchObjects?: CachedResearchObject[];
+  /**
+   * Canonical PG `as_of_date` for cache-key alignment. See
+   * `buildResearchObjects.asOfDate` for the rationale. Threaded through
+   * here so the planner-handled path keys ROs the same way the standard
+   * loader does.
+   */
+  asOfDate?: string;
   researchObjectBuilder?: (input: {
     classification: Classification;
     snapshots: SnapshotBundle;
     toolOutputs: ToolOutputs;
     priorResearchObjects?: CachedResearchObject[];
+    asOfDate?: string;
   }) => Promise<ResearchObjectBuildResult>;
   pgCapabilityRunner?: (
     input: PgCapabilityRunInput,
@@ -907,6 +915,7 @@ async function runPlannerResearchObjects(
     snapshots: input.snapshots,
     toolOutputs: input.toolOutputs,
     priorResearchObjects: input.priorResearchObjects ?? [],
+    ...(input.asOfDate ? { asOfDate: input.asOfDate } : {}),
   });
 }
 
