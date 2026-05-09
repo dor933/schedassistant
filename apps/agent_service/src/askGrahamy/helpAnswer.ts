@@ -155,24 +155,98 @@ async function buildIndustriesHelp(hebrew: boolean): Promise<HelpAnswerResult> {
 
 function buildCapabilitiesHelp(hebrew: boolean): HelpAnswerResult {
   const summary = hebrew
-    ? `Ask Grahamy עונה על שאלות מחקר ציבוריות על מניות, סקטורים, תעשיות ומשטר השוק. אפשר לשאול:
+    ? `Ask Grahamy עונה על שאלות מחקר ציבוריות על מניות, סקטורים, תעשיות, משטר השוק, ושילובים של אלה. כל התשובות מבוססות ראיות ציבוריות בלבד — דליים, אחוזונים, מדגמי analog היסטוריים, ו־drawdown מהיסטוריית המחיר.
 
-• **על מניה ספציפית** — למה היא מעניינת עכשיו, פרופיל פונדמנטלי, ראיה היסטורית מקבילה (60 ימים), סיכון מסלול / drawdown, השוואה לסקטור ולתעשייה שלה.
-• **על סקטור** — כיצד מתפקד היסטורית במשטר הנוכחי, mtm לעומת שבוע שעבר, פער בין conviction למחיר, מניות מובילות בתוכו.
-• **על תעשייה** — אותה תמונה כמו לסקטור אבל ברמת תעשייה.
-• **על משטר השוק** — מה המשטר הנוכחי, מה היסטורית עובד בו, איזה סקטורים מובילים/חלשים בו.
-• **חיפושים** — feature screen לפי buckets ציבוריים (valuation, quality, momentum, growth, leverage, risk).
-• **Backtest פקטור משולב** — מה קרה היסטורית כששילוב של buckets התקיים.
-• **שאלות compound** — למשל "סקטורים מובילים במשטר הנוכחי, ומניות מעניינות בהם".`
-    : `Ask Grahamy answers public research questions about stocks, sectors, industries, and the market regime. You can ask about:
+**מחקר על מניה אחת**
+• למה היא מעניינת עכשיו, פרופיל פונדמנטלי (גדילה / איכות / מאזן), התאמה למשטר.
+• ראיה היסטורית מקבילה ל־60 יום על המניה עצמה ועל הסקטור שלה.
+• סיכון לירידה זמנית בדרך (path risk / drawdown) — הסתברות לירידה מעל 5/10/15/20%, p10 max drawdown, ושיעור התאוששות עד סוף הטווח.
+• השוואה לסקטור או לתעשייה שלה — Grahamy טוען אוטומטית את אובייקט המחקר של הסקטור והתעשייה גם כשלא מציינים אותם.
+• דוגמאות: "מה דעתך על NVDA?", "כמה בסיכון GSL?", "מה ההסתברות לאבד יותר מ־10% ב־AAPL?"
 
-• **A specific stock** — why it matters now, fundamental profile, 60-day historical analog evidence, drawdown / path risk, comparison to its own sector and industry peers.
-• **A sector** — current-regime historical playbook, week-over-week change, conviction-vs-price divergence, leading stocks within it.
-• **An industry** — same shape as sectors but at the finer industry granularity.
-• **The market regime** — what the current regime is, what historically works in it, which sectors lead/lag.
-• **Screens** — feature screens over public buckets (valuation, quality, momentum, growth, leverage, risk).
-• **Factor backtests** — historical forward profile of factor-bucket combinations.
-• **Compound questions** — e.g. "leading sectors in this regime, and the stocks worth looking at in them".`;
+**שאלות סקטור**
+• Sector conviction leaderboard — דירוג סקטורים לפי conviction השבוע.
+• Week-over-week delta — אילו סקטורים התחזקו / נחלשו השבוע.
+• Conviction-vs-momentum divergence — סקטורים עם פער בין ראיות למחיר.
+• Sector leaders — המניות המובילות בתוך סקטור ספציפי.
+• Sector regime playbook — איך הסקטור התנהג היסטורית במשטר הנוכחי.
+• דוגמאות: "אילו סקטורים מובילים על conviction השבוע?", "אילו סקטורים התחזקו השבוע?", "המניות המובילות ב־Healthcare".
+
+**שאלות תעשייה**
+• פרופיל תעשייה (PE, שינוי יומי ממוצע, hit rate היסטורי).
+• Industry leaders — המניות המובילות בתוך תעשייה ספציפית.
+• דוגמאות: "מה קורה ב־Semiconductors?", "המניות המובילות ב־Biotechnology".
+
+**משטר השוק**
+• מה המשטר הנוכחי (RISK-ON / NEUTRAL / RISK-OFF) ומה ה־VIX band.
+• Historical playbook — מה היסטורית עובד / חלש במשטר הזה, איזה סקטורים מובילים, איזה סיכונים בולטים.
+• דוגמאות: "מה המשטר עכשיו?", "מה עובד היסטורית במשטר הזה?", "מה הסיכונים במשטר הנוכחי?"
+
+**גילוי וסינון**
+• Stock idea discovery — קבל מועמדי מחקר נוכחיים בלי להגדיר קריטריונים.
+• Feature screen — סנן מניות לפי דליים ציבוריים (valuation, quality, momentum, growth, leverage, risk, sector).
+• Factor-conditioned backtest — מה קרה היסטורית כששילוב דליים התקיים (אופקים: 20/40/60/120/252 ימים).
+• דוגמאות: "תן לי מניה מעניינת", "מצא מניות זולות ואיכותיות", "מה קרה היסטורית כש־RSI נמוך ו־valuation אטרקטיבי?"
+
+**שרשראות compound (workflow)**
+• Regime → screen — סקטורים מובילים במשטר + מניות בהם.
+• Sector delta → screen — סקטורים שהתחזקו השבוע + מניות בהם.
+• Sector divergence → screen — סקטורים עם פער ראיות-מחיר + מניות בהם.
+• Feature screen + backtest — סינון נוכחי + בדיקת אם השילוב עבד היסטורית.
+• Stock deep-dive stack — ניתוח מלא למניה (פונדמנטל + סיכון + השוואה לסקטור / תעשייה + ראיה מאומתת).
+• Idea → compare → risk — רעיון מניה + השוואה לסקטור + סיכון.
+
+**ראיה מאומתת (Validated edge evidence)**
+שכבת bonus נפרדת מ־Pipeline — מצב מאומת חזק / קיים / מעורב. שאל ישירות: "האם יש ראיה מאומתת ל־X?", "האם NVDA נתמך ב־pipeline?"
+
+**שאלות פלטפורמה**
+"אילו סקטורים יש לכם?", "אילו תעשיות זמינות?", "מה Ask Grahamy יודע לנתח?", "איך זה עובד?"`
+    : `Ask Grahamy answers public research questions about stocks, sectors, industries, the market regime, and combinations of those. Every answer is grounded in public evidence only — buckets, percentile bands, historical analog samples, and drawdown evidence from price history.
+
+**Single-stock research**
+• Why it matters now, fundamental profile (growth / quality / balance sheet), regime fit.
+• 60-day historical analog evidence — both stock-local and sector-conditioned.
+• Path risk / drawdown — probability of drawdowns greater than 5%, 10%, 15%, 20%; p10 max drawdown; recovery rate by horizon.
+• Peer comparison to the stock's own sector and industry — Grahamy auto-loads the sibling sector and industry research objects even when you don't name them.
+• Examples: *"What do you think about NVDA?"*, *"How risky is GSL?"*, *"What is the probability of losing more than 10% on AAPL?"*
+
+**Sector questions**
+• Sector conviction leaderboard — sectors ranked by current conviction.
+• Week-over-week delta — which sectors strengthened or weakened this week.
+• Conviction-vs-momentum divergence — sectors where evidence and price disagree.
+• Sector leaders — top stocks within a named sector.
+• Sector regime playbook — how the sector has historically behaved in the current regime.
+• Examples: *"Which sectors are leading on conviction this week?"*, *"Which sectors improved most versus last week?"*, *"Top stocks in Healthcare."*
+
+**Industry questions**
+• Industry profile (PE, average daily change, historical hit-rate bucket).
+• Industry leaders — top stocks within a named industry.
+• Examples: *"How are Semiconductors looking?"*, *"Top stocks in Biotechnology."*
+
+**Market regime**
+• Current regime label (RISK-ON / NEUTRAL / RISK-OFF) and the VIX band.
+• Historical playbook — what works / underperforms in this regime, which sectors lead, which risks matter.
+• Examples: *"What is the current market regime?"*, *"What historically works in this regime?"*, *"What are the regime risks now?"*
+
+**Discovery and screens**
+• Stock idea discovery — anchorless current research candidates with no criteria.
+• Feature screen — filter stocks by public buckets (valuation, quality, momentum, growth, leverage, risk, sector).
+• Factor-conditioned backtest — historical forward profile of factor-bucket combinations across 20 / 40 / 60 / 120 / 252-day horizons.
+• Examples: *"Give me an interesting stock"*, *"Find cheap, high-quality stocks"*, *"What happens historically when RSI is low and valuation is attractive?"*
+
+**Compound (multi-step) workflows**
+• Regime → screen — leading sectors in this regime + the stocks inside them.
+• Sector delta → screen — sectors that improved this week + the stocks inside them.
+• Sector divergence → screen — divergence sectors + the stocks inside them.
+• Feature screen + backtest — current screen + historical proof that the combination worked.
+• Stock deep-dive stack — full analysis on one stock (fundamentals + risk + sibling sector / industry + optional validated evidence).
+• Idea → compare → risk — stock idea + sibling sector comparison + risk on it.
+
+**Validated edge evidence (Pipeline overlay)**
+A separate optional layer on top of the public stack — flags whether a stock / sector / regime is *evidence-backed* by Grahamy's validation pipeline (states: edge_evidence_strong / edge_evidence_present / mixed / insufficient_data / unavailable). Ask directly: *"Is there validated edge evidence for X?"*, *"Is NVDA evidence-backed?"*
+
+**Platform questions**
+*"Which sectors do you cover?"*, *"What industries are available?"*, *"What can Ask Grahamy analyze?"*, *"How does Ask Grahamy work?"*`;
   return {
     answer: {
       headline: hebrew ? "מה Ask Grahamy יודע לנתח" : "What Ask Grahamy can analyze",
