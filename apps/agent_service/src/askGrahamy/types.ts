@@ -713,6 +713,20 @@ export type PublicResearchObjectView = {
   anchor: string;
   asOfDate: string;
   title?: string;
+  /**
+   * Stock-only: the canonical sector this stock belongs to (from
+   * md_symbols.sector via the core query's `meta.sector`). Surfaced as a
+   * first-class field on the view so the deep agent can suggest natural
+   * sector-comparison follow-ups ("how does X compare to other stocks in
+   * <sector>?") without having to infer it from prose.
+   */
+  sector?: string;
+  /**
+   * Stock-only: the Yahoo industry this stock belongs to (from
+   * md_symbols.industry via the core query's `meta.industry`). Same purpose
+   * as `sector` but at the finer industry granularity.
+   */
+  industry?: string;
   fiveQuestion: FiveQuestionCoverage;
   edgeEvidence: EdgeEvidenceView;
   probabilisticEvidence: ProbabilisticEvidenceView;

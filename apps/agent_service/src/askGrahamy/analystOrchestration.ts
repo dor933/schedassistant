@@ -391,7 +391,18 @@ function inferAnchor(
   }
   const ro = ros[0];
   if (ro) {
-    if (ro.objectType === "stock") return { type: "stock", symbol: ro.anchor, label: ro.title ?? ro.anchor };
+    if (ro.objectType === "stock") {
+      // Carry the stock's own sector/industry on the anchor so downstream
+      // follow-up generation can suggest natural sector/industry comparison
+      // questions ("how does X compare to other stocks in <sector>?", etc.)
+      return {
+        type: "stock",
+        symbol: ro.anchor,
+        label: ro.title ?? ro.anchor,
+        ...(ro.sector ? { sector: ro.sector } : {}),
+        ...(ro.industry ? { industry: ro.industry } : {}),
+      };
+    }
     if (ro.objectType === "sector") return { type: "sector", sector: ro.anchor, label: ro.title ?? ro.anchor };
     if (ro.objectType === "industry") return { type: "industry", industry: ro.anchor, label: ro.title ?? ro.anchor };
     return { type: "regime", regime: ro.anchor, label: ro.title ?? ro.anchor };
@@ -1042,6 +1053,22 @@ function buildFollowUps(pack: EvidencePack): string[] {
   if (!pack.pipelineEvidence) followUps.add(`Is there validated Pipeline evidence for ${label}?`);
   if (pack.relativeComparison) followUps.add(`What is the strongest comparison point for ${label}?`);
   if (pack.contradictions.length) followUps.add("What would resolve the main contradiction?");
+
+  // Stock anchors with a known sector/industry → lead the user toward the
+  // natural peer-comparison capabilities (sector_leaders, industry_leaders,
+  // sector_conviction_leaderboard) that the platform already supports.
+  if (pack.anchor?.type === "stock") {
+    const sector = pack.anchor.sector;
+    const industry = pack.anchor.industry;
+    if (sector) {
+      followUps.add(`How does ${label} compare to other stocks in the ${sector} sector?`);
+      followUps.add(`What are the leading stocks in ${sector} right now?`);
+    }
+    if (industry) {
+      followUps.add(`How does ${label} compare to other stocks in the ${industry} industry?`);
+    }
+  }
+
   followUps.add("What should I monitor next?");
   return [...followUps].slice(0, 5);
 }

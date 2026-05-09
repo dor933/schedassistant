@@ -315,6 +315,8 @@ function shapeViewForPrompt(
       anchor: view.anchor,
       asOfDate: view.asOfDate,
       title: view.title,
+      ...(view.sector ? { sector: view.sector } : {}),
+      ...(view.industry ? { industry: view.industry } : {}),
       probabilisticEvidence: view.probabilisticEvidence,
       pathRisk: view.pathRisk,
       ...(pipelineSnapshotLineage ? { pipelineSnapshotLineage } : {}),
@@ -328,6 +330,8 @@ function shapeViewForPrompt(
     anchor: view.anchor,
     asOfDate: view.asOfDate,
     title: view.title,
+    ...(view.sector ? { sector: view.sector } : {}),
+    ...(view.industry ? { industry: view.industry } : {}),
     fiveQuestion: view.fiveQuestion,
     edgeEvidence: cleanedEdgeEvidence,
     probabilisticEvidence: view.probabilisticEvidence,
@@ -531,6 +535,8 @@ After your prose answer, append a section in this exact shape:
 \`\`\`
 
 The follow-ups MUST be specific to what you just discussed (not generic). 3-4 questions, each one phrased the way the user might naturally ask. Use the user's language.
+
+When the anchor is a single stock and the Research Object exposes \`sector\` and/or \`industry\` as first-class fields, AT LEAST ONE follow-up SHOULD be a peer-comparison question grounded in that sector or industry — e.g. "How does <stock> compare to other stocks in <sector>?", "What are the leading stocks in <sector> right now?", or "How does <stock> compare to other stocks in the <industry> industry?". These map to the platform's \`sector_leaders\` / \`industry_leaders\` / \`sector_conviction_leaderboard\` capabilities and lead the user toward natural next steps. Skip this if the stock RO didn't carry a sector/industry value.
 
 # MOAT discipline (strict)
 - Use ONLY the bucket labels, percentile bands, direction descriptors, and explicit numeric public evidence fields from the EVIDENCE below. Acceptable: "in the high quintile of its sector", "FCF/NI poor conversion", "ROE above its 5-year history", "regime-challenged", or "the public view shows a 61% 60-day hit rate" when that exact field exists.

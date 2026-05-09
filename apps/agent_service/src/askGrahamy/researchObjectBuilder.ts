@@ -703,6 +703,7 @@ function buildStockSummary(
     symbol,
     company: stringValue(meta.company_name) ?? snapshotStock?.company,
     sector: stringValue(meta.sector) ?? snapshotStock?.sector,
+    industry: stringValue(meta.industry),
     asOfDate: stringValue(meta.as_of_date),
 
     // Regime context (bucketed only — no raw VIX numbers)
@@ -881,6 +882,12 @@ function buildStockPublicResearchObjectView(input: {
     anchor: input.symbol,
     asOfDate: input.asOfDate,
     title: stringValue(input.publicSummary.company) ?? input.symbol,
+    ...(stringValue(input.publicSummary.sector)
+      ? { sector: stringValue(input.publicSummary.sector) }
+      : {}),
+    ...(stringValue(input.publicSummary.industry)
+      ? { industry: stringValue(input.publicSummary.industry) }
+      : {}),
     fiveQuestion: {
       whatMattersNow: buildStockWhatMattersNow(input.publicSummary),
       whyNow: stringValue(input.publicSummary.whyNow),
