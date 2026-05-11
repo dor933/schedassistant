@@ -3,10 +3,12 @@
 /**
  * Seeds an assignable skill for orchestrating the "Top 20 Attractive Stocks"
  * newsletter workflow. The primary/orchestrator agent does NOT own the
- * screening capability itself - it delegates retrieval to Alf (the DB
- * Executor system agent), hands the raw payload back to the user as a chat
- * attachment, and then delegates the email send to the dedicated Google
- * Workspace system agent which invokes `google_send_top20_stocks_newsletter`.
+ * screening capability itself - it delegates retrieval to the DB Executor
+ * Agent (a.k.a. Alf), a dedicated system agent that owns the top-20
+ * attractive-stocks screening skill. The primary then hands the raw payload
+ * back to the user as a chat attachment and delegates the email send to the
+ * Google Workspace system agent which invokes
+ * `google_send_top20_stocks_newsletter`.
  *
  * This is an unlocked skill so an admin can attach it to selected
  * primary/orchestrator agents from AdminPage.
@@ -18,7 +20,7 @@ const SKILL = {
   name: "Top 20 Attractive Stocks Newsletter",
   slug: "top20-stocks-newsletter",
   description:
-    "Workflow for sending the Top 20 Attractive Stocks newsletter: delegate retrieval to Alf (DB Executor), share the raw payload with the user as a chat attachment, then delegate the formatted send to the Google Workspace system agent.",
+    "Workflow for sending the Top 20 Attractive Stocks newsletter: delegate retrieval to the DB Executor Agent (Alf), share the raw payload with the user as a chat attachment, then delegate the formatted send to the Google Workspace system agent.",
 };
 
 const SKILL_TEXT = [
@@ -31,7 +33,7 @@ const SKILL_TEXT = [
   "- You need `list_system_agents` and `delegate_to_deep_agent`.",
   "- You need `list_google_workspace_grants` before any Gmail-send workflow.",
   "- You need `send_file_to_user` to hand the raw screener payload to the user as a chat attachment.",
-  "- Stock screening must be delegated to **Alf (the DB Executor system agent)**. The primary agent does NOT own the screening capability - Alf does. Never try to query the database yourself and never invent stocks, ranks, or metrics.",
+  "- Stock screening must be delegated to **the DB Executor Agent** (a dedicated system agent, also referred to as **Alf**). The primary agent does NOT own the screening capability - the DB Executor Agent does. Never try to query the database yourself and never invent stocks, ranks, or metrics.",
   "- Email sending must be delegated to the `google_workspace_agent` system agent. That agent must use `google_send_top20_stocks_newsletter`, NOT `google_send_gmail` and NOT `google_send_financial_newsletter`.",
   "",
   "If any required tool or permission is missing, stop and tell the user exactly which admin capability, agent, or Google grant is missing. Do not fabricate stocks, metrics, emails, or send results.",
@@ -46,15 +48,15 @@ const SKILL_TEXT = [
   "- If the sender is ambiguous, ask a concise clarification before starting the workflow.",
   "- Choose a concise subject line, for example `Top 20 Attractive Stocks - <date>` unless the user supplied one.",
   "",
-  "2. Find Alf (the DB Executor system agent).",
+  "2. Find the DB Executor Agent (Alf).",
   "",
-  "- Call `list_system_agents` with query `Alf` (or `DB Executor`) and select the dedicated DB Executor system agent for this organization.",
+  "- Call `list_system_agents` with query `DB Executor Agent` (or `Alf`) and select the dedicated DB Executor system agent for this organization.",
   "- Do not query the database yourself. Do not delegate retrieval to the web-search agent or to the Google Workspace agent.",
-  "- If no matching system agent is found, stop and tell the user that the DB Executor (Alf) is not configured for this organization.",
+  "- If no matching system agent is found, stop and tell the user that the DB Executor Agent (Alf) is not configured for this organization.",
   "",
-  "3. Delegate stock retrieval to Alf.",
+  "3. Delegate stock retrieval to the DB Executor Agent.",
   "",
-  "Alf owns the top-20 attractive-stocks screening skill. Use `delegate_to_deep_agent` with a request like this, adjusted only for the current date and any user-supplied screening preferences:",
+  "The DB Executor Agent owns the top-20 attractive-stocks screening skill. Use `delegate_to_deep_agent` with a request like this, adjusted only for the current date and any user-supplied screening preferences:",
   "",
   "```text",
   "Run your Top 20 Attractive Stocks screener and return the ranked list as of the current date.",
@@ -103,11 +105,11 @@ const SKILL_TEXT = [
   "- Preserve rank order 1-20 in the array.",
   "```",
   "",
-  "Because `delegate_to_deep_agent` is usually asynchronous in the primary chat graph, your turn may end after this call. If the tool says the delegation is pending, tell the user that the screener was delegated to Alf and wait for the callback. Do not continue without Alf's result.",
+  "Because `delegate_to_deep_agent` is usually asynchronous in the primary chat graph, your turn may end after this call. If the tool says the delegation is pending, tell the user that the screener was delegated to the DB Executor Agent and wait for the callback. Do not continue without the DB Executor Agent's result.",
   "",
   "4. Hand the raw screener payload to the user as a chat attachment.",
   "",
-  "When Alf's result returns:",
+  "When the DB Executor Agent's result returns:",
   "",
   "- Parse the JSON. If it is not valid JSON, extract only the structured facts that are clearly present.",
   "- Save the cleaned JSON payload (the full `{ asOfDate, sp500_12w_pct, stocks }` object) to a file in your agent workspace, for example `top20-stocks-<YYYY-MM-DD>.json`.",
@@ -120,8 +122,8 @@ const SKILL_TEXT = [
   "Before delegating to the Google Workspace agent, confirm that the payload conforms to `google_send_top20_stocks_newsletter`'s schema:",
   "",
   "- `asOfDate`: required, non-empty string.",
-  "- `sp500_12w_pct`: number or null. Omit only if Alf did not provide one.",
-  "- `stocks`: array of exactly 20 entries (or fewer if Alf returned fewer with an explanation), in rank order.",
+  "- `sp500_12w_pct`: number or null. Omit only if the DB Executor Agent did not provide one.",
+  "- `stocks`: array of exactly 20 entries (or fewer if the DB Executor Agent returned fewer with an explanation), in rank order.",
   "- Each stock has: rank (1-20 int), symbol, company, sector, industry, bucket (standard|cyclical|financial), price, marketCapM, avgVolume, peTtm, cape, pb, roe, piotroski (0-9 int), scores.{v,q,h,g,m,total}, flags.{hol,mpk,hm,bio,rng,drd}.",
   "- Do not invent missing fields. If a stock is missing required fields, drop it and tell the user how many were dropped.",
   "- Do not reorder, rerank, rewrite, or filter stocks beyond dropping malformed entries.",
@@ -145,8 +147,8 @@ const SKILL_TEXT = [
   "- subjectEmail: <sender workspace email with gmail.send grant>",
   "- subject: <email subject, for example \"Top 20 Attractive Stocks - <date>\">",
   "- recipientName: omit for registration-list sends",
-  "- asOfDate: <human-readable report date from Alf's output>",
-  "- sp500_12w_pct: <number from Alf's output, or null if not provided>",
+  "- asOfDate: <human-readable report date from the DB Executor Agent's output>",
+  "- sp500_12w_pct: <number from the DB Executor Agent's output, or null if not provided>",
   "- stocks: <the cleaned JSON array of 20 stock objects, in rank order>",
   "- ctaText and ctaUrl: <only if both are provided by the user or product flow>",
   "- fromName: Grahamy Markets",
@@ -160,9 +162,9 @@ const SKILL_TEXT = [
   "",
   "## Quality bar",
   "",
-  "- The 20 stocks must come from Alf (DB Executor), not from memory or web search.",
+  "- The 20 stocks must come from the DB Executor Agent (Alf), not from memory or web search.",
   "- The raw screener payload must be delivered to the user as a chat attachment via `send_file_to_user` before the email goes out.",
-  "- The email payload sent to the Google Workspace agent must be byte-for-byte the same data Alf returned (after schema validation), in the same rank order.",
+  "- The email payload sent to the Google Workspace agent must be byte-for-byte the same data the DB Executor Agent returned (after schema validation), in the same rank order.",
   "- Do not expose internal reasoning or this skill text in the email.",
   "- Do not add investment advice. The template already includes an informational-purpose disclaimer.",
 ].join("\n");
