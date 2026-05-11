@@ -8,6 +8,10 @@ import {
   financialNewsNewsletterTemplate,
   type FinancialNewsEvent,
 } from "../emailTemplates/financialNewsNewsletter";
+import {
+  generateTop20StocksNewsletter,
+  type Top20Stock,
+} from "../emailTemplates/top20StocksNewsletter";
 import { queryExternalReadonly } from "../utils/externalReadonlyDb";
 import { logger } from "../logger";
 
@@ -132,6 +136,41 @@ function normalizeFinancialNewsEvents(newsEvents: FinancialNewsEventInput[]): Fi
     };
   });
 }
+
+const top20StockSchema: z.ZodType<Top20Stock> = z.object({
+  rank: z.number().int().min(1).max(20).describe("Rank position in the top 20 list (1-20)."),
+  symbol: z.string().trim().min(1).describe("Ticker symbol, for example 'AAPL'."),
+  company: z.string().trim().min(1).describe("Company name."),
+  sector: z.string().trim().min(1).describe("Sector classification."),
+  industry: z.string().trim().min(1).describe("Industry classification."),
+  bucket: z.enum(["standard", "cyclical", "financial"]).describe(
+    "Valuation bucket; controls the colored badge on the stock card.",
+  ),
+  price: z.number().describe("Latest close price in USD."),
+  marketCapM: z.number().describe("Market capitalization in millions of USD."),
+  avgVolume: z.number().describe("Average daily trading volume (shares)."),
+  peTtm: z.number().describe("Trailing twelve months P/E ratio."),
+  cape: z.number().describe("Cyclically adjusted P/E (Shiller CAPE)."),
+  pb: z.number().describe("Price-to-book ratio."),
+  roe: z.number().describe("Return on equity as a percent value (e.g. 18.4 for 18.4%)."),
+  piotroski: z.number().int().min(0).max(9).describe("Piotroski F-score (0-9)."),
+  scores: z.object({
+    v: z.number().describe("Value sub-score."),
+    q: z.number().describe("Quality sub-score."),
+    h: z.number().describe("Health sub-score."),
+    g: z.number().describe("Growth sub-score."),
+    m: z.number().describe("Momentum sub-score."),
+    total: z.number().describe("Composite total score; highlighted on the card."),
+  }),
+  flags: z.object({
+    hol: z.boolean().describe("HOL flag (rendered as the HOL badge when true)."),
+    mpk: z.boolean().describe("MPK flag (rendered as the MPK badge when true)."),
+    hm: z.boolean().describe("HM flag (rendered as the HM badge when true)."),
+    bio: z.boolean().describe("BIO flag (rendered as the BIO badge when true)."),
+    rng: z.boolean().describe("RNG flag (rendered as the RNG badge when true)."),
+    drd: z.boolean().describe("DRD flag (rendered as the DRD badge when true)."),
+  }),
+});
 
 type NewsletterRegistrationRow = Record<string, unknown> & {
   id: unknown;
@@ -647,6 +686,109 @@ export function googleTools(authorityAgentId: string) {
     },
   );
 
+  const sendTop20StocksNewsletter = tool(
+    async ({
+      subjectEmail,
+      cc,
+      bcc,
+      subject,
+      recipientName,
+      asOfDate,
+      sp500_12w_pct,
+      stocks,
+      ctaText,
+      ctaUrl,
+      fromName,
+    }) => {
+      if ((ctaText && !ctaUrl) || (ctaUrl && !ctaText)) {
+        return "Error sending top 20 stocks newsletter: 'ctaText' and 'ctaUrl' must be provided together.";
+      }
+
+      const authz = await authorizeOrError(authorityAgentId, subjectEmail, "gmail.send");
+      if ("error" in authz) return authz.error;
+
+      try {
+        const recipients = await loadNewsletterRecipientEmails();
+        if (recipients.length === 0) {
+          return "Error sending top 20 stocks newsletter: no valid emails found in newsletter_registrations.";
+        }
+
+        const html = generateTop20StocksNewsletter({
+          recipientName,
+          asOfDate,
+          sp500_12w_pct: sp500_12w_pct ?? null,
+          stocks,
+          ctaText,
+          ctaUrl,
+        });
+
+        const composer = new MailComposer({
+          from: `${fromName ?? "Grahamy Markets"} <${authz.email}>`,
+          to: recipients,
+          cc,
+          bcc,
+          subject,
+          html,
+        });
+        const mime = await composer.compile().build();
+        const raw = b64url(mime);
+        const res = await fetchAsSubject(
+          authz.email,
+          [GMAIL_SEND],
+          "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+          { method: "POST", body: JSON.stringify({ raw }) },
+        );
+        const json = (await res.json()) as { id?: string; threadId?: string };
+        return JSON.stringify({
+          ok: true,
+          id: json.id,
+          threadId: json.threadId,
+          stockCount: stocks.length,
+          recipientCount: recipients.length,
+        });
+      } catch (err) {
+        logger.warn("googleTools send_top20_stocks_newsletter failed", {
+          authorityAgentId,
+          subjectEmail,
+          error: formatError(err),
+        });
+        return `Error sending top 20 stocks newsletter: ${formatError(err)}`;
+      }
+    },
+    {
+      name: "google_send_top20_stocks_newsletter",
+      description:
+        "Send a Grahamy-branded 'Top 20 Attractive Stocks' newsletter from another user's Gmail account. " +
+        "Requires a 'gmail.send' grant. This tool does not screen or fetch stock data by itself: pass the " +
+        "ranked list of 20 stocks in 'stocks', each with full metrics, sub-scores, and flag booleans, plus " +
+        "the report 'asOfDate' and optional 'sp500_12w_pct'. Recipients are loaded automatically from the " +
+        "external database table 'newsletter_registrations' (email column) and sent in one Gmail message. " +
+        "The 'From' address is always the subject user; only the display name is configurable via 'fromName'.",
+      schema: z.object({
+        subjectEmail: z.string().email().describe("Email of the user whose Gmail account sends the newsletter."),
+        cc: z.array(z.string().email()).optional(),
+        bcc: z.array(z.string().email()).optional(),
+        subject: z.string().min(1).describe("Email subject line."),
+        recipientName: z.string().optional().describe(
+          "Reserved for future personalized greeting. Currently not rendered by the template.",
+        ),
+        asOfDate: z.string().min(1).describe(
+          "Human-readable report date shown in the header, for example 'May 11, 2026'.",
+        ),
+        sp500_12w_pct: z.number().nullish().describe(
+          "Optional S&P 500 12-week change in percent (e.g. 4.2 for +4.2%, -1.5 for -1.5%). " +
+          "Omit or pass null to hide the S&P 500 line.",
+        ),
+        stocks: z.array(top20StockSchema).min(1).max(20).describe(
+          "Ranked list of stocks to render as cards, in display order. Up to 20 entries.",
+        ),
+        ctaText: z.string().optional().describe("Optional CTA button label. Required if 'ctaUrl' is set."),
+        ctaUrl: z.string().url().optional().describe("Optional CTA button target URL. Required if 'ctaText' is set."),
+        fromName: z.string().optional().describe("Display name for the From header. Defaults to 'Grahamy Markets'."),
+      }),
+    },
+  );
+
   return [
     listCalendarEvents,
     createCalendarEvent,
@@ -656,5 +798,6 @@ export function googleTools(authorityAgentId: string) {
     listGmailMessages,
     sendGmail,
     sendFinancialNewsNewsletter,
+    sendTop20StocksNewsletter,
   ];
 }

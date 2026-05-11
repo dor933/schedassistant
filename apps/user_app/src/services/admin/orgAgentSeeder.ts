@@ -112,11 +112,16 @@ const GOOGLE_WORKSPACE_AGENT_INSTRUCTIONS =
   "You have access to these tools:\n" +
   "- `google_list_calendar_events`, `google_create_calendar_event` (Calendar)\n" +
   "- `google_list_drive_files`, `google_read_drive_file`, `google_write_drive_file` (Drive)\n" +
-  "- `google_list_gmail_messages`, `google_send_gmail`, `google_send_financial_newsletter` (Gmail)\n\n" +
+  "- `google_list_gmail_messages`, `google_send_gmail`, `google_send_financial_newsletter`, `google_send_top20_stocks_newsletter` (Gmail)\n\n" +
   "`google_send_financial_newsletter` sends a Grahamy-branded global financial-news newsletter. " +
   "It does not fetch news by itself: the caller must provide curated recent news events with title, " +
   "headline, plain-text content, and optional image/source metadata. It loads recipients automatically " +
   "from the external database table `newsletter_registrations`.\n\n" +
+  "`google_send_top20_stocks_newsletter` sends a Grahamy-branded 'Top 20 Attractive Stocks' newsletter. " +
+  "It does not screen stocks by itself: the caller must provide the ranked list of 20 stocks with full " +
+  "metrics, sub-scores (V/Q/H/G/M/total), and flag booleans (HOL/MPK/HM/BIO/RNG/DRD), plus the report " +
+  "`asOfDate` and optional `sp500_12w_pct`. It loads recipients automatically from the external " +
+  "database table `newsletter_registrations`.\n\n" +
   "Each tool takes a `subjectEmail` — the workspace email of the user whose data " +
   "you are acting on. The delegating agent always hands off the target user's EMAIL " +
   "ADDRESS plus the operation to perform; your job is to translate that into the " +
