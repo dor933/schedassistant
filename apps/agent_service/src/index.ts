@@ -32,6 +32,7 @@ import {
 import { cronAgentQueue, cronAgentQueueEvents } from "./queues/cronAgent.bull";
 import { roundtableQueueEvents } from "./queues/roundtable.bull";
 import { attachAgentSocketIO } from "./socket";
+import { attachAskBridgeSocketIO } from "./askBridgeSocket";
 import { renderCodexConfigToml } from "./services/codexConfigToml.service";
 import { renderClaudeMcpConfig } from "./services/claudeMcpConfig.service";
 import { logger } from "./logger";
@@ -136,7 +137,11 @@ async function main(): Promise<void> {
   // 4. HTTP + Socket.IO server (chat enqueues jobs; results emitted via socket).
   const app = createServer({ agentChatQueue, graph, roundtableGraph, applicationGraph });
   const httpServer = createHttpServer(app);
-  attachAgentSocketIO(httpServer);
+  const agentIO = attachAgentSocketIO(httpServer);
+  // /ask-bridge namespace piggybacks on the same Socket.IO server so
+  // both user_app (/agent-socket) and StocksScanner (/ask-bridge) share
+  // one engine.io path. See askBridgeSocket.ts for protocol details.
+  attachAskBridgeSocketIO(agentIO);
 
   httpServer.listen(PORT, () => {
     logger.info(`HTTP + Socket.IO server listening on port ${PORT}`);

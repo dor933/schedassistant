@@ -163,6 +163,33 @@ export type AskGrahamyClassifyResponse = {
   classification: Classification;
 };
 
+/**
+ * Coarse progress milestones emitted during a turn so the upstream
+ * caller (StocksScanner) can replace its synthetic LiveOpsStrip
+ * storyboard with real server-side progress. The stage is a stable
+ * enum (drives chip icon + ordering on the client); the label is a
+ * human-readable string the client renders verbatim; the detail is an
+ * optional second-line context string for things like the active
+ * capability name or symbol. Four stages map to natural boundaries
+ * in the askGrahamy graph — see `fetchBaseSnapshotsNode`,
+ * `loadResearchObjectsNode`, `answerNode`, `finalizeResponseNode`.
+ */
+export type AskGrahamyProgressStage =
+  | "market-context"
+  | "priors"
+  | "synthesise"
+  | "compose";
+
+export type AskGrahamyProgressEvent = {
+  stage: AskGrahamyProgressStage;
+  label: string;
+  detail?: string;
+};
+
+export type AskGrahamyProgressEmitter = (
+  event: AskGrahamyProgressEvent,
+) => void;
+
 export type Intent = (typeof INTENTS)[number];
 export type AnswerType = (typeof ANSWER_TYPES)[number];
 export type Confidence = "high" | "medium" | "low";

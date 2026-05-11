@@ -18,7 +18,11 @@ import type {
 } from "./pipelineOverlays/registry";
 import type { buildResearchObjects } from "./researchObjectBuilder";
 import { GrahamySnapshotClient } from "./snapshotClient";
-import type { AskGrahamyResponse, AskGrahamyState } from "./types";
+import type {
+  AskGrahamyProgressEmitter,
+  AskGrahamyResponse,
+  AskGrahamyState,
+} from "./types";
 
 export type SnapshotClient = Pick<
   GrahamySnapshotClient,
@@ -50,8 +54,21 @@ export type RunAskGrahamyGraphOptions = {
 
   researchObjectBuilder?: typeof buildResearchObjects;
 
-  
+
   grahamyAgentRunner?: typeof runGrahamyDeepAgent;
+
+  /**
+   * Coarse progress-event callback fired at known stage boundaries
+   * (market-context, priors, synthesise, compose). The bridge handler
+   * (`askBridgeSocket.ts`) wires this so each emit travels back over
+   * the SS socket as `ask:run-progress` carrying the original turnId,
+   * letting SS forward it to the user's room as `ask:turn-progress`.
+   * Optional — direct HTTP callers leave it undefined and the nodes
+   * silently no-op. NOT a LangGraph annotation field because functions
+   * don't serialise; we pass it via the per-invoke `options` snapshot
+   * that nodes already pull from state.
+   */
+  emitProgress?: AskGrahamyProgressEmitter;
 };
 
 export type AskGrahamyGraphState = AskGrahamyState & {

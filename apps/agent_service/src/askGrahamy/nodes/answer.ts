@@ -16,6 +16,16 @@ import {
 export async function answerNode(
   state: AskGrahamyLangGraphState,
 ): Promise<Partial<AskGrahamyGraphState>> {
+  // The synthesise stage covers both the analyst-brief synthesis and
+  // the deep-agent call inside `answerNode` — the longest single phase
+  // of a turn (commonly 60-180s). Emitting once at entry pins the
+  // active LiveOps chip for the duration; finer-grained sub-events
+  // (e.g. analystBrief vs deepAgent) can be added later if the chip
+  // feels too static.
+  state.options?.emitProgress?.({
+    stage: "synthesise",
+    label: "Running deep research",
+  });
   return runGraphNode(state, async () => {
     const next = toAskGrahamyState(state);
     // Platform_help short-circuit: deterministic help-topic answer rendered

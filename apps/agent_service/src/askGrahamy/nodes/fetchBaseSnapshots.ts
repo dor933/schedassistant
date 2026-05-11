@@ -12,6 +12,14 @@ import {
 export async function fetchBaseSnapshotsNode(
   state: AskGrahamyLangGraphState,
 ): Promise<Partial<AskGrahamyGraphState>> {
+  // First coarse stage boundary — the graph has just validated the
+  // classification and is about to fan out the read path. Anything
+  // before this is sub-100ms validation noise that wouldn't render as
+  // a chip anyway.
+  state.options?.emitProgress?.({
+    stage: "market-context",
+    label: "Reading market context",
+  });
   return runGraphNode(state, async () => {
     const next = toAskGrahamyState(state);
     await fetchBaseSnapshots(next, state.snapshotClient);

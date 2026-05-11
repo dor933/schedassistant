@@ -22,6 +22,10 @@ import {
 export async function finalizeResponseNode(
   state: AskGrahamyLangGraphState,
 ): Promise<Partial<AskGrahamyGraphState>> {
+  state.options?.emitProgress?.({
+    stage: "compose",
+    label: "Composing answer",
+  });
   return runGraphNode(state, async () => {
     const next = toAskGrahamyState(state);
     const response = await finalizeResponse(next);

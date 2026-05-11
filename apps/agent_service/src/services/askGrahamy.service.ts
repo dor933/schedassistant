@@ -7,6 +7,7 @@ import {
 } from "../utils/clientApplicationUser.service";
 import { runAskGrahamyGraph } from "../askGrahamy/graph";
 import { classifyMessage } from "../askGrahamy/classification";
+import type { RunAskGrahamyGraphOptions } from "../askGrahamy/askGrahamyState";
 import type {
   AskGrahamyClassifyRequest,
   AskGrahamyClassifyResponse,
@@ -39,6 +40,7 @@ export type ClassifyAskGrahamyResult =
  */
 export async function runAskGrahamyForExternalUser(
   request: AskGrahamyRequest,
+  graphOptions: RunAskGrahamyGraphOptions = {},
 ): Promise<RunAskGrahamyForExternalUserResult> {
   const clientApplication = await resolveDefaultClientApplication();
   if (!clientApplication) {
@@ -58,7 +60,7 @@ export async function runAskGrahamyForExternalUser(
   });
 
   try {
-    const response = await runAskGrahamyGraph(request, user.id);
+    const response = await runAskGrahamyGraph(request, user.id, graphOptions);
     return { ok: true, response };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

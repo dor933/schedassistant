@@ -23,6 +23,10 @@ import {
 export async function loadResearchObjectsNode(
   state: AskGrahamyLangGraphState,
 ): Promise<Partial<AskGrahamyGraphState>> {
+  state.options?.emitProgress?.({
+    stage: "priors",
+    label: "Loading prior research",
+  });
   return runGraphNode(state, async () => {
     const next = toAskGrahamyState(state);
     await loadResearchObjects(next);
