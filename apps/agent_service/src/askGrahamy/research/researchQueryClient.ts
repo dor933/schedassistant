@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { queryExternalReadonly } from "../utils/externalReadonlyDb";
+import { queryExternalReadonly } from "../../utils/externalReadonlyDb";
 
 export const RESEARCH_QUERY_NAMES = [
   "query_v6a_core_live",
@@ -25,14 +25,19 @@ const QUERY_FILES: Record<ResearchQueryName, string> = {
 /**
  * The v6 .sql files now live alongside the pgCapability queries under
  * `./pgCapabilities/queries`. In dev (ts-node from src/) `__dirname` is
- * `apps/agent_service/src/askGrahamy/`; in prod (compiled, run from dist/)
- * it's `apps/agent_service/dist/askGrahamy/`. The Dockerfile copies the
+ * `apps/agent_service/src/askGrahamy/research/`; in prod (compiled, run from dist/)
+ * it's `apps/agent_service/dist/askGrahamy/research/`. The Dockerfile copies the
  * `pgCapabilities/queries/` folder into `dist/askGrahamy/pgCapabilities/`
  * after the TypeScript build so both paths resolve.
  *
  * `GRAHAMY_QUERIES_DIR` env override remains for ad-hoc deployments / tests.
  */
-const DEFAULT_QUERIES_DIR = path.join(__dirname, "pgCapabilities", "queries");
+const DEFAULT_QUERIES_DIR = path.join(
+  __dirname,
+  "..",
+  "pgCapabilities",
+  "queries",
+);
 
 const queryTextCache = new Map<ResearchQueryName, string>();
 

@@ -1,6 +1,6 @@
 import { logger } from "../../logger";
 import type { CachedResearchObject, Classification, Intent } from "../types";
-import { buildResearchObjectsForAnchors } from "../researchObjectBuilder";
+import { buildResearchObjectsForAnchors } from "../research/researchObjectBuilder";
 import {
   buildFactorConditionedBacktestView,
   factorConditionedBacktestDiscriminators,

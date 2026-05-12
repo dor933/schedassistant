@@ -7,7 +7,7 @@ import {
   type AnswerObject,
   type HelpTopic,
   type UiHints,
-} from "./types";
+} from "../types";
 
 /**
  * Renders deterministic help-topic answers. Skips the deep agent entirely —

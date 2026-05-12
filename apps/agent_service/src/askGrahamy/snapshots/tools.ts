@@ -1,4 +1,4 @@
-import { observeToolCall } from "../langfuse";
+import { observeToolCall } from "../../langfuse";
 import { isRecord, numberValue, stringValue } from "./snapshotClient";
 import type {
   Classification,
@@ -10,7 +10,7 @@ import type {
   StockResearchContext,
   ToolName,
   ToolOutputs,
-} from "./types";
+} from "../types";
 
 export async function executeSnapshotTools(
   tools: ToolName[],

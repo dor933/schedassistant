@@ -14,7 +14,7 @@ import {
   EMPTY_PUBLIC_RESEARCH_VIEW,
   type AskGrahamyResponse,
 } from "../askGrahamy/types";
-import { buildSafeErrorAnswer } from "../askGrahamy/answerTemplates";
+import { buildSafeErrorAnswer } from "../askGrahamy/answers/answerTemplates";
 import { getAskBridgeIO } from "../askBridgeSocket";
 
 /**

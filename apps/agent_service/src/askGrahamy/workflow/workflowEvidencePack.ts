@@ -4,7 +4,7 @@ import type {
   EvidencePack,
   WorkflowCandidateRow,
   WorkflowExecutionResult,
-} from "./analystTypes";
+} from "../types/analystTypes";
 
 export function buildEvidencePackFromWorkflowExecution(
   result: WorkflowExecutionResult,

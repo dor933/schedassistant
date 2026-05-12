@@ -1,13 +1,13 @@
 import { createDeepAgent } from "deepagents";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import { ChatOpenAI } from "@langchain/openai";
-import { logger } from "../logger";
-import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
-import { getLangfuseCallbackHandler, flushLangfuse } from "../langfuse";
-import { stringValue } from "./snapshotClient";
+import { logger } from "../../logger";
+import { resolveOrgVendorByOrg } from "../../utils/resolveOrgVendor.service";
+import { getLangfuseCallbackHandler, flushLangfuse } from "../../langfuse";
+import { stringValue } from "../snapshots/snapshotClient";
 import type {
   EvidencePack,
-} from "./analystTypes";
+} from "../types/analystTypes";
 import {
   buildEvidencePack,
   formatEvidencePackSynthesisForPrompt,
@@ -18,7 +18,7 @@ import type {
   ClassificationFocus,
   PgCapabilityViews,
   PipelineOverlayViews,
-} from "./types";
+} from "../types";
 
 /**
  * Grahamy deep-agent runner.

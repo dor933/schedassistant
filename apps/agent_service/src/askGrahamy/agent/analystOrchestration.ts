@@ -16,7 +16,7 @@ import type {
   SectorLeaderboardView,
   StockIdeaView,
   ValidatedEdgeEvidenceView,
-} from "./types";
+} from "../types";
 import type {
   AnalystAnchor,
   AnalystBrief,
@@ -27,7 +27,7 @@ import type {
   EvidenceLayer,
   EvidenceLayerStrength,
   EvidencePack,
-} from "./analystTypes";
+} from "../types/analystTypes";
 
 type EvidencePackInput = Pick<
   AskGrahamyState,

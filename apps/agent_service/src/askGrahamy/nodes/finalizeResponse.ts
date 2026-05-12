@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { logger } from "../../logger";
-import { buildSafeErrorAnswer } from "../answerTemplates";
-import { runMoatGuard } from "../moatGuard";
+import { buildSafeErrorAnswer } from "../answers/answerTemplates";
+import { runMoatGuard } from "../agent/moatGuard";
 import {
   EMPTY_CLASSIFICATION,
   EMPTY_PUBLIC_RESEARCH_VIEW,
@@ -17,7 +17,7 @@ import {
   patchFromAskGrahamyState,
   runGraphNode,
   toAskGrahamyState,
-} from "../askGrahamyState";
+} from "../state/askGrahamyState";
 
 export async function finalizeResponseNode(
   state: AskGrahamyLangGraphState,

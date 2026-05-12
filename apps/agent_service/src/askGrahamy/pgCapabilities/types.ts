@@ -15,7 +15,7 @@ import type {
   StockIdeaView,
   ToolOutputs,
 } from "../types";
-import type { ResearchObjectBuildResult } from "../researchObjectBuilder";
+import type { ResearchObjectBuildResult } from "../research/researchObjectBuilder";
 
 export type PgCapabilityIntent =
   | "sector_conviction_leaderboard"

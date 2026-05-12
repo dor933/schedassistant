@@ -3,12 +3,12 @@ import type {
   WorkflowCandidateRow,
   WorkflowExecutionResult,
   WorkflowPublicViews,
-} from "./analystTypes";
+} from "../types/analystTypes";
 import type {
   FeatureScreenRowView,
   PublicFreshnessView,
   StockIdeaRowView,
-} from "./types";
+} from "../types";
 
 type BuildWorkflowExecutionResultInput = {
   workflowName: AnalystWorkflowName;

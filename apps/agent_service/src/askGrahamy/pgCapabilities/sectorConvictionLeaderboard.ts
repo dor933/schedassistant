@@ -1,10 +1,10 @@
 import { logger } from "../../logger";
-import { numberValue, stringValue } from "../snapshotClient";
+import { numberValue, stringValue } from "../snapshots/snapshotClient";
 import type { SectorLeaderboardRowView, SectorLeaderboardView } from "../types";
 import {
   buildResearchObjectCacheKey,
   buildResearchObjectsForAnchors,
-} from "../researchObjectBuilder";
+} from "../research/researchObjectBuilder";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
   CapabilityFreshness,

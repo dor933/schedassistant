@@ -4,7 +4,7 @@ import {
   buildResearchWorkflowPlan,
   executeResearchPlan,
   shouldRunResearchPlanner,
-} from "../researchPlanner";
+} from "../workflow/researchPlanner";
 import { EMPTY_CLASSIFICATION, type AskGrahamyState } from "../types";
 import {
   type AskGrahamyGraphState,
@@ -12,7 +12,7 @@ import {
   patchFromAskGrahamyState,
   runGraphNode,
   toAskGrahamyState,
-} from "../askGrahamyState";
+} from "../state/askGrahamyState";
 
 export async function researchPlannerNode(
   state: AskGrahamyLangGraphState,

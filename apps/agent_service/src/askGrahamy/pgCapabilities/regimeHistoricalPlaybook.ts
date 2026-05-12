@@ -1,5 +1,5 @@
 import { logger } from "../../logger";
-import { numberValue, stringValue } from "../snapshotClient";
+import { numberValue, stringValue } from "../snapshots/snapshotClient";
 import type {
   RegimeHistoricalPlaybookRiskView,
   RegimeHistoricalPlaybookRole,
@@ -9,7 +9,7 @@ import type {
 import {
   buildResearchObjectCacheKey,
   buildResearchObjectsForAnchors,
-} from "../researchObjectBuilder";
+} from "../research/researchObjectBuilder";
 import { assessCapabilityFreshness } from "./freshnessGuard";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {

@@ -5,7 +5,7 @@ import {
   type AnswerType,
   type PublicResearchView,
   type UiHints,
-} from "./types";
+} from "../types";
 
 /**
  * Static stubs for the three "no real answer to compose" paths. The full

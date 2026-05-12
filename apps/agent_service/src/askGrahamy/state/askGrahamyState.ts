@@ -1,28 +1,28 @@
 import { Annotation } from "@langchain/langgraph";
-import type { runGrahamyDeepAgent } from "./grahamyAgent";
+import type { runGrahamyDeepAgent } from "../agent/grahamyAgent";
 import type {
   AnalystBriefSynthesisInput,
   AnalystBriefSynthesisResult,
-} from "./analystBriefSynthesizer";
+} from "../agent/analystBriefSynthesizer";
 import type {
   ResearchPlanExecutor,
-} from "./researchPlanner";
+} from "../workflow/researchPlanner";
 import type {
   CachedCapabilityView,
   PgCapabilityRunInput,
   PgCapabilityRunResult,
-} from "./pgCapabilities/types";
+} from "../pgCapabilities/types";
 import type {
   PipelineOverlayRunInput,
   PipelineOverlayRunResult,
-} from "./pipelineOverlays/registry";
-import type { buildResearchObjects } from "./researchObjectBuilder";
-import { GrahamySnapshotClient } from "./snapshotClient";
+} from "../pipelineOverlays/registry";
+import type { buildResearchObjects } from "../research/researchObjectBuilder";
+import { GrahamySnapshotClient } from "../snapshots/snapshotClient";
 import type {
   AskGrahamyProgressEmitter,
   AskGrahamyResponse,
   AskGrahamyState,
-} from "./types";
+} from "../types";
 
 export type SnapshotClient = Pick<
   GrahamySnapshotClient,

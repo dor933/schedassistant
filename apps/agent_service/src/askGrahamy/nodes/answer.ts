@@ -1,9 +1,9 @@
 import { observeToolCall } from "../../langfuse";
-import { renderAnalystBriefToAnswer } from "../analystBriefRenderer";
-import { synthesizeAnalystBriefFromEvidencePack } from "../analystBriefSynthesizer";
-import { runGrahamyDeepAgent } from "../grahamyAgent";
-import { buildEvidencePackFromWorkflowExecution } from "../workflowEvidencePack";
-import { buildHelpAnswer, genericHelpFollowUps } from "../helpAnswer";
+import { renderAnalystBriefToAnswer } from "../agent/analystBriefRenderer";
+import { synthesizeAnalystBriefFromEvidencePack } from "../agent/analystBriefSynthesizer";
+import { runGrahamyDeepAgent } from "../agent/grahamyAgent";
+import { buildEvidencePackFromWorkflowExecution } from "../workflow/workflowEvidencePack";
+import { buildHelpAnswer, genericHelpFollowUps } from "../classification/helpAnswer";
 import { DEFAULT_DISCLAIMER } from "../types";
 import {
   type AskGrahamyGraphState,
@@ -11,7 +11,7 @@ import {
   patchFromAskGrahamyState,
   runGraphNode,
   toAskGrahamyState,
-} from "../askGrahamyState";
+} from "../state/askGrahamyState";
 
 export async function answerNode(
   state: AskGrahamyLangGraphState,

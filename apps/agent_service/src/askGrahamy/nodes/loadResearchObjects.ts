@@ -2,11 +2,11 @@ import { observeToolCall } from "../../langfuse";
 import {
   buildResearchObjects,
   buildResearchObjectsForAnchors,
-} from "../researchObjectBuilder";
+} from "../research/researchObjectBuilder";
 import {
   inferIndustryFromResearchObjects,
   inferSectorFromResearchObjects,
-} from "../researchPlanner";
+} from "../workflow/researchPlanner";
 import {
   EMPTY_CLASSIFICATION,
   type AskGrahamyState,
@@ -19,7 +19,7 @@ import {
   patchFromAskGrahamyState,
   runGraphNode,
   toAskGrahamyState,
-} from "../askGrahamyState";
+} from "../state/askGrahamyState";
 
 export async function loadResearchObjectsNode(
   state: AskGrahamyLangGraphState,

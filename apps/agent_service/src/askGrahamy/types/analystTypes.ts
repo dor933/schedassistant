@@ -4,7 +4,7 @@ import type {
   PipelineOverlayViews,
   PublicFreshnessView,
   PublicResearchObjectView,
-} from "./types";
+} from "./index";
 
 export type AnalystQuestionType =
   | "stock_opinion"

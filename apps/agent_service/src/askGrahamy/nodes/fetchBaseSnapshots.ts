@@ -7,7 +7,7 @@ import {
   runGraphNode,
   type SnapshotClient,
   toAskGrahamyState,
-} from "../askGrahamyState";
+} from "../state/askGrahamyState";
 
 export async function fetchBaseSnapshotsNode(
   state: AskGrahamyLangGraphState,

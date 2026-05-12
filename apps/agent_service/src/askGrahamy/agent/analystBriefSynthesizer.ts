@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { logger } from "../logger";
-import { runAnthropicOneShot } from "../chat/anthropic/anthropicOneShot";
-import { resolveOrgVendorByOrg } from "../utils/resolveOrgVendor.service";
+import { logger } from "../../logger";
+import { runAnthropicOneShot } from "../../chat/anthropic/anthropicOneShot";
+import { resolveOrgVendorByOrg } from "../../utils/resolveOrgVendor.service";
 import {
   formatEvidencePackForPrompt,
 } from "./analystOrchestration";
@@ -12,7 +12,7 @@ import type {
   AnalystBriefTable,
   EvidencePack,
   WorkflowCandidateRow,
-} from "./analystTypes";
+} from "../types/analystTypes";
 
 export type AnalystBriefSynthesisInput = {
   message: string;

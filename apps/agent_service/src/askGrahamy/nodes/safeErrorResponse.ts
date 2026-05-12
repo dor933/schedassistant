@@ -4,7 +4,7 @@ import {
   type AskGrahamyLangGraphState,
   patchFromAskGrahamyState,
   toAskGrahamyState,
-} from "../askGrahamyState";
+} from "../state/askGrahamyState";
 
 export async function safeErrorResponseNode(
   state: AskGrahamyLangGraphState,

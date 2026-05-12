@@ -1,4 +1,4 @@
-import { logger } from "../logger";
+import { logger } from "../../logger";
 import type {
   CachedResearchObject,
   Classification,
@@ -14,26 +14,26 @@ import type {
   SnapshotBundle,
   ToolOutputs,
   ValidatedEdgeEvidenceView,
-} from "./types";
+} from "../types";
 import {
   buildResearchObjects,
   type ResearchObjectBuildResult,
-} from "./researchObjectBuilder";
+} from "../research/researchObjectBuilder";
 import {
   executePgCapabilitiesWithCache,
-} from "./pgCapabilities/registry";
-import { executePipelineOverlays } from "./pipelineOverlays/registry";
+} from "../pgCapabilities/registry";
+import { executePipelineOverlays } from "../pipelineOverlays/registry";
 import { buildWorkflowExecutionResult } from "./workflowExecution";
-import type { WorkflowExecutionResult } from "./analystTypes";
+import type { WorkflowExecutionResult } from "../types/analystTypes";
 import type {
   CachedCapabilityView,
   PgCapabilityRunInput,
   PgCapabilityRunResult,
-} from "./pgCapabilities/types";
+} from "../pgCapabilities/types";
 import type {
   PipelineOverlayRunInput,
   PipelineOverlayRunResult,
-} from "./pipelineOverlays/registry";
+} from "../pipelineOverlays/registry";
 
 /**
  * The 12 PG capabilities + research-object kinds the executors compose into

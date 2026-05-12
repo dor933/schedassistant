@@ -1,4 +1,4 @@
-import type { FreshnessMetadata, SnapshotBundle, SnapshotName } from "./types";
+import type { FreshnessMetadata, SnapshotBundle, SnapshotName } from "../types";
 
 const SNAPSHOT_NAMES: SnapshotName[] = [
   "daily_brief",

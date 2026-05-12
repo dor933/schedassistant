@@ -1,4 +1,4 @@
-import { isLangfuseConfigured, startActiveObservation } from "../langfuse";
+import { isLangfuseConfigured, startActiveObservation } from "../../langfuse";
 
 const SQL_PREVIEW_MAX = 4000;
 const SAMPLE_ROW_COUNT = 5;

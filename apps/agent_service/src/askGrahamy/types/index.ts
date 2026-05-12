@@ -897,7 +897,7 @@ export type CachedResearchObject = {
  * response meta, upstream caller types) live in one place. Definition
  * itself sits next to the registry that produces it.
  */
-export type { CachedCapabilityView } from "./pgCapabilities/types";
+export type { CachedCapabilityView } from "../pgCapabilities/types";
 
 export type PublicResearchView = {
   objectType: "stock" | "sector" | "industry" | "regime" | "mixed";
@@ -993,7 +993,7 @@ export type ResponseMeta = {
    * reuse on future turns within the same `as_of_date`. Empty when the
    * intent had no capability or the call was a cache hit.
    */
-  capabilityViewsUpdated?: import("./pgCapabilities/types").CachedCapabilityView[];
+  capabilityViewsUpdated?: import("../pgCapabilities/types").CachedCapabilityView[];
   upstreamLatency?: Partial<Record<SnapshotName, number>>;
   moatGuardResult?: "clean" | "cleaned" | "failed";
 };
@@ -1045,7 +1045,7 @@ export type AskGrahamyState = {
    * `executePgCapabilitiesWithCache` exactly the way `priorResearchObjects`
    * is used by `buildResearchObjects`.
    */
-  priorCapabilityViews?: import("./pgCapabilities/types").CachedCapabilityView[];
+  priorCapabilityViews?: import("../pgCapabilities/types").CachedCapabilityView[];
   priorCapabilityViewIds?: string[];
   pgCapabilityViews?: PgCapabilityViews;
   pipelineOverlayViews?: PipelineOverlayViews;
@@ -1072,7 +1072,7 @@ export type AskGrahamyState = {
    * upstream caller persists them after receiving the response. Empty when
    * the intent had no matching capability or the call was a cache hit.
    */
-  capabilityViewsUpdated?: import("./pgCapabilities/types").CachedCapabilityView[];
+  capabilityViewsUpdated?: import("../pgCapabilities/types").CachedCapabilityView[];
   capabilityViewCacheStats?: {
     hits: number;
     misses: number;

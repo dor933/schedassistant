@@ -1,5 +1,5 @@
-import { DEFAULT_DISCLAIMER, type AnswerObject, type UiHints } from "./types";
-import type { AnalystBrief, AnalystBriefTable } from "./analystTypes";
+import { DEFAULT_DISCLAIMER, type AnswerObject, type UiHints } from "../types";
+import type { AnalystBrief, AnalystBriefTable } from "../types/analystTypes";
 
 export function renderAnalystBriefToAnswer(brief: AnalystBrief): {
   answer: AnswerObject;

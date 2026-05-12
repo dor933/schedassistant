@@ -5,10 +5,10 @@ import {
   resolveDefaultClientApplication,
   resolveOrCreateClientUser,
 } from "../utils/clientApplicationUser.service";
-import { runAskGrahamyGraph } from "../askGrahamy/graph";
-import { runAskGrahamyLandingWarmGraph } from "../askGrahamy/landingWarmGraph";
-import { classifyMessage } from "../askGrahamy/classification";
-import type { RunAskGrahamyGraphOptions } from "../askGrahamy/askGrahamyState";
+import { runAskGrahamyGraph } from "../askGrahamy/graphs/askQuestion";
+import { runAskGrahamyLandingWarmGraph } from "../askGrahamy/graphs/landingWarmGraph";
+import { classifyMessage } from "../askGrahamy/classification/classification";
+import type { RunAskGrahamyGraphOptions } from "../askGrahamy/state/askGrahamyState";
 import type {
   AskGrahamyClassifyRequest,
   AskGrahamyClassifyResponse,

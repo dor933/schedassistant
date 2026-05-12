@@ -7,7 +7,7 @@ import type {
   CachedResearchObject,
   PgCapabilityViews,
   PipelineOverlayViews,
-} from "./types";
+} from "../types";
 import {
   publicObjectViewFromCachedObject,
   sectorContextFromResearchObjects,

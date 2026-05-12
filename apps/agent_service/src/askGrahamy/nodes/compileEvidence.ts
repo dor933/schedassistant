@@ -1,9 +1,9 @@
 import {
   buildAnalystBriefContract,
   buildEvidencePack,
-} from "../analystOrchestration";
-import { compilePublicResearchView } from "../publicResearch";
-import { buildEvidencePackFromWorkflowExecution } from "../workflowEvidencePack";
+} from "../agent/analystOrchestration";
+import { compilePublicResearchView } from "../research/publicResearch";
+import { buildEvidencePackFromWorkflowExecution } from "../workflow/workflowEvidencePack";
 import { EMPTY_CLASSIFICATION } from "../types";
 import {
   type AskGrahamyGraphState,
@@ -11,7 +11,7 @@ import {
   patchFromAskGrahamyState,
   runGraphNode,
   toAskGrahamyState,
-} from "../askGrahamyState";
+} from "../state/askGrahamyState";
 
 export async function compileEvidenceNode(
   state: AskGrahamyLangGraphState,

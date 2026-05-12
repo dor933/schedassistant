@@ -1,7 +1,7 @@
-import { logger } from "../logger";
-import { queryExternalReadonly } from "../utils/externalReadonlyDb";
-import type { CachedCapabilityView } from "./pgCapabilities/types";
-import type { CachedResearchObject } from "./types";
+import { logger } from "../../logger";
+import { queryExternalReadonly } from "../../utils/externalReadonlyDb";
+import type { CachedCapabilityView } from "../pgCapabilities/types";
+import type { CachedResearchObject } from "../types";
 
 function normalizeIds(ids: readonly string[] | undefined): string[] {
   const out: string[] = [];
