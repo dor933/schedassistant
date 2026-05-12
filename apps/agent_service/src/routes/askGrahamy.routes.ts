@@ -7,6 +7,7 @@ const controller = new AskGrahamyController();
 
 router.use(requireApplicationToken);
 router.post("/classify", controller.classify);
+router.post("/landing-warm", controller.landingWarm);
 router.post("/", controller.ask);
 
 export { router as askGrahamyRouter };

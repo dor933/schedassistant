@@ -1,17 +1,21 @@
+import crypto from "node:crypto";
 import type { Request, Response } from "express";
 import { logger } from "../logger";
 import {
   classifyAskGrahamy,
+  runAskGrahamyLandingWarmForExternalUser,
   runAskGrahamyForExternalUser,
 } from "../services/askGrahamy.service";
 import {
   askGrahamyClassifyRequestSchema,
+  askGrahamyLandingWarmRequestSchema,
   askGrahamyRequestSchema,
   EMPTY_CLASSIFICATION,
   EMPTY_PUBLIC_RESEARCH_VIEW,
   type AskGrahamyResponse,
 } from "../askGrahamy/types";
 import { buildSafeErrorAnswer } from "../askGrahamy/answerTemplates";
+import { getAskBridgeIO } from "../askBridgeSocket";
 
 /**
  * POST /api/ask-grahamy
@@ -103,6 +107,86 @@ export class AskGrahamyController {
         .json(buildSafeErrorEnvelope(conversationId, "Ask Grahamy failed safely."));
     }
   };
+
+  /**
+   * POST /api/ask-grahamy/landing-warm
+   *
+   * Worker-only async submit endpoint. Returns 202 immediately and emits
+   * `ask:landing-warm-complete` on the ask-bridge socket when the nightly
+   * graph finishes. This avoids binding BullMQ cron duration to HTTP/socket
+   * request timeouts while still returning the final cache payload to SS for
+   * persistence.
+   */
+  landingWarm = async (req: Request, res: Response) => {
+    const rawBody =
+      req.body && typeof req.body === "object"
+        ? (req.body as Record<string, unknown>)
+        : {};
+    const requestId =
+      typeof rawBody.requestId === "string" && rawBody.requestId.trim()
+        ? rawBody.requestId.trim()
+        : crypto.randomUUID();
+    const { requestId: _stripped, ...requestBody } = rawBody;
+    void _stripped;
+
+    const parsed = askGrahamyLandingWarmRequestSchema.safeParse(
+      requestBody,
+    );
+    if (!parsed.success) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "Invalid landing warm payload — userId, message, and classification are required.",
+      });
+    }
+
+    const acceptedAt = new Date().toISOString();
+    res.status(202).json({ ok: true, requestId, acceptedAt });
+
+    void (async () => {
+      try {
+        const result = await runAskGrahamyLandingWarmForExternalUser(
+          parsed.data,
+        );
+        emitLandingWarmComplete(
+          result.ok
+            ? { requestId, ok: true, response: result.response }
+            : {
+                requestId,
+                ok: false,
+                status: result.status,
+                error: result.error,
+              },
+        );
+      } catch (err) {
+        logger.error("Ask Grahamy landing warm background error", {
+          requestId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        emitLandingWarmComplete({
+          requestId,
+          ok: false,
+          status: 500,
+          error: err instanceof Error ? err.message : "landing warm failed",
+        });
+      }
+    })();
+  };
+}
+
+function emitLandingWarmComplete(
+  payload:
+    | { requestId: string; ok: true; response: AskGrahamyResponse }
+    | { requestId: string; ok: false; status: number; error: string },
+): void {
+  try {
+    getAskBridgeIO().of("/ask-bridge").emit("ask:landing-warm-complete", payload);
+  } catch (err) {
+    logger.warn("Ask Grahamy landing warm completion emit failed", {
+      requestId: payload.requestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

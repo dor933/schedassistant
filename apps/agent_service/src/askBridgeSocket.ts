@@ -1,14 +1,11 @@
-import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 import { logger } from "./logger";
 import {
   askGrahamyClassifyRequestSchema,
-  askGrahamyLandingWarmRequestSchema,
   askGrahamyRequestSchema,
 } from "./askGrahamy/types";
 import {
   classifyAskGrahamy,
-  runAskGrahamyLandingWarmForExternalUser,
   runAskGrahamyForExternalUser,
 } from "./services/askGrahamy.service";
 
@@ -181,45 +178,6 @@ export function attachAskBridgeSocketIO(io: Server): Server {
             ok: false,
             status: 500,
             error: err instanceof Error ? err.message : "run failed",
-          });
-        }
-      },
-    );
-
-    socket.on(
-      "ask:landing-warm",
-      async (payload: unknown, ack?: (response: unknown) => void) => {
-        if (typeof ack !== "function") {
-          logger.warn("ask-bridge: ask:landing-warm received with no ack");
-          return;
-        }
-        const parsed = askGrahamyLandingWarmRequestSchema.safeParse(payload ?? {});
-        if (!parsed.success) {
-          ack({
-            ok: false,
-            status: 400,
-            error:
-              "Invalid landing warm payload — userId, message, and classification are required.",
-          });
-          return;
-        }
-        try {
-          const result = await runAskGrahamyLandingWarmForExternalUser(
-            parsed.data,
-          );
-          if (!result.ok) {
-            ack({ ok: false, status: result.status, error: result.error });
-            return;
-          }
-          ack({ ok: true, response: result.response });
-        } catch (err) {
-          logger.error("ask-bridge: ask:landing-warm handler crashed", {
-            error: err instanceof Error ? err.message : String(err),
-          });
-          ack({
-            ok: false,
-            status: 500,
-            error: err instanceof Error ? err.message : "landing warm failed",
           });
         }
       },
