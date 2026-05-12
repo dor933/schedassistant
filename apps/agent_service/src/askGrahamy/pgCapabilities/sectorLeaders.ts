@@ -30,16 +30,15 @@ export type SectorLeadersOptions = {
 };
 
 /**
- * Cache-key params for `sector_leaders`. Both the inferred ranking basis and
- * the target sector reorder/scope the view, so both go into the cache key.
+ * Discriminator for `sector_leaders`. The sector itself lives in the
+ * first-class `anchor_sector` column (set via the registry's
+ * `cacheAnchors`), so only the message-derived `rankingBasis` ends up
+ * in `ranking_basis` here.
  */
-export function sectorLeadersCacheKeyParams(
+export function sectorLeadersDiscriminators(
   input: PgCapabilityRunInput,
-): { rankingBasis: StockIdeaView["rankingBasis"]; sector: string } {
-  return {
-    rankingBasis: inferRankingBasis(input.message),
-    sector: targetSector(input) ?? "",
-  };
+): { rankingBasis: StockIdeaView["rankingBasis"] } {
+  return { rankingBasis: inferRankingBasis(input.message) };
 }
 
 export async function buildSectorLeadersView(

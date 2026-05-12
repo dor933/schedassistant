@@ -6,6 +6,7 @@ import {
   resolveOrCreateClientUser,
 } from "../utils/clientApplicationUser.service";
 import { runAskGrahamyGraph } from "../askGrahamy/graph";
+import { runAskGrahamyLandingWarmGraph } from "../askGrahamy/landingWarmGraph";
 import { classifyMessage } from "../askGrahamy/classification";
 import type { RunAskGrahamyGraphOptions } from "../askGrahamy/askGrahamyState";
 import type {
@@ -65,6 +66,51 @@ export async function runAskGrahamyForExternalUser(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error("Ask Grahamy graph failed", {
+      error: message,
+      userId: user.id,
+      conversationId: request.conversationId,
+    });
+    return { ok: false, status: 500, error: message };
+  }
+}
+
+/**
+ * Worker-only entry for the nightly landing/ranking graph. It shares the
+ * same client-user resolution as the live graph for traceability, but calls
+ * a separate LangGraph compiled workflow where expensive capability SQL and
+ * Research Object fanout are allowed.
+ */
+export async function runAskGrahamyLandingWarmForExternalUser(
+  request: AskGrahamyRequest,
+  graphOptions: RunAskGrahamyGraphOptions = {},
+): Promise<RunAskGrahamyForExternalUserResult> {
+  const clientApplication = await resolveDefaultClientApplication();
+  if (!clientApplication) {
+    logger.error(
+      "Ask Grahamy landing warm: DEFAULT_CLIENT_APPLICATION_ID is missing or refers to a non-existent row",
+    );
+    return {
+      ok: false,
+      status: 500,
+      error: "Server is not configured for client-app requests.",
+    };
+  }
+
+  const user = await resolveOrCreateClientUser({
+    clientApplication,
+    externalUserId: request.userId,
+  });
+
+  try {
+    const response = await runAskGrahamyLandingWarmGraph(
+      request,
+      user.id,
+      graphOptions,
+    );
+    return { ok: true, response };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error("Ask Grahamy landing warm graph failed", {
       error: message,
       userId: user.id,
       conversationId: request.conversationId,

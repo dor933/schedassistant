@@ -10,6 +10,7 @@ import {
   buildResearchObjectsForAnchors,
 } from "../researchObjectBuilder";
 import { assessCapabilityFreshness } from "./freshnessGuard";
+import { hashCapabilityParams } from "./discriminatorHash";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
   CapabilityFreshness,
@@ -33,10 +34,19 @@ export type FeatureScreenOptions = {
   now?: Date;
 };
 
-export function featureScreenCacheKeyParams(
+/**
+ * Discriminator for `feature_screen`. The free-form criteria array
+ * doesn't fit a single string column — hash the canonicalised criteria
+ * string into `criteria_hash`.
+ */
+export function featureScreenDiscriminators(
   input: PgCapabilityRunInput,
-): Record<string, string> {
-  return { criteria: stringifyCriteria(criteriaFromInput(input)) };
+): { criteriaHash: string } {
+  return {
+    criteriaHash: hashCapabilityParams({
+      criteria: stringifyCriteria(criteriaFromInput(input)),
+    }),
+  };
 }
 
 export async function buildFeatureScreenView(

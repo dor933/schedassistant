@@ -99,6 +99,12 @@ export const askGrahamyRequestSchema = z.object({
    */
   priorResearchObjects: z.array(passthroughRecord).optional(),
   /**
+   * Live StocksScanner turns send cache row ids instead of JSONB payloads.
+   * agent_service hydrates these from `research_objects` using its read-only
+   * DB connection before the graph runs.
+   */
+  priorResearchObjectIds: z.array(z.string().trim().regex(/^\d+$/)).optional(),
+  /**
    * Optional. Existing pgCapability views the caller has cached for the
    * classified intent (sector_conviction_leaderboard, sector_divergence,
    * week_over_week_sector_delta, stock_idea_discovery, feature_screen, etc.).
@@ -106,6 +112,12 @@ export const askGrahamyRequestSchema = z.object({
    * Mirrors `priorResearchObjects` for the non-`stock_sector_regime` intents.
    */
   priorCapabilityViews: z.array(passthroughRecord).optional(),
+  /**
+   * Live StocksScanner turns send cached capability-view row ids instead of
+   * payloads. The landing warmer is the only path that should create or
+   * refresh these rows.
+   */
+  priorCapabilityViewIds: z.array(z.string().trim().regex(/^\d+$/)).optional(),
   /**
    * Optional. The canonical PG `as_of_date` the caller (StocksScanner) used
    * when keying its `priorResearchObjects` / `priorCapabilityViews` cache
@@ -1025,6 +1037,7 @@ export type AskGrahamyState = {
    * keys present here are reused as-is; missing keys are built from v6 SQL.
    */
   priorResearchObjects?: CachedResearchObject[];
+  priorResearchObjectIds?: string[];
   researchObjects?: CachedResearchObject[];
   /** Subset of `researchObjects` that need persistence by the upstream caller —
    * either freshly built this turn or augmented with new fields. Cache hits
@@ -1042,6 +1055,7 @@ export type AskGrahamyState = {
    * is used by `buildResearchObjects`.
    */
   priorCapabilityViews?: import("./pgCapabilities/types").CachedCapabilityView[];
+  priorCapabilityViewIds?: string[];
   pgCapabilityViews?: PgCapabilityViews;
   pipelineOverlayViews?: PipelineOverlayViews;
   /**

@@ -35,10 +35,18 @@ export type RegimeHistoricalPlaybookOptions = {
   now?: Date;
 };
 
-export function regimeHistoricalPlaybookCacheKeyParams(
+/**
+ * Discriminator for `market_regime_historical_playbook`. The
+ * message-derived `emphasis` (sectors / stocks / balanced) reshapes
+ * which rows the LLM is asked to focus on, so it lives in
+ * `ranking_basis` — semantics-stretched but it IS a single-string
+ * message-derived discriminator just like rankingBasis is for the
+ * idea/leaderboard capabilities.
+ */
+export function regimeHistoricalPlaybookDiscriminators(
   input: PgCapabilityRunInput,
-): { emphasis: RegimePlaybookEmphasis } {
-  return { emphasis: inferEmphasis(input.message) };
+): { rankingBasis: RegimePlaybookEmphasis } {
+  return { rankingBasis: inferEmphasis(input.message) };
 }
 
 export async function buildRegimeHistoricalPlaybookView(

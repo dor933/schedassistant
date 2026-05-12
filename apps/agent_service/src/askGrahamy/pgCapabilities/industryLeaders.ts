@@ -30,17 +30,15 @@ export type IndustryLeadersOptions = {
 };
 
 /**
- * Cache-key params for `industry_leaders`. Both the inferred ranking basis
- * and the target industry reorder/scope the view, so both go into the cache
- * key. Mirrors `sectorLeadersCacheKeyParams`.
+ * Discriminator for `industry_leaders`. The industry itself lives in the
+ * first-class `anchor_industry` column (set via the registry's
+ * `cacheAnchors`), so only the message-derived `rankingBasis` ends up
+ * in `ranking_basis` here. Mirrors `sectorLeadersDiscriminators`.
  */
-export function industryLeadersCacheKeyParams(
+export function industryLeadersDiscriminators(
   input: PgCapabilityRunInput,
-): { rankingBasis: StockIdeaView["rankingBasis"]; industry: string } {
-  return {
-    rankingBasis: inferRankingBasis(input.message),
-    industry: targetIndustry(input) ?? "",
-  };
+): { rankingBasis: StockIdeaView["rankingBasis"] } {
+  return { rankingBasis: inferRankingBasis(input.message) };
 }
 
 export async function buildIndustryLeadersView(

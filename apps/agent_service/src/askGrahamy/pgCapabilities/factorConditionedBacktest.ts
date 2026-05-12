@@ -10,6 +10,7 @@ import {
   buildResearchObjectCacheKey,
   buildResearchObjectsForAnchors,
 } from "../researchObjectBuilder";
+import { hashCapabilityParams } from "./discriminatorHash";
 import { assessCapabilityFreshness } from "./freshnessGuard";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
@@ -33,15 +34,22 @@ export type FactorConditionedBacktestOptions = {
   now?: Date;
 };
 
-export function factorConditionedBacktestCacheKeyParams(
+/**
+ * Discriminator for `factor_conditioned_backtest`. Multi-field criteria
+ * + horizon don't fit a single string column — hash the canonicalised
+ * params into `criteria_hash`.
+ */
+export function factorConditionedBacktestDiscriminators(
   input: PgCapabilityRunInput,
-): Record<string, string> {
+): { criteriaHash: string } {
   const backtest = backtestFromInput(input);
   return {
-    criteria: stringifyCriteria(backtest.criteria),
-    horizon: backtest.horizon ?? DEFAULT_HORIZON,
-    unsupportedHorizon: backtest.unsupportedHorizon ?? "",
-    unsupportedCriteria: (backtest.unsupportedCriteria ?? []).join(","),
+    criteriaHash: hashCapabilityParams({
+      criteria: stringifyCriteria(backtest.criteria),
+      horizon: backtest.horizon ?? DEFAULT_HORIZON,
+      unsupportedHorizon: backtest.unsupportedHorizon ?? "",
+      unsupportedCriteria: (backtest.unsupportedCriteria ?? []).join(","),
+    }),
   };
 }
 

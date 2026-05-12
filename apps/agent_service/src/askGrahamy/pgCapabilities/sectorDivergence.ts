@@ -30,13 +30,14 @@ export type SectorDivergenceOptions = {
 };
 
 /**
- * Cache-key params for `sector_momentum_vs_conviction_divergence`. The query
- * has no message-derived inputs (default MAX_ROWS only), so two same-day
- * callers share one cached view.
+ * Discriminator for `sector_momentum_vs_conviction_divergence`. The
+ * query has no message-derived inputs (default MAX_ROWS only), so all
+ * same-day callers share one cached view — both discriminator columns
+ * stay NULL and the unique index matches them via NULLS NOT DISTINCT.
  */
-export function sectorDivergenceCacheKeyParams(
+export function sectorDivergenceDiscriminators(
   _input: PgCapabilityRunInput,
-): Record<string, string | number | boolean> {
+): Record<string, never> {
   return {};
 }
 

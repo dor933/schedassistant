@@ -28,15 +28,41 @@ export function buildResearchObjectCacheKey(
   return `${objectType}:${anchor.toUpperCase()}:${asOfDate}`;
 }
 
-/** Index prior objects by cache_key for O(1) lookup during the build loop. */
+/**
+ * Date-less identity key used to match priors against the symbols/sectors
+ * this turn wants. The SS persistence layer keys its `expires_at` filter
+ * on `(object_type, anchor)` only — never `as_of_date` — so a row
+ * written by the warmer at one asOfDate still serves a live turn that
+ * resolved a different asOfDate. We mirror that here so the in-memory
+ * `priorIndex` lookup matches regardless of which date is baked into
+ * the upstream `cacheKey` string. This is what unblocks the per-stock
+ * fan-out cache hits after a capability-view cache hit on
+ * stock_idea_discovery / sector_leaders / etc.
+ */
+function researchObjectMatchKey(
+  objectType: string,
+  anchor: string,
+): string {
+  return `${objectType.toUpperCase()}:${anchor.toUpperCase()}`;
+}
+
+/**
+ * Index priors by `(objectType, anchor)` (date-less) so a prior written
+ * at any asOfDate is reachable from a lookup at any other asOfDate. If
+ * two priors collide on the key we keep the freshest by `generatedAt`.
+ */
 function indexPriorObjects(
   priors: CachedResearchObject[] | undefined,
 ): Map<string, CachedResearchObject> {
   const index = new Map<string, CachedResearchObject>();
   if (!priors) return index;
   for (const obj of priors) {
-    if (!obj?.cacheKey) continue;
-    index.set(obj.cacheKey, obj);
+    if (!obj?.objectType || !obj?.anchor) continue;
+    const key = researchObjectMatchKey(obj.objectType, obj.anchor);
+    const existing = index.get(key);
+    if (!existing || (obj.generatedAt ?? "") > (existing.generatedAt ?? "")) {
+      index.set(key, obj);
+    }
   }
   return index;
 }
@@ -71,6 +97,12 @@ export async function buildResearchObjects(input: {
    * lag the actual PG data date.
    */
   asOfDate?: string;
+  /**
+   * The nightly graph builds the regime RO as part of the full evidence pack.
+   * Live chat stock-only loading disables it so user turns do not perform
+   * extra Research Object work beyond the requested stock.
+   */
+  includeRegimeResearchObject?: boolean;
 }): Promise<ResearchObjectBuildResult> {
   const { classification, snapshots, toolOutputs, priorResearchObjects } = input;
   const stats = { hits: 0, misses: 0, writes: 0 };
@@ -87,7 +119,7 @@ export async function buildResearchObjects(input: {
 
   for (const symbol of classification.symbols) {
     const cacheKey = buildResearchObjectCacheKey("STOCK", symbol, asOfDate);
-    const prior = priorIndex.get(cacheKey);
+    const prior = priorIndex.get(researchObjectMatchKey("STOCK", symbol));
     if (prior) {
       const hydrated = hydrateCachedResearchObjectView(prior);
       if (hydrated) {
@@ -125,7 +157,7 @@ export async function buildResearchObjects(input: {
 
   for (const sector of classification.sectors) {
     const cacheKey = buildResearchObjectCacheKey("SECTOR", sector, asOfDate);
-    const prior = priorIndex.get(cacheKey);
+    const prior = priorIndex.get(researchObjectMatchKey("SECTOR", sector));
     if (prior) {
       const hydrated = hydrateCachedResearchObjectView(prior);
       if (hydrated) {
@@ -163,7 +195,7 @@ export async function buildResearchObjects(input: {
 
   for (const industry of classification.industries) {
     const cacheKey = buildResearchObjectCacheKey("INDUSTRY", industry, asOfDate);
-    const prior = priorIndex.get(cacheKey);
+    const prior = priorIndex.get(researchObjectMatchKey("INDUSTRY", industry));
     if (prior) {
       const hydrated = hydrateCachedResearchObjectView(prior);
       if (hydrated) {
@@ -201,11 +233,11 @@ export async function buildResearchObjects(input: {
   // The regime Research Object is loaded for every turn — it is the canonical
   // source of the current market regime label that the system prompt and the
   // analyst layer reason from. Pipeline `daily_brief` is only supplemental.
-  {
+  if (input.includeRegimeResearchObject !== false) {
     const regime = await resolveCurrentRegime(toolOutputs.get_market_context, objects);
     if (regime) {
       const cacheKey = buildResearchObjectCacheKey("REGIME", "MARKET", asOfDate);
-      const prior = priorIndex.get(cacheKey);
+      const prior = priorIndex.get(researchObjectMatchKey("REGIME", "MARKET"));
       if (prior) {
         const hydrated = hydrateCachedResearchObjectView(prior);
         if (hydrated) {

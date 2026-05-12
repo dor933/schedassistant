@@ -1,50 +1,52 @@
+import { logger } from "../../logger";
 import type { CachedResearchObject, Classification, Intent } from "../types";
 import { buildResearchObjectsForAnchors } from "../researchObjectBuilder";
 import {
   buildFactorConditionedBacktestView,
-  factorConditionedBacktestCacheKeyParams,
+  factorConditionedBacktestDiscriminators,
 } from "./factorConditionedBacktest";
 import {
   buildFeatureScreenView,
-  featureScreenCacheKeyParams,
+  featureScreenDiscriminators,
 } from "./featureScreen";
 import {
   buildRegimeHistoricalPlaybookView,
-  regimeHistoricalPlaybookCacheKeyParams,
+  regimeHistoricalPlaybookDiscriminators,
 } from "./regimeHistoricalPlaybook";
 import {
   buildSectorConvictionLeaderboardView,
-  sectorConvictionLeaderboardCacheKeyParams,
+  sectorConvictionLeaderboardDiscriminators,
 } from "./sectorConvictionLeaderboard";
 import {
   buildSectorLeadersView,
-  sectorLeadersCacheKeyParams,
+  sectorLeadersDiscriminators,
 } from "./sectorLeaders";
 import {
   buildIndustryLeadersView,
-  industryLeadersCacheKeyParams,
+  industryLeadersDiscriminators,
 } from "./industryLeaders";
 import {
   buildSectorDeltaView,
-  sectorDeltaCacheKeyParams,
+  sectorDeltaDiscriminators,
 } from "./sectorDelta";
 import {
   buildSectorDivergenceView,
-  sectorDivergenceCacheKeyParams,
+  sectorDivergenceDiscriminators,
 } from "./sectorDivergence";
 import {
   buildStockIdeaDiscoveryView,
-  stockIdeaDiscoveryCacheKeyParams,
+  stockIdeaDiscoveryDiscriminators,
 } from "./stockIdeaDiscovery";
 import type {
   CachedCapabilityView,
-  CapabilityCacheKeyParams,
+  CapabilityDiscriminators,
   PgCapabilityExecuteResult,
   PgCapabilityRegistryEntry,
   PgCapabilityRunInput,
   PgCapabilityRunResult,
   PgCapabilityViews,
 } from "./types";
+export { hashCapabilityParams } from "./discriminatorHash";
 
 export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
   {
@@ -61,7 +63,7 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     sanitizer: "public_safe_capability_view",
     run: buildSectorConvictionLeaderboardView,
     viewSlot: "sectorLeaderboardView",
-    cacheKeyParams: sectorConvictionLeaderboardCacheKeyParams,
+    discriminators: sectorConvictionLeaderboardDiscriminators,
   },
   {
     name: "sector_momentum_vs_conviction_divergence",
@@ -77,7 +79,7 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     sanitizer: "public_safe_capability_view",
     run: buildSectorDivergenceView,
     viewSlot: "sectorDivergenceView",
-    cacheKeyParams: sectorDivergenceCacheKeyParams,
+    discriminators: sectorDivergenceDiscriminators,
   },
   {
     name: "week_over_week_sector_delta",
@@ -90,7 +92,7 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     sanitizer: "public_safe_capability_view",
     run: buildSectorDeltaView,
     viewSlot: "sectorDeltaView",
-    cacheKeyParams: sectorDeltaCacheKeyParams,
+    discriminators: sectorDeltaDiscriminators,
   },
   {
     name: "stock_idea_discovery",
@@ -107,7 +109,7 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     sanitizer: "public_safe_capability_view",
     run: buildStockIdeaDiscoveryView,
     viewSlot: "stockIdeaView",
-    cacheKeyParams: stockIdeaDiscoveryCacheKeyParams,
+    discriminators: stockIdeaDiscoveryDiscriminators,
   },
   {
     name: "sector_leaders",
@@ -124,7 +126,7 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     sanitizer: "public_safe_capability_view",
     run: buildSectorLeadersView,
     viewSlot: "stockIdeaView",
-    cacheKeyParams: sectorLeadersCacheKeyParams,
+    discriminators: sectorLeadersDiscriminators,
     cacheAnchors: (input) => ({
       anchorSector: input.classification.sectors[0],
     }),
@@ -143,7 +145,7 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     sanitizer: "public_safe_capability_view",
     run: buildIndustryLeadersView,
     viewSlot: "stockIdeaView",
-    cacheKeyParams: industryLeadersCacheKeyParams,
+    discriminators: industryLeadersDiscriminators,
     cacheAnchors: (input) => ({
       anchorIndustry: input.classification.industries[0],
     }),
@@ -163,7 +165,7 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     sanitizer: "public_safe_capability_view",
     run: buildFeatureScreenView,
     viewSlot: "featureScreenView",
-    cacheKeyParams: featureScreenCacheKeyParams,
+    discriminators: featureScreenDiscriminators,
   },
   {
     name: "factor_conditioned_backtest",
@@ -176,7 +178,7 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     sanitizer: "public_safe_capability_view",
     run: buildFactorConditionedBacktestView,
     viewSlot: "factorBacktestView",
-    cacheKeyParams: factorConditionedBacktestCacheKeyParams,
+    discriminators: factorConditionedBacktestDiscriminators,
   },
   {
     name: "market_regime_historical_playbook",
@@ -192,7 +194,7 @@ export const PG_CAPABILITY_REGISTRY: PgCapabilityRegistryEntry[] = [
     sanitizer: "public_safe_capability_view",
     run: buildRegimeHistoricalPlaybookView,
     viewSlot: "regimeHistoricalPlaybookView",
-    cacheKeyParams: regimeHistoricalPlaybookCacheKeyParams,
+    discriminators: regimeHistoricalPlaybookDiscriminators,
   },
 ];
 
@@ -239,15 +241,89 @@ export async function executePgCapabilities(
 }
 
 /**
- * Cache-aware orchestrator. Mirror of the round-trip used by the v6 research-
- * object path:
+ * Live-chat capability resolver. It may only use already-hydrated cached
+ * capability views supplied by the caller as DB row ids. It never executes
+ * capability SQL and never fans out Research Objects. Missing or stale cache
+ * rows are hard errors because the nightly landing graph owns those builds.
+ */
+export async function resolvePgCapabilitiesFromCacheOnly(
+  input: PgCapabilityRunInput,
+  priors: CachedCapabilityView[] = [],
+): Promise<PgCapabilityExecuteResult> {
+  const entry = capabilityForClassification(input.classification);
+  if (!entry) {
+    return {
+      views: {},
+      warnings: [],
+      viewsUpdated: [],
+      cacheStats: { hits: 0, misses: 0, writes: 0 },
+    };
+  }
+
+  const asOfDate =
+    input.asOfDate ?? input.snapshots?.freshness?.dataThrough;
+  const discriminators = entry.discriminators(input);
+  const anchors = entry.cacheAnchors ? entry.cacheAnchors(input) : {};
+  const prior = findPriorMatchingDiscriminators(
+    priors,
+    entry,
+    anchors,
+    discriminators,
+  );
+  if (!prior) {
+    throw new Error(
+      `Cached capability view is required for ${entry.name}; nightly warm graph did not prepare a matching row.`,
+    );
+  }
+
+  const priorViewVersion = (prior.view as { viewSchemaVersion?: number })
+    .viewSchemaVersion;
+  const liveViewVersion = currentViewSchemaVersion(entry.viewSlot);
+  if (
+    priorViewVersion !== prior.viewSchemaVersion ||
+    (liveViewVersion !== undefined && liveViewVersion !== priorViewVersion)
+  ) {
+    throw new Error(
+      `Cached capability view for ${entry.name} has incompatible schema version.`,
+    );
+  }
+
+  logger.info("PG capability cache-only hit", {
+    capability: entry.name,
+    asOfDate,
+    anchors,
+    discriminators,
+    viewSchemaVersion: priorViewVersion,
+  });
+
+  return {
+    views: { [entry.viewSlot]: prior.view } as PgCapabilityViews,
+    warnings: [],
+    viewsUpdated: [],
+    cacheStats: { hits: 1, misses: 0, writes: 0 },
+  };
+}
+
+/**
+ * Cache-aware orchestrator. Mirror of the round-trip used by the v6
+ * research-object path, but keyed on typed discriminator columns
+ * instead of a derived `cache_key` string:
  *
- *   - The upstream caller (StocksScanner) reads any rows it has cached for
- *     the classified intent + as_of_date and passes them as `priors`.
- *   - On hit (matching `cache_key` and `viewSchemaVersion`) we skip the SQL
- *     and reuse the stored view.
- *   - On miss we run the capability, attach the freshly built view to
- *     `viewsUpdated`, and return it for the caller to upsert.
+ *   - The upstream caller (StocksScanner) reads any rows it has cached
+ *     for this capability (and the relevant first-class anchor) and
+ *     forwards them as `priors`. SS does NOT compute the
+ *     message-derived discriminator (`rankingBasis` / `criteriaHash`);
+ *     it forwards up to ~8 plausible candidates.
+ *   - We compute the discriminator here via the capability's own
+ *     `discriminators(input)` function and pick the prior whose
+ *     `(rankingBasis, criteriaHash)` matches. View schema version must
+ *     also match so a builder version bump doesn't serve a stale shape.
+ *   - On hit, the cached view goes out and the per-row research objects
+ *     are resolved against `priorResearchObjects` (usually cache-hits
+ *     all the way down).
+ *   - On miss, we run the capability and attach the freshly built view
+ *     to `viewsUpdated` carrying the same discriminator columns so SS
+ *     can upsert against the composite unique index.
  *
  * `runner` defaults to `executePgCapabilities` and exists primarily as a
  * test seam (matches the existing `pgCapabilityRunner` graph option).
@@ -270,66 +346,108 @@ export async function executePgCapabilitiesWithCache(
 
   // Prefer the explicit PG `as_of_date` supplied by the caller (SS resolves
   // it via `MAX(as_of_date)` and forwards it on every turn). Fall back to
-  // the pipeline `daily_brief` snapshot's `dataThrough` only when missing —
-  // older callers, freshly-bootstrapped tests. The pipeline date can lag PG
-  // (e.g. snapshot=2026-04-28 while PG already has 2026-05-08), so using it
-  // for the cache key produces silent mismatches with SS-side priors.
+  // the pipeline `daily_brief` snapshot's `dataThrough` only when missing
+  // (older callers, freshly-bootstrapped tests).
   const asOfDate =
     input.asOfDate ?? input.snapshots?.freshness?.dataThrough;
-  const cacheKey = asOfDate
-    ? buildCapabilityCacheKey(entry.name, entry.cacheKeyParams(input), asOfDate)
-    : undefined;
 
-  if (cacheKey) {
-    const prior = priors.find((p) => p.cacheKey === cacheKey);
-    if (prior) {
-      const priorViewVersion = (prior.view as { viewSchemaVersion?: number })
-        .viewSchemaVersion;
-      const liveViewVersion = currentViewSchemaVersion(entry.viewSlot);
-      if (
-        priorViewVersion === prior.viewSchemaVersion &&
-        (liveViewVersion === undefined || liveViewVersion === priorViewVersion)
-      ) {
-        // Cache hit on the capability view — we still need to (re)resolve the
-        // attached research objects so the agent prompt has the deep payload.
-        // priorResearchObjects acts as the cache for that fan-out, so this
-        // typically resolves entirely from cache.
-        const fanout = await fanOutResearchObjectsForCachedView(input, prior.view);
-        return {
-          views: { [entry.viewSlot]: prior.view } as PgCapabilityViews,
-          warnings: fanout.warnings,
-          viewsUpdated: [],
-          cacheStats: { hits: 1, misses: 0, writes: 0 },
-          ...(fanout.researchObjects.length
-            ? { researchObjects: fanout.researchObjects }
-            : {}),
-          ...(fanout.researchObjectsUpdated.length
-            ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
-            : {}),
-          ...(fanout.stats
-            ? { researchObjectCacheStats: fanout.stats }
-            : {}),
-        };
-      }
+  const discriminators = entry.discriminators(input);
+  const anchors = entry.cacheAnchors ? entry.cacheAnchors(input) : {};
+
+  const prior = findPriorMatchingDiscriminators(
+    priors,
+    entry,
+    anchors,
+    discriminators,
+  );
+  if (prior) {
+    const priorViewVersion = (prior.view as { viewSchemaVersion?: number })
+      .viewSchemaVersion;
+    const liveViewVersion = currentViewSchemaVersion(entry.viewSlot);
+    if (
+      priorViewVersion === prior.viewSchemaVersion &&
+      (liveViewVersion === undefined || liveViewVersion === priorViewVersion)
+    ) {
+      logger.info("PG capability cache hit", {
+        capability: entry.name,
+        asOfDate,
+        anchors,
+        discriminators,
+        viewSchemaVersion: priorViewVersion,
+      });
+      // Cache hit on the capability view — we still need to (re)resolve
+      // the attached research objects so the agent prompt has the deep
+      // payload. priorResearchObjects acts as the cache for that
+      // fan-out, so this typically resolves entirely from cache.
+      const fanout = await fanOutResearchObjectsForCachedView(input, prior.view);
+      return {
+        views: { [entry.viewSlot]: prior.view } as PgCapabilityViews,
+        warnings: fanout.warnings,
+        viewsUpdated: [],
+        cacheStats: { hits: 1, misses: 0, writes: 0 },
+        ...(fanout.researchObjects.length
+          ? { researchObjects: fanout.researchObjects }
+          : {}),
+        ...(fanout.researchObjectsUpdated.length
+          ? { researchObjectsUpdated: fanout.researchObjectsUpdated }
+          : {}),
+        ...(fanout.stats
+          ? { researchObjectCacheStats: fanout.stats }
+          : {}),
+      };
     }
+    logger.warn("PG capability cache miss — prior matched discriminators but failed schema version check", {
+      capability: entry.name,
+      asOfDate,
+      anchors,
+      discriminators,
+      priorViewVersion,
+      priorColumnVersion: prior.viewSchemaVersion,
+      liveViewVersion,
+    });
+  } else {
+    logger.info("PG capability cache miss — no prior matched discriminators", {
+      capability: entry.name,
+      asOfDate,
+      anchors,
+      discriminators,
+      priorCount: priors.length,
+      priorSummaries: priors.slice(0, 4).map((p) => ({
+        capabilityName: p.capabilityName,
+        anchorSymbol: p.anchorSymbol,
+        anchorSector: p.anchorSector,
+        anchorIndustry: p.anchorIndustry,
+        rankingBasis: p.rankingBasis,
+        criteriaHash: p.criteriaHash,
+        viewSchemaVersion: p.viewSchemaVersion,
+      })),
+    });
   }
 
   const result = await runner(input);
   const view = result.views[entry.viewSlot];
   let viewsUpdated: CachedCapabilityView[] = [];
 
-  if (cacheKey && view && asOfDate) {
-    const anchors = entry.cacheAnchors ? entry.cacheAnchors(input) : {};
+  if (view && asOfDate) {
     viewsUpdated = [
       {
-        cacheKey,
         capabilityName: entry.name,
         viewSchemaVersion: (view as { viewSchemaVersion: number }).viewSchemaVersion,
         asOfDate,
-        priorAsOfDate: extractPriorAsOfDate(view),
-        anchorSymbol: anchors.anchorSymbol,
-        anchorSector: anchors.anchorSector,
-        anchorIndustry: anchors.anchorIndustry,
+        ...(extractPriorAsOfDate(view)
+          ? { priorAsOfDate: extractPriorAsOfDate(view) }
+          : {}),
+        ...(anchors.anchorSymbol ? { anchorSymbol: anchors.anchorSymbol } : {}),
+        ...(anchors.anchorSector ? { anchorSector: anchors.anchorSector } : {}),
+        ...(anchors.anchorIndustry
+          ? { anchorIndustry: anchors.anchorIndustry }
+          : {}),
+        ...(discriminators.rankingBasis
+          ? { rankingBasis: discriminators.rankingBasis }
+          : {}),
+        ...(discriminators.criteriaHash
+          ? { criteriaHash: discriminators.criteriaHash }
+          : {}),
         view: view as CachedCapabilityView["view"],
         generatedAt: new Date().toISOString(),
       },
@@ -345,6 +463,53 @@ export async function executePgCapabilitiesWithCache(
       writes: viewsUpdated.length,
     },
   };
+}
+
+/**
+ * Find a SS-supplied prior matching this turn's discriminators. SS
+ * already narrowed by capability + first-class anchor; we finalise the
+ * match by `(rankingBasis, criteriaHash)` (which SS doesn't know about).
+ * Returns undefined when no prior matches.
+ */
+function findPriorMatchingDiscriminators(
+  priors: CachedCapabilityView[],
+  entry: PgCapabilityRegistryEntry,
+  anchors: { anchorSymbol?: string; anchorSector?: string; anchorIndustry?: string },
+  discriminators: CapabilityDiscriminators,
+): CachedCapabilityView | undefined {
+  if (!priors.length) return undefined;
+  return priors.find((p) => {
+    if (p.capabilityName !== entry.name) return false;
+    if (!eqOptionalCi(p.anchorSymbol, anchors.anchorSymbol)) return false;
+    if (!eqOptionalCi(p.anchorSector, anchors.anchorSector)) return false;
+    if (!eqOptionalCi(p.anchorIndustry, anchors.anchorIndustry)) return false;
+    if (normalizeOptional(p.rankingBasis) !== normalizeOptional(discriminators.rankingBasis))
+      return false;
+    if (normalizeOptional(p.criteriaHash) !== normalizeOptional(discriminators.criteriaHash))
+      return false;
+    return true;
+  });
+}
+
+// The SS-side persistence layer stores unused anchors/discriminators as
+// empty strings ("") rather than NULL, so priors arrive with "" where the
+// live side computes `undefined`. Treat both as "no value" so a genuinely
+// matching prior (no anchors, no criteria) doesn't get rejected and force
+// a full SQL re-run + per-row RO fan-out.
+function normalizeOptional(value: string | undefined | null): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  return value;
+}
+
+function eqOptionalCi(
+  a: string | undefined | null,
+  b: string | undefined | null,
+): boolean {
+  const left = normalizeOptional(a);
+  const right = normalizeOptional(b);
+  if (left === null && right === null) return true;
+  if (left === null || right === null) return false;
+  return left.toLowerCase() === right.toLowerCase();
 }
 
 /**
@@ -457,32 +622,6 @@ function anchorsFromCachedView(view: unknown): {
     sectors: [...sectors.values()],
     regimeRequested,
   };
-}
-
-/**
- * Build a deterministic, human-readable cache key.
- *
- *   `CAP:{capability}:{as_of}` — when no params
- *   `CAP:{capability}:{as_of}:{k1=v1|k2=v2}` (params sorted by key)
- *
- * Sorting keeps the key stable across invocations even if the param object's
- * declaration order changes.
- */
-export function buildCapabilityCacheKey(
-  name: string,
-  params: CapabilityCacheKeyParams,
-  asOfDate: string,
-): string {
-  const orderedKeys = Object.keys(params).sort();
-  if (orderedKeys.length === 0) return `CAP:${name}:${asOfDate}`;
-  const tail = orderedKeys
-    .map((key) => `${key}=${stringifyParam(params[key])}`)
-    .join("|");
-  return `CAP:${name}:${asOfDate}:${tail}`;
-}
-
-function stringifyParam(value: string | number | boolean): string {
-  return String(value);
 }
 
 function extractPriorAsOfDate(view: unknown): string | undefined {

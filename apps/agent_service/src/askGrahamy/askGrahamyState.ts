@@ -30,6 +30,13 @@ export type SnapshotClient = Pick<
 >;
 
 export type RunAskGrahamyGraphOptions = {
+  /**
+   * `live` user turns are cache-read-only for PG capabilities/ranking views
+   * and may build only direct stock Research Objects. `landing_warm` turns
+   * are worker-only and may run the heavy PG capability/RO expansion path.
+   */
+  executionMode?: "live" | "landing_warm";
+
   snapshotClient?: SnapshotClient;
   /**
    * Test seam for the underlying capability SQL run. Returns the raw

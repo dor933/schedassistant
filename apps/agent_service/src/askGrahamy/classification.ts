@@ -1194,12 +1194,7 @@ export async function classifyMessage(
     ...(helpTopic ? { helpTopic } : {}),
     requiresTools: toolsForIntent(finalIntent),
     confidence: raw.confidence,
-    warnings:
-      finalIntent === "unknown"
-        ? [
-            "Could not classify the message into stock, sector, industry, or regime context.",
-          ]
-        : [],
+    warnings: [],
   };
 }
 

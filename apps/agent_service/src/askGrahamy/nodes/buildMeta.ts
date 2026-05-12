@@ -52,6 +52,17 @@ export function buildMeta(
   capabilityViewCacheStats?: ResponseMeta["capabilityViewCache"],
   pipelineOverlayViews?: PipelineOverlayViews,
 ): ResponseMeta {
+  // Composite identifier for a capability view — replaces the old flat
+  // `cacheKey` string. Used in `meta.capabilityViewKeys` purely for
+  // telemetry / debugging.
+  function identifyCapabilityView(item: CachedCapabilityView): string {
+    const anchor =
+      item.anchorSector ?? item.anchorIndustry ?? item.anchorSymbol ?? "";
+    const discriminator = item.rankingBasis ?? item.criteriaHash ?? "";
+    return [item.capabilityName, item.asOfDate, anchor, discriminator]
+      .filter(Boolean)
+      .join(":");
+  }
   // Only research objects are "sources" the answer was actually grounded in.
   // Snapshots are background scaffolding the graph fetches for system-prompt
   // context — the agent never quotes them, so listing them as numbered
@@ -127,7 +138,7 @@ export function buildMeta(
       ? researchObjectsUpdated
       : undefined,
     capabilityViewKeys: capabilityViewsUpdated.length
-      ? capabilityViewsUpdated.map((item) => item.cacheKey)
+      ? capabilityViewsUpdated.map((item) => identifyCapabilityView(item))
       : undefined,
     capabilityViewCache: capabilityViewCacheStats,
     capabilityViewsUpdated: capabilityViewsUpdated.length

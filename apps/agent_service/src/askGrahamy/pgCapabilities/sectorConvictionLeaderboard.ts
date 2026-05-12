@@ -27,11 +27,11 @@ export type SectorConvictionLeaderboardOptions = {
 };
 
 /**
- * Cache-key params for `sector_conviction_leaderboard`. Two different ranking
- * bases produce different views from the same row set, so the ranking-basis
- * inference goes into the cache key alongside `as_of_date`.
+ * Discriminator for `sector_conviction_leaderboard` — two different
+ * ranking bases produce different views from the same row set, so the
+ * basis goes into `cached_capability_views.ranking_basis`.
  */
-export function sectorConvictionLeaderboardCacheKeyParams(
+export function sectorConvictionLeaderboardDiscriminators(
   input: PgCapabilityRunInput,
 ): { rankingBasis: SectorLeaderboardView["rankingBasis"] } {
   return { rankingBasis: inferRankingBasis(input.message) };

@@ -115,12 +115,26 @@ export type PgCapabilityRunResult = {
 };
 
 /**
- * Subset of capability-input fields that, together with `as_of_date`, uniquely
- * identify a capability view. Each capability supplies its own extractor
- * (e.g., leaderboard's `rankingBasis`, comparison's `(leftSymbol, rightSector)`)
- * and the orchestrator stringifies the result into `cache_key`.
+ * Per-capability discriminator: the bit(s) that vary between two cached
+ * views of the same capability on the same `as_of_date`. Stored on
+ * `cached_capability_views` as typed columns (`ranking_basis`,
+ * `criteria_hash`); no more flat-string `cache_key` concatenation.
+ *
+ *   - `rankingBasis`  : single message-derived discriminator
+ *                       (rankingBasis / emphasis / etc. — one string)
+ *   - `criteriaHash`  : md5 of the canonical-JSON of multi-field or
+ *                       free-form criteria (feature_screen,
+ *                       factor_conditioned_backtest, sector_delta)
+ *
+ * Capabilities with no per-turn discriminator (e.g.
+ * sector_momentum_vs_conviction_divergence) return `{}` — both columns
+ * stay NULL and the unique index treats them as equal via
+ * `NULLS NOT DISTINCT`.
  */
-export type CapabilityCacheKeyParams = Record<string, string | number | boolean>;
+export type CapabilityDiscriminators = {
+  rankingBasis?: string;
+  criteriaHash?: string;
+};
 
 export type PgCapabilityRegistryEntry = {
   name: PgCapabilityName;
@@ -142,11 +156,12 @@ export type PgCapabilityRegistryEntry = {
   run: (input: PgCapabilityRunInput) => Promise<PgCapabilityRunResult>;
   /** Which slot of `PgCapabilityViews` this capability fills. */
   viewSlot: keyof PgCapabilityViews;
-  /** Subset of input fields baked into the cache key. */
-  cacheKeyParams: (input: PgCapabilityRunInput) => CapabilityCacheKeyParams;
+  /** Discriminator extractor for this capability — see `CapabilityDiscriminators`. */
+  discriminators: (input: PgCapabilityRunInput) => CapabilityDiscriminators;
   /**
-   * Anchor extractors for the cached row. Sector/leaderboard/idea capabilities
-   * are org-wide singletons per day (no anchors); comparison fills these.
+   * Anchor extractors for the cached row. Most capabilities are org-wide
+   * singletons per day (no anchors); `sector_leaders` sets `anchorSector`,
+   * `industry_leaders` sets `anchorIndustry`.
    */
   cacheAnchors?: (
     input: PgCapabilityRunInput,
@@ -157,21 +172,29 @@ export type PgCapabilityRegistryEntry = {
  * A capability view persisted by the upstream caller (StocksScanner) and
  * passed back on the next request as `priorCapabilityViews`. Mirrors the
  * `CachedResearchObject` round-trip used by the v6 path.
+ *
+ * Identity columns map 1:1 to the new `cached_capability_views` layout
+ * (see migration `20260511150000-redesign-capability-view-cache-keys`):
+ * the row is unique on (capability_name, as_of_date, anchor_symbol,
+ * anchor_sector, anchor_industry, ranking_basis, criteria_hash).
  */
 export type CachedCapabilityView = {
-  cacheKey: string;
   capabilityName: PgCapabilityName;
   viewSchemaVersion: number;
-  /** Snapshot publish date used for keying — `snapshots.freshness.dataThrough`. */
+  /** Canonical PG `as_of_date` for the data inside this view. */
   asOfDate: string;
   /** sector_delta only — the SQL's `prior_as_of_date` for the same row. */
   priorAsOfDate?: string;
   /** Reserved for capabilities anchored to a single symbol; currently unused. */
   anchorSymbol?: string;
-  /** Reserved for capabilities anchored to a single sector; currently unused. */
+  /** Populated by `sector_leaders` only. */
   anchorSector?: string;
-  /** Reserved for capabilities anchored to a single industry (industry_leaders). */
+  /** Populated by `industry_leaders` only. */
   anchorIndustry?: string;
+  /** Single-string discriminator (rankingBasis / emphasis / etc.). */
+  rankingBasis?: string;
+  /** md5 of canonical-JSON of multi-field criteria. */
+  criteriaHash?: string;
   view:
     | import("../types").SectorLeaderboardView
     | import("../types").SectorDivergenceView

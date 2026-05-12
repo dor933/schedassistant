@@ -68,7 +68,8 @@
       "Bash(xargs -I{} sh -c 'grep -l \"skill\\\\|Skill\" \"/home/office/Dev/schedassistant/packages/database/migrations/{}\" 2>/dev/null')",
       "Bash(git mv *)",
       "Bash(git rm *)",
-      "Read(//home/office/.codex/**)"
+      "Read(//home/office/.codex/**)",
+      "Bash(docker port *)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -10,6 +10,7 @@ import {
   buildResearchObjectsForAnchors,
 } from "../researchObjectBuilder";
 import { assessCapabilityFreshness } from "./freshnessGuard";
+import { hashCapabilityParams } from "./discriminatorHash";
 import { runPgCapabilityQuery } from "./queryClient";
 import type {
   CapabilityFreshness,
@@ -40,17 +41,18 @@ export type SectorDeltaOptions = {
 };
 
 /**
- * Cache-key params for `week_over_week_sector_delta`. Both the rankingBasis
- * and directionFilter are inferred from the message and shape the SQL output,
- * so they belong in the cache key.
+ * Discriminator for `week_over_week_sector_delta`. Both `rankingBasis`
+ * and `directionFilter` shape the SQL output, so we hash them together
+ * into `criteria_hash` — a single string column can't carry both.
  */
-export function sectorDeltaCacheKeyParams(input: PgCapabilityRunInput): {
-  rankingBasis: SectorDeltaRankingBasis;
-  directionFilter: SectorDeltaDirectionFilter;
+export function sectorDeltaDiscriminators(input: PgCapabilityRunInput): {
+  criteriaHash: string;
 } {
   return {
-    rankingBasis: inferRankingBasis(input.message),
-    directionFilter: inferDirectionFilter(input.message),
+    criteriaHash: hashCapabilityParams({
+      rankingBasis: inferRankingBasis(input.message),
+      directionFilter: inferDirectionFilter(input.message),
+    }),
   };
 }
 

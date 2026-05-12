@@ -1,5 +1,8 @@
 import { observeToolCall } from "../../langfuse";
-import { executePgCapabilitiesWithCache } from "../pgCapabilities/registry";
+import {
+  executePgCapabilitiesWithCache,
+  resolvePgCapabilitiesFromCacheOnly,
+} from "../pgCapabilities/registry";
 import {
   EMPTY_CLASSIFICATION,
   type AskGrahamyState,
@@ -20,13 +23,18 @@ export async function loadPgCapabilitiesNode(
 ): Promise<Partial<AskGrahamyGraphState>> {
   return runGraphNode(state, async () => {
     const next = toAskGrahamyState(state);
-    await loadPgCapabilities(next, state.options.pgCapabilityRunner);
+    await loadPgCapabilities(
+      next,
+      state.options?.executionMode ?? "live",
+      state.options.pgCapabilityRunner,
+    );
     return patchFromAskGrahamyState(next);
   });
 }
 
 async function loadPgCapabilities(
   state: AskGrahamyState,
+  executionMode: "live" | "landing_warm",
   runner?: RunAskGrahamyGraphOptions["pgCapabilityRunner"],
 ): Promise<void> {
   const classification = state.classification ?? EMPTY_CLASSIFICATION;
@@ -46,7 +54,9 @@ async function loadPgCapabilities(
     ...(state.asOfDate ? { asOfDate: state.asOfDate } : {}),
   };
   const result = await observeToolCall(
-    "execute_pg_capabilities",
+    executionMode === "landing_warm"
+      ? "execute_pg_capabilities"
+      : "resolve_pg_capabilities_from_cache",
     {
       message: state.message,
       intent: classification.intent,
@@ -55,11 +65,16 @@ async function loadPgCapabilities(
       priorCapabilityViewCount: state.priorCapabilityViews?.length ?? 0,
     },
     () =>
-      executePgCapabilitiesWithCache(
-        input,
-        state.priorCapabilityViews ?? [],
-        runner,
-      ),
+      executionMode === "landing_warm"
+        ? executePgCapabilitiesWithCache(
+            input,
+            state.priorCapabilityViews ?? [],
+            runner,
+          )
+        : resolvePgCapabilitiesFromCacheOnly(
+            input,
+            state.priorCapabilityViews ?? [],
+          ),
   );
   state.pgCapabilityViews = result.views;
   state.capabilityViewsUpdated = result.viewsUpdated;

@@ -11,6 +11,7 @@ import {
   EMPTY_CLASSIFICATION,
   type AskGrahamyState,
   type CachedResearchObject,
+  type Classification,
 } from "../types";
 import {
   type AskGrahamyGraphState,
@@ -29,12 +30,15 @@ export async function loadResearchObjectsNode(
   });
   return runGraphNode(state, async () => {
     const next = toAskGrahamyState(state);
-    await loadResearchObjects(next);
+    await loadResearchObjects(next, state.options?.executionMode ?? "live");
     return patchFromAskGrahamyState(next);
   });
 }
 
-async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
+async function loadResearchObjects(
+  state: AskGrahamyState,
+  executionMode: "live" | "landing_warm",
+): Promise<void> {
   if (
     state.classification?.focus === "validated_evidence" ||
     state.classification?.intent === "platform_help"
@@ -45,6 +49,12 @@ async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
     return;
   }
   const classification = state.classification ?? EMPTY_CLASSIFICATION;
+
+  if (executionMode !== "landing_warm") {
+    await loadLiveResearchObjects(state, classification);
+    return;
+  }
+
   const result = await observeToolCall(
     "build_research_objects",
     {
@@ -97,6 +107,46 @@ async function loadResearchObjects(state: AskGrahamyState): Promise<void> {
   state.researchObjectsUpdated = objectsUpdated;
   state.researchObjectCacheStats = stats;
   state.warnings.push(...warnings);
+}
+
+async function loadLiveResearchObjects(
+  state: AskGrahamyState,
+  classification: Classification,
+): Promise<void> {
+  if (classification.intent !== "stock") {
+    state.researchObjects = [];
+    state.researchObjectsUpdated = [];
+    state.researchObjectCacheStats = { hits: 0, misses: 0, writes: 0 };
+    return;
+  }
+
+  const stockOnlyClassification = {
+    ...classification,
+    sectors: [],
+    industries: [],
+    regimeRequested: false,
+  };
+  const result = await observeToolCall(
+    "build_live_stock_research_objects",
+    {
+      symbols: stockOnlyClassification.symbols,
+      priorObjectCount: state.priorResearchObjects?.length ?? 0,
+    },
+    () =>
+      buildResearchObjects({
+        classification: stockOnlyClassification,
+        snapshots: state.snapshots ?? {},
+        toolOutputs: state.toolOutputs ?? {},
+        priorResearchObjects: state.priorResearchObjects ?? [],
+        includeRegimeResearchObject: false,
+        ...(state.asOfDate ? { asOfDate: state.asOfDate } : {}),
+      }),
+  );
+
+  state.researchObjects = result.objects;
+  state.researchObjectsUpdated = result.objectsUpdated;
+  state.researchObjectCacheStats = result.stats;
+  state.warnings.push(...result.warnings);
 }
 
 /**

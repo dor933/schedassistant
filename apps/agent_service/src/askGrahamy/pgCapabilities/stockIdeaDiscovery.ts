@@ -30,11 +30,11 @@ export type StockIdeaDiscoveryOptions = {
 };
 
 /**
- * Cache-key params for `stock_idea_discovery`. The candidate-pool size is a
- * static default, but rankingBasis is message-derived and reorders the
- * returned rows — so it lives in the cache key.
+ * Discriminator for `stock_idea_discovery` — message-derived
+ * `rankingBasis` reorders the returned rows, so it differentiates
+ * cached views per turn. Goes into `cached_capability_views.ranking_basis`.
  */
-export function stockIdeaDiscoveryCacheKeyParams(
+export function stockIdeaDiscoveryDiscriminators(
   input: PgCapabilityRunInput,
 ): { rankingBasis: StockIdeaView["rankingBasis"] } {
   return { rankingBasis: inferRankingBasis(input.message) };
