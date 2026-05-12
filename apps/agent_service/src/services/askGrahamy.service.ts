@@ -12,6 +12,7 @@ import type { RunAskGrahamyGraphOptions } from "../askGrahamy/askGrahamyState";
 import type {
   AskGrahamyClassifyRequest,
   AskGrahamyClassifyResponse,
+  AskGrahamyLandingWarmRequest,
   AskGrahamyRequest,
   AskGrahamyResponse,
 } from "../askGrahamy/types";
@@ -81,7 +82,7 @@ export async function runAskGrahamyForExternalUser(
  * Research Object fanout are allowed.
  */
 export async function runAskGrahamyLandingWarmForExternalUser(
-  request: AskGrahamyRequest,
+  request: AskGrahamyLandingWarmRequest,
   graphOptions: RunAskGrahamyGraphOptions = {},
 ): Promise<RunAskGrahamyForExternalUserResult> {
   const clientApplication = await resolveDefaultClientApplication();

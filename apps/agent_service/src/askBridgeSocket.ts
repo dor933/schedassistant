@@ -3,6 +3,7 @@ import { Server, type Socket } from "socket.io";
 import { logger } from "./logger";
 import {
   askGrahamyClassifyRequestSchema,
+  askGrahamyLandingWarmRequestSchema,
   askGrahamyRequestSchema,
 } from "./askGrahamy/types";
 import {
@@ -192,7 +193,7 @@ export function attachAskBridgeSocketIO(io: Server): Server {
           logger.warn("ask-bridge: ask:landing-warm received with no ack");
           return;
         }
-        const parsed = askGrahamyRequestSchema.safeParse(payload ?? {});
+        const parsed = askGrahamyLandingWarmRequestSchema.safeParse(payload ?? {});
         if (!parsed.success) {
           ack({
             ok: false,

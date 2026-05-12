@@ -15,15 +15,25 @@ export async function loadPipelineOverlaysNode(
 ): Promise<Partial<AskGrahamyGraphState>> {
   return runGraphNode(state, async () => {
     const next = toAskGrahamyState(state);
-    await loadPipelineOverlays(next, state.options.pipelineOverlayRunner);
+    await loadPipelineOverlays(
+      next,
+      state.options?.executionMode ?? "live",
+      state.options.pipelineOverlayRunner,
+    );
     return patchFromAskGrahamyState(next);
   });
 }
 
 async function loadPipelineOverlays(
   state: AskGrahamyState,
+  executionMode: "live" | "landing_warm",
   runner?: RunAskGrahamyGraphOptions["pipelineOverlayRunner"],
 ): Promise<void> {
+  if (executionMode !== "landing_warm") {
+    state.pipelineOverlayViews = {};
+    return;
+  }
+
   const classification = state.classification ?? EMPTY_CLASSIFICATION;
   const input = {
     classification,

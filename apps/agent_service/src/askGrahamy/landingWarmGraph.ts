@@ -27,7 +27,7 @@ import {
   selectToolsNode,
 } from "./nodes";
 import type {
-  AskGrahamyRequest,
+  AskGrahamyLandingWarmRequest,
   AskGrahamyResponse,
   AskGrahamyState,
 } from "./types";
@@ -121,7 +121,7 @@ const compiledAskGrahamyLandingWarmWorkflow =
 export { askGrahamyLandingWarmWorkflow };
 
 export async function runAskGrahamyLandingWarmGraph(
-  request: AskGrahamyRequest,
+  request: AskGrahamyLandingWarmRequest,
   internalUserId: number,
   options: RunAskGrahamyGraphOptions = {},
 ): Promise<AskGrahamyResponse> {

@@ -30,13 +30,9 @@ import {
   selectToolsNode,
 } from "./nodes";
 import type {
-  CachedCapabilityView,
-} from "./pgCapabilities/types";
-import type {
   AskGrahamyRequest,
   AskGrahamyResponse,
   AskGrahamyState,
-  CachedResearchObject,
 } from "./types";
 
 export type { RunAskGrahamyGraphOptions };
@@ -126,13 +122,9 @@ export async function runAskGrahamyGraph(
   internalUserId: number,
   options: RunAskGrahamyGraphOptions = {},
 ): Promise<AskGrahamyResponse> {
-  // Caller (StocksScanner) must classify via POST /api/ask-grahamy/classify,
-  // then send that classification here with any cache hits it found locally.
-  const suppliedPriorObjects =
-    (request as { priorResearchObjects?: CachedResearchObject[] }).priorResearchObjects;
-  const suppliedPriorCapabilityViews =
-    (request as { priorCapabilityViews?: CachedCapabilityView[] })
-      .priorCapabilityViews;
+  // Live caller must classify via POST /api/ask-grahamy/classify, then send
+  // cache row ids only. Full cached JSONB payloads are accepted only by the
+  // separate landing warm graph.
   const suppliedPriorObjectIds =
     (request as { priorResearchObjectIds?: string[] }).priorResearchObjectIds;
   const suppliedPriorCapabilityViewIds =
@@ -141,11 +133,9 @@ export async function runAskGrahamyGraph(
     (request as { asOfDate?: string }).asOfDate?.trim() || undefined;
 
   const hydratedPriorObjects =
-    suppliedPriorObjects ??
-    (await loadCachedResearchObjectsByIds(suppliedPriorObjectIds));
+    await loadCachedResearchObjectsByIds(suppliedPriorObjectIds);
   const hydratedPriorCapabilityViews =
-    suppliedPriorCapabilityViews ??
-    (await loadCachedCapabilityViewsByIds(suppliedPriorCapabilityViewIds));
+    await loadCachedCapabilityViewsByIds(suppliedPriorCapabilityViewIds);
 
   const state: AskGrahamyState = {
     internalUserId,
@@ -169,7 +159,7 @@ export async function runAskGrahamyGraph(
   const snapshotClient = options.snapshotClient ?? new GrahamySnapshotClient();
   const graphOptions: RunAskGrahamyGraphOptions = {
     ...options,
-    executionMode: options.executionMode ?? "live",
+    executionMode: "live",
   };
   const graphState: AskGrahamyGraphState = {
     ...state,

@@ -81,7 +81,7 @@ const classificationRecord = z
   })
   .passthrough();
 
-export const askGrahamyRequestSchema = z.object({
+const askGrahamyBaseRequestSchema = z.object({
   userId: z.string().trim().min(1),
   conversationId: z.string().trim().min(1).optional().nullable(),
   message: z.string().trim().min(1).max(4000),
@@ -92,46 +92,8 @@ export const askGrahamyRequestSchema = z.object({
    */
   classification: classificationRecord,
   /**
-   * Optional. Existing research objects the caller already has cached for
-   * the classified anchors. agent_service uses these when cache_key matches
-   * a classified key, and only builds (via v6 SQL) what the caller didn't
-   * supply. Absent or empty → every classified key is built from scratch.
-   */
-  priorResearchObjects: z.array(passthroughRecord).optional(),
-  /**
-   * Live StocksScanner turns send cache row ids instead of JSONB payloads.
-   * agent_service hydrates these from `research_objects` using its read-only
-   * DB connection before the graph runs.
-   */
-  priorResearchObjectIds: z.array(z.string().trim().regex(/^\d+$/)).optional(),
-  /**
-   * Optional. Existing pgCapability views the caller has cached for the
-   * classified intent (sector_conviction_leaderboard, sector_divergence,
-   * week_over_week_sector_delta, stock_idea_discovery, feature_screen, etc.).
-   * agent_service skips the corresponding SQL when `cache_key` matches.
-   * Mirrors `priorResearchObjects` for the non-`stock_sector_regime` intents.
-   */
-  priorCapabilityViews: z.array(passthroughRecord).optional(),
-  /**
-   * Live StocksScanner turns send cached capability-view row ids instead of
-   * payloads. The landing warmer is the only path that should create or
-   * refresh these rows.
-   */
-  priorCapabilityViewIds: z.array(z.string().trim().regex(/^\d+$/)).optional(),
-  /**
    * Optional. The canonical PG `as_of_date` the caller (StocksScanner) used
-   * when keying its `priorResearchObjects` / `priorCapabilityViews` cache
-   * lookups. When present, agent_service uses it as the cache-key date for
-   * every Research Object / capability view it builds this turn — so a
-   * Research Object built here keys with the SAME date that SS will use to
-   * look it up later, and SS's pre-fetched priors hit agent_service's
-   * cache lookup instead of falsely missing.
-   *
-   * Without this, agent_service falls back to the pipeline `daily_brief`
-   * snapshot's `dataThrough`, which usually lags the actual PG data date
-   * (e.g. snapshot says 2026-04-28 while md_features_daily already has
-   * 2026-05-08). That lag causes cache-key drift between SS (PG-aligned)
-   * and agent_service (pipeline-aligned), producing silent rebuilds.
+   * when keying its cache lookups.
    *
    * Format: `YYYY-MM-DD`. Optional for back-compat; older callers continue
    * to work via the pipeline-snapshot fallback.
@@ -142,6 +104,35 @@ export const askGrahamyRequestSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, "asOfDate must be a YYYY-MM-DD string")
     .optional(),
 });
+
+export const askGrahamyRequestSchema = askGrahamyBaseRequestSchema.extend({
+  /**
+   * Live StocksScanner turns send cache row ids, not JSONB payloads.
+   * agent_service hydrates these from `research_objects` using its read-only
+   * DB connection before the graph runs.
+   */
+  priorResearchObjectIds: z.array(z.string().trim().regex(/^\d+$/)).optional(),
+  /**
+   * Live StocksScanner turns send cached capability-view row ids. The landing
+   * warmer is the only path that should create or refresh these rows.
+   */
+  priorCapabilityViewIds: z.array(z.string().trim().regex(/^\d+$/)).optional(),
+});
+
+export const askGrahamyLandingWarmRequestSchema =
+  askGrahamyBaseRequestSchema.extend({
+    /**
+     * Worker-only compatibility hook. The current landing worker sends no
+     * priors; if a future nightly job seeds rows, payloads are accepted only
+     * on this worker graph, never on live chat turns.
+     */
+    priorResearchObjects: z.array(passthroughRecord).optional(),
+    priorCapabilityViews: z.array(passthroughRecord).optional(),
+  });
+
+export type AskGrahamyLandingWarmRequest = z.infer<
+  typeof askGrahamyLandingWarmRequestSchema
+>;
 
 export type AskGrahamyRequest = z.infer<typeof askGrahamyRequestSchema>;
 
