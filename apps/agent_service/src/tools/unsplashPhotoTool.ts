@@ -4,7 +4,7 @@ import { logger } from "../logger";
 
 const UNSPLASH_API_BASE_URL = "https://api.unsplash.com";
 const DEFAULT_TIMEOUT_MS = 8_000;
-const DEFAULT_UTM_SOURCE = "schedassistant";
+const DEFAULT_UTM_SOURCE = "grahamy";
 
 const orientationSchema = z.enum(["landscape", "portrait", "squarish"]);
 const orderBySchema = z.enum(["relevant", "latest"]);
@@ -81,6 +81,7 @@ const unsplashSearchSchema = z.object({
   autoFormat: z.boolean().optional().describe("When true, add auto=format to the returned rendered imageUrl."),
   trackDownload: z.boolean().optional().describe(
     "Set true only when every returned photo is being inserted, set, or otherwise used by the app. " +
+    "For newsletter images that are selected for the actual send, this must be true. " +
     "This triggers Unsplash's download tracking endpoint for compliance.",
   ),
 });
@@ -418,8 +419,8 @@ export function UnsplashSearchPhotosTool() {
         "downloadLocation, source size/aspect metadata, and optional rendered crop URLs. " +
         "Use minWidth/minHeight/targetAspectRatio to filter returned candidates locally; use renderWidth/renderHeight " +
         "to generate an email-ready crop via Unsplash's supported dynamic image URL parameters. " +
-        "Use trackDownload=true only when the returned photo(s) are actually being inserted, set as a header/background, " +
-        "or otherwise chosen for use.",
+        "Use trackDownload=true when the returned photo(s) are actually being inserted, set as a header/background, " +
+        "or otherwise chosen for use; for newsletter images selected for the actual send, trackDownload=true is required.",
       schema: unsplashSearchSchema,
     },
   );

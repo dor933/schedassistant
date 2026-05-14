@@ -6,6 +6,19 @@ export interface FinancialNewsEventImage {
   src: string;
   alt?: string;
   href?: string;
+  photographerName?: string;
+  photographerUrl?: string;
+  unsplashUrl?: string;
+  photographer?: {
+    name?: string;
+    username?: string | null;
+    profileUrl?: string | null;
+  };
+  attribution?: {
+    text?: string;
+    photographerUrl?: string | null;
+    unsplashUrl?: string;
+  };
 }
 
 export interface FinancialNewsEvent {
@@ -74,6 +87,49 @@ function normalizeImage(image?: FinancialNewsEvent["image"]): FinancialNewsEvent
   return src ? { ...image, src } : null;
 }
 
+function extractUnsplashCredit(image: FinancialNewsEventImage): {
+  photographerName: string;
+  photographerUrl?: string;
+  unsplashUrl: string;
+} | null {
+  const photographerName =
+    image.photographerName?.trim() ||
+    image.photographer?.name?.trim() ||
+    image.attribution?.text?.match(/^Photo by (.+) on Unsplash$/)?.[1]?.trim();
+
+  if (!photographerName) return null;
+
+  const photographerUrl =
+    image.photographerUrl?.trim() ||
+    image.photographer?.profileUrl?.trim() ||
+    image.attribution?.photographerUrl?.trim() ||
+    (image.photographer?.username
+      ? `https://unsplash.com/@${encodeURIComponent(image.photographer.username)}?utm_source=grahamy&utm_medium=referral`
+      : undefined);
+  const unsplashUrl = image.unsplashUrl?.trim() || image.attribution?.unsplashUrl?.trim() || "https://unsplash.com/?utm_source=grahamy&utm_medium=referral";
+
+  return {
+    photographerName,
+    ...(photographerUrl ? { photographerUrl } : {}),
+    unsplashUrl,
+  };
+}
+
+function renderUnsplashCredit(image: FinancialNewsEventImage): string {
+  const credit = extractUnsplashCredit(image);
+  if (!credit) return "";
+
+  const photographer = credit.photographerUrl
+    ? `<a href="${escapeHtml(credit.photographerUrl)}" style="color: #D4AF37; text-decoration: none;">${escapeHtml(credit.photographerName)}</a>`
+    : escapeHtml(credit.photographerName);
+
+  return `
+    <mj-text css-class="unsplash-credit" align="center" padding="8px 28px 0 28px" color="#9AA6B2" font-size="11px" line-height="1.4">
+      Photo by ${photographer} on <a href="${escapeHtml(credit.unsplashUrl)}" style="color: #D4AF37; text-decoration: none;">Unsplash</a>
+    </mj-text>
+  `;
+}
+
 const Band = (inner: string, padding = "0 20px") => `
   <mj-section padding="${padding}">
     <mj-column width="100%">
@@ -107,7 +163,10 @@ function renderStoryImage(event: FinancialNewsEvent, fallbackAlt: string, featur
     imageAttrs.push(`href="${escapeHtml(image.href)}"`);
   }
 
-  return `<mj-image ${imageAttrs.join(" ")} />`;
+  return `
+    <mj-image ${imageAttrs.join(" ")} />
+    ${renderUnsplashCredit(image)}
+  `;
 }
 
 function renderMeta(event: FinancialNewsEvent, align: "left" | "right"): string {

@@ -19,11 +19,31 @@ export interface Top20Stock {
   flags: { hol: boolean; mpk: boolean; hm: boolean; bio: boolean; rng: boolean; drd: boolean };
 }
 
+export interface Top20NewsletterHeroImage {
+  src: string;
+  alt?: string;
+  href?: string;
+  photographerName?: string;
+  photographerUrl?: string;
+  unsplashUrl?: string;
+  photographer?: {
+    name?: string;
+    username?: string | null;
+    profileUrl?: string | null;
+  };
+  attribution?: {
+    text?: string;
+    photographerUrl?: string | null;
+    unsplashUrl?: string;
+  };
+}
+
 export interface Top20NewsletterContent {
   recipientName?: string;
   asOfDate: string;
   sp500_12w_pct?: number | null;
   changeSummary?: string;
+  heroImage?: string | Top20NewsletterHeroImage;
   stocks: Top20Stock[];
   ctaText?: string;
   ctaUrl?: string;
@@ -66,6 +86,84 @@ function formatSp500Pct(pct: number): string {
 
 function logoUrl(symbol: string): string {
   return `https://financialmodelingprep.com/image-stock/${encodeURIComponent(symbol)}.png`;
+}
+
+function normalizeHeroImage(image?: Top20NewsletterContent["heroImage"]): Top20NewsletterHeroImage | null {
+  if (!image) return null;
+  if (typeof image === "string") {
+    const src = image.trim();
+    return src ? { src } : null;
+  }
+
+  const src = image.src.trim();
+  return src ? { ...image, src } : null;
+}
+
+function extractUnsplashCredit(image: Top20NewsletterHeroImage): {
+  photographerName: string;
+  photographerUrl?: string;
+  unsplashUrl: string;
+} | null {
+  const photographerName =
+    image.photographerName?.trim() ||
+    image.photographer?.name?.trim() ||
+    image.attribution?.text?.match(/^Photo by (.+) on Unsplash$/)?.[1]?.trim();
+
+  if (!photographerName) return null;
+
+  const photographerUrl =
+    image.photographerUrl?.trim() ||
+    image.photographer?.profileUrl?.trim() ||
+    image.attribution?.photographerUrl?.trim() ||
+    (image.photographer?.username
+      ? `https://unsplash.com/@${encodeURIComponent(image.photographer.username)}?utm_source=grahamy&utm_medium=referral`
+      : undefined);
+  const unsplashUrl = image.unsplashUrl?.trim() || image.attribution?.unsplashUrl?.trim() || "https://unsplash.com/?utm_source=grahamy&utm_medium=referral";
+
+  return {
+    photographerName,
+    ...(photographerUrl ? { photographerUrl } : {}),
+    unsplashUrl,
+  };
+}
+
+function renderUnsplashCredit(image: Top20NewsletterHeroImage): string {
+  const credit = extractUnsplashCredit(image);
+  if (!credit) return "";
+
+  const photographer = credit.photographerUrl
+    ? `<a href="${escapeHtml(credit.photographerUrl)}" style="color: #D4AF37; text-decoration: none;">${escapeHtml(credit.photographerName)}</a>`
+    : escapeHtml(credit.photographerName);
+
+  return `
+    <mj-text css-class="unsplash-credit" align="center" padding="8px 28px 0 28px" color="#9AA6B2" font-size="11px" line-height="1.4">
+      Photo by ${photographer} on <a href="${escapeHtml(credit.unsplashUrl)}" style="color: #D4AF37; text-decoration: none;">Unsplash</a>
+    </mj-text>
+  `;
+}
+
+function renderHeroImage(image?: Top20NewsletterContent["heroImage"]): string {
+  const normalized = normalizeHeroImage(image);
+  if (!normalized) return "";
+
+  const imageAttrs = [
+    `src="${escapeHtml(normalized.src)}"`,
+    `alt="${escapeHtml(normalized.alt ?? "Top 20 Attractive Stocks")}"`,
+    'height="220px"',
+    'align="center"',
+    'padding="0"',
+    'fluid-on-mobile="true"',
+  ];
+
+  if (normalized.href) {
+    imageAttrs.push(`href="${escapeHtml(normalized.href)}"`);
+  }
+
+  return StockCard(`
+    <mj-image ${imageAttrs.join(" ")} />
+    ${renderUnsplashCredit(normalized)}
+    <mj-spacer height="18px" />
+  `);
 }
 
 const LOGO_AVAILABILITY_CACHE = new Map<string, boolean>();
@@ -296,6 +394,7 @@ export async function generateTop20StocksNewsletter(content: Top20NewsletterCont
 
   const logoMap = await resolveLogoAvailability(content.stocks.map((s) => s.symbol));
   const changeSummaryBlock = renderChangeSummary(content.changeSummary);
+  const heroImage = renderHeroImage(content.heroImage);
 
   const sp500Line =
     content.sp500_12w_pct != null
@@ -410,6 +509,8 @@ export async function generateTop20StocksNewsletter(content: Top20NewsletterCont
         )}
 
         ${changeSummaryBlock}
+
+        ${heroImage}
 
         ${stockCards}
 
