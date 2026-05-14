@@ -16,3 +16,8 @@ export { RoundtableAgent } from "./RoundtableAgent";
 export { RoundtableMessage } from "./RoundtableMessage";
 export { ClientApplication } from "./ClientApplication";
 export { ApplicationAgentThread } from "./ApplicationAgentThread";
+export { NewsletterIssue } from "./NewsletterIssue";
+export type {
+  NewsletterIssueStatus,
+  NewsletterIssueType,
+} from "./NewsletterIssue";

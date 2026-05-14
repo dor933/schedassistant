@@ -33,7 +33,7 @@ import { verifyTurnToken, type TurnTokenClaims } from "../chat/codex/codexBridge
 import { lookup } from "../chat/toolRegistry";
 import { observeToolCall } from "../langfuse";
 
-const MAX_TOOL_RESULT_CHARS = 10_000;
+const MAX_TOOL_RESULT_CHARS = 100_000;
 
 /**
  * Same content-coercion rules as the legacy tool loop and the Anthropic
@@ -67,7 +67,9 @@ function sanitizeToolResultText(content: string, toolName: string): string {
   if (looksLikeError && !content.startsWith("[TOOL ERROR]")) {
     content = `[TOOL ERROR] ${content}`;
   }
-  if (content.length > MAX_TOOL_RESULT_CHARS) {
+  // `get_agent_skill` returns full skill bodies that the model needs in their
+  // entirety — truncating them defeats the purpose of loading the skill.
+  if (toolName !== "get_agent_skill" && content.length > MAX_TOOL_RESULT_CHARS) {
     const truncated = content.slice(0, MAX_TOOL_RESULT_CHARS);
     content =
       truncated +

@@ -12,6 +12,7 @@ export interface DeepAgentDelegationAttributes {
   status: "pending" | "running" | "completed" | "failed";
   groupId: string | null;
   singleChatId: string | null;
+  callerThreadId: string | null;
   error: string | null;
   createdAt: Date;
   completedAt: Date | null;
@@ -19,7 +20,7 @@ export interface DeepAgentDelegationAttributes {
 
 type CreationAttrs = Optional<
   DeepAgentDelegationAttributes,
-  "id" | "createdAt" | "result" | "completedAt" | "error"
+  "id" | "createdAt" | "result" | "completedAt" | "error" | "callerThreadId"
 >;
 
 class DeepAgentDelegation
@@ -35,6 +36,7 @@ class DeepAgentDelegation
   declare status: "pending" | "running" | "completed" | "failed";
   declare groupId: string | null;
   declare singleChatId: string | null;
+  declare callerThreadId: string | null;
   declare error: string | null;
   declare createdAt: Date;
   declare completedAt: Date | null;
@@ -85,6 +87,11 @@ DeepAgentDelegation.init(
       type: DataTypes.UUID,
       allowNull: true,
       field: "single_chat_id",
+    },
+    callerThreadId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      field: "caller_thread_id",
     },
     error: {
       type: DataTypes.TEXT,

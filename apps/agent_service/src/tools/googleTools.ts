@@ -580,6 +580,7 @@ export function googleTools(authorityAgentId: string) {
       newsletterTitle,
       newsletterHeadline,
       intro,
+      changeSummary,
       issuedAt,
       preview,
       newsEvents,
@@ -608,6 +609,7 @@ export function googleTools(authorityAgentId: string) {
           newsletterTitle,
           newsletterHeadline,
           intro,
+          changeSummary,
           issuedAt,
           preview: preview ?? subject,
           newsEvents: normalizedNewsEvents,
@@ -671,6 +673,9 @@ export function googleTools(authorityAgentId: string) {
           "Top summary line under the masthead. Defaults to a recent global market-news headline.",
         ),
         intro: z.string().optional().describe("Optional plain-text introductory note shown before the news cards."),
+        changeSummary: z.string().optional().describe(
+          "Optional plain-text change summary or previous-newsletter context. Rendered as a Change Summary block before the news cards. Do not pass HTML.",
+        ),
         issuedAt: z.string().optional().describe(
           "Human-readable issue label, for example 'May 5, 2026' or 'Tuesday Market Brief'.",
         ),
@@ -695,6 +700,7 @@ export function googleTools(authorityAgentId: string) {
       recipientName,
       asOfDate,
       sp500_12w_pct,
+      changeSummary,
       stocks,
       ctaText,
       ctaUrl,
@@ -713,10 +719,11 @@ export function googleTools(authorityAgentId: string) {
           return "Error sending top 20 stocks newsletter: no valid emails found in newsletter_registrations.";
         }
 
-        const html = generateTop20StocksNewsletter({
+        const html = await generateTop20StocksNewsletter({
           recipientName,
           asOfDate,
           sp500_12w_pct: sp500_12w_pct ?? null,
+          changeSummary,
           stocks,
           ctaText,
           ctaUrl,
@@ -778,6 +785,9 @@ export function googleTools(authorityAgentId: string) {
         sp500_12w_pct: z.number().nullish().describe(
           "Optional S&P 500 12-week change in percent (e.g. 4.2 for +4.2%, -1.5 for -1.5%). " +
           "Omit or pass null to hide the S&P 500 line.",
+        ),
+        changeSummary: z.string().optional().describe(
+          "Optional plain-text change summary or previous-newsletter context. Rendered as a Change Summary block before the stock cards. Do not pass HTML.",
         ),
         stocks: z.array(top20StockSchema).min(1).max(20).describe(
           "Ranked list of stocks to render as cards, in display order. Up to 20 entries.",

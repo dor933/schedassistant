@@ -37,7 +37,7 @@ export const AGENT_TOOLS_MCP_SERVER_NAME = "agent_tools";
 
 /** Max characters for a single tool result before we truncate. Mirrors the
  * legacy loop's `MAX_TOOL_RESULT_CHARS` so behavior parity is preserved. */
-const MAX_TOOL_RESULT_CHARS = 10_000;
+const MAX_TOOL_RESULT_CHARS = 100_000;
 
 /**
  * Sanitizes a tool result string before passing it back to the model:
@@ -57,7 +57,9 @@ function sanitizeToolResultText(content: string, toolName: string): string {
     content = `[TOOL ERROR] ${content}`;
   }
 
-  if (content.length > MAX_TOOL_RESULT_CHARS) {
+  // `get_agent_skill` returns full skill bodies that the model needs in their
+  // entirety — truncating them defeats the purpose of loading the skill.
+  if (toolName !== "get_agent_skill" && content.length > MAX_TOOL_RESULT_CHARS) {
     const truncated = content.slice(0, MAX_TOOL_RESULT_CHARS);
     content =
       truncated +
@@ -122,6 +124,9 @@ function extractZodShape(
   schema: unknown,
   toolName: string,
 ): Record<string, z.ZodTypeAny> {
+  if (schema instanceof z.ZodEffects) {
+    return extractZodShape(schema.innerType(), toolName);
+  }
   if (
     schema != null &&
     typeof schema === "object" &&

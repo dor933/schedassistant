@@ -23,6 +23,7 @@ export interface Top20NewsletterContent {
   recipientName?: string;
   asOfDate: string;
   sp500_12w_pct?: number | null;
+  changeSummary?: string;
   stocks: Top20Stock[];
   ctaText?: string;
   ctaUrl?: string;
@@ -37,20 +38,71 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+function textToHtml(s: string): string {
+  const trimmed = s.trim();
+  if (!trimmed) return "";
+
+  return trimmed
+    .split(/\n{2,}/)
+    .map((paragraph) => `<p>${escapeHtml(paragraph).replace(/\n/g, "<br />")}</p>`)
+    .join("");
+}
+
 function formatNumber(n: number, decimals: number): string {
   return n.toFixed(decimals);
 }
 
 function formatMarketCap(marketCapM: number): string {
   if (marketCapM >= 1000) {
-    return `${(marketCapM / 1000).toFixed(1)}B`;
+    return `$${(marketCapM / 1000).toFixed(1)}B`;
   }
-  return `${Math.round(marketCapM)}M`;
+  return `$${Math.round(marketCapM)}M`;
 }
 
 function formatSp500Pct(pct: number): string {
   const sign = pct >= 0 ? "+" : "";
   return `${sign}${pct.toFixed(1)}%`;
+}
+
+function logoUrl(symbol: string): string {
+  return `https://financialmodelingprep.com/image-stock/${encodeURIComponent(symbol)}.png`;
+}
+
+const LOGO_AVAILABILITY_CACHE = new Map<string, boolean>();
+const LOGO_HEAD_TIMEOUT_MS = 2500;
+
+async function symbolHasLogo(symbol: string): Promise<boolean> {
+  const cached = LOGO_AVAILABILITY_CACHE.get(symbol);
+  if (cached !== undefined) return cached;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LOGO_HEAD_TIMEOUT_MS);
+  try {
+    const res = await fetch(logoUrl(symbol), { method: "HEAD", signal: controller.signal });
+    const ok = res.ok;
+    LOGO_AVAILABILITY_CACHE.set(symbol, ok);
+    return ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveLogoAvailability(symbols: string[]): Promise<Map<string, boolean>> {
+  const unique = Array.from(new Set(symbols));
+  const results = await Promise.all(unique.map(async (s) => [s, await symbolHasLogo(s)] as const));
+  return new Map(results);
+}
+
+function initialsChipHtml(symbol: string): string {
+  const letters = escapeHtml(symbol.slice(0, 4));
+  const fontSize = letters.length >= 4 ? 13 : letters.length === 3 ? 16 : 18;
+  return `
+    <div style="background-color:#1F2530;border:1px solid #2A3441;border-radius:10px;width:56px;height:56px;line-height:56px;text-align:center;color:#F4D55F;font-size:${fontSize}px;font-weight:700;letter-spacing:0.5px;">
+      ${letters}
+    </div>
+  `;
 }
 
 const Band = (inner: string, padding = "0 20px") => `
@@ -62,21 +114,39 @@ const Band = (inner: string, padding = "0 20px") => `
 `;
 
 const StockCard = (inner: string) => `
-  <mj-section padding="0 20px 18px 20px">
-    <mj-column width="100%" background-color="#151922" border="1px solid #2A3441" border-radius="8px" padding="0" css-class="stock-card">
+  <mj-section padding="0 20px 16px 20px">
+    <mj-column width="100%" background-color="#151922" border="1px solid #232B38" border-radius="12px" padding="0" css-class="stock-card">
       ${inner}
     </mj-column>
   </mj-section>
 `;
 
+function renderChangeSummary(changeSummary?: string): string {
+  const body = changeSummary ? textToHtml(changeSummary) : "";
+  if (!body) return "";
+
+  return `
+    <mj-section padding="0 20px 22px 20px">
+      <mj-column width="100%" background-color="#10161D" border="1px solid #253140" border-radius="8px" padding="0" css-class="summary-card">
+        <mj-text padding="18px 22px 8px 22px" color="#78D6A3" font-size="11px" line-height="1.4" font-weight="700" letter-spacing="1.4px" text-transform="uppercase" css-class="summary-title">
+          Short Brief
+        </mj-text>
+        <mj-text padding="0 22px 18px 22px" color="#E9EEF4" font-size="14px" line-height="1.65" font-weight="400" css-class="summary-content">
+          ${body}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  `;
+}
+
 function bucketColor(bucket: Top20Stock["bucket"]): string {
   switch (bucket) {
     case "cyclical":
-      return "#E67E22";
+      return "#F59E0B";
     case "financial":
-      return "#2E86C1";
+      return "#3B82F6";
     default:
-      return "#27AE60";
+      return "#22C55E";
   }
 }
 
@@ -84,7 +154,7 @@ function renderFlagsHtml(flags: Top20Stock["flags"]): string {
   const active: Array<{ label: string; color: string }> = [];
   if (flags.hol) active.push({ label: "HOL", color: "#E67E22" });
   if (flags.mpk) active.push({ label: "MPK", color: "#E74C3C" });
-  if (flags.hm)  active.push({ label: "HM",  color: "#F1C40F" });
+  if (flags.hm) active.push({ label: "HM", color: "#F1C40F" });
   if (flags.bio) active.push({ label: "BIO", color: "#8E44AD" });
   if (flags.rng) active.push({ label: "RNG", color: "#2E86C1" });
   if (flags.drd) active.push({ label: "DRD", color: "#D63384" });
@@ -94,112 +164,129 @@ function renderFlagsHtml(flags: Top20Stock["flags"]): string {
   return active
     .map(
       (f) =>
-        `<span style="display:inline-block;background-color:${f.color};color:#FFFFFF;font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;margin-right:4px;letter-spacing:0.5px;">${f.label}</span>`,
+        `<span style="display:inline-block;background-color:${f.color};color:#FFFFFF;font-size:10px;font-weight:700;padding:3px 8px;border-radius:4px;margin:0 4px 4px 0;letter-spacing:0.6px;line-height:1.4;">${f.label}</span>`,
     )
     .join("");
 }
 
-function renderStockCard(stock: Top20Stock): string {
+function metricCell(label: string, value: string): string {
+  return `
+    <td style="width:33.33%;padding:0 8px 14px 0;vertical-align:top;">
+      <div style="color:#6B7785;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;line-height:1.3;">${label}</div>
+      <div style="color:#E9EEF4;font-size:15px;font-weight:600;line-height:1.2;padding-top:4px;">${value}</div>
+    </td>
+  `;
+}
+
+function renderStockCard(stock: Top20Stock, hasLogo: boolean): string {
   const bucketLabel = stock.bucket.toUpperCase();
   const bColor = bucketColor(stock.bucket);
   const mktCap = formatMarketCap(stock.marketCapM);
   const flagsHtml = renderFlagsHtml(stock.flags);
   const hasFlags = flagsHtml.length > 0;
 
-  const flagsSection = hasFlags
+  const logoCellHtml = hasLogo
     ? `
-    <mj-section padding="8px 20px 0 20px">
-      <mj-column width="100%" padding="0">
-        <mj-divider border-width="1px" border-style="dashed" border-color="#2A3441" padding="0" />
-      </mj-column>
-    </mj-section>
-    <mj-section padding="8px 20px 14px 20px">
-      <mj-column width="100%" padding="0">
-        <mj-text padding="0" color="#9AA6B2" font-size="12px" line-height="1.4" css-class="flags-row">
-          ${flagsHtml}
-        </mj-text>
-      </mj-column>
-    </mj-section>
-    `
-    : `
-    <mj-section padding="0 20px 14px 20px">
-      <mj-column width="100%" padding="0">
-        <mj-text padding="0" color="transparent" font-size="1px">&nbsp;</mj-text>
-      </mj-column>
-    </mj-section>
-    `;
+        <div style="background-color:#FFFFFF;border-radius:10px;padding:6px;width:56px;height:56px;line-height:0;">
+          <img src="${escapeHtml(logoUrl(stock.symbol))}" alt="${escapeHtml(stock.symbol)}" width="56" height="56" style="display:block;width:56px;height:56px;border:0;outline:none;" />
+        </div>
+      `
+    : initialsChipHtml(stock.symbol);
+
+  const headerRow = `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+      <tr>
+        <td align="left" style="color:#6B7785;font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;line-height:1.3;">
+          Rank #${stock.rank}
+        </td>
+        <td align="right" style="color:#4DD0C4;font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;line-height:1.3;">
+          ${escapeHtml(stock.sector)}
+        </td>
+      </tr>
+    </table>
+  `;
+
+  const heroRow = `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+      <tr>
+        <td width="68" valign="middle" style="width:68px;padding-right:14px;">
+          ${logoCellHtml}
+        </td>
+        <td valign="middle" style="vertical-align:middle;">
+          <div style="color:#F4D55F;font-size:24px;line-height:1.1;font-weight:700;">${escapeHtml(stock.symbol)}</div>
+          <div style="color:#D6DCE3;font-size:13px;line-height:1.35;font-weight:500;padding-top:4px;">${escapeHtml(stock.company)}</div>
+          <div style="padding-top:8px;line-height:1.4;">
+            <span style="display:inline-block;background-color:${bColor};color:#0B0E12;font-size:10px;font-weight:700;padding:3px 9px;border-radius:4px;letter-spacing:0.6px;vertical-align:middle;">${bucketLabel}</span>
+            <span style="color:#6B7785;font-size:11px;margin-left:8px;vertical-align:middle;">${escapeHtml(stock.industry)}</span>
+          </div>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  const scoreRow = `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:separate;background-color:#0E1219;border-radius:10px;">
+      <tr>
+        <td valign="middle" style="padding:14px 0 14px 18px;vertical-align:middle;width:40%;">
+          <div style="color:#6B7785;font-size:10px;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;line-height:1.2;">Total</div>
+          <div style="color:#F4D55F;font-size:32px;line-height:1;font-weight:700;padding-top:4px;">${stock.scores.total}</div>
+        </td>
+        <td valign="middle" align="right" style="padding:14px 18px 14px 0;vertical-align:middle;color:#9AA6B2;font-size:12px;line-height:1.85;text-align:right;">
+          <span style="margin-left:10px;">V <strong style="color:#E9EEF4;font-weight:600;">${stock.scores.v}</strong></span>
+          <span style="margin-left:10px;">Q <strong style="color:#E9EEF4;font-weight:600;">${stock.scores.q}</strong></span>
+          <span style="margin-left:10px;">H <strong style="color:#E9EEF4;font-weight:600;">${stock.scores.h}</strong></span>
+          <span style="margin-left:10px;">G <strong style="color:#E9EEF4;font-weight:600;">${stock.scores.g}</strong></span>
+          <span style="margin-left:10px;">M <strong style="color:#E9EEF4;font-weight:600;">${stock.scores.m}</strong></span>
+        </td>
+      </tr>
+    </table>
+  `;
+
+  const metricsRow = `
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+      <tr>
+        ${metricCell("Price", `$${formatNumber(stock.price, 2)}`)}
+        ${metricCell("Market Cap", mktCap)}
+        ${metricCell("P/E TTM", formatNumber(stock.peTtm, 1))}
+      </tr>
+      <tr>
+        ${metricCell("P/B", formatNumber(stock.pb, 2))}
+        ${metricCell("ROE", `${formatNumber(stock.roe, 1)}%`)}
+        ${metricCell("Piotroski", `${stock.piotroski}/9`)}
+      </tr>
+    </table>
+  `;
 
   return StockCard(`
-    <mj-section padding="20px 20px 0 20px">
-      <mj-column width="50%" padding="0">
-        <mj-text padding="0" color="#9AA6B2" font-size="12px" line-height="1.3" font-weight="500" css-class="rank-label">
-          #${stock.rank}
-        </mj-text>
-        <mj-text padding="2px 0 0 0" color="#D4AF37" font-size="22px" line-height="1.1" font-weight="700" css-class="symbol-label">
-          ${escapeHtml(stock.symbol)}
-        </mj-text>
-      </mj-column>
-      <mj-column width="50%" padding="0">
-        <mj-text padding="0" align="right" color="#4DD0C4" font-size="12px" line-height="1.3" font-weight="600" text-transform="uppercase" css-class="sector-label">
-          ${escapeHtml(stock.sector)}
-        </mj-text>
-        <mj-text padding="2px 0 0 0" align="right" color="#9AA6B2" font-size="11px" line-height="1.3" css-class="industry-label">
-          ${escapeHtml(stock.industry)}
-        </mj-text>
-      </mj-column>
-    </mj-section>
+    <mj-text padding="18px 22px 0 22px" css-class="card-header">
+      ${headerRow}
+    </mj-text>
 
-    <mj-section padding="8px 20px 0 20px">
-      <mj-column width="100%" padding="0">
-        <mj-text padding="0 0 6px 0" color="#FFFFFF" font-size="15px" line-height="1.3" font-weight="500" css-class="company-name">
-          ${escapeHtml(stock.company)}&nbsp;&nbsp;<span style="display:inline-block;background-color:${bColor};color:#FFFFFF;font-size:10px;font-weight:700;padding:2px 8px;border-radius:3px;letter-spacing:0.6px;vertical-align:middle;">${bucketLabel}</span>
-        </mj-text>
-      </mj-column>
-    </mj-section>
+    <mj-text padding="14px 22px 0 22px" css-class="card-hero">
+      ${heroRow}
+    </mj-text>
 
-    <mj-section padding="10px 20px 0 20px">
-      <mj-column width="100%" padding="0">
-        <mj-divider border-width="1px" border-style="solid" border-color="#2A3441" padding="0" />
-      </mj-column>
-    </mj-section>
+    <mj-text padding="18px 22px 0 22px" css-class="card-score">
+      ${scoreRow}
+    </mj-text>
 
-    <mj-section padding="12px 20px 0 20px">
-      <mj-column width="100%" padding="0">
-        <mj-text padding="0" color="#9AA6B2" font-size="12px" line-height="1.5" css-class="score-bar">
-          <span style="margin-right:10px;">V: <strong style="color:#D6DCE3;">${stock.scores.v}</strong></span>
-          <span style="margin-right:10px;">Q: <strong style="color:#D6DCE3;">${stock.scores.q}</strong></span>
-          <span style="margin-right:10px;">H: <strong style="color:#D6DCE3;">${stock.scores.h}</strong></span>
-          <span style="margin-right:10px;">G: <strong style="color:#D6DCE3;">${stock.scores.g}</strong></span>
-          <span style="margin-right:14px;">M: <strong style="color:#D6DCE3;">${stock.scores.m}</strong></span>
-          <span>TOTAL: <strong style="color:#D4AF37;font-size:15px;">${stock.scores.total}</strong></span>
-        </mj-text>
-      </mj-column>
-    </mj-section>
+    <mj-text padding="18px 22px 4px 22px" css-class="card-metrics">
+      ${metricsRow}
+    </mj-text>
 
-    <mj-section padding="10px 20px 0 20px">
-      <mj-column width="100%" padding="0">
-        <mj-divider border-width="1px" border-style="solid" border-color="#2A3441" padding="0" />
-      </mj-column>
-    </mj-section>
-
-    <mj-section padding="12px 20px 0 20px">
-      <mj-column width="100%" padding="0">
-        <mj-text padding="0" color="#9AA6B2" font-size="12px" line-height="1.6" css-class="metrics-row">
-          <span style="margin-right:12px;">Price: <strong style="color:#E9EEF4;">$${formatNumber(stock.price, 2)}</strong></span>
-          <span style="margin-right:12px;">Mkt Cap: <strong style="color:#E9EEF4;">${mktCap}</strong></span>
-          <span style="margin-right:12px;">P/E TTM: <strong style="color:#E9EEF4;">${formatNumber(stock.peTtm, 1)}</strong></span>
-          <span style="margin-right:12px;">P/B: <strong style="color:#E9EEF4;">${formatNumber(stock.pb, 2)}</strong></span>
-          <span style="margin-right:12px;">ROE%: <strong style="color:#E9EEF4;">${formatNumber(stock.roe, 1)}</strong></span>
-          <span>Piotroski: <strong style="color:#E9EEF4;">${stock.piotroski}/9</strong></span>
-        </mj-text>
-      </mj-column>
-    </mj-section>
-
-    ${flagsSection}
+    ${
+      hasFlags
+        ? `
+    <mj-text padding="6px 22px 18px 22px" css-class="card-flags">
+      ${flagsHtml}
+    </mj-text>
+    `
+        : `<mj-spacer height="14px" />`
+    }
   `);
 }
 
-export function generateTop20StocksNewsletter(content: Top20NewsletterContent): string {
+export async function generateTop20StocksNewsletter(content: Top20NewsletterContent): Promise<string> {
   if ((content.ctaText && !content.ctaUrl) || (content.ctaUrl && !content.ctaText)) {
     throw new Error("'ctaText' and 'ctaUrl' must be provided together.");
   }
@@ -207,22 +294,27 @@ export function generateTop20StocksNewsletter(content: Top20NewsletterContent): 
   const asOfDate = escapeHtml(content.asOfDate);
   const preview = `Top 20 Attractive Stocks as of ${asOfDate}`;
 
+  const logoMap = await resolveLogoAvailability(content.stocks.map((s) => s.symbol));
+  const changeSummaryBlock = renderChangeSummary(content.changeSummary);
+
   const sp500Line =
     content.sp500_12w_pct != null
       ? `
-      <mj-text align="center" padding="6px 0 0 0" color="#4DD0C4" font-size="13px" line-height="1.4" font-weight="600" css-class="sp500-line">
-        S&amp;P 500 (12W): ${escapeHtml(formatSp500Pct(content.sp500_12w_pct))}
+      <mj-text align="center" padding="10px 0 0 0" color="#4DD0C4" font-size="13px" line-height="1.4" font-weight="600" letter-spacing="0.4px" css-class="sp500-line">
+        S&amp;P 500 · 12 Weeks &nbsp;<strong style="color:#E9EEF4;">${escapeHtml(formatSp500Pct(content.sp500_12w_pct))}</strong>
       </mj-text>
       `
       : "";
 
-  const stockCards = content.stocks.map((stock) => renderStockCard(stock)).join("");
+  const stockCards = content.stocks
+    .map((stock) => renderStockCard(stock, logoMap.get(stock.symbol) ?? true))
+    .join("");
 
   const cta =
     content.ctaText && content.ctaUrl
       ? `
-      <mj-text align="center" padding="8px 0 30px 0" font-family="Inter, 'Roboto', sans-serif">
-        <a href="${escapeHtml(content.ctaUrl)}" class="newsletter-button" style="background: linear-gradient(135deg, #D4AF37 0%, #F4D03F 50%, #D4AF37 100%); color: #101419; text-decoration: none; padding: 16px 34px; border-radius: 6px; font-weight: 700; font-size: 14px; display: inline-block; letter-spacing: 0.6px; text-transform: uppercase; box-shadow: 0px 4px 15px rgba(212, 175, 55, 0.24); border: 1px solid #D4AF37; white-space: nowrap;">
+      <mj-text align="center" padding="14px 0 30px 0" font-family="Inter, 'Roboto', sans-serif">
+        <a href="${escapeHtml(content.ctaUrl)}" class="newsletter-button" style="background: linear-gradient(135deg, #D4AF37 0%, #F4D55F 50%, #D4AF37 100%); color: #101419; text-decoration: none; padding: 16px 34px; border-radius: 6px; font-weight: 700; font-size: 14px; display: inline-block; letter-spacing: 0.6px; text-transform: uppercase; box-shadow: 0px 4px 15px rgba(212, 175, 55, 0.24); border: 1px solid #D4AF37; white-space: nowrap;">
           ${escapeHtml(content.ctaText)}
         </a>
       </mj-text>
@@ -242,30 +334,41 @@ export function generateTop20StocksNewsletter(content: Top20NewsletterContent): 
 
         <mj-style inline="inline">
           .eyebrow { color: #78D6A3 !important; }
-          .newsletter-title { color: #D4AF37 !important; }
+          .newsletter-title { color: #F4D55F !important; }
           .newsletter-subtitle { color: #D6DCE3 !important; }
           .sp500-line { color: #4DD0C4 !important; }
-          .rank-label { color: #9AA6B2 !important; }
-          .symbol-label { color: #D4AF37 !important; }
-          .sector-label { color: #4DD0C4 !important; }
-          .industry-label { color: #9AA6B2 !important; }
-          .company-name { color: #FFFFFF !important; }
-          .score-bar { color: #9AA6B2 !important; }
-          .metrics-row { color: #9AA6B2 !important; }
-          .flags-row { color: #9AA6B2 !important; }
+          .summary-title { color: #78D6A3 !important; }
+          .summary-content, .summary-content * { color: #E9EEF4 !important; }
+          .summary-content p { margin: 0 0 12px 0; }
+          .summary-content p:last-child { margin-bottom: 0; }
           .fine-print { font-size: 13px; color: #9AA6B2 !important; line-height: 1.5; }
           .footer-line { padding-bottom: 10px; }
         </mj-style>
 
         <mj-style>
           @media only screen and (max-width:600px) {
-            .newsletter-title div { font-size: 26px !important; }
-            .newsletter-subtitle div { font-size: 16px !important; }
-            .symbol-label div { font-size: 18px !important; }
-            .company-name div { font-size: 13px !important; }
-            .score-bar div, .metrics-row div { font-size: 11px !important; }
+            .newsletter-title div { font-size: 28px !important; }
+            .newsletter-subtitle div { font-size: 15px !important; }
+            .summary-content div, .summary-content p { font-size: 13.5px !important; }
+            .stock-card { border-radius: 10px !important; }
+            .card-header td { font-size: 10px !important; }
+            .card-hero td > div:first-child { font-size: 20px !important; }
+            .card-hero td > div:nth-child(2) { font-size: 12.5px !important; }
+            .card-score td:first-child > div:nth-child(2) { font-size: 28px !important; }
+            .card-score td:last-child { font-size: 11px !important; line-height: 1.7 !important; }
+            .card-score td:last-child span { margin-left: 7px !important; }
+            .card-metrics td > div:first-child { font-size: 9.5px !important; }
+            .card-metrics td > div:nth-child(2) { font-size: 13.5px !important; }
             .fine-print { font-size: 12px !important; }
             .footer-line { padding-bottom: 14px !important; }
+          }
+          @media only screen and (max-width:420px) {
+            .card-hero td:first-child { width: 56px !important; padding-right: 10px !important; }
+            .card-hero td:first-child > div { width: 44px !important; height: 44px !important; padding: 4px !important; }
+            .card-hero td:first-child img { width: 44px !important; height: 44px !important; }
+            .card-score td:first-child { padding-left: 14px !important; }
+            .card-score td:last-child { padding-right: 14px !important; font-size: 10.5px !important; }
+            .card-score td:last-child span { margin-left: 5px !important; }
           }
         </mj-style>
       </mj-head>
@@ -277,7 +380,7 @@ export function generateTop20StocksNewsletter(content: Top20NewsletterContent): 
           <mj-image src="https://grahamy.com/assets/logo_horizontal-C-hWewqw.png"
             alt="Grahamy" width="200px" align="center" padding="0" />
           `,
-          "44px 20px 24px 20px",
+          "44px 20px 22px 20px",
         )}
 
         ${Band(
@@ -289,22 +392,24 @@ export function generateTop20StocksNewsletter(content: Top20NewsletterContent): 
 
         ${Band(
           `
-          <mj-text align="center" padding="0 0 8px 0" color="#78D6A3" font-size="13px" line-height="1.4" font-weight="700" letter-spacing="1.2px" text-transform="uppercase" css-class="eyebrow">
+          <mj-text align="center" padding="0 0 10px 0" color="#78D6A3" font-size="12px" line-height="1.4" font-weight="700" letter-spacing="2px" text-transform="uppercase" css-class="eyebrow">
             Stock Screener
           </mj-text>
 
-          <mj-text align="center" padding="0 0 8px 0" color="#D4AF37" font-size="36px" line-height="1.1" font-weight="650" css-class="newsletter-title">
+          <mj-text align="center" padding="0 0 10px 0" color="#F4D55F" font-size="34px" line-height="1.1" font-weight="700" letter-spacing="-0.3px" css-class="newsletter-title">
             Top 20 Attractive Stocks
           </mj-text>
 
-          <mj-text align="center" padding="0 24px 0 24px" color="#D6DCE3" font-size="18px" line-height="1.45" font-weight="400" css-class="newsletter-subtitle">
+          <mj-text align="center" padding="0 24px 0 24px" color="#D6DCE3" font-size="16px" line-height="1.45" font-weight="400" css-class="newsletter-subtitle">
             As of ${asOfDate}
           </mj-text>
 
           ${sp500Line}
           `,
-          "0 20px 28px 20px",
+          "0 20px 30px 20px",
         )}
+
+        ${changeSummaryBlock}
 
         ${stockCards}
 
@@ -320,7 +425,7 @@ export function generateTop20StocksNewsletter(content: Top20NewsletterContent): 
 
           <mj-text css-class="fine-print footer-line" align="center" padding="0 0 10px 0" color="#9AA6B2">
             Need assistance? Our team is available at
-            <a href="mailto:office@grahamy.com" style="color: #D4AF37; text-decoration: none;">office@grahamy.com</a>
+            <a href="mailto:office@grahamy.com" style="color: #F4D55F; text-decoration: none;">office@grahamy.com</a>
           </mj-text>
 
           <mj-text css-class="fine-print" align="center" padding="0" color="#657180">

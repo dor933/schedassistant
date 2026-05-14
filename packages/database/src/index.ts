@@ -40,3 +40,8 @@ export { AgentUserScope } from "./models/AgentUserScope";
 export { OrganizationVendorApiKey } from "./models/OrganizationVendorApiKey";
 export { ClientApplication } from "./models/ClientApplication";
 export { ApplicationAgentThread } from "./models/ApplicationAgentThread";
+export { NewsletterIssue } from "./models/NewsletterIssue";
+export type {
+  NewsletterIssueStatus,
+  NewsletterIssueType,
+} from "./models/NewsletterIssue";

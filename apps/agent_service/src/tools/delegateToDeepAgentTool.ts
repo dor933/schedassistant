@@ -75,6 +75,7 @@ export function DelegateToDeepAgentTool(
         status: "pending",
         groupId,
         singleChatId,
+        callerThreadId,
       });
 
       const queue = getDeepAgentQueue();
@@ -192,6 +193,7 @@ export function DelegateWebSearchTool(
         status: "pending",
         groupId,
         singleChatId,
+        callerThreadId,
       });
 
       const queue = getDeepAgentQueue();

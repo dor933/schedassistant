@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Worker } from "bullmq";
 import type { CompiledStateGraph } from "@langchain/langgraph";
 
@@ -11,6 +12,7 @@ import { executeChatTurn, storeMessageOnly } from "../chat/executeChatTurn";
 import { createThreadLockRedis, withThreadLock, withThreadLockTimeout, LockTimeoutError } from "./threadLock";
 import { emitAgentReply, emitAgentTyping } from "../socket";
 import { ensureCanonicalThreadId } from "../sessionsManagment/canonicalThread";
+import { ensureSession } from "../sessionsManagment/sessionRegistry";
 import { writeConversationMessage } from "../sessionsManagment/conversationMessageWriter";
 import { popConsultationOrigin } from "../consultationChain";
 import { agentChatQueue } from "../queues/agentChat.bull";
@@ -27,6 +29,57 @@ const lockRedis = createThreadLockRedis(redisConfig);
 const USER_LOCK_WAIT_TIMEOUT_MS = Number(
   process.env.AGENT_CHAT_USER_LOCK_WAIT_TIMEOUT_MS ?? "30000",
 );
+
+async function ensureAgentActiveThreadId(agentId: string): Promise<string> {
+  const agent = await Agent.findByPk(agentId, {
+    attributes: ["id", "activeThreadId"],
+  });
+  if (!agent) {
+    throw Object.assign(new Error("Agent not found."), { status: 404 });
+  }
+  if (agent.activeThreadId) {
+    return agent.activeThreadId;
+  }
+
+  const threadId = crypto.randomUUID();
+  await ensureSession(threadId, null, { agentId: agent.id });
+  await Agent.update(
+    { activeThreadId: threadId },
+    { where: { id: agent.id } },
+  );
+  logger.info("Created canonical thread (internal callback)", {
+    threadId,
+    agentId: agent.id,
+  });
+  return threadId;
+}
+
+async function buildDelegationRotationContext(
+  requestId: string | undefined,
+  currentThreadId: string,
+): Promise<string | null> {
+  if (!requestId?.startsWith("delegation-")) {
+    return null;
+  }
+
+  const delegationId = requestId.replace("delegation-", "");
+  const delegation = await DeepAgentDelegation.findByPk(delegationId, {
+    attributes: ["callerThreadId"],
+  });
+  const callerThreadId = delegation?.callerThreadId ?? null;
+  if (!callerThreadId || callerThreadId === currentThreadId) {
+    return null;
+  }
+
+  return (
+    `[Delegation context]\n` +
+    `This delegation was initiated on caller thread ${callerThreadId}, ` +
+    `but the caller's current active thread is ${currentThreadId}. ` +
+    `Executor workspace artifacts for this delegation, if any, were written ` +
+    `under \`threads/${callerThreadId}/\` in this agent's workspace. Use that ` +
+    `thread folder when referencing files from the delegated work.`
+  );
+}
 
 export type AgentChatWorkerHandle = {
   worker: Worker<AgentChatJobData, AgentChatJobResult, string>;
@@ -176,6 +229,8 @@ export function startAgentChatWorker(
         requestId?.startsWith("delegation-") ||
         requestId?.startsWith("consultation-chain-") ||
         requestId?.startsWith("pr-approved-");
+      const shouldUseAgentActiveThread =
+        isSystemInternalRequest && !groupId && !singleChatId;
 
       // (Removed: busy-bounce that auto-replied "The Epic Orchestrator is
       // currently executing ..." whenever any task was in_progress system-wide.
@@ -261,11 +316,13 @@ export function startAgentChatWorker(
 
       try {
         const result = await acquireLock(async () => {
-          const threadId = await ensureCanonicalThreadId({
-            userId,
-            groupId: groupId ?? null,
-            singleChatId: singleChatId ?? null,
-          });
+          const threadId = shouldUseAgentActiveThread
+            ? await ensureAgentActiveThreadId(resolvedAgentId)
+            : await ensureCanonicalThreadId({
+                userId,
+                groupId: groupId ?? null,
+                singleChatId: singleChatId ?? null,
+              });
           threadIdForError = threadId;
 
           emitAgentTyping({
@@ -299,10 +356,18 @@ export function startAgentChatWorker(
             });
           }
 
+          const delegationRotationContext = await buildDelegationRotationContext(
+            requestId,
+            threadId,
+          );
+          const turnMessage = delegationRotationContext
+            ? `${delegationRotationContext}\n\n${message}`
+            : message;
+
           const turnResult = await executeChatTurn(activeGraph, {
             userId,
             threadId,
-            message,
+            message: turnMessage,
             groupId,
             singleChatId,
             agentId,

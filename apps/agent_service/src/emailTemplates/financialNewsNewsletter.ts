@@ -35,6 +35,7 @@ export interface FinancialNewsNewsletterContent {
   newsletterTitle?: string;
   newsletterHeadline?: string;
   intro?: string;
+  changeSummary?: string;
   issuedAt?: string;
   preview?: string;
   newsEvents: FinancialNewsEvent[];
@@ -168,6 +169,24 @@ function renderEmptyState(): string {
   );
 }
 
+function renderChangeSummary(changeSummary: string | undefined, align: "left" | "right"): string {
+  const body = changeSummary ? textToHtml(changeSummary) : "";
+  if (!body) return "";
+
+  return StoryCard(
+    `
+      <mj-text css-class="summary-title" align="${align}" padding="20px 28px 8px 28px" color="#78D6A3" font-size="12px" line-height="1.4" font-weight="700" letter-spacing="1.1px" text-transform="uppercase">
+        Short Brief
+      </mj-text>
+
+      <mj-text css-class="summary-content" align="${align}" padding="0 28px 22px 28px" color="#E9EEF4" font-size="15px" line-height="1.65" font-weight="400">
+        ${body}
+      </mj-text>
+    `,
+    "0 20px 22px 20px",
+  );
+}
+
 export const financialNewsNewsletterTemplate = (content: FinancialNewsNewsletterContent): string => {
   if ((content.ctaText && !content.ctaUrl) || (content.ctaUrl && !content.ctaText)) {
     throw new Error("'ctaText' and 'ctaUrl' must be provided together.");
@@ -179,6 +198,7 @@ export const financialNewsNewsletterTemplate = (content: FinancialNewsNewsletter
   const newsletterHeadline = content.newsletterHeadline ?? "Recent market-moving stories from around the world";
   const preview = escapeHtml(content.preview ?? newsletterHeadline);
   const issueLine = content.issuedAt ? escapeHtml(content.issuedAt) : "Latest issue";
+  const changeSummary = renderChangeSummary(content.changeSummary, align);
   const stories = content.newsEvents.length
     ? content.newsEvents.map((event, index) => renderNewsEvent(event, index, align)).join("")
     : renderEmptyState();
@@ -212,6 +232,10 @@ export const financialNewsNewsletterTemplate = (content: FinancialNewsNewsletter
           .story-content, .story-content * { color: #E9EEF4 !important; }
           .story-content p { margin: 0 0 12px 0; }
           .story-content p:last-child { margin-bottom: 0; }
+          .summary-title { color: #78D6A3 !important; letter-spacing: 1.1px; }
+          .summary-content, .summary-content * { color: #E9EEF4 !important; }
+          .summary-content p { margin: 0 0 12px 0; }
+          .summary-content p:last-child { margin-bottom: 0; }
           .story-meta { color: #9AA6B2 !important; letter-spacing: 0.6px; }
           .fine-print { font-size: 13px; color: #9AA6B2 !important; line-height: 1.5; }
           .footer-line { padding-bottom: 10px; }
@@ -223,6 +247,7 @@ export const financialNewsNewsletterTemplate = (content: FinancialNewsNewsletter
             .newsletter-headline div { font-size: 18px !important; }
             .feature-headline div { font-size: 22px !important; }
             .story-headline div { font-size: 19px !important; }
+            .summary-content div, .summary-content p { font-size: 14px !important; }
             .story-content div, .story-content p { font-size: 14px !important; }
             .fine-print { font-size: 12px !important; }
             .footer-line { padding-bottom: 14px !important; }
@@ -262,6 +287,8 @@ export const financialNewsNewsletterTemplate = (content: FinancialNewsNewsletter
         `,
           "0 20px 28px 20px",
         )}
+
+        ${changeSummary}
 
         ${stories}
 

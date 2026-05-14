@@ -59,6 +59,7 @@ export function SyncDelegateToDeepAgentTool(
         status: "pending",
         groupId,
         singleChatId,
+        callerThreadId,
       });
 
       const queue = getDeepAgentQueue();

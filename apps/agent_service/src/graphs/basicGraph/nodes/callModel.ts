@@ -46,6 +46,11 @@ import { QueryDatabaseTool } from "../../../tools/queryDatabaseTool";
 import { UnsplashSearchPhotosTool } from "../../../tools/unsplashPhotoTool";
 import { SendFileToUserTool } from "../../../tools/sendFileTool";
 import { InvokeApplicationAgentTool } from "../../../tools/invokeApplicationAgentTool";
+import {
+  GetLatestNewsletterIssueTool,
+  RecordNewsletterIssueTool,
+  UpdateNewsletterIssuePathTool,
+} from "../../../tools/newsletterIssueTool";
 import { loadActiveToolSlugs } from "../../../tools/resolveAgentTools";
 import getMcpTools from "../../../mcpClient";
 import { instrumentFsWriteTools } from "../../../workspace/instrumentFsWriteTools";
@@ -59,7 +64,7 @@ import { observeToolCall } from "../../../langfuse";
 const MAX_TOOL_ROUNDS = 10;
 
 /** Max characters for a single tool result before truncation. */
-const MAX_TOOL_RESULT_CHARS = 30_000;
+const MAX_TOOL_RESULT_CHARS = 100_000;
 
 /**
  * Sanitizes a tool result before passing it back to the LLM:
@@ -76,8 +81,9 @@ function sanitizeToolResult(content: string, toolName: string | undefined): stri
     content = `[TOOL ERROR] ${content}`;
   }
 
-  // Truncate excessively long results
-  if (content.length > MAX_TOOL_RESULT_CHARS) {
+  // `get_agent_skill` returns full skill bodies that the model needs in their
+  // entirety — truncating them defeats the purpose of loading the skill.
+  if (toolName !== "get_agent_skill" && content.length > MAX_TOOL_RESULT_CHARS) {
     const truncated = content.slice(0, MAX_TOOL_RESULT_CHARS);
     content =
       truncated +
@@ -348,7 +354,7 @@ export async function callModelNode(
   if (has("delegate_to_deep_agent"))
     tools.push(DelegateToDeepAgentTool(agentId, state.userId, state.groupId, state.singleChatId, state.threadId));
   if (has("delegate_to_epic_orchestrator"))
-    tools.push(DelegateToEpicOrchestratorTool(agentId, state.userId, state.groupId, state.singleChatId));
+    tools.push(DelegateToEpicOrchestratorTool(agentId, state.userId, state.groupId, state.singleChatId, state.threadId));
   if (has("list_projects"))
     tools.push(ListProjectsTool(state.userId));
   if (has("list_repositories"))
@@ -359,6 +365,12 @@ export async function callModelNode(
     tools.push(QueryDatabaseTool());
   if (has("unsplash_search_photos"))
     tools.push(UnsplashSearchPhotosTool());
+  if (has("record_newsletter_issue"))
+    tools.push(RecordNewsletterIssueTool(agentId));
+  if (has("update_newsletter_issue_path"))
+    tools.push(UpdateNewsletterIssuePathTool(agentId));
+  if (has("get_latest_newsletter_issue"))
+    tools.push(GetLatestNewsletterIssueTool(agentId));
   if (has("send_file_to_user"))
     tools.push(SendFileToUserTool(agentId));
   if (has("invoke_application_agent"))

@@ -21,6 +21,7 @@ export function DelegateToEpicOrchestratorTool(
   userId: number,
   groupId: string | null,
   singleChatId: string | null,
+  callerThreadId: string | null,
 ) {
   return tool(
     async (input) => {
@@ -58,6 +59,7 @@ export function DelegateToEpicOrchestratorTool(
         status: "pending",
         groupId,
         singleChatId,
+        callerThreadId,
       });
 
       // Enqueue to the agent chat queue — the worker routes to epicGraph
