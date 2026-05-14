@@ -10,6 +10,7 @@ import {
 } from "../emailTemplates/financialNewsNewsletter";
 import {
   generateTop20StocksNewsletter,
+  type Top20NewsletterHeroImage,
   type Top20Stock,
 } from "../emailTemplates/top20StocksNewsletter";
 import { queryExternalReadonly } from "../utils/externalReadonlyDb";
@@ -68,10 +69,27 @@ const publicHttpsUrlSchema = z.string().trim().url().refine(
   "Must be a public HTTPS URL.",
 );
 
+const unsplashPhotographerSchema = z.object({
+  name: z.string().trim().min(1).optional().describe("Unsplash photographer display name."),
+  username: z.string().trim().min(1).nullable().optional().describe("Unsplash photographer username."),
+  profileUrl: publicHttpsUrlSchema.nullable().optional().describe("Unsplash photographer profile URL with UTM parameters."),
+}).passthrough();
+
+const unsplashAttributionSchema = z.object({
+  text: z.string().trim().min(1).optional().describe("Plain-text Unsplash credit, for example 'Photo by Name on Unsplash'."),
+  photographerUrl: publicHttpsUrlSchema.nullable().optional().describe("Unsplash photographer profile URL with UTM parameters."),
+  unsplashUrl: publicHttpsUrlSchema.optional().describe("Unsplash homepage URL with UTM parameters."),
+}).passthrough();
+
 const financialNewsEventImageSchema = z.object({
   src: publicHttpsUrlSchema.describe("Public HTTPS image URL for the story."),
   alt: z.string().trim().min(1).optional().describe("Short accessible image description."),
   href: publicHttpsUrlSchema.optional().describe("Optional HTTPS URL to open if the reader clicks the image."),
+  photographerName: z.string().trim().min(1).optional().describe("Unsplash photographer display name for required image credit."),
+  photographerUrl: publicHttpsUrlSchema.optional().describe("Unsplash photographer profile URL with UTM parameters for required image credit."),
+  unsplashUrl: publicHttpsUrlSchema.optional().describe("Unsplash homepage URL with UTM parameters for required image credit."),
+  photographer: unsplashPhotographerSchema.optional().describe("Photographer metadata returned by unsplash_search_photos."),
+  attribution: unsplashAttributionSchema.optional().describe("Attribution metadata returned by unsplash_search_photos."),
   width: z.number().int().positive().optional().describe(
     "Optional source image width from research. Accepted for compatibility with the newsletter skill; not rendered.",
   ),
@@ -101,6 +119,29 @@ const financialNewsEventSchema = z.object({
 });
 
 type FinancialNewsEventInput = z.infer<typeof financialNewsEventSchema>;
+type FinancialNewsEventImageInput = z.infer<typeof financialNewsEventImageSchema>;
+
+const top20NewsletterHeroImageSchema: z.ZodType<Top20NewsletterHeroImage> = financialNewsEventImageSchema;
+
+function normalizeNewsletterImageCredit<T extends FinancialNewsEventImageInput>(image: T): {
+  photographerName?: string;
+  photographerUrl?: string;
+  unsplashUrl?: string;
+  photographer?: T["photographer"];
+  attribution?: T["attribution"];
+} {
+  const photographerName = image.photographerName?.trim();
+  const photographerUrl = image.photographerUrl?.trim();
+  const unsplashUrl = image.unsplashUrl?.trim();
+
+  return {
+    ...(photographerName ? { photographerName } : {}),
+    ...(photographerUrl ? { photographerUrl } : {}),
+    ...(unsplashUrl ? { unsplashUrl } : {}),
+    ...(image.photographer ? { photographer: image.photographer } : {}),
+    ...(image.attribution ? { attribution: image.attribution } : {}),
+  };
+}
 
 function normalizeFinancialNewsEventImage(image: FinancialNewsEventInput["image"]): FinancialNewsEvent["image"] | undefined {
   if (!image) return undefined;
@@ -119,6 +160,7 @@ function normalizeFinancialNewsEventImage(image: FinancialNewsEventInput["image"
     src,
     ...(alt ? { alt } : {}),
     ...(href ? { href } : {}),
+    ...normalizeNewsletterImageCredit(image),
   };
 }
 
@@ -701,6 +743,7 @@ export function googleTools(authorityAgentId: string) {
       asOfDate,
       sp500_12w_pct,
       changeSummary,
+      heroImage,
       stocks,
       ctaText,
       ctaUrl,
@@ -724,6 +767,7 @@ export function googleTools(authorityAgentId: string) {
           asOfDate,
           sp500_12w_pct: sp500_12w_pct ?? null,
           changeSummary,
+          heroImage,
           stocks,
           ctaText,
           ctaUrl,
@@ -788,6 +832,9 @@ export function googleTools(authorityAgentId: string) {
         ),
         changeSummary: z.string().optional().describe(
           "Optional plain-text change summary or previous-newsletter context. Rendered as a Change Summary block before the stock cards. Do not pass HTML.",
+        ),
+        heroImage: z.union([publicHttpsUrlSchema, top20NewsletterHeroImageSchema]).optional().describe(
+          "Optional public HTTPS hero image, or an object with src/alt/href plus Unsplash photographer/attribution metadata. If it is an Unsplash image, include photographerName/photographerUrl/unsplashUrl or the attribution object returned by unsplash_search_photos.",
         ),
         stocks: z.array(top20StockSchema).min(1).max(20).describe(
           "Ranked list of stocks to render as cards, in display order. Up to 20 entries.",
