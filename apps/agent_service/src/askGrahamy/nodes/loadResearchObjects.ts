@@ -113,28 +113,51 @@ async function loadLiveResearchObjects(
   state: AskGrahamyState,
   classification: Classification,
 ): Promise<void> {
-  if (classification.intent !== "stock") {
+  // Live RO builds are intentionally constrained — the nightly landing
+  // warm graph owns SECTOR and REGIME ROs and warms them ahead of time,
+  // so the live graph leaves them alone. Two narrow exceptions:
+  //   - intent === "stock"           → build STOCK RO(s) for the named symbol(s).
+  //   - classification.industries[]  → build INDUSTRY RO(s) on demand.
+  //                                    The StocksScanner landing-ideas worker
+  //                                    no longer fans out across every industry,
+  //                                    so an INDUSTRY RO is allowed to be
+  //                                    constructed live when the classifier
+  //                                    names an industry (typically alongside
+  //                                    intent === "industry" or
+  //                                    "industry_leaders").
+  // Everything else (sector-only turns, regime-only turns) still bails
+  // out with an empty RO set in live mode.
+  const wantsStock =
+    classification.intent === "stock" && classification.symbols.length > 0;
+  const wantsIndustry = classification.industries.length > 0;
+  if (!wantsStock && !wantsIndustry) {
     state.researchObjects = [];
     state.researchObjectsUpdated = [];
     state.researchObjectCacheStats = { hits: 0, misses: 0, writes: 0 };
     return;
   }
 
-  const stockOnlyClassification = {
+  const liveClassification = {
     ...classification,
+    // Keep only the symbols we're allowed to build live (stock intent only).
+    symbols: wantsStock ? classification.symbols : [],
+    // SECTOR ROs are owned by the landing warmer; never build them live.
     sectors: [],
-    industries: [],
+    // INDUSTRY ROs are explicitly allowed live when present.
+    industries: wantsIndustry ? classification.industries : [],
+    // REGIME RO is owned by the landing warmer; never build it live.
     regimeRequested: false,
   };
   const result = await observeToolCall(
-    "build_live_stock_research_objects",
+    "build_live_research_objects",
     {
-      symbols: stockOnlyClassification.symbols,
+      symbols: liveClassification.symbols,
+      industries: liveClassification.industries,
       priorObjectCount: state.priorResearchObjects?.length ?? 0,
     },
     () =>
       buildResearchObjects({
-        classification: stockOnlyClassification,
+        classification: liveClassification,
         snapshots: state.snapshots ?? {},
         toolOutputs: state.toolOutputs ?? {},
         priorResearchObjects: state.priorResearchObjects ?? [],

@@ -53,8 +53,22 @@ async function loadPgCapabilities(
     // to pipeline freshness and SS priors miss.
     ...(state.asOfDate ? { asOfDate: state.asOfDate } : {}),
   };
+  // Live execution normally resolves PG capability views from the
+  // SS-supplied cache only — the nightly landing warm graph owns every
+  // capability build, and a cache miss is a hard error. The one
+  // exception is `industry_leaders`: there are ~150 industries and we
+  // intentionally do NOT fan out across all of them in the nightly
+  // warmer anymore (see StocksScanner `landing-ideas` worker, which
+  // dropped its industry loop). For that intent we let the live graph
+  // run the capability SQL on demand via `executePgCapabilitiesWithCache`,
+  // which still consults SS priors first and writes a fresh row back
+  // through `viewsUpdated` on a miss. Every other intent stays on the
+  // cache-only path to preserve the MOAT of the landing graph.
+  const allowLiveExecute =
+    executionMode === "landing_warm" ||
+    classification.intent === "industry_leaders";
   const result = await observeToolCall(
-    executionMode === "landing_warm"
+    allowLiveExecute
       ? "execute_pg_capabilities"
       : "resolve_pg_capabilities_from_cache",
     {
@@ -65,7 +79,7 @@ async function loadPgCapabilities(
       priorCapabilityViewCount: state.priorCapabilityViews?.length ?? 0,
     },
     () =>
-      executionMode === "landing_warm"
+      allowLiveExecute
         ? executePgCapabilitiesWithCache(
             input,
             state.priorCapabilityViews ?? [],
